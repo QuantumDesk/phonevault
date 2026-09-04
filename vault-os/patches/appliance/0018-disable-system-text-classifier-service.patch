@@ -1,0 +1,14 @@
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -1505,8 +1505,8 @@ public final class SystemServer implements Dumpable {
+         final boolean isPhoneVaultOffline = SystemProperties.getBoolean(
+                 "ro.phonevault.offline", false);
+ 
+-        boolean disableSystemTextClassifier = SystemProperties.getBoolean(
+-                "config.disable_systemtextclassifier", false);
++        boolean disableSystemTextClassifier = isPhoneVaultOffline ||
++                SystemProperties.getBoolean("config.disable_systemtextclassifier", false);
+ 
+         boolean disableNetworkTime = isPhoneVaultOffline || SystemProperties.getBoolean(
+                 "config.disable_networktime", false);

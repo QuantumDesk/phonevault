@@ -1,0 +1,24 @@
+--- a/vendor/google/crosshatch/crosshatch-vendor.mk
++++ b/vendor/google/crosshatch/crosshatch-vendor.mk
+@@ -9,11 +9,10 @@
+ PRODUCT_PACKAGES += \
+     libsecureui_svcsock_system \
+     libsecureuisvc_jni \
+-    vendor.qti.hardware.tui_comm@1.0 \
++    vendor.qti.hardware.tui_comm@1.0
+ 
+ 
+ 
+-    system_ext_priv-app_ims_lib_arm64_libimsmedia_jni_so
+ 
+ PRODUCT_COPY_FILES += \
+     vendor/google/crosshatch/proprietary/vendor/dsp/adsp/AlacDecoderModule.so.1:$(TARGET_COPY_OUT_VENDOR)/dsp/adsp/AlacDecoderModule.so.1 \
+@@ -676,7 +675,7 @@
+     ssr_diag \
+     ssr_setup \
+     subsystem_ramdump \
+-    thermal-engine \
++    thermal-engine
+ 
+ PRODUCT_PACKAGES += \
+     vendor_lib_libEGL_adreno_so \

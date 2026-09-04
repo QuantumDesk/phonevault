@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     Minimal framework feature declaration for the Phone Vault appliance.
+
+     Do not use Android's handheld_core_hardware.xml here. It advertises
+     camera, location, Bluetooth, microphone, telecom, backup, printing, and
+     other capabilities that are intentionally absent from this product.
+-->
+<permissions>
+    <feature name="android.hardware.touchscreen" />
+    <feature name="android.hardware.screen.portrait" />
+    <feature name="android.hardware.screen.landscape" />
+    <feature name="android.hardware.security.model.compatible" />
+    <feature name="android.software.home_screen" />
+    <feature name="android.software.secure_lock_screen" />
+    <feature name="android.software.device_admin" />
+</permissions>

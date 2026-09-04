@@ -1,0 +1,40 @@
+From 4a3b6b70826c2a6efdbba28c87c9a88f52a33850 Mon Sep 17 00:00:00 2001
+From: Daniel Micay <daniel.micay@grapheneos.org>
+Date: Tue, 8 Apr 2025 22:04:15 -0400
+Subject: [PATCH] fix upstream RecoverySystem.verifyPackage vulnerability
+
+This was not directly exploitable due to there being 2 layers of update
+package signature verification and downgrade protection, but the first
+layer of protection should work properly to avoid a vulnerability in the
+2nd layer being exploited.
+---
+ core/java/android/os/RecoverySystem.java | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/core/java/android/os/RecoverySystem.java b/core/java/android/os/RecoverySystem.java
+index 398140da..60208f74 100644
+--- a/core/java/android/os/RecoverySystem.java
++++ b/core/java/android/os/RecoverySystem.java
+@@ -333,6 +333,9 @@ public class RecoverySystem {
+             if (certificates == null || certificates.length == 0) {
+                 throw new SignatureException("signature contains no certificates");
+             }
++            if (certificates.length > 1) {
++                throw new SignatureException("signature contains multiple certificates");
++            }
+             X509Certificate cert = certificates[0];
+             PublicKey signatureKey = cert.getPublicKey();
+ 
+@@ -340,6 +343,9 @@ public class RecoverySystem {
+             if (signerInfos == null || signerInfos.length == 0) {
+                 throw new SignatureException("signature contains no signedData");
+             }
++            if (signerInfos.length > 1) {
++                throw new SignatureException("signature contains multiple signedData");
++            }
+             SignerInfo signerInfo = signerInfos[0];
+ 
+             // Check that the public key of the certificate contained
+-- 
+2.46.1
+

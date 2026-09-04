@@ -1,0 +1,25 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Mon, 17 Aug 2026 22:15:00 -0400
+Subject: [PATCH] core: export fixed-function owner resource internally
+
+Framework resources referenced through com.android.internal.R require an
+explicit java-symbol declaration. Export the appliance owner configuration so
+DevicePolicyManagerService can consume the value introduced by the preceding
+patch.
+---
+ core/res/res/values/symbols.xml | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index ae6cf2c087ec..a602165bfd44 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -5245,3 +5245,5 @@
+   <java-symbol type="string" name="config_devicePolicyManagementUpdater" />
+ 
++  <java-symbol type="string" name="config_fixedFunctionDeviceOwner" />
++
+   <java-symbol type="string" name="config_deviceSpecificDeviceStatePolicyProvider" />
+-- 
+2.50.1

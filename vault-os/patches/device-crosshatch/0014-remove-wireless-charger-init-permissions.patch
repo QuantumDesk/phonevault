@@ -1,0 +1,13 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -414,10 +414,1 @@
+-    # Permission for Wireless charger
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/rxdata
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/txdata
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/txlen
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/ccreset
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/status
+-    chown system system /sys/devices/platform/soc/a88000.i2c/i2c-0/0-0061/version
+-    chown system system /sys/class/power_supply/wireless/capacity
+-
+     # FG cycle counts read from dumpstate + backup restore from health HAL

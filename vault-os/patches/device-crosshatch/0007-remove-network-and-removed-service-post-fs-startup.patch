@@ -1,0 +1,33 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -250,30 +250,12 @@
+ on post-fs-data
+-    # We can start netd here before in is launched in common init.rc on zygote-start
+-    start netd
+-
+-    # b/38048356 Setup debug folders for camera
+-    mkdir /data/vendor/camera 0770 camera camera
+-
+     # b/38496103 Setup debug folders for display
+     mkdir /data/vendor/display 0770 system graphics
+ 
+-    # Setup folder for modem fdr
+-    mkdir /data/vendor/modem_fdr 0700 root system
+-
+-    # Resume-on-Reboot after we have the data dir and keymaster
+-    mkdir /data/vendor/rebootescrow 0770 hsm hsm
+-    start vendor.rebootescrow-citadel
+-
+     # keep that at the end of on post-fs-data
+     # Set indication (checked by vold) that we have finished this action
+     setprop vold.post_fs_data_done 1
+ 
+-    # Wait until the system time is set
+-    wait_for_prop vendor.qcom.time.set true
+-
+     # Wait qseecomd started
+     wait_for_prop vendor.sys.listeners.registered true
+-
+-    mkdir /data/vendor/nnhal 0700 system system
+ 
+ # zygote need to be started after otapreopt which will be done on post-fs-data

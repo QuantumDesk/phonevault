@@ -1,0 +1,26 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -279,23 +279,6 @@
+ # zygote need to be started after otapreopt which will be done on post-fs-data
+ on zygote-start
+     # zygote is started in common init.rc
+     # and now we can continue initialize /data/
+-    # Create the directories used by the Wireless subsystem
+-    mkdir /data/vendor/wifi 0771 wifi wifi
+-    mkdir /data/vendor/wifi/wpa 0770 wifi wifi
+-    mkdir /data/vendor/wifi/wpa/sockets 0770 wifi wifi
+-
+-    chown system system /persist/WCNSS_qcom_wlan_nv.bin
+-
+-    #create netmgr log dir
+-    mkdir /data/vendor/netmgr 0771 radio radio
+-    chmod 0771 /data/vendor/netmgr
+-
+-    # Create netmgr recovery folder
+-    mkdir /data/vendor/netmgr/recovery 0700 radio radio
+-    chmod 0770 /data/vendor/netmgr/recovery
+-    write /data/vendor/netmgr/recovery/recovery_info ""
+-    chown radio radio /data/vendor/netmgr/recovery/recovery_info
+-
+     # Create directory used by audio subsystem
+     mkdir /data/vendor/audio 0770 audio audio

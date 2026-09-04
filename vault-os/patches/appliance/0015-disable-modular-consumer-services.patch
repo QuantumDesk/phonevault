@@ -1,0 +1,251 @@
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -1739,6 +1739,8 @@ public final class SystemServer implements Dumpable {
+ 
+             if (mFactoryTestMode == FactoryTest.FACTORY_TEST_LOW_LEVEL) {
+                 Slog.i(TAG, "No Bluetooth Service (factory test)");
++            } else if (isPhoneVaultOffline) {
++                Slog.i(TAG, "No Bluetooth Service (Phone Vault appliance)");
+             } else if (!context.getPackageManager().hasSystemFeature
+                     (PackageManager.FEATURE_BLUETOOTH)) {
+                 Slog.i(TAG, "No Bluetooth Service (Bluetooth Hardware Not Present)");
+@@ -2153,7 +2155,7 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            if (context.getPackageManager().hasSystemFeature(
++            if (!isPhoneVaultOffline && context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_WIFI)) {
+                 // Wifi Service must be started first for wifi-related services.
+                 t.traceBegin("StartWifi");
+@@ -2173,7 +2175,7 @@ public final class SystemServer implements Dumpable {
+                 }
+             }
+ 
+-            if (context.getPackageManager().hasSystemFeature(
++            if (!isPhoneVaultOffline && context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_WIFI_RTT)) {
+                 t.traceBegin("StartRttService");
+                 mSystemServiceManager.startServiceFromJar(
+@@ -2181,7 +2183,7 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            if (context.getPackageManager().hasSystemFeature(
++            if (!isPhoneVaultOffline && context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_WIFI_AWARE)) {
+                 t.traceBegin("StartWifiAware");
+                 mSystemServiceManager.startServiceFromJar(
+@@ -2189,7 +2191,7 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            if (context.getPackageManager().hasSystemFeature(
++            if (!isPhoneVaultOffline && context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_WIFI_DIRECT)) {
+                 t.traceBegin("StartWifiP2P");
+                 mSystemServiceManager.startServiceFromJar(
+@@ -2197,7 +2199,7 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            if (context.getPackageManager().hasSystemFeature(
++            if (!isPhoneVaultOffline && context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_LOWPAN)) {
+                 t.traceBegin("StartLowpan");
+                 mSystemServiceManager.startService(LOWPAN_SERVICE_CLASS);
+@@ -2848,49 +2850,51 @@ public final class SystemServer implements Dumpable {
+             t.traceEnd();
+         }
+ 
+-        // Statsd helper
+-        t.traceBegin("StartStatsCompanion");
+-        mSystemServiceManager.startServiceFromJar(
+-                STATS_COMPANION_LIFECYCLE_CLASS, STATS_COMPANION_APEX_PATH);
+-        t.traceEnd();
+-
+-        // Reboot Readiness
+-        t.traceBegin("StartRebootReadinessManagerService");
+-        mSystemServiceManager.startServiceFromJar(
+-                REBOOT_READINESS_LIFECYCLE_CLASS, SCHEDULING_APEX_PATH);
+-        t.traceEnd();
+-
+-        // Statsd pulled atoms
+-        t.traceBegin("StartStatsPullAtomService");
+-        mSystemServiceManager.startService(StatsPullAtomService.class);
+-        t.traceEnd();
+-
+-        // Log atoms to statsd from bootstrap processes.
+-        t.traceBegin("StatsBootstrapAtomService");
+-        mSystemServiceManager.startService(StatsBootstrapAtomService.Lifecycle.class);
+-        t.traceEnd();
+-
+-        // Incidentd and dumpstated helper
+-        t.traceBegin("StartIncidentCompanionService");
+-        mSystemServiceManager.startService(IncidentCompanionService.class);
+-        t.traceEnd();
+-
+-        // SdkSandboxManagerService
+-        t.traceBegin("StarSdkSandboxManagerService");
+-        mSystemServiceManager.startService(SDK_SANDBOX_MANAGER_SERVICE_CLASS);
+-        t.traceEnd();
+-
+-        // AdServicesManagerService (PP API service)
+-        t.traceBegin("StartAdServicesManagerService");
+-        mSystemServiceManager.startService(AD_SERVICES_MANAGER_SERVICE_CLASS);
+-        t.traceEnd();
+-
+-        // OnDevicePersonalizationSystemService
+-        if (!com.android.server.flags.Flags.enableOdpFeatureGuard()
+-                || SystemProperties.getBoolean("ro.system_settings.service.odp_enabled", true)) {
+-            t.traceBegin("StartOnDevicePersonalizationSystemService");
+-            mSystemServiceManager.startService(ON_DEVICE_PERSONALIZATION_SYSTEM_SERVICE_CLASS);
++        if (!isPhoneVaultOffline) {
++            // Statsd helper
++            t.traceBegin("StartStatsCompanion");
++            mSystemServiceManager.startServiceFromJar(
++                    STATS_COMPANION_LIFECYCLE_CLASS, STATS_COMPANION_APEX_PATH);
++            t.traceEnd();
++
++            // Reboot Readiness
++            t.traceBegin("StartRebootReadinessManagerService");
++            mSystemServiceManager.startServiceFromJar(
++                    REBOOT_READINESS_LIFECYCLE_CLASS, SCHEDULING_APEX_PATH);
++            t.traceEnd();
++
++            // Statsd pulled atoms
++            t.traceBegin("StartStatsPullAtomService");
++            mSystemServiceManager.startService(StatsPullAtomService.class);
++            t.traceEnd();
++
++            // Log atoms to statsd from bootstrap processes.
++            t.traceBegin("StatsBootstrapAtomService");
++            mSystemServiceManager.startService(StatsBootstrapAtomService.Lifecycle.class);
++            t.traceEnd();
++
++            // Incidentd and dumpstated helper
++            t.traceBegin("StartIncidentCompanionService");
++            mSystemServiceManager.startService(IncidentCompanionService.class);
++            t.traceEnd();
++
++            // SdkSandboxManagerService
++            t.traceBegin("StarSdkSandboxManagerService");
++            mSystemServiceManager.startService(SDK_SANDBOX_MANAGER_SERVICE_CLASS);
++            t.traceEnd();
++
++            // AdServicesManagerService (PP API service)
++            t.traceBegin("StartAdServicesManagerService");
++            mSystemServiceManager.startService(AD_SERVICES_MANAGER_SERVICE_CLASS);
++            t.traceEnd();
++
++            // OnDevicePersonalizationSystemService
++            if (!com.android.server.flags.Flags.enableOdpFeatureGuard()
++                    || SystemProperties.getBoolean("ro.system_settings.service.odp_enabled", true)) {
++                t.traceBegin("StartOnDevicePersonalizationSystemService");
++                mSystemServiceManager.startService(ON_DEVICE_PERSONALIZATION_SYSTEM_SERVICE_CLASS);
++                t.traceEnd();
++            }
+-            t.traceEnd();
+         }
+ 
+         // Profiling
+@@ -3121,7 +3125,7 @@ public final class SystemServer implements Dumpable {
+         }
+         t.traceEnd();
+ 
+-        if (!isWatch || !android.server.Flags.removeGameManagerServiceFromWear()) {
++        if (!isPhoneVaultOffline && (!isWatch || !android.server.Flags.removeGameManagerServiceFromWear())) {
+             t.traceBegin("GameManagerService");
+             mSystemServiceManager.startService(GameManagerService.Lifecycle.class);
+             t.traceEnd();
+@@ -3129,7 +3133,8 @@ public final class SystemServer implements Dumpable {
+             Slog.d(TAG, "Not starting GameManagerService");
+         }
+ 
+-        if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_UWB)) {
++        if (!isPhoneVaultOffline
++                && context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_UWB)) {
+             t.traceBegin("UwbService");
+             mSystemServiceManager.startServiceFromJar(UWB_SERVICE_CLASS, UWB_APEX_SERVICE_JAR_PATH);
+             t.traceEnd();
+@@ -3137,6 +3142,7 @@ public final class SystemServer implements Dumpable {
+         }
+ 
+-        if (com.android.ranging.flags.Flags.rangingStackEnabled()) {
++        if (!isPhoneVaultOffline
++                && com.android.ranging.flags.Flags.rangingStackEnabled()) {
+             if (context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_UWB)
+                     || context.getPackageManager().hasSystemFeature(
+                             PackageManager.FEATURE_WIFI_RTT)
+@@ -3156,37 +3162,39 @@ public final class SystemServer implements Dumpable {
+         mSystemServiceManager.startBootPhase(t, SystemService.PHASE_DEVICE_SPECIFIC_SERVICES_READY);
+         t.traceEnd();
+ 
+-        t.traceBegin("StartSafetyCenterService");
+-        mSystemServiceManager.startService(SAFETY_CENTER_SERVICE_CLASS);
+-        t.traceEnd();
+-
+-        t.traceBegin("AppSearchModule");
+-        mSystemServiceManager.startService(APPSEARCH_MODULE_LIFECYCLE_CLASS);
+-        t.traceEnd();
+-
+-        if (SystemProperties.getBoolean("ro.config.isolated_compilation_enabled", false)) {
+-            t.traceBegin("IsolatedCompilationService");
+-            mSystemServiceManager.startService(ISOLATED_COMPILATION_SERVICE_CLASS);
+-            t.traceEnd();
+-        }
+-
+-        t.traceBegin("StartMediaCommunicationService");
+-        mSystemServiceManager.startService(MEDIA_COMMUNICATION_SERVICE_CLASS);
+-        t.traceEnd();
+-
+-        t.traceBegin("AppCompatOverridesService");
+-        mSystemServiceManager.startService(AppCompatOverridesService.Lifecycle.class);
+-        t.traceEnd();
+-
+-        t.traceBegin("HealthConnectManagerService");
+-        mSystemServiceManager.startService(HEALTHCONNECT_MANAGER_SERVICE_CLASS);
+-        t.traceEnd();
+-
+-        if (mPackageManager.hasSystemFeature(PackageManager.FEATURE_DEVICE_LOCK)) {
+-            t.traceBegin("DeviceLockService");
+-            mSystemServiceManager.startServiceFromJar(DEVICE_LOCK_SERVICE_CLASS,
+-                    DEVICE_LOCK_APEX_PATH);
++        if (!isPhoneVaultOffline) {
++            t.traceBegin("StartSafetyCenterService");
++            mSystemServiceManager.startService(SAFETY_CENTER_SERVICE_CLASS);
++            t.traceEnd();
++
++            t.traceBegin("AppSearchModule");
++            mSystemServiceManager.startService(APPSEARCH_MODULE_LIFECYCLE_CLASS);
++            t.traceEnd();
++
++            if (SystemProperties.getBoolean("ro.config.isolated_compilation_enabled", false)) {
++                t.traceBegin("IsolatedCompilationService");
++                mSystemServiceManager.startService(ISOLATED_COMPILATION_SERVICE_CLASS);
++                t.traceEnd();
++            }
++
++            t.traceBegin("StartMediaCommunicationService");
++            mSystemServiceManager.startService(MEDIA_COMMUNICATION_SERVICE_CLASS);
++            t.traceEnd();
++
++            t.traceBegin("AppCompatOverridesService");
++            mSystemServiceManager.startService(AppCompatOverridesService.Lifecycle.class);
++            t.traceEnd();
++
++            t.traceBegin("HealthConnectManagerService");
++            mSystemServiceManager.startService(HEALTHCONNECT_MANAGER_SERVICE_CLASS);
++            t.traceEnd();
++
++            if (mPackageManager.hasSystemFeature(PackageManager.FEATURE_DEVICE_LOCK)) {
++                t.traceBegin("DeviceLockService");
++                mSystemServiceManager.startServiceFromJar(DEVICE_LOCK_SERVICE_CLASS,
++                        DEVICE_LOCK_APEX_PATH);
++                t.traceEnd();
++            }
+-            t.traceEnd();
+         }
+ 
+         if (android.permission.flags.Flags.sensitiveNotificationAppProtection()

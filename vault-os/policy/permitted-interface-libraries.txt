@@ -1,0 +1,55 @@
+# Exact target-files paths of HAL *client interface* libraries that the
+# forbidden-artifact policy would otherwise reject but that cannot be removed
+# without cutting core platform code. Each entry is a pure HIDL/AIDL stub or a
+# vendor dependency library, not a HAL server, service binary, init policy,
+# feature declaration, or VINTF contract; those remain forbidden and are
+# checked separately. Only lines that match ^(SYSTEM|VENDOR)/lib(64)?/NAME.so$
+# are accepted, and matching is exact, so any newly appearing interface
+# library still fails the gate. Evidence: reverse NEEDED analysis of the first
+# full crosshatch appliance image (2026-08-18).
+#
+# system_server JNI (libandroid_servers -> libservices.core-gnss / ContextHub).
+# Follow-up hardening: drop the GNSS and ContextHub JNI from
+# frameworks/base/services/core/jni once boot is validated.
+SYSTEM/lib/android.hardware.contexthub@1.0.so
+SYSTEM/lib64/android.hardware.contexthub@1.0.so
+SYSTEM/lib/android.hardware.gnss-V3-cpp.so
+SYSTEM/lib64/android.hardware.gnss-V3-cpp.so
+SYSTEM/lib/android.hardware.gnss.measurement_corrections@1.0.so
+SYSTEM/lib64/android.hardware.gnss.measurement_corrections@1.0.so
+SYSTEM/lib/android.hardware.gnss.measurement_corrections@1.1.so
+SYSTEM/lib64/android.hardware.gnss.measurement_corrections@1.1.so
+SYSTEM/lib/android.hardware.gnss.visibility_control@1.0.so
+SYSTEM/lib64/android.hardware.gnss.visibility_control@1.0.so
+SYSTEM/lib/android.hardware.gnss@1.0.so
+SYSTEM/lib64/android.hardware.gnss@1.0.so
+SYSTEM/lib/android.hardware.gnss@1.1.so
+SYSTEM/lib64/android.hardware.gnss@1.1.so
+SYSTEM/lib/android.hardware.gnss@2.0.so
+SYSTEM/lib64/android.hardware.gnss@2.0.so
+SYSTEM/lib/android.hardware.gnss@2.1.so
+SYSTEM/lib64/android.hardware.gnss@2.1.so
+# system_server sensorservice (libsensorservice / libsensorservicehidl /
+# libsensorserviceaidl). With no sensor HAL the service publishes zero sensors.
+SYSTEM/lib/android.hardware.sensors-V3-ndk.so
+SYSTEM/lib64/android.hardware.sensors-V3-ndk.so
+SYSTEM/lib/android.hardware.sensors@1.0.so
+SYSTEM/lib64/android.hardware.sensors@1.0.so
+SYSTEM/lib/android.hardware.sensors@2.0.so
+SYSTEM/lib64/android.hardware.sensors@2.0.so
+SYSTEM/lib/android.hardware.sensors@2.1.so
+SYSTEM/lib64/android.hardware.sensors@2.1.so
+# libandroid_runtime (zygote / every app process) links the camera2 metadata
+# JNI, which depends on the camera.device@3.2 stub. cameraserver, the camera
+# HAL, camera feature declarations, and camera kernel drivers are all removed.
+SYSTEM/lib/android.hardware.camera.common@1.0.so
+SYSTEM/lib64/android.hardware.camera.common@1.0.so
+SYSTEM/lib/android.hardware.camera.device@3.2.so
+SYSTEM/lib64/android.hardware.camera.device@3.2.so
+# Vendor display post-processing daemon mm-pp-dpps links the sensorservice
+# client (ambient-light features); no vendor sensor HAL or driver exists.
+# Follow-up: evaluate removing mm-pp-dpps after display validation.
+VENDOR/lib64/android.hardware.sensors@1.0.so
+# qseecomd (TEE daemon backing keymaster/gatekeeper/FBE) has libdrmfs as a
+# NEEDED dependency; the DRM HAL services themselves are removed.
+VENDOR/lib64/libdrmfs.so

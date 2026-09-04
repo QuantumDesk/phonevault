@@ -1,0 +1,300 @@
+diff --git a/build/make/target/product/media_system.mk b/build/make/target/product/media_system.mk
+index 0733d06..3976a68 100644
+--- a/build/make/target/product/media_system.mk
++++ b/build/make/target/product/media_system.mk
+@@ -47,9 +47,7 @@ endif
+ 
+ # The order here is the same order they end up on the classpath, so it matters.
+ PRODUCT_SYSTEM_SERVER_JARS := \
+-    com.android.location.provider \
+-    services \
+-    org.lineageos.platform
++    services
+ 
+ PRODUCT_COPY_FILES += \
+     system/core/rootdir/etc/public.libraries.android.txt:system/etc/public.libraries.txt
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+index e92ba3e..b5c2c70 100644
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -1502,13 +1502,16 @@ public final class SystemServer implements Dumpable {
+         HardwarePropertiesManagerService hardwarePropertiesService = null;
+         PacProxyService pacProxyService = null;
+ 
++        final boolean isPhoneVaultOffline = SystemProperties.getBoolean(
++                "ro.phonevault.offline", false);
++
+         boolean disableSystemTextClassifier = SystemProperties.getBoolean(
+                 "config.disable_systemtextclassifier", false);
+ 
+-        boolean disableNetworkTime = SystemProperties.getBoolean("config.disable_networktime",
+-                false);
+-        boolean disableCameraService = SystemProperties.getBoolean("config.disable_cameraservice",
+-                false);
++        boolean disableNetworkTime = isPhoneVaultOffline || SystemProperties.getBoolean(
++                "config.disable_networktime", false);
++        boolean disableCameraService = isPhoneVaultOffline || SystemProperties.getBoolean(
++                "config.disable_cameraservice", false);
+ 
+         boolean isWatch = RoSystemFeatures.hasFeatureWatch(context);
+ 
+@@ -2079,30 +2082,33 @@ public final class SystemServer implements Dumpable {
+                 Slog.d(TAG, "ContextualSearchManagerService not defined or disabled by flag");
+             }
+ 
+-            t.traceBegin("InitConnectivityModuleConnector");
+-            try {
+-                ConnectivityModuleConnector.getInstance().init(context);
+-            } catch (Throwable e) {
+-                reportWtf("initializing ConnectivityModuleConnector", e);
+-            }
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("InitConnectivityModuleConnector");
++                try {
++                    ConnectivityModuleConnector.getInstance().init(context);
++                } catch (Throwable e) {
++                    reportWtf("initializing ConnectivityModuleConnector", e);
++                }
++                t.traceEnd();
+ 
+-            t.traceBegin("InitNetworkStackClient");
+-            try {
+-                NetworkStackClient.getInstance().init();
+-            } catch (Throwable e) {
+-                reportWtf("initializing NetworkStackClient", e);
+-            }
+-            t.traceEnd();
++                t.traceBegin("InitNetworkStackClient");
++                try {
++                    NetworkStackClient.getInstance().init();
++                } catch (Throwable e) {
++                    reportWtf("initializing NetworkStackClient", e);
++                }
++                t.traceEnd();
+ 
+-            t.traceBegin("StartNetworkManagementService");
+-            try {
+-                networkManagement = NetworkManagementService.create(context);
+-                ServiceManager.addService(Context.NETWORKMANAGEMENT_SERVICE, networkManagement);
+-            } catch (Throwable e) {
+-                reportWtf("starting NetworkManagement Service", e);
++                t.traceBegin("StartNetworkManagementService");
++                try {
++                    networkManagement = NetworkManagementService.create(context);
++                    ServiceManager.addService(Context.NETWORKMANAGEMENT_SERVICE,
++                            networkManagement);
++                } catch (Throwable e) {
++                    reportWtf("starting NetworkManagement Service", e);
++                }
++                t.traceEnd();
+             }
+-            t.traceEnd();
+ 
+             t.traceBegin("StartFontManagerService");
+             mSystemServiceManager.startService(new FontManagerService.Lifecycle(context, safeMode));
+@@ -2121,26 +2127,29 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            t.traceBegin("StartNetworkScoreService");
+-            mSystemServiceManager.startService(NetworkScoreService.Lifecycle.class);
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartNetworkScoreService");
++                mSystemServiceManager.startService(NetworkScoreService.Lifecycle.class);
++                t.traceEnd();
+ 
+-            t.traceBegin("StartNetworkStatsService");
+-            // This has to be called before NetworkPolicyManager because NetworkPolicyManager
+-            // needs to take NetworkStatsService to initialize.
+-            mSystemServiceManager.startServiceFromJar(NETWORK_STATS_SERVICE_INITIALIZER_CLASS,
+-                    CONNECTIVITY_SERVICE_APEX_PATH);
+-            t.traceEnd();
++                t.traceBegin("StartNetworkStatsService");
++                // This has to be called before NetworkPolicyManager because
++                // NetworkPolicyManager needs NetworkStatsService to initialize.
++                mSystemServiceManager.startServiceFromJar(
++                        NETWORK_STATS_SERVICE_INITIALIZER_CLASS,
++                        CONNECTIVITY_SERVICE_APEX_PATH);
++                t.traceEnd();
+ 
+-            t.traceBegin("StartNetworkPolicyManagerService");
+-            try {
+-                networkPolicy = new NetworkPolicyManagerService(context, mActivityManagerService,
+-                        networkManagement);
+-                ServiceManager.addService(Context.NETWORK_POLICY_SERVICE, networkPolicy);
+-            } catch (Throwable e) {
+-                reportWtf("starting NetworkPolicy Service", e);
++                t.traceBegin("StartNetworkPolicyManagerService");
++                try {
++                    networkPolicy = new NetworkPolicyManagerService(context,
++                            mActivityManagerService, networkManagement);
++                    ServiceManager.addService(Context.NETWORK_POLICY_SERVICE, networkPolicy);
++                } catch (Throwable e) {
++                    reportWtf("starting NetworkPolicy Service", e);
++                }
++                t.traceEnd();
+             }
+-            t.traceEnd();
+ 
+             if (context.getPackageManager().hasSystemFeature(
+                     PackageManager.FEATURE_WIFI)) {
+@@ -2193,23 +2202,25 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            t.traceBegin("StartPacProxyService");
+-            try {
+-                pacProxyService = new PacProxyService(context);
+-                ServiceManager.addService(Context.PAC_PROXY_SERVICE, pacProxyService);
+-            } catch (Throwable e) {
+-                reportWtf("starting PacProxyService", e);
+-            }
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartPacProxyService");
++                try {
++                    pacProxyService = new PacProxyService(context);
++                    ServiceManager.addService(Context.PAC_PROXY_SERVICE, pacProxyService);
++                } catch (Throwable e) {
++                    reportWtf("starting PacProxyService", e);
++                }
++                t.traceEnd();
+ 
+-            t.traceBegin("StartConnectivityService");
+-            // This has to be called after NetworkManagementService, NetworkStatsService
+-            // and NetworkPolicyManager because ConnectivityService needs to take these
+-            // services to initialize.
+-            mSystemServiceManager.startServiceFromJar(CONNECTIVITY_SERVICE_INITIALIZER_CLASS,
+-                    CONNECTIVITY_SERVICE_APEX_PATH);
+-            networkPolicy.bindConnectivityManager();
+-            t.traceEnd();
++                t.traceBegin("StartConnectivityService");
++                // This has to be called after NetworkManagementService,
++                // NetworkStatsService and NetworkPolicyManager.
++                mSystemServiceManager.startServiceFromJar(
++                        CONNECTIVITY_SERVICE_INITIALIZER_CLASS,
++                        CONNECTIVITY_SERVICE_APEX_PATH);
++                networkPolicy.bindConnectivityManager();
++                t.traceEnd();
++            }
+ 
+             t.traceBegin("StartSecurityStateManagerService");
+             try {
+@@ -2220,7 +2231,8 @@ public final class SystemServer implements Dumpable {
+             }
+             t.traceEnd();
+ 
+-            if (!isWatch || !android.server.Flags.allowRemovingVpnService()) {
++            if (!isPhoneVaultOffline
++                    && (!isWatch || !android.server.Flags.allowRemovingVpnService())) {
+                 t.traceBegin("StartVpnManagerService");
+                 try {
+                     vpnManager = VpnManagerService.create(context);
+@@ -2235,16 +2247,16 @@ public final class SystemServer implements Dumpable {
+                 Slog.i(TAG, "Not starting VpnManagerService");
+             }
+ 
+-            t.traceBegin("StartVcnManagementService");
+-            try {
+-                // TODO: b/375213246 When VCN is in mainline module, load it from the apex path.
+-                // Whether VCN will be in apex or in the platform will be gated by a build system
+-                // flag.
+-                mSystemServiceManager.startService(CONNECTIVITY_SERVICE_INITIALIZER_B_CLASS);
+-            } catch (Throwable e) {
+-                reportWtf("starting VCN Management Service", e);
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartVcnManagementService");
++                try {
++                    // TODO: b/375213246 When VCN is in mainline module, load it from the apex.
++                    mSystemServiceManager.startService(CONNECTIVITY_SERVICE_INITIALIZER_B_CLASS);
++                } catch (Throwable e) {
++                    reportWtf("starting VCN Management Service", e);
++                }
++                t.traceEnd();
+             }
+-            t.traceEnd();
+ 
+             t.traceBegin("StartSystemUpdateManagerService");
+             try {
+@@ -2284,9 +2296,11 @@ public final class SystemServer implements Dumpable {
+             }
+             t.traceEnd();
+ 
+-            t.traceBegin("StartLocationManagerService");
+-            mSystemServiceManager.startService(LocationManagerService.Lifecycle.class);
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartLocationManagerService");
++                mSystemServiceManager.startService(LocationManagerService.Lifecycle.class);
++                t.traceEnd();
++            }
+ 
+             t.traceBegin("StartCountryDetectorService");
+             try {
+@@ -3271,7 +3285,7 @@ public final class SystemServer implements Dumpable {
+             // TODO: This may actually be too late if radio firmware already started leaking
+             // RF before the respective services start. However, fixing this requires changes
+             // to radio firmware and interfaces.
+-            if (safeMode) {
++            if (safeMode && !isPhoneVaultOffline) {
+                 t.traceBegin("EnableAirplaneModeInSafeMode");
+                 try {
+                     connectivityF.setAirplaneMode(true);
+@@ -3341,33 +3355,30 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            t.traceBegin("StartNetworkStack");
+-            try {
+-                // Note : the network stack is creating on-demand objects that need to send
+-                // broadcasts, which means it currently depends on being started after
+-                // ActivityManagerService.mSystemReady and ActivityManagerService.mProcessesReady
+-                // are set to true. Be careful if moving this to a different place in the
+-                // startup sequence.
+-                NetworkStackClient.getInstance().start();
+-            } catch (Throwable e) {
+-                reportWtf("starting Network Stack", e);
+-            }
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartNetworkStack");
++                try {
++                    // The network stack creates on-demand objects after ActivityManager is ready.
++                    NetworkStackClient.getInstance().start();
++                } catch (Throwable e) {
++                    reportWtf("starting Network Stack", e);
++                }
++                t.traceEnd();
+ 
+-            t.traceBegin("StartTethering");
+-            try {
+-                // TODO: hide implementation details, b/146312721.
+-                ConnectivityModuleConnector.getInstance().startModuleService(
+-                        TETHERING_CONNECTOR_CLASS,
+-                        PERMISSION_MAINLINE_NETWORK_STACK, service -> {
+-                            ServiceManager.addService(Context.TETHERING_SERVICE, service,
+-                                    false /* allowIsolated */,
+-                                    DUMP_FLAG_PRIORITY_HIGH | DUMP_FLAG_PRIORITY_NORMAL);
+-                        });
+-            } catch (Throwable e) {
+-                reportWtf("starting Tethering", e);
++                t.traceBegin("StartTethering");
++                try {
++                    ConnectivityModuleConnector.getInstance().startModuleService(
++                            TETHERING_CONNECTOR_CLASS,
++                            PERMISSION_MAINLINE_NETWORK_STACK, service -> {
++                                ServiceManager.addService(Context.TETHERING_SERVICE, service,
++                                        false /* allowIsolated */,
++                                        DUMP_FLAG_PRIORITY_HIGH | DUMP_FLAG_PRIORITY_NORMAL);
++                            });
++                } catch (Throwable e) {
++                    reportWtf("starting Tethering", e);
++                }
++                t.traceEnd();
+             }
+-            t.traceEnd();
+ 
+             t.traceBegin("MakeCountryDetectionServiceReady");
+             try {

@@ -1,0 +1,38 @@
+VENDOR/etc/init/hw/
+VENDOR/etc/init/hw/init.blueline.rc
+VENDOR/etc/init/hw/init.crosshatch.rc
+VENDOR/etc/init/hw/init.sdm845.diag.rc
+VENDOR/etc/init/hw/init.sdm845.logging.rc
+VENDOR/etc/init/hw/init.sdm845.mpssrfs.rc
+VENDOR/etc/init/hw/init.sdm845.power.rc
+VENDOR/etc/init/hw/init.sdm845.rc
+VENDOR/etc/init/hw/init.sdm845.usb.rc
+diff --git a/device-common.mk b/device-common.mk
+--- a/device-common.mk
++++ b/device-common.mk
+@@ -100,10 +100,6 @@ $(call soong_config_set,qtiaudio,feature_snd_monitor,true)
+ $(call soong_config_set,qtiaudio,feature_usb_tunnel,true)
+ $(call soong_config_set,qtiaudio,feature_sound_trigger,true)
+ 
+-# Modem loging file
+-PRODUCT_COPY_FILES += \
+-    device/google/crosshatch/init.logging.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.$(PRODUCT_PLATFORM).logging.rc
+-
+ # whitelisted app
+ PRODUCT_COPY_FILES += \
+     device/google/crosshatch/qti_whitelist.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/qti_whitelist.xml
+diff --git a/device.mk b/device.mk
+--- a/device.mk
++++ b/device.mk
+@@ -84,10 +84,7 @@ else
+     $(LOCAL_PATH)/init.hardware.xr.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.$(PRODUCT_PLATFORM).rc
+ endif
+ 
+-PRODUCT_COPY_FILES += \
+-    $(LOCAL_PATH)/init.hardware.diag.rc.user:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.$(PRODUCT_PLATFORM).diag.rc
+-PRODUCT_COPY_FILES += \
+-    $(LOCAL_PATH)/init.hardware.mpssrfs.rc.user:$(TARGET_COPY_OUT_VENDOR)/etc/init/hw/init.$(PRODUCT_PLATFORM).mpssrfs.rc
++# Phone Vault appliance: modem diagnostic and RFS init policy is not installed.
+ 
+ #per device
+ PRODUCT_COPY_FILES += \

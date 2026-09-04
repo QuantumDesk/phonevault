@@ -1,0 +1,44 @@
+From b471ebaaac9a190e3c61b51e5671573d2af5f45d Mon Sep 17 00:00:00 2001
+From: Dmitry Muhomor <muhomor.dmitry@gmail.com>
+Date: Sun, 23 Mar 2025 13:29:53 +0200
+Subject: [PATCH] don't allow to install APEXes on user builds
+
+APEX installation support slightly increases the attack surface.
+---
+ .../java/com/android/server/pm/PackageInstallerService.java  | 3 +++
+ .../java/com/android/server/pm/PackageInstallerSession.java  | 5 +++++
+ 2 files changed, 8 insertions(+)
+
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerService.java b/services/core/java/com/android/server/pm/PackageInstallerService.java
+index e83c987b..40d28a02 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerService.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerService.java
+@@ -831,6 +831,9 @@ public class PackageInstallerService extends IPackageInstaller.Stub implements
+                     == PackageManager.PERMISSION_DENIED) {
+                 throw new SecurityException("Not allowed to perform APEX updates");
+             }
++            if (Build.IS_USER) {
++                throw new SecurityException("Not allowed to perform APEX updates on user builds");
++            }
+         } else if (params.isStaged) {
+             mContext.enforceCallingOrSelfPermission(Manifest.permission.INSTALL_PACKAGES, TAG);
+         }
+diff --git a/services/core/java/com/android/server/pm/PackageInstallerSession.java b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+index c3b61849..03f17fa0 100644
+--- a/services/core/java/com/android/server/pm/PackageInstallerSession.java
++++ b/services/core/java/com/android/server/pm/PackageInstallerSession.java
+@@ -3456,6 +3456,11 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
+     @GuardedBy("mLock")
+     private void validateApexInstallLocked()
+             throws PackageManagerException {
++        if (Build.IS_USER) {
++            throw new PackageManagerException(PackageManager.INSTALL_FAILED_SESSION_INVALID,
++                    "APEX installation is not allowed on user builds");
++        }
++
+         final List<File> addedFiles = getAddedApksLocked();
+         if (addedFiles.isEmpty()) {
+             throw new PackageManagerException(INSTALL_FAILED_INVALID_APK,
+-- 
+2.46.1
+

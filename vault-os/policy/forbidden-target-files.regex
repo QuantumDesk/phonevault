@@ -1,0 +1,90 @@
+# Extended regular expressions matched against target-files ZIP paths.
+# Every non-comment line is a release-blocking artifact class.
+
+# Consumer applications and alternate launchers.
+/(Aperture|AudioFX|AvatarPicker|Backgrounds|BasicDreams|BlockedNumberProvider|BookmarkProvider|Browser2|BuiltInPrintService|Calendar[^/]*|CallLogBackup|Camelot|DeskClock|DeviceDiagnostics|DocumentsUI|DownloadProvider[^/]*|DynamicSystemInstallationService|E2eeContactKeysProvider|EasterEgg|Email|Etar|ExactCalculator|ExternalStorageProvider|Gallery2|Glimpse|Jelly|LatinIME|LineageParts|LineageSetupWizard|ManagedProvisioning|MtpService|Music[^/]*|PackageInstaller|PrintRecommendationService|PrintSpooler|Profiles|Recorder|Seedvault|Settings|SetupWizard|SharedStorageBackup|SimAppDialog|SoundPicker|ThemePicker|ThemesStub|Trebuchet[^/]*|Twelve|Updater|WallpaperPicker[^/]*)/
+/(AdServicesApk|SdkSandbox|Bluetooth|DeviceLockController|HealthConnectBackupRestore|HealthConnectController|MediaProvider|Photopicker|OnDevicePersonalization|FederatedCompute|ServiceUwbResources|ServiceWifiResources|WifiDialog)(/|\.apk$)
+/com\.android\.appsearch\.apk$
+/wpa_supplicant_mainline(\.|/|$)
+/(mediatranscoding|media_provider)(\.|/|$)
+/(AmbientSensePrebuilt|AppDirectedSMSService|CarrierServices|CarrierSettings|CarrierWifi|ConnMO|DCMO|DMService|DeviceIntelligenceNetworkPrebuilt|DevicePersonalizationPrebuiltPixel3|DiagMon|EuiccGoogle|EuiccSupportPixel[^/]*|HardwareInfo|HotwordEnrollment[^/]*|MobileFeliCa[^/]*|MyVerizonServices|OBDM_Permissions|OemDmTrigger|PixelCameraServicesCrosshatch|SprintDM|SprintHM|TetheringEntitlement|USCCDM|VZWAPNLib|WfcActivation)/
+/CarrierSettings/
+
+# Remote shells and general-purpose network clients/servers.
+/(bash|curl|htop|nano|rsync|scp|sftp|ssh|ssh-keygen|sshd|sshd_config|start-ssh|vim)(\.|/|$)
+/init\.openssh\.rc$
+/((irsc_util|ramoops|ssr_diag|ssr_setup|subsystem_ramdump))(\.|/|$)
+
+# Core Android network daemons and diagnostic/configuration tools. Framework
+# connectivity code may remain for boot-classpath compatibility, but the
+# fixed-function product must not install or start these native entry points.
+(^|/)(SYSTEM|SYSTEM_EXT|PRODUCT|VENDOR|ODM)/(bin|xbin)/(arping|clatd|dnsmasq|ebtables|ethtool|ip|ip(6)?tables(-save|-restore)?|iw|mdnsd|ndc|netcat|netd|nft|ping|ping6|ss|tcpdump|tc|traceroute)$
+/netd\.rc$
+
+# The modular connectivity APEX is retained only for required Android
+# classpath fragments. These paths catch flattened builds; the verifier also
+# opens packaged APEX payloads and applies the dedicated embedded policy.
+/com\.android\.tethering/(bin|app)/
+/com\.android\.tethering/etc/bpf/
+/com\.android\.tethering/etc/.*(netbpfload|ot-daemon).*rc$
+
+# Local bugreport tooling drags the network administration tools back into the
+# install graph and has no production role in a fixed signing appliance.
+(^|/)(SYSTEM|SYSTEM_EXT|PRODUCT|VENDOR|ODM)/(bin|xbin)/(bugreport|bugreport_procdump|bugreportz|dumpstate)$
+
+# Incident reporting, heap profiling, and system tracing expose sensitive
+# signing activity and are unnecessary on the fixed-function appliance.
+/(dmesgd|heapprofd|heapprofd_client|incident|incident-helper-cmd|incident_report|incidentd|incident_helper|perfetto|perfetto-extras|traced|traced_probes)(\.|/|$)
+
+# Cellular, IMS, packet-data, and tethering components.
+/(CneApp|CarrierConfig|CarrierDefaultApp|CellBroadcast[^/]*|Dialer|EmergencyInfo|ImsService[^/]*|IWlanService|MmsService|ONS|Phone|QtiTelephonyService|RadioConfigLib|RilConfigService|TeleService|Telecom|TelephonyProvider[^/]*|Tethering|UceShimService|grilservice|ims|qcrilmsgtunnel)/
+/(cdsprpcd|cnd|google-ril|ims_rtp_daemon|imsdatadaemon|imsqmidaemon|imsrcsd|ipacm|modem_svc|netmgrd|pd-mapper|port-bridge|qcrild|qcrilhook|rild|rmt_storage|tftp_server|uceShimService|uimremoteclient|uimremoteclientlibrary|uimremoteserver|uimremoteserverlibrary|uimservicelibrary)(\.|/|$)
+/com\.android\.cellbroadcast(\.|/|$)
+/com\.android\.location\.provider(\.|/|$)
+/com\.android\.resolv(\.(apex|capex)|/|$)
+/(com\.android\.(adservices|appsearch|devicelock|extservices[^/]*|healthfitness|media\.swcodec|neuralnetworks|ondevicepersonalization|scheduling|uwb|virt)(\.(apex|capex)|/))
+/android\.hardware\.radio[^/]*-service[^/]*/
+/IPACM_cfg\.xml$
+/init\.radio\.sh$
+
+# Wi-Fi, Bluetooth, NFC, GNSS, and camera runtime services.
+/(Bluetooth|DeviceAsWebcam|FusedLocation|NfcNci|SecureElement|Tag|cameraserver|cnss-daemon|cnss_diag|easelmanagerd|libgnss|libgps\.utils|liblocation_api|wificond|wpa_supplicant|hostapd)(\.|/|$)
+/android\.hardware\.(bluetooth|camera|gnss|nfc|wifi)[^/]*(\.|/|$)
+/(android\.hardware\.drm-service\.clearkey|android\.hardware\.drm@1\.3-service\.widevine|android\.hardware\.drm@1\.3\.vendor)(\.|/|$)
+/(android\.hardware\.secure_element@1\.1-service-disabled|camera\.device@3\.2-impl|camera\.sdm845)(\.|/|$)
+/(CameraExtensionsProxy|com\.android\.nfcservices|com\.google\.android\.camera\.(experimental2018|extensions))/
+/(loc_launcher|lowi-server|time_daemon|xtra-daemon)(\.|/|$)
+/(camera|gps|gnss|nfc|wifi)[^/]*/.*\.rc$
+/wifi\.rc$
+
+# Motion/environment sensor and context-hub runtimes are unnecessary.
+/android\.hardware\.(contexthub|sensors)[^/]*(\.|/|$)
+/(chre_daemon_msm|sensors\.qti|sensors\.ssc|sscrpcd)(\.|/|$)
+/android\.hardware\.rebootescrow-service\.citadel(\.|/|$)
+/android\.hardware\.(dumpstate|neuralnetworks|soundtrigger)[^/]*(\.|/|$)
+/(audio\.bluetooth\.default|vendor\.google_paintbox@[^/]*|vendor\.google\.wireless_charger@[^/]*|vendor\.qti\.media\.c2@[^/]*)(\.|/|$)
+
+# Raw proprietary configuration and firmware for removed hardware stacks.
+(^|/)VENDOR/dsp/(cdsp|sdsp)/
+(^|/)VENDOR/etc/(chre|cne|data|sensors)/
+(^|/)VENDOR/etc/init/(PaintboxDriver|android\.hardware\.neuralnetworks@|init-ramoops|vendor\.google\.wireless_charger@|vendor\.qti\.media\.c2@)[^/]*\.rc$
+(^|/)VENDOR/etc/(mdlog/|media_codecs_c2\.xml$|seccomp_policy/codec2\.vendor\.)
+(^|/)VENDOR/etc/(flp|izat|modem_stat|sap)\.conf$
+(^|/)(VENDOR|PRODUCT|ODM)/etc/([^/]*(gps|lowi|nfc)[^/]*|libese[^/]*)\.conf$
+(^|/)VENDOR/etc/acdbdata/.*/Bluetooth_cal\.acdb$
+(^|/)(VENDOR|PRODUCT|ODM)/etc/permissions/.*camera\.easel[^/]*\.xml$
+(^|/)VENDOR/(radio/qcril_database|rfs/msm/mpss)/
+(^|/)VENDOR/firmware/(bdwlan|ipa_fws|modemuw|nanoapp_config|pn557|slpi|venus|widevine|wil6210|wlanmdsp)[^/]*$
+(^|/)VENDOR/firmware/(cdsp[^/]*|cpe_9340[^/]*|cppf[^/]*|crbtfw[^/]*|crnv[^/]*|easel)(/|$)
+(^|/)VENDOR/lib64/camera/
+(^|/)VENDOR/lib(64)?/lib(OpenCL(-pixel)?|adm|adpcmdec|apps_mem_heap|bccQTI|btnv|camx[^/]*|cdsp_default_listener|cdsprpc|com\.qti\.chinodeutils|cppf|dataitems|diagjni|drmfs|drmtime|dspCV_skel|dsp_streamer[^/]*|elmyra-protos|fastcrc|fastcv[^/]*|flp|gcam[^/]*|gcs(-calwrapper|-ipc|-osal)?|geofence|goog_(catpipe|flicker|llv_gpu|pdaf_core_imx363)|hdcpsrm|hexagon_nn[^/]*|izat_core|lbs_core|loc_api_v02|loc_ds_api|mm-hdcpmgr|motion_ae|mulawdec|oemcrypto|qcodec2|qisl|sdedrm|sdm-diag|sdsprpc|si|sns[^/]*|spiris|ssc(_default_listener|_proto)?|streamparser|swregistrationalgo|swvdec|sysmon_cdsp_skel|vd6281|videoutils|vqzip|vsc|wlcproto_13|wvhidl@1\.3)\.so$
+(^|/)VENDOR/lib(64)?/(com\.(custom|google|qti|qtistatic)\.(3atuning|eis|hvx|node|stats)[^/]*|unnhal-acc-[^/]*|vendor\.google_paintbox@[^/]*|vendor\.qti\.(hardware\.(cvp|scve|wigig)[^/]*|voiceprint@[^/]*))\.so$
+(^|/)VENDOR/media/(LMspeed_508|PFFprec_600|ensemble_fd_model)\.emd$
+
+# Browser engine and network service modules are not needed by the signer.
+/(webview|Trichrome|CaptivePortalLogin|ConnectivityOverlay|NetworkStack[^/]*|OsuLogin|PacProcessor|ProxyHandler|VpnDialogs|WifiOverlay)/
+/com\.android\.webview\.bootstrap(\.|/|$)
+
+# Remote Key Provisioning is an updatable privileged network client. Local
+# StrongBox key generation does not require its RKPD APEX or embedded app.
+/(com\.android\.rkpd(\.apex|/)|rkpdapp(\.apk|/))

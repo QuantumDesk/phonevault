@@ -1,0 +1,21 @@
+--- a/vendor/google/crosshatch/crosshatch-vendor.mk
++++ b/vendor/google/crosshatch/crosshatch-vendor.mk
+@@ -220,17 +220,7 @@
+     vendor/google/crosshatch/proprietary/vendor/firmware/fpctzappfingerprint.mdt:$(TARGET_COPY_OUT_VENDOR)/firmware/fpctzappfingerprint.mdt \
+     vendor/google/crosshatch/proprietary/vendor/firmware/ftm5_fw.ftb:$(TARGET_COPY_OUT_VENDOR)/firmware/ftm5_fw.ftb \
+     vendor/google/crosshatch/proprietary/vendor/firmware/ftm5_p1_fw.ftb:$(TARGET_COPY_OUT_VENDOR)/firmware/ftm5_p1_fw.ftb \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/s6sy761.fw:$(TARGET_COPY_OUT_VENDOR)/firmware/s6sy761.fw \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.b00:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.b00 \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.b01:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.b01 \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.b02:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.b02 \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.b03:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.b03 \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.b04:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.b04 \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.mbn:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.mbn \
+-    vendor/google/crosshatch/proprietary/vendor/firmware/venus.mdt:$(TARGET_COPY_OUT_VENDOR)/firmware/venus.mdt \
+-    vendor/google/crosshatch/proprietary/vendor/media/LMspeed_508.emd:$(TARGET_COPY_OUT_VENDOR)/media/LMspeed_508.emd \
+-    vendor/google/crosshatch/proprietary/vendor/media/PFFprec_600.emd:$(TARGET_COPY_OUT_VENDOR)/media/PFFprec_600.emd \
+-    vendor/google/crosshatch/proprietary/vendor/media/ensemble_fd_model.emd:$(TARGET_COPY_OUT_VENDOR)/media/ensemble_fd_model.emd
++    vendor/google/crosshatch/proprietary/vendor/firmware/s6sy761.fw:$(TARGET_COPY_OUT_VENDOR)/firmware/s6sy761.fw
+ 
+ PRODUCT_PACKAGES += \
+     eglSubDriverAndroid \

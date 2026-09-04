@@ -1,0 +1,41 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -339,38 +339,8 @@
+     chmod 770 /persist/haptics
+     chmod 440 /persist/haptics/cs40l20.cal
+     chown system system /persist/haptics
+     chown system system /persist/haptics/cs40l20.cal
+ 
+-    # Mark the copy complete flag to not completed
+-    write /data/vendor/radio/copy_complete 0
+-    chown radio radio /data/vendor/radio/copy_complete
+-    chmod 0660 /data/vendor/radio/copy_complete
+-
+-    # File flags for prebuilt ril db file
+-    write /data/vendor/radio/prebuilt_db_support 1
+-    chown radio radio /data/vendor/radio/prebuilt_db_support
+-    chmod 0400 /data/vendor/radio/prebuilt_db_support
+-    write /data/vendor/radio/db_check_done 0
+-    chown radio radio /data/vendor/radio/db_check_done
+-    chmod 0660 /data/vendor/radio/db_check_done
+-
+-    # Create directories for Location services
+-    mkdir /data/vendor/location 0770 gps gps
+-    mkdir /data/vendor/location/mq 0770 gps gps
+-    mkdir /data/vendor/location/xtwifi 0770 gps gps
+-    mkdir /dev/socket/location 0770 gps gps
+-    mkdir /dev/socket/location/mq 0770 gps gps
+-    mkdir /dev/socket/location/xtra 0770 gps gps
+-
+-    # NFC local data and nfcee xml storage
+-    mkdir /data/vendor/nfc 0770 nfc nfc
+-
+-    # Secure Element directory for loader service functionality
+-    mkdir /data/vendor/secure_element 0770 secure_element secure_element
+-
+ on early-boot
+-    # wait for devices
+-    wait_for_prop vendor.qcom.devup 1
+-
+     # wait for insmod_sh to finish all modules
+     wait_for_prop vendor.all.modules.ready 1

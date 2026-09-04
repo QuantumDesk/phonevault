@@ -1,0 +1,79 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'dev.phonevault.signer'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId 'dev.phonevault.signer'
+        minSdk 28
+        targetSdk 35
+        versionCode 2
+        versionName '0.2.0'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+
+    // Screenshot/UI-dump support lives in src/debug/java/DevTools.java and is compiled ONLY into
+    // the debug and appliance build types; src/release/java/DevTools.java is a no-op stub, so a
+    // release APK contains no capture code. The manifest carries a "dev.phonevault.variant"
+    // marker that verify-signer-apk.sh checks so a dev/appliance APK can never pass as release.
+    buildTypes {
+        debug {
+            buildConfigField 'boolean', 'VAULT_REQUIRE_SECURE_HARDWARE', 'false'
+            // Dev builds must stay installable over adb; release freezes the app set with
+            // DISALLOW_INSTALL_APPS / DISALLOW_UNINSTALL_APPS (see enforceApplianceRestrictions).
+            buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'true'
+            manifestPlaceholders = [vaultVariant: 'dev']
+        }
+        release {
+            buildConfigField 'boolean', 'VAULT_REQUIRE_SECURE_HARDWARE', 'true'
+            buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'false'
+            manifestPlaceholders = [vaultVariant: 'release']
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        appliance {
+            initWith release
+            // Development appliance images use a convenient local signature,
+            // but retain release behavior: non-debuggable, minified, and no
+            // fallback from StrongBox-backed key wrapping.
+            signingConfig signingConfigs.debug
+            versionNameSuffix '-dev-appliance'
+            matchingFallbacks = ['release']
+            buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'true'
+            manifestPlaceholders = [vaultVariant: 'dev-appliance']
+        }
+    }
+
+    sourceSets {
+        // The dev appliance shares the debug DevTools (screenshots for UI review).
+        appliance.java.srcDirs += ['src/debug/java']
+    }
+
+    buildFeatures { buildConfig true }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources {
+            pickFirsts += ['META-INF/DISCLAIMER']
+        }
+    }
+}
+
+dependencies {
+    implementation 'org.web3j:crypto:4.12.3'
+    // web3j 4.12.3 declares Bouncy Castle 1.78.1 (GOST CTR / FrodoKEM advisories). BC IS on the
+    // signing path, so it is pinned forward here (Gradle resolves the highest version).
+    // Jackson (2.17.1, only used by web3j's WalletFile) is NOT pinned: it is fully removed from
+    // the release DEX by R8 (see proguard-rules.pro; test-app-build-policy.sh checks the DEX), and
+    // its artifacts do not share a single version line. web3j 6.x is a major API change and is
+    // tracked separately in the roadmap.
+    implementation 'org.bouncycastle:bcprov-jdk18on:1.85.2'
+    implementation 'com.google.zxing:core:3.5.3'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20240303'
+}

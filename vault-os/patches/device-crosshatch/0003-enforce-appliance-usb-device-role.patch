@@ -1,0 +1,45 @@
+--- a/usb/usb/Usb.cpp
++++ b/usb/usb/Usb.cpp
+@@ -346,6 +346,42 @@ Usb::Usb()
+ 
+ ScopedAStatus Usb::switchRole(const string& in_portName, const PortRole& in_role,
+         int64_t in_transactionId) {
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++        bool allowed = false;
++        switch (in_role.getTag()) {
++            case PortRole::powerRole:
++                allowed = in_role.get<PortRole::powerRole>() == PortPowerRole::SINK
++                        || in_role.get<PortRole::powerRole>() == PortPowerRole::NONE;
++                break;
++            case PortRole::dataRole:
++                allowed = in_role.get<PortRole::dataRole>() == PortDataRole::DEVICE
++                        || in_role.get<PortRole::dataRole>() == PortDataRole::NONE;
++                break;
++            case PortRole::mode:
++                allowed = in_role.get<PortRole::mode>() == PortMode::UFP
++                        || in_role.get<PortRole::mode>() == PortMode::NONE;
++                break;
++            default:
++                break;
++        }
++        if (!allowed) {
++            ALOGE("Phone Vault rejected USB host role: %s",
++                  convertRoletoString(in_role).c_str());
++            pthread_mutex_lock(&mLock);
++            if (mCallback != nullptr) {
++                ScopedAStatus ret = mCallback->notifyRoleSwitchStatus(
++                        in_portName, in_role, Status::ERROR, in_transactionId);
++                if (!ret.isOk()) {
++                    ALOGE("RoleSwitchStatus error %s", ret.getDescription().c_str());
++                }
++            } else {
++                ALOGE("Not notifying userspace. Callback is not set");
++            }
++            pthread_mutex_unlock(&mLock);
++            return ScopedAStatus::ok();
++        }
++    }
++
+     string filename = appendRoleNodeHelper(string(in_portName.c_str()), in_role.getTag());
+     string written;
+     FILE *fp;

@@ -1,0 +1,31 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -212,7 +212,5 @@
+ on late-fs
+-    start devstart_sh
+-
+     # Start services for bootanim
+     start surfaceflinger
+     start bootanim
+     start vendor.hwcomposer-2-3
+@@ -615,20 +613,1 @@
+-service irsc_util /vendor/bin/irsc_util "/vendor/etc/sec_config"
+-    class core
+-    user root
+-    oneshot
+-
+-# bugreport is triggered by holding down volume down, volume up and power
+-service bugreport /system/bin/dumpstate -d -p -z
+-    class main
+-    disabled
+-    oneshot
+-    keycodes 114 115 116
+-
+-service devstart_sh /vendor/bin/init.qcom.devstart.sh
+-    class main
+-    user root
+-    group root system
+-    disabled
+-    oneshot
+-
+ service insmod_sh /vendor/bin/init.insmod.sh

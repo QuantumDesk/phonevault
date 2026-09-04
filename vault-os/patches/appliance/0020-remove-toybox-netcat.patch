@@ -1,0 +1,34 @@
+diff --git a/external/toybox/Android.bp b/external/toybox/Android.bp
+--- a/external/toybox/Android.bp
++++ b/external/toybox/Android.bp
+@@ -155,7 +155,6 @@ device_srcs = [
+     "toys/lsb/pidof.c",
+     "toys/lsb/sync.c",
+     "toys/net/ifconfig.c",
+-    "toys/net/netcat.c",
+     "toys/net/netstat.c",
+     "toys/net/ping.c",
+     "toys/net/rfkill.c",
+@@ -348,8 +347,6 @@ toybox_symlinks = [
+     "mount",
+     "mountpoint",
+     "mv",
+-    "nc",
+-    "netcat",
+     "netstat",
+     "nice",
+     "nl",
+diff --git a/external/toybox/android/device/generated/config.h b/external/toybox/android/device/generated/config.h
+--- a/external/toybox/android/device/generated/config.h
++++ b/external/toybox/android/device/generated/config.h
+@@ -414,8 +414,8 @@
+ #define USE_NBD_CLIENT(...) __VA_ARGS__
+ #define CFG_NBD_SERVER 0
+ #define USE_NBD_SERVER(...)
+-#define CFG_NETCAT 1
+-#define USE_NETCAT(...) __VA_ARGS__
++#define CFG_NETCAT 0
++#define USE_NETCAT(...)
+ #define CFG_NETSTAT 1
+ #define USE_NETSTAT(...) __VA_ARGS__
+ #define CFG_NICE 1

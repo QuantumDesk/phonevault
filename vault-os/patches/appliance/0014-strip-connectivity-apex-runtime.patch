@@ -1,0 +1,81 @@
+diff --git a/packages/modules/Connectivity/Tethering/apex/Android.bp b/packages/modules/Connectivity/Tethering/apex/Android.bp
+--- a/packages/modules/Connectivity/Tethering/apex/Android.bp
++++ b/packages/modules/Connectivity/Tethering/apex/Android.bp
+@@ -39,7 +39,7 @@ apex_defaults {
+     // Tethering app to include in the AOSP apex. Branches that disable the "next" targets may use
+     // a stable tethering app instead, but will generally override the AOSP apex to use updatable
+     // package names and keys, so that apex will be unused anyway.
+-    apps: ["TetheringNext"], // Replace to "Tethering" if ConnectivityNextEnableDefaults is false.
++    // Phone Vault: no tethering service application ships in the appliance.
+ }
+ 
+ enable_tethering_next_apex = true
+@@ -49,11 +49,7 @@ enable_tethering_next_apex = true
+ 
+ apex_defaults {
+     name: "CronetInTetheringApexDefaults",
+-    jni_libs: [
+-        "cronet_aml_components_cronet_android_cronet",
+-        "//external/cronet/third_party/boringssl:libcrypto",
+-        "//external/cronet/third_party/boringssl:libssl",
+-    ],
++    // Phone Vault: HttpEngine/Cronet native runtime is not shipped.
+ }
+ 
+ apex {
+@@ -70,51 +66,16 @@ apex {
+     systemserverclasspath_fragments: [
+         "com.android.tethering-systemserverclasspath-fragment",
+     ],
+-    multilib: {
+-        first: {
+-            jni_libs: [
+-                "libservice-connectivity",
+-                "libservice-thread-jni",
+-                "libandroid_net_connectivity_com_android_net_module_util_jni",
+-            ],
+-            native_shared_libs: [
+-                "libcom.android.tethering.dns_helper",
+-                "libcom.android.tethering.connectivity_native",
+-                "libnetd_updatable",
+-            ],
+-        },
+-        both: {
+-            jni_libs: [
+-                "libframework-connectivity-jni",
+-                "libframework-connectivity-tiramisu-jni",
+-            ],
+-        },
+-    },
+-    binaries: [
+-        "clatd",
+-        "ethtool",
+-        "netbpfload",
+-        "ot-daemon",
+-    ],
+-    canned_fs_config: "canned_fs_config",
+-    bpfs: [
+-        "clatd.o",
+-        "dscpPolicy.o",
+-        "netd.o",
+-        "offload.o",
+-        "offload@mainline.o",
+-        "test.o",
+-        "test@mainline.o",
+-    ],
++    // Phone Vault: the classpath jars remain for boot compatibility, but no
++    // network daemon, BPF program, JNI/native runtime, or daemon init file
++    // ships. ServiceConnectivityResources stays only because
++    // service-connectivity compiles against its resource identifiers.
+     apps: [
+         "ServiceConnectivityResources",
+     ],
+     prebuilts: [
+         "current_sdkinfo",
+-        "netbpfload.33rc",
+-        "netbpfload.35rc",
+-        "ot-daemon.34rc",
+     ],
+     manifest: "manifest.json",
+     key: "com.android.tethering.key",
+     // Indicates that pre-installed version of this apex can be compressed.

@@ -1,0 +1,76 @@
+diff --git a/frameworks/av/apex/Android.bp b/frameworks/av/apex/Android.bp
+--- a/frameworks/av/apex/Android.bp
++++ b/frameworks/av/apex/Android.bp
+@@ -25,41 +25,6 @@ apex_defaults {
+     name: "com.android.media-defaults",
+     bootclasspath_fragments: ["com.android.media-bootclasspath-fragment"],
+     systemserverclasspath_fragments: ["com.android.media-systemserverclasspath-fragment"],
+-    multilib: {
+-        first: {
+-            // Extractor process runs only with the primary ABI.
+-            native_shared_libs: [
+-                // Extractor plugins
+-                "libaacextractor",
+-                "libamrextractor",
+-                "libflacextractor",
+-                "libmidiextractor",
+-                "libmkvextractor",
+-                "libmp3extractor",
+-                "libmp4extractor",
+-                "libmpeg2extractor",
+-                "liboggextractor",
+-                "libwavextractor",
+-            ],
+-            // Transcoding service only run with primary ABI.
+-            binaries: [
+-                "mediatranscoding",
+-            ],
+-        },
+-    },
+-    // JNI
+-    native_shared_libs: [
+-        "libmediaparser-jni",
+-        "libmediaformatshaper",
+-    ],
+     compile_multilib: "both",
+-    prebuilts: [
+-        "code_coverage.policy",
+-        "com.android.media-mediatranscoding.rc",
+-        "com.android.media-mediatranscoding.32rc",
+-        "crash_dump.policy",
+-        "mediaextractor.policy",
+-        "media-linker-config",
+-    ],
+     key: "com.android.media.key",
+     certificate: ":com.android.media.certificate",
+diff --git a/packages/providers/MediaProvider/apex/Android.bp b/packages/providers/MediaProvider/apex/Android.bp
+--- a/packages/providers/MediaProvider/apex/Android.bp
++++ b/packages/providers/MediaProvider/apex/Android.bp
+@@ -23,16 +23,5 @@ apex {
+     name: "com.android.mediaprovider",
+     defaults: ["com.android.mediaprovider-defaults"],
+     manifest: "apex_manifest.json",
+-    apps: [
+-        "MediaProvider",
+-        "Photopicker",
+-    ],
+-    compat_configs: [
+-        "media-provider-platform-compat-config",
+-        "framework-pdf-v-platform-compat-config",
+-    ],
+-    jni_libs: [
+-        "libpdfclient",
+-    ],
+     compile_multilib: "both",
+ }
+@@ -41,10 +30,5 @@ apex_defaults {
+     name: "com.android.mediaprovider-defaults",
+-    required: ["preinstalled-packages-com.android.providers.media.module.xml"],
+     bootclasspath_fragments: ["com.android.mediaprovider-bootclasspath-fragment"],
+-    sh_binaries: [
+-        // MediaProvider CLI (cli/media_provider_cli_wrapper.sh)
+-        "media_provider",
+-    ],
+     prebuilts: ["current_sdkinfo"],
+     key: "com.android.mediaprovider.key",
+     certificate: ":com.android.mediaprovider.certificate",

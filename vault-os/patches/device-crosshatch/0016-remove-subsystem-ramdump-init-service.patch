@@ -1,0 +1,21 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -588,18 +588,1 @@
+-service ss_ramdump /vendor/bin/subsystem_ramdump
+-    class main
+-    user root
+-    group system
+-    disabled
+-
+-on property:persist.vendor.sys.ssr.enable_ramdumps=1
+-    write /sys/module/subsystem_restart/parameters/enable_ramdumps 1
+-    mkdir /data/vendor/wifidump 771 root system
+-    mkdir /data/vendor/ramdump 771 root system
+-    mkdir /data/vendor/ssrdump 771 root system
+-    mkdir /data/vendor/ssrlog  775 root system
+-    start ss_ramdump
+-
+-on property:persist.vendor.sys.ssr.enable_ramdumps=0
+-    write /sys/module/subsystem_restart/parameters/enable_ramdumps 0
+-
+ service adsprpcd /vendor/bin/adsprpcd

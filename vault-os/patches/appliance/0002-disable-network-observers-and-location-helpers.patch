@@ -1,0 +1,105 @@
+diff --git a/frameworks/base/services/java/com/android/server/SystemServer.java b/frameworks/base/services/java/com/android/server/SystemServer.java
+--- a/frameworks/base/services/java/com/android/server/SystemServer.java
++++ b/frameworks/base/services/java/com/android/server/SystemServer.java
+@@ -1751,13 +1751,15 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            t.traceBegin("IpConnectivityMetrics");
+-            mSystemServiceManager.startService(IpConnectivityMetrics.class);
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("IpConnectivityMetrics");
++                mSystemServiceManager.startService(IpConnectivityMetrics.class);
++                t.traceEnd();
+ 
+-            t.traceBegin("NetworkWatchlistService");
+-            mSystemServiceManager.startService(NetworkWatchlistService.Lifecycle.class);
+-            t.traceEnd();
++                t.traceBegin("NetworkWatchlistService");
++                mSystemServiceManager.startService(NetworkWatchlistService.Lifecycle.class);
++                t.traceEnd();
++            }
+ 
+             t.traceBegin("PinnerService");
+             mSystemServiceManager.startService(PinnerService.class);
+@@ -2302,14 +2304,16 @@ public final class SystemServer implements Dumpable {
+                 t.traceEnd();
+             }
+ 
+-            t.traceBegin("StartCountryDetectorService");
+-            try {
+-                countryDetector = new CountryDetectorService(context);
+-                ServiceManager.addService(Context.COUNTRY_DETECTOR, countryDetector);
+-            } catch (Throwable e) {
+-                reportWtf("starting Country Detector", e);
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartCountryDetectorService");
++                try {
++                    countryDetector = new CountryDetectorService(context);
++                    ServiceManager.addService(Context.COUNTRY_DETECTOR, countryDetector);
++                } catch (Throwable e) {
++                    reportWtf("starting Country Detector", e);
++                }
++                t.traceEnd();
+             }
+-            t.traceEnd();
+ 
+             t.traceBegin("StartTimeZoneDetectorService");
+             try {
+@@ -2319,30 +2323,34 @@ public final class SystemServer implements Dumpable {
+             }
+             t.traceEnd();
+ 
+-            t.traceBegin("StartAltitudeService");
+-            try {
+-                mSystemServiceManager.startService(AltitudeService.Lifecycle.class);
+-            } catch (Throwable e) {
+-                reportWtf("starting AltitudeService service", e);
+-            }
+-            t.traceEnd();
++            if (!isPhoneVaultOffline) {
++                t.traceBegin("StartAltitudeService");
++                try {
++                    mSystemServiceManager.startService(AltitudeService.Lifecycle.class);
++                } catch (Throwable e) {
++                    reportWtf("starting AltitudeService service", e);
++                }
++                t.traceEnd();
+ 
+-            t.traceBegin("StartLocationTimeZoneManagerService");
+-            try {
+-                mSystemServiceManager.startService(LocationTimeZoneManagerService.Lifecycle.class);
+-            } catch (Throwable e) {
+-                reportWtf("starting LocationTimeZoneManagerService service", e);
+-            }
+-            t.traceEnd();
++                t.traceBegin("StartLocationTimeZoneManagerService");
++                try {
++                    mSystemServiceManager.startService(
++                            LocationTimeZoneManagerService.Lifecycle.class);
++                } catch (Throwable e) {
++                    reportWtf("starting LocationTimeZoneManagerService service", e);
++                }
++                t.traceEnd();
+ 
+-            if (context.getResources().getBoolean(R.bool.config_enableGnssTimeUpdateService)) {
+-                t.traceBegin("StartGnssTimeUpdateService");
+-                try {
+-                    mSystemServiceManager.startService(GnssTimeUpdateService.Lifecycle.class);
+-                } catch (Throwable e) {
+-                    reportWtf("starting GnssTimeUpdateService service", e);
++                if (context.getResources().getBoolean(
++                        R.bool.config_enableGnssTimeUpdateService)) {
++                    t.traceBegin("StartGnssTimeUpdateService");
++                    try {
++                        mSystemServiceManager.startService(GnssTimeUpdateService.Lifecycle.class);
++                    } catch (Throwable e) {
++                        reportWtf("starting GnssTimeUpdateService service", e);
++                    }
++                    t.traceEnd();
+                 }
+-                t.traceEnd();
+             }
+ 
+             if (!isWatch) {

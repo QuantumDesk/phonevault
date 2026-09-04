@@ -1,0 +1,22 @@
+diff --git a/BoardConfig-common.mk b/BoardConfig-common.mk
+--- a/BoardConfig-common.mk
++++ b/BoardConfig-common.mk
+@@ -241,16 +241,8 @@ DEVICE_MANIFEST_FILE := device/google/crosshatch/manifest.xml
+ DEVICE_MATRIX_FILE := device/google/crosshatch/compatibility_matrix.xml
+ DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := device/google/crosshatch/device_framework_matrix.xml
+ 
+-ODM_MANIFEST_SKUS += \
+-    G013A \
+-    G013B \
+-    G013C \
+-    G013D \
+-
+-ODM_MANIFEST_G013A_FILES := device/google/crosshatch/nfc/manifest_se_SIM1.xml
+-ODM_MANIFEST_G013B_FILES := device/google/crosshatch/nfc/manifest_se_eSE1.xml
+-ODM_MANIFEST_G013C_FILES := device/google/crosshatch/nfc/manifest_se_SIM1.xml
+-ODM_MANIFEST_G013D_FILES := device/google/crosshatch/nfc/manifest_se_eSE1.xml
++# Phone Vault appliance: no NFC/secure-element HAL is shipped, so no per-SKU
++# ODM manifest fragment may declare one.
+ 
+ # Use mke2fs to create ext4 images
+ TARGET_USES_MKE2FS := true

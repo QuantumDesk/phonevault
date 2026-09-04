@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="def_airplane_mode_on">true</bool>
+    <string name="airplane_mode_radios" translatable="false">cell,bluetooth,wifi,wimax,nfc</string>
+</resources>

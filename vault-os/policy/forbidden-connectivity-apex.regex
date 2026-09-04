@@ -1,0 +1,14 @@
+# Extended regular expressions matched against paths inside the retained
+# com.android.tethering compatibility APEX. Its framework and system-server
+# classpath fragments remain for Android boot compatibility, but no executable
+# network service, tethering application, BPF program, native/JNI runtime, or
+# daemon init file may ship. Lines starting with "!" are permitted patterns:
+# a path matching a permitted pattern is exempt from the forbidden patterns.
+^bin/
+^(priv-)?app/
+^lib(64)?/
+^etc/bpf/
+^etc/.*(netbpfload|ot-daemon).*rc$
+# service-connectivity compiles against this resource-only APK (no code); it
+# is exempted by exact path so no other application can hide beside it.
+!^priv-app/ServiceConnectivityResources@[A-Za-z0-9._-]+(/ServiceConnectivityResources\.apk)?$

@@ -1,0 +1,68 @@
+diff --git a/packages/modules/Bluetooth/apex/Android.bp b/packages/modules/Bluetooth/apex/Android.bp
+--- a/packages/modules/Bluetooth/apex/Android.bp
++++ b/packages/modules/Bluetooth/apex/Android.bp
+@@ -20,32 +20,6 @@ apex {
+     manifest: "apex_manifest.json",
+     bootclasspath_fragments: ["com.android.btservices-bootclasspath-fragment"],
+     systemserverclasspath_fragments: ["com.android.btservices-systemserverclasspath-fragment"],
+-    compat_configs: [
+-        "bluetooth-compat-config",
+-        "bluetoothapk-platform-compat-config",
+-        "framework-bluetooth-compat-config",
+-    ],
+-    apps: ["Bluetooth"],
+-
+-    multilib: {
+-        first: {
+-            // Extractor process runs only with the primary ABI.
+-            jni_libs: [
+-                "libbluetooth_jni",
+-            ],
+-        },
+-    },
+-
+-    prebuilts: [
+-        "audio_set_configurations_bfbs",
+-        "audio_set_configurations_json",
+-        "audio_set_scenarios_bfbs",
+-        "audio_set_scenarios_json",
+-        "bt_did.conf",
+-        "bt_stack.conf",
+-        "btservices-linker-config",
+-        "interop_database.conf",
+-    ],
+     key: "com.android.btservices.key",
+     certificate: ":com.android.btservices.certificate",
+     updatable: true,
+diff --git a/packages/modules/Wifi/apex/Android.bp b/packages/modules/Wifi/apex/Android.bp
+--- a/packages/modules/Wifi/apex/Android.bp
++++ b/packages/modules/Wifi/apex/Android.bp
+@@ -23,26 +23,12 @@ apex_defaults {
+     bootclasspath_fragments: ["com.android.wifi-bootclasspath-fragment"],
+     systemserverclasspath_fragments: ["com.android.wifi-systemserverclasspath-fragment"],
+-    compat_configs: ["wifi-compat-config"],
+-    // from build rule `cacerts_wfa`
+-    prebuilts: [
+-        "cacerts_wfa",
+-        "mainline_supplicant_conf",
+-        "mainline_supplicant_rc",
+-    ],
+     key: "com.android.wifi.key",
+     certificate: ":com.android.wifi.certificate",
++    // Phone Vault: wifi-service compiles against this resource-only APK; no
++    // Wi-Fi application, supplicant, or JNI runtime ships.
+     apps: [
+-        "OsuLogin",
+         "ServiceWifiResources",
+-        "WifiDialog",
+     ],
+-    binaries: select(release_flag("RELEASE_WIFI_MAINLINE_SUPPLICANT_BINARY"), {
+-        true: ["wpa_supplicant_mainline"],
+-        default: [],
+-    }),
+-    jni_libs: [
+-        "libservice-wifi-jni",
+-    ],
+     defaults: ["r-launched-apex-module"],
+     // Indicates that pre-installed version of this apex can be compressed.
+     // Whether it actually will be compressed is controlled on per-device basis.

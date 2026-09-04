@@ -1,0 +1,54 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -230,12 +230,6 @@
+     # Mount RW partitions which need run fsck
+     mount_all /vendor/etc/fstab.${ro.boot.hardware.platform} --late
+ 
+-    # Required for time_daemon
+-    mkdir /persist/time 0770 system system
+-
+-    # Start time daemon early so that the system time can be set early
+-    start time_daemon
+-
+     # Write build info to kdebuginfo.
+     write /sys/module/kdebuginfo/parameters/build_info "${ro.product.name}-${ro.build.type} ${ro.build.version.incremental}"
+ 
+@@ -623,38 +617,6 @@
+     user root
+     oneshot
+ 
+-service rmt_storage /vendor/bin/rmt_storage
+-    class core
+-    user root
+-    ioprio rt 0
+-    shutdown critical
+-
+-service tftp_server /vendor/bin/tftp_server
+-   class core
+-   user root
+-   group root system
+-
+-service modem_svc /vendor/bin/modem_svc -q
+-   class core
+-   user root
+-   group system
+-   capabilities NET_BIND_SERVICE
+-
+-service cnss-daemon /vendor/bin/cnss-daemon -n -l
+-   class late_start
+-   user system
+-   group system inet wifi
+-
+-service loc_launcher /vendor/bin/loc_launcher
+-    class late_start
+-    group gps inet diag wifi
+-
+-on property:persist.sys.xtra-daemon.enabled=*
+-    restart loc_launcher
+-
+-service pd_mapper /vendor/bin/pd-mapper
+-     class core
+-
+ # bugreport is triggered by holding down volume down, volume up and power
+ service bugreport /system/bin/dumpstate -d -p -z
+     class main

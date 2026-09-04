@@ -1,0 +1,42 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -443,39 +443,6 @@
+ on boot
+-    mkdir /dev/socket/qmux_radio 0770 radio radio
+-    chmod 2770 /dev/socket/qmux_radio
+     mkdir /dev/socket/qmux_audio 0770 media audio
+     chmod 2770 /dev/socket/qmux_audio
+-    mkdir /dev/socket/qmux_bluetooth 0770 bluetooth bluetooth
+-    chmod 2770 /dev/socket/qmux_bluetooth
+-    mkdir /dev/socket/qmux_gps 0770 gps gps
+-    chmod 2770 /dev/socket/qmux_gps
+-
+-    # Create NETMGR daemon socket area
+-    mkdir /dev/socket/netmgr 0750 radio radio
+-
+-    # Assign TCP buffer thresholds to be ceiling value of technology maximums
+-    # Increased technology maximums should be reflected here.
+-    write /proc/sys/net/core/rmem_max  8388608
+-    write /proc/sys/net/core/wmem_max  8388608
+-
+-    # Bluetooth
+-    chown bluetooth net_bt /sys/class/rfkill/rfkill0/type
+-    chown bluetooth net_bt /sys/class/rfkill/rfkill0/state
+-    chmod 0660 /sys/class/rfkill/rfkill0/state
+-    chown bluetooth net_bt /sys/class/rfkill/rfkill0/device/extldo
+-    chmod 0660 /sys/class/rfkill/rfkill0/device/extldo
+-
+-    # Wifi firmware reload path
+-    chown wifi wifi /sys/module/wlan/parameters/fwpath
+-
+-    # default country code
+-    setprop ro.boot.wificountrycode 00
+-
+-    # WLAN debug access
+-    chown system system /d/icnss/stats
+-
+-    # Default enable uicc_se
+-    setprop persist.vendor.radio.uicc_se_enabled true
+ 
+ # reset thermal-engine when changed profile
+ on property:vendor.thermal.vr_mode=*

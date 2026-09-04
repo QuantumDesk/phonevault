@@ -1,0 +1,8 @@
+# Relative paths forbidden inside media APEX containers retained solely for
+# framework/SystemUI API linkage. The signing appliance has no media workflow.
+^app/
+^priv-app/
+\.apk$
+^bin/
+^lib(64)?/
+^etc/.*(mediatranscoding|mediaextractor|media_provider|photopicker|compat|preinstalled-packages)

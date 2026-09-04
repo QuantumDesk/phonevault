@@ -1,0 +1,14 @@
+diff --git a/external/cronet/components/cronet/android/Android.bp b/external/cronet/components/cronet/android/Android.bp
+--- a/external/cronet/components/cronet/android/Android.bp
++++ b/external/cronet/components/cronet/android/Android.bp
+@@ -597,6 +597,10 @@ cc_library_shared {
+ // this can be removed.
+ cc_library_shared {
+     name: "cronet_aml_components_cronet_android_cronet__testing",
++    // Phone Vault: Cronet is not packaged in the appliance connectivity APEX,
++    // so this test twin must not emit a platform install rule that collides
++    // with the identically named production library.
++    installable: false,
+     srcs: [
+         "cronet_jni.cc",
+     ],

@@ -1,0 +1,43 @@
+diff --git a/system/core/rootdir/init.rc b/system/core/rootdir/init.rc
+index 1b2baa5439b6..35552db9ea36 100644
+--- a/system/core/rootdir/init.rc
++++ b/system/core/rootdir/init.rc
+@@ -1128,7 +1128,7 @@ on property:suspend.disable_sync_on_suspend=true
+ on load-bpf-programs
+     exec_start bpfloader
+ 
+-on bpf-progs-loaded
++on bpf-progs-loaded && property:ro.phonevault.offline=false
+     start netd
+ 
+ # It is recommended to put unnecessary data/ initialization from post-fs-data
+diff --git a/system/core/rootdir/init.zygote32.rc b/system/core/rootdir/init.zygote32.rc
+index fb05c647f55e..ae2915a3a8cc 100644
+--- a/system/core/rootdir/init.zygote32.rc
++++ b/system/core/rootdir/init.zygote32.rc
+@@ -11,10 +11,7 @@ service zygote /system/bin/app_process -Xzygote /system/bin --zygote --start-sys
+     # update it in SystemSuspend.cpp
+     onrestart write /sys/power/wake_lock zygote_kwl
+     onrestart restart audioserver
+-    onrestart restart cameraserver
+     onrestart restart media
+     onrestart restart --only-if-running media.tuner
+-    onrestart restart netd
+-    onrestart restart wificond
+     task_profiles ProcessCapacityHigh MaxPerformance
+     critical window=${zygote.critical_window.minute:-off} target=zygote-fatal
+diff --git a/system/core/rootdir/init.zygote64.rc b/system/core/rootdir/init.zygote64.rc
+index e7ac70b3e4b2..ab76fbafcfa0 100644
+--- a/system/core/rootdir/init.zygote64.rc
++++ b/system/core/rootdir/init.zygote64.rc
+@@ -11,10 +11,7 @@ service zygote /system/bin/app_process64 -Xzygote /system/bin --zygote --start-s
+     # update it in SystemSuspend.cpp
+     onrestart write /sys/power/wake_lock zygote_kwl
+     onrestart restart audioserver
+-    onrestart restart cameraserver
+     onrestart restart media
+     onrestart restart --only-if-running media.tuner
+-    onrestart restart netd
+-    onrestart restart wificond
+     task_profiles ProcessCapacityHigh MaxPerformance
+     critical window=${zygote.critical_window.minute:-off} target=zygote-fatal

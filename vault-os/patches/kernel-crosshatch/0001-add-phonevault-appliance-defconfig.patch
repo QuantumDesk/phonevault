@@ -1,0 +1,74 @@
+diff --git a/arch/arm64/configs/phonevault.config b/arch/arm64/configs/phonevault.config
+new file mode 100644
+index 000000000000..ac4c0ec9414d
+--- /dev/null
++++ b/arch/arm64/configs/phonevault.config
+@@ -0,0 +1,68 @@
++# Phone Vault signing-appliance fragment, merged after b1c1_defconfig.
++# Keep USB peripheral/configfs and Titan M support in the base configuration;
++# remove radios and consumer capture/compute surfaces unused by the signer.
++CONFIG_PHONEVAULT_APPLIANCE=y
++# CONFIG_BT is not set
++# CONFIG_BTFM_SLIM is not set
++# CONFIG_BTFM_SLIM_WCN3990 is not set
++# CONFIG_MSM_BT_POWER is not set
++# CONFIG_NFC is not set
++# CONFIG_NFC_NQ is not set
++# CONFIG_NFC_NQ_PN81A is not set
++# CONFIG_WIRELESS is not set
++# CONFIG_WIRELESS_EXT is not set
++# CONFIG_WLAN is not set
++# CONFIG_QCA_CLD_WLAN is not set
++# CONFIG_CNSS_GENL is not set
++# CONFIG_CNSS_UTILS is not set
++# CONFIG_GOOGLE_WLAN_MAC is not set
++# CONFIG_ICNSS is not set
++# CONFIG_WCNSS_MEM_PRE_ALLOC is not set
++# CONFIG_IPA3 is not set
++# CONFIG_IPA_UT is not set
++# CONFIG_RMNET_DATA is not set
++# CONFIG_RMNET_DATA_FC is not set
++# CONFIG_RMNET_IPA3 is not set
++# CONFIG_RNDIS_IPA is not set
++# CONFIG_MODEMSMEM is not set
++# CONFIG_MSM_PIL_MSS_QDSP6V5 is not set
++# CONFIG_MSM_GLINK_LOOPBACK_SERVER is not set
++# CONFIG_MSM_GLINK_PKT is not set
++# CONFIG_CAMERA_FW_UPDATE is not set
++# CONFIG_MEDIA_CAMERA_SUPPORT is not set
++# CONFIG_MEDIA_DIGITAL_TV_SUPPORT is not set
++# CONFIG_MEDIA_CONTROLLER is not set
++# CONFIG_MEDIA_ATTACH is not set
++# CONFIG_MEDIA_TUNER is not set
++# CONFIG_DVB_AU8522 is not set
++# CONFIG_DVB_AU8522_V4L is not set
++# CONFIG_DVB_TUNER_DIB0070 is not set
++# CONFIG_DVB_TUNER_DIB0090 is not set
++# CONFIG_VIDEO_V4L2_SUBDEV_API is not set
++# CONFIG_VIDEO_FIXED_MINOR_RANGES is not set
++# CONFIG_MSM_VIDC_V4L2 is not set
++# CONFIG_MSM_VIDC_GOVERNORS is not set
++# CONFIG_MSM_VIDEOCC_SDM845 is not set
++# CONFIG_TOUCHSCREEN_HEATMAP is not set
++# CONFIG_INPUT_VD6281 is not set
++# CONFIG_SENSORS_SSC is not set
++# CONFIG_SPECTRA_CAMERA is not set
++# CONFIG_MSM_ADSPRPC is not set
++# CONFIG_MSM_CDSP_LOADER is not set
++# CONFIG_USB_DWC3_DUAL_ROLE is not set
++# CONFIG_USB_DWC3_HOST is not set
++CONFIG_USB_DWC3_GADGET=y
++# CONFIG_USB_DWC3_OF_SIMPLE is not set
++# CONFIG_USB_DWC3_PCI is not set
++# CONFIG_USB_CONFIGFS_MASS_STORAGE is not set
++# CONFIG_USB_CONFIGFS_F_AUDIO_SRC is not set
++# CONFIG_USB_CONFIGFS_F_CCID is not set
++# CONFIG_USB_CONFIGFS_F_CDEV is not set
++# CONFIG_USB_CONFIGFS_F_DIAG is not set
++# CONFIG_USB_CONFIGFS_F_GSI is not set
++# CONFIG_USB_CONFIGFS_F_HID is not set
++# CONFIG_USB_CONFIGFS_F_MIDI is not set
++# CONFIG_USB_CONFIGFS_F_MTP is not set
++# CONFIG_USB_CONFIGFS_F_PTP is not set
++# CONFIG_USB_CONFIGFS_F_QDSS is not set
++# CONFIG_SND_USB_AUDIO_QMI is not set

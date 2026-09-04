@@ -1,0 +1,32 @@
+--- a/usb/gadget/UsbGadget.cpp
++++ b/usb/gadget/UsbGadget.cpp
+@@ -669,6 +669,29 @@ Return<void> UsbGadget::setCurrentUsbFunctions(uint64_t functions,
+                                                const sp<V1_0::IUsbGadgetCallback> &callback,
+                                                uint64_t timeout) {
+     std::unique_lock<std::mutex> lk(mLockSetCurrentFunction);
++
++    // Phone Vault exposes only Android Open Accessory transport. ADB is
++    // available for userdebug bring-up, but a production user build rejects
++    // it along with every media, audio, MIDI, diagnostic, serial, and network
++    // gadget composition. Enforce this in the HAL rather than trusting a
++    // mutable framework request or the set of functions created by init.
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++        const uint64_t none = static_cast<uint64_t>(GadgetFunction::NONE);
++        const uint64_t accessory = static_cast<uint64_t>(GadgetFunction::ACCESSORY);
++        const uint64_t adb = static_cast<uint64_t>(GadgetFunction::ADB);
++        const bool debuggable = GetProperty("ro.debuggable", "0") == "1";
++        const bool allowed = functions == none || functions == accessory
++                || (debuggable && (functions == adb || functions == (accessory | adb)));
++        if (!allowed) {
++            ALOGE("Phone Vault rejected USB gadget functions: 0x%llx",
++                  static_cast<unsigned long long>(functions));
++            if (callback != nullptr) {
++                callback->setCurrentUsbFunctionsCb(
++                        functions, Status::CONFIGURATION_NOT_SUPPORTED);
++            }
++            return Void();
++        }
++    }
+ 
+     mCurrentUsbFunctions = functions;
+     mCurrentUsbFunctionsApplied = false;

@@ -1,0 +1,35 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -303,32 +303,5 @@
+     # Create directory for audio delta files
+     mkdir /data/vendor/audio/acdbdata 0770 media audio
+     mkdir /data/vendor/audio/acdbdata/delta 0770 media audio
+ 
+-    # Create directory for radio
+-    mkdir /data/vendor/radio 0773 system radio
+-    mkdir /data/vendor/modem_stat 0771 system radio
+-    write /data/vendor/modem_stat/debug.txt ""
+-    chown system radio /data/vendor/modem_stat/debug.txt
+-    chmod 0664 /data/vendor/modem_stat/debug.txt
+-
+-    # Set up sensors-related directories and permissions
+-    chmod 775 /persist/sensors
+-    chmod 664 /persist/sensors/sensors_settings
+-    chown root system /persist/sensors/registry
+-    chmod 775 /persist/sensors/registry
+-    chown root system /persist/sensors/registry/registry
+-    chmod 775 /persist/sensors/registry/registry
+-
+-    chown system root /persist/sensors/sensors_settings
+-    chown root root /persist/sensors/registry/registry/sensors_settings
+-
+-    mkdir /data/vendor/sensors 0770
+-    chown system system /data/vendor/sensors
+-    mkdir /data/vendor/sensors/log 0770
+-    chown system system /data/vendor/sensors/log
+-
+-    # Restore SeLinux Context for preventing temp.json with
+-    # incorrect security context
+-    restorecon /mnt/vendor/persist/sensors/registry/temp.json
+-
+     chmod 770 /persist/audio

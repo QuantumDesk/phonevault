@@ -1,0 +1,45 @@
+--- a/device.mk
++++ b/device.mk
+@@ -390,42 +390,2 @@
+-#GNSS HAL
+-PRODUCT_PACKAGES += \
+-    libgps.utils \
+-    libgnss \
+-    liblocation_api \
+-    android.hardware.gnss@1.1-impl-qti \
+-    android.hardware.gnss@1.1-service-qti
+-
+-ENABLE_VENDOR_RIL_SERVICE := true
+-
+-USE_QCRIL_OEMHOOK := true
+-
+-PRODUCT_COPY_FILES += \
+-    $(LOCAL_PATH)/sec_config:$(TARGET_COPY_OUT_VENDOR)/etc/sec_config
+-
+-HOSTAPD := hostapd
+-PRODUCT_PACKAGES += $(HOSTAPD)
+-
+-WPA := wpa_supplicant.conf
+-WPA += wpa_supplicant
+-PRODUCT_PACKAGES += $(WPA)
+-
+-# Wifi
+-PRODUCT_PACKAGES += \
+-    android.hardware.wifi-service \
+-    wificond \
+-    WifiOverlay
+-
+-# Connectivity
+-PRODUCT_PACKAGES += \
+-    ConnectivityOverlay
+-
+-# Audio effects
+-PRODUCT_PACKAGES += \
+-    libvolumelistener \
+-    libqcomvisualizer \
+-    libqcomvoiceprocessing \
+-    libqcomvoiceprocessingdescriptors \
+-    libqcompostprocbundle
+-
+ PRODUCT_PACKAGES += \
+     audio.primary.sdm845 \

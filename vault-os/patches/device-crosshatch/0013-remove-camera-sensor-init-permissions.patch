@@ -1,0 +1,18 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -378,15 +378,5 @@
+     write /sys/kernel/boot_adsp/boot 1
+     write /sys/kernel/boot_cdsp/boot 1
+ 
+-    # Permission for rainbow sensor
+-    chown cameraserver camera /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_enable
+-    chmod 0660 /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_enable
+-    chown cameraserver camera /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_read_byte
+-    chmod 0660 /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_read_byte
+-    chown cameraserver camera /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_write_byte
+-    chmod 0660 /sys/devices/platform/soc/ac4a000.qcom,cci/ac4a000.qcom,cci:qcom,rainbow@20/rainbow_write_byte
+-    chown cameraserver camera /dev/vd6281
+-    chmod 0660 /dev/vd6281
+-
+     # Permission for Vibrator
+     chown system system /sys/class/leds/vibrator/device/comp_enable

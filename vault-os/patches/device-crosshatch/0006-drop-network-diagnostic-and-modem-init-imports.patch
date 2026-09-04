@@ -1,0 +1,11 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -17,8 +17,5 @@
+ import /vendor/etc/init/hw/init.${ro.boot.hardware.platform}.power.rc
+ import /vendor/etc/init/hw/init.${ro.boot.hardware.platform}.usb.rc
+-import /vendor/etc/init/hw/init.${ro.boot.hardware.platform}.diag.rc
+-import /vendor/etc/init/hw/init.${ro.boot.hardware.platform}.logging.rc
+-import /vendor/etc/init/hw/init.${ro.boot.hardware.platform}.mpssrfs.rc
+ 
+ 
+ on property:init.svc.vendor.charger=running

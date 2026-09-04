@@ -1,0 +1,304 @@
+--- a/device.mk
++++ b/device.mk
+@@ -17,27 +17,13 @@
+ PRODUCT_SOONG_NAMESPACES += \
+     device/google/crosshatch \
+     hardware/google/av \
+-    hardware/google/camera \
+     hardware/google/interfaces \
+     hardware/google/pixel \
+     hardware/qcom/audio \
+     hardware/qcom/sdm845/display \
+-    hardware/qcom/sdm845/gps \
+     hardware/qcom/wlan/legacy \
+-    hardware/qcom-caf/bootctrl \
+-    vendor/qcom/opensource/data-ipa-cfg-mgr-legacy-um
++    hardware/qcom-caf/bootctrl
+ 
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    keyguard.no_require_sim=true
+-
+-# enable cal by default on accel sensor
+-PRODUCT_PRODUCT_PROPERTIES += \
+-    persist.vendor.debug.sensors.accel_cal=1
+-
+-# The default value of this variable is false and should only be set to true when
+-# the device allows users to retain eSIM profiles after factory reset of user data.
+-PRODUCT_PRODUCT_PROPERTIES += \
+-    masterclear.allow_retain_esim_profiles_after_fdr=true
+ 
+ PRODUCT_COPY_FILES += \
+     device/google/crosshatch/default-permissions.xml:$(TARGET_COPY_OUT_VENDOR)/etc/default-permissions/default-permissions.xml \
+@@ -181,11 +166,6 @@
+     vendor.audio.offload.gapless.enabled=true \
+ 
+ # MaxxAudio effect and add rotation monitor
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.audio.monitorRotation=true
+-
+-PRODUCT_PACKAGES += \
+-    libmalistener
+ 
+ # graphics
+ PRODUCT_PROPERTY_OVERRIDES += \
+@@ -194,7 +174,6 @@
+ PRODUCT_PROPERTY_OVERRIDES += \
+     ro.vendor.display.foss=1 \
+     ro.vendor.display.paneltype=2 \
+-    ro.vendor.display.sensortype=2 \
+     vendor.display.foss.config=1 \
+     vendor.display.foss.config_path=/vendor/etc/FOSSConfig.xml
+ 
+@@ -204,62 +183,14 @@
+ PRODUCT_PROPERTY_OVERRIDES += \
+     vendor.display.disable_decimation=1
+ 
+-# Enable camera EIS3.0
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.camera.is_type=5 \
+-    persist.camera.gzoom.at=0
+-
+-# b/166675194
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.vendor.camera.provider24.disable_mem_init=1
+-
+-# camera google face detection
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.camera.googfd.enable=1
+-
+-# Enable logical camera as default (camera id 1)
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.camera.logical.default=1
+-
+-# Enable Treble camera shim to free buffers earlier than default
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.vendor.camera.free_buf_early=true
+ 
+ # OEM Unlock reporting
+ PRODUCT_DEFAULT_PROPERTY_OVERRIDES += \
+     ro.oem_unlock_supported=1
+ 
+ PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.vendor.cne.feature=1 \
+-    persist.vendor.data.iwlan.enable=true \
+-    persist.radio.RATE_ADAPT_ENABLE=1 \
+-    persist.radio.ROTATION_ENABLE=1 \
+-    persist.radio.VT_ENABLE=1 \
+-    persist.radio.VT_HYBRID_ENABLE=1 \
+-    persist.vendor.radio.apm_sim_not_pwdn=1 \
+-    persist.vendor.radio.custom_ecc=1 \
+-    persist.vendor.radio.data_ltd_sys_ind=1 \
+-    persist.radio.videopause.mode=1 \
+-    persist.vendor.radio.mt_sms_ack=30 \
+-    persist.vendor.radio.sib16_support=1 \
+-    persist.vendor.radio.data_con_rprt=true \
+-    persist.vendor.radio.relay_oprt_change=1 \
+-    persist.vendor.radio.no_wait_for_card=1 \
+-    persist.vendor.radio.sap_silent_pin=1 \
+-    persist.vendor.radio.multisim_switch_support=false \
+-    persist.vendor.radio.manual_nw_rej_ct=1 \
+-    persist.rcs.supported=1 \
+-    vendor.rild.libpath=/vendor/lib64/libril-qc-hal-qmi.so \
+-    ro.hardware.keystore_desede=true \
++    ro.hardware.keystore_desede=true
+ 
+-# Disable snapshot timer
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.vendor.radio.snapshot_enabled=0 \
+-    persist.vendor.radio.snapshot_timer=0
+-
+-# logical camera for dual front sensors
+-PRODUCT_PROPERTY_OVERRIDES += \
+-  persist.vendor.camera.multicam=1
+ 
+ PRODUCT_PACKAGES += \
+     hwcomposer.qcom \
+@@ -292,52 +223,11 @@
+ PRODUCT_PACKAGES += \
+     vendor.qti.hardware.memtrack-service
+ 
+-# Bluetooth SoC
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    vendor.qcom.bluetooth.soc=cherokee
+-
+-# Property for loading BDA from device tree
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.vendor.bt.bdaddr_path=/proc/device-tree/chosen/cdt/cdb2/bt_addr
+-
+-# Bluetooth WiPower
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.vendor.bluetooth.emb_wp_mode=false \
+-    ro.vendor.bluetooth.wipower=false
+ 
+ # HEH filename encryption is being dropped
+ PRODUCT_PROPERTY_OVERRIDES += \
+     ro.crypto.volume.filenames_mode=aes-256-cts
+ 
+-# DRM HAL
+-PRODUCT_PACKAGES += \
+-    android.hardware.drm@1.3.vendor \
+-    android.hardware.drm-service.clearkey
+-
+-# NFC and Secure Element packages
+-PRODUCT_PACKAGES += \
+-    Tag \
+-    android.hardware.nfc@1.2-service \
+-    android.hardware.secure_element@1.1-service-disabled
+-
+-PRODUCT_PRODUCT_PROPERTIES += \
+-    vendor.ese.loader_script_path=/sys/firmware/devicetree/base/soc/i2c@88c000/nq@28/ese/loader_scripts_path
+-
+-PRODUCT_COPY_FILES += \
+-    frameworks/native/data/etc/android.hardware.nfc.uicc.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013A/android.hardware.nfc.uicc.xml \
+-    frameworks/native/data/etc/android.hardware.nfc.ese.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013B/android.hardware.nfc.ese.xml \
+-    frameworks/native/data/etc/android.hardware.se.omapi.ese.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013B/android.hardware.se.omapi.ese.xml \
+-    frameworks/native/data/etc/android.hardware.nfc.uicc.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013C/android.hardware.nfc.uicc.xml \
+-    frameworks/native/data/etc/android.hardware.nfc.ese.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013D/android.hardware.nfc.ese.xml \
+-    frameworks/native/data/etc/android.hardware.se.omapi.ese.xml:$(TARGET_COPY_OUT_VENDOR)/odm/etc/permissions/sku_G013D/android.hardware.se.omapi.ese.xml
+-
+-PRODUCT_COPY_FILES += \
+-    device/google/crosshatch/nfc/com.google.hardware.pixel.japan.xml:$(TARGET_COPY_OUT_ODM)/etc/permissions/sku_G013B/com.google.hardware.pixel.japan.xml \
+-    device/google/crosshatch/nfc/com.google.hardware.pixel.japan.xml:$(TARGET_COPY_OUT_ODM)/etc/permissions/sku_G013D/com.google.hardware.pixel.japan.xml
+-
+-PRODUCT_COPY_FILES += \
+-    device/google/crosshatch/nfc/libnfc-nci.conf:$(TARGET_COPY_OUT_PRODUCT)/etc/libnfc-nci.conf \
+-    device/google/crosshatch/nfc/libese-nxp.conf:$(TARGET_COPY_OUT_VENDOR)/etc/libese-nxp.conf
+ 
+ # USB HAL
+ PRODUCT_PACKAGES += \
+@@ -345,20 +235,6 @@
+ PRODUCT_PACKAGES += \
+     android.hardware.usb.gadget-service.crosshatch
+ 
+-# Create input surface on the framework side
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    debug.stagefright.c2inputsurface=-1 \
+-
+-# Transcoding related property.
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    debug.media.transcoding.codec_max_operating_rate_720P=480 \
+-    debug.media.transcoding.codec_max_operating_rate_1080P=240 \
+-    debug.media.transcoding.codec_max_operating_rate_4k=120 \
+-
+-PRODUCT_PACKAGES += \
+-    android.hardware.camera.provider@2.4-impl \
+-    android.hardware.camera.provider@2.4-service_64 \
+-    camera.device@3.2-impl
+ 
+ # Default permission grant exceptions
+ PRODUCT_COPY_FILES += \
+@@ -399,16 +275,10 @@
+ PRODUCT_PROPERTY_OVERRIDES += \
+     audio.snd_card.open.retries=50
+ 
+-PRODUCT_COPY_FILES += \
+-    $(LOCAL_PATH)/lowi.conf:$(TARGET_COPY_OUT_VENDOR)/etc/lowi.conf
+-
+-# GPS configuration file
+-PRODUCT_COPY_FILES += \
+-    $(LOCAL_PATH)/gps.conf:$(TARGET_COPY_OUT_VENDOR)/etc/gps.conf
+ 
+ # Subsystem silent restart
+ PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.vendor.sys.ssr.restart_level=modem,slpi,adsp
++    persist.vendor.sys.ssr.restart_level=adsp
+ 
+ # setup dalvik vm configs
+ $(call inherit-product, frameworks/native/build/phone-xhdpi-4096-dalvik-heap.mk)
+@@ -430,9 +300,6 @@
+ PRODUCT_PACKAGES += \
+     charger_res_images
+ 
+-# Dumpstate HAL
+-PRODUCT_PACKAGES += \
+-    android.hardware.dumpstate@1.1-service.crosshatch
+ 
+ # Storage: for factory reset protection feature
+ PRODUCT_PROPERTY_OVERRIDES += \
+@@ -442,25 +309,13 @@
+ PRODUCT_PROPERTY_OVERRIDES += \
+     dalvik.vm.heapgrowthlimit?=256m
+ 
+-PRODUCT_PACKAGES += \
+-    ipacm \
+-    IPACM_cfg.xml
+ 
+-#Set default CDMA subscription to RUIM
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.telephony.default_cdma_sub=0
+-
+-# Set network mode to Global by default and no DSDS/DSDA
+-PRODUCT_PROPERTY_OVERRIDES += ro.telephony.default_network=10
+ 
+ # Set display color mode to Automatic by default
+ PRODUCT_PROPERTY_OVERRIDES += \
+     persist.sys.sf.color_saturation=1.0 \
+     persist.sys.sf.native_mode=2
+ 
+-# Easel device feature
+-PRODUCT_COPY_FILES += \
+-    device/google/crosshatch/permissions/com.google.hardware.camera.easel_2018.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/com.google.hardware.camera.easel_2018.xml
+ 
+ # Fingerprint
+ PRODUCT_COPY_FILES += \
+@@ -480,7 +335,6 @@
+ 
+ # Audio ACDB data
+ PRODUCT_COPY_FILES += \
+-     device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Bluetooth_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Bluetooth_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/General_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/General_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Global_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Global_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Handset_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Handset_cal.acdb \
+@@ -488,7 +342,6 @@
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Headset_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Headset_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Speaker_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Speaker_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-snd-card/Codec_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-snd-card/Codec_cal.acdb \
+-     device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Bluetooth_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Bluetooth_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/General_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/General_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Global_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Global_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Handset_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Handset_cal.acdb \
+@@ -496,7 +349,6 @@
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Headset_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Headset_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Speaker_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Speaker_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-b1-snd-card/Codec_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-b1-snd-card/Codec_cal.acdb \
+-     device/google/crosshatch/acdbdata/OEM/sdm845-tavil-c1-snd-card/Bluetooth_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-c1-snd-card/Bluetooth_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-c1-snd-card/General_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-c1-snd-card/General_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-c1-snd-card/Global_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-c1-snd-card/Global_cal.acdb \
+      device/google/crosshatch/acdbdata/OEM/sdm845-tavil-c1-snd-card/Handset_cal.acdb:$(TARGET_COPY_OUT_VENDOR)/etc/acdbdata/OEM/sdm845-tavil-c1-snd-card/Handset_cal.acdb \
+@@ -518,16 +370,6 @@
+     frameworks/native/data/etc/android.software.device_id_attestation.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.device_id_attestation.xml \
+      frameworks/native/data/etc/android.hardware.device_unique_attestation.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.device_unique_attestation.xml
+ 
+-# Enable modem logging
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    ro.radio.log_loc="/data/vendor/modem_dump" \
+-    ro.radio.log_prefix="modem_log_"
+-
+-# Enable modem logging for debug
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.vendor.sys.modem.diag.mdlog=false
+-PRODUCT_PROPERTY_OVERRIDES += \
+-    persist.vendor.sys.modem.diag.mdlog_br_num=5
+ 
+ # Preopt SystemUI
+ PRODUCT_DEXPREOPT_SPEED_APPS += SystemUIGoogle  # For internal
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -126,9 +126,6 @@
+     write /dev/stune/top-app/schedtune.boost 10
+     write /dev/stune/top-app/schedtune.prefer_idle 1
+ 
+-    # set default schedTune value for camera-daemon
+-    write /dev/stune/camera-daemon/schedtune.prefer_idle 1
+-    write /dev/stune/camera-daemon/schedtune.boost 0
+ 
+     # b/37682684 Enable suspend clock reporting
+     write /sys/kernel/debug/clk/debug_suspend 1
+@@ -165,7 +162,6 @@
+     chown system system /sys/devices/platform/soc/soc:google,charger/bd_trigger_voltage
+     chown system system /sys/devices/platform/soc/soc:google,charger/bd_temp_enable
+     chown system system /sys/devices/platform/soc/soc:google,charger/bd_clear
+-    chown system system /sys/class/power_supply/wireless/device/mitigate_threshold
+ 
+     # Health HAL
+     chown system system /sys/devices/virtual/thermal/tz-by-name/soc/mode

@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Mon, 17 Aug 2026 21:30:00 -0400
+Subject: [PATCH] devicepolicy: provision configured appliance owner
+
+An appliance image is relocked only after a data wipe, so an owner provisioned
+with adb cannot survive the relock boundary. Allow an explicitly configured
+system-image component to become active admin and device owner during the
+first boot, before setup completes, then mark the owner-managed appliance as
+provisioned. General-purpose products leave the new resource empty and retain
+upstream behavior.
+---
+ core/res/res/values/config.xml                              |  5 ++++
+ .../server/devicepolicy/DevicePolicyManagerService.java    | 61 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 66 insertions(+)
+
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 48ae7f83ce23..c553181dac72 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -2447,4 +2447,9 @@
+     <!-- The name of the package that will hold the device management role -->
+     <string name="config_devicePolicyManagement" translatable="false"></string>
++    <!-- An optional flattened admin component to provision as device owner on
++         the first boot of a fixed-function appliance. Empty on ordinary Android
++         products. This is evaluated only while no device or profile owner exists
++         and before user setup has completed. -->
++    <string name="config_fixedFunctionDeviceOwner" translatable="false"></string>
+     <!-- The name of the package that will hold the app protection service role. -->
+     <string name="config_systemAppProtectionService" translatable="false"></string>
+diff --git a/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java b/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
+index 434ce293184c..fd49f239b864 100644
+--- a/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
++++ b/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
+@@ -3414,5 +3414,6 @@ public class DevicePolicyManagerService extends BaseIDevicePolicyManager {
+                     maybeMigratePoliciesPostUpgradeToDevicePolicyEngineLocked();
+                     migratePoliciesToPolicyEngineLocked();
+                 }
++                provisionConfiguredFixedFunctionOwner();
+                 maybeStartSecurityLogMonitorOnActivityManagerReady();
+                 break;
+@@ -3428,5 +3429,65 @@ public class DevicePolicyManagerService extends BaseIDevicePolicyManager {
+         }
+     }
+
++    private void provisionConfiguredFixedFunctionOwner() {
++        final String configuredComponent = mContext.getString(
++                com.android.internal.R.string.config_fixedFunctionDeviceOwner);
++        if (TextUtils.isEmpty(configuredComponent)) {
++            return;
++        }
++
++        final ComponentName admin = ComponentName.unflattenFromString(configuredComponent);
++        if (admin == null) {
++            Slogf.wtf(LOG_TAG, "Invalid fixed-function device owner: " + configuredComponent);
++            return;
++        }
++
++        final ApplicationInfo ownerInfo;
++        try {
++            ownerInfo = mIPackageManager.getApplicationInfo(admin.getPackageName(),
++                    MATCH_UNINSTALLED_PACKAGES, UserHandle.USER_SYSTEM);
++        } catch (RemoteException e) {
++            Slogf.wtf(LOG_TAG, "Cannot verify fixed-function owner " + admin, e);
++            return;
++        }
++        if (ownerInfo == null || !ownerInfo.isSystemApp()
++                || ownerInfo.isPrivilegedApp()) {
++            Slogf.wtf(LOG_TAG, "Fixed-function owner must be an ordinary system app: "
++                    + admin);
++            return;
++        }
++
++        synchronized (getLockObject()) {
++            if (mOwners.hasDeviceOwner()) {
++                if (!admin.equals(mOwners.getDeviceOwnerComponent())) {
++                    Slogf.wtf(LOG_TAG, "Configured fixed-function owner " + admin
++                            + " does not match existing owner "
++                            + mOwners.getDeviceOwnerComponent());
++                }
++                return;
++            }
++            if (mOwners.hasProfileOwner(UserHandle.USER_SYSTEM)
++                    || hasUserSetupCompleted(UserHandle.USER_SYSTEM)) {
++                Slogf.wtf(LOG_TAG, "Refusing late fixed-function owner provisioning");
++                return;
++            }
++        }
++
++        try {
++            setActiveAdmin(admin, /* refreshing= */ false, UserHandle.USER_SYSTEM,
++                    "fixed-function-system-image");
++            if (!setDeviceOwner(admin, UserHandle.USER_SYSTEM,
++                    /* setProfileOwnerOnCurrentUserIfNecessary= */ false)) {
++                Slogf.wtf(LOG_TAG, "Failed to set fixed-function owner " + admin);
++            } else {
++                mInjector.settingsSecurePutIntForUser(
++                        USER_SETUP_COMPLETE, 1, UserHandle.USER_SYSTEM);
++                mInjector.settingsGlobalPutInt(Settings.Global.DEVICE_PROVISIONED, 1);
++            }
++        } catch (RuntimeException e) {
++            Slogf.wtf(LOG_TAG, "Failed to provision fixed-function owner " + admin, e);
++        }
++    }
++
+     @GuardedBy("getLockObject()")
+     private void maybeMigrateSecurityLoggingPolicyLocked() {
+-- 
+2.50.1

@@ -1,0 +1,13 @@
+# Relative paths forbidden inside Bluetooth/Wi-Fi APEX containers retained
+# only to satisfy framework/SystemUI classpath linkage. Lines starting with
+# "!" are permitted patterns: a path matching one is exempt from the forbidden
+# patterns.
+^app/
+^priv-app/
+\.apk$
+^bin/
+^lib(64)?/
+^etc/.*(bluetooth|supplicant|cacerts_wfa|wifi)
+# wifi-service compiles against this resource-only APK (no code); it is
+# exempted by exact path so no other application can hide beside it.
+!^priv-app/ServiceWifiResources@[A-Za-z0-9._-]+(/ServiceWifiResources\.apk)?$

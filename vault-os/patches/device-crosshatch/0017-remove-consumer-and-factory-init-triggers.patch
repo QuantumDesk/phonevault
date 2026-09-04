@@ -1,0 +1,32 @@
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -667,29 +667,4 @@
+ on property:ro.boot.mode=sota
+     setprop ro.boot.sota enabled
+-
+-on property:ro.boot.hardware.sku=G013B
+-    start vendor.secure_element_hal_service_1_1
+-on property:ro.boot.hardware.sku=G013D
+-    start vendor.secure_element_hal_service_1_1
+-
+-# charger driver exposes now finer grain control, map demo mode to those properties
+-# demo mode can only be exit wipping data which will also reset the persist properties
+-on property:sys.retaildemo.enabled=1
+-    setprop persist.vendor.charge.stop.level 35
+-    setprop persist.vendor.charge.start.level 30
+-
+-# For Japan radio builds, always enforce camera shutter sound
+-# Since this property is read by the audio server in system service,
+-# it should be written by the system init.
+-on property:ro.boot.hardware.radio.subtype=1
+-    setprop audio.camerasound.force true
+-
+-on property:sys.boot_completed=1 && property:ro.boot.mode=firstboot
+-    start init-firstboot-sh
+-
+-service init-firstboot-sh /vendor/bin/init.firstboot.sh
+-    user nobody
+-    disabled
+-    oneshot
+ 
+ # init-fingerprint-sh is for stopping fps_hal after init retry fail serval times
