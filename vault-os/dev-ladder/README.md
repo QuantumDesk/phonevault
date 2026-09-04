@@ -41,6 +41,13 @@ carries the adb deviation), then flash with the sideload flow in `NOTES.md`.
 |---|---|---|---|
 | 0 | — (known-good baseline) | ✅ 2026-09-02 | overrides disabled (DEBUG48), AVB/VINTF/kernel fragment disabled (DEBUG44), minimal `common.mk` with insecure adb + pre-authorised key (DEBUG-47), owner string emptied (DEBUG-40), wifi-keystore HAL `optional`, branding boot animation |
 | 1 | `config.xml` — `config_fixedFunctionDeviceOwner` restored; app self-provisions HOME/keyguard | ⏳ | first boot on a wiped /data must land in the kiosk with no adb `dpm` step |
+| 2a | `BoardConfigVault.mk` partially: `WITH_AVB`, our AVB key/algorithm for vbmeta + vbmeta_system, `board-info.txt` | ⏳ | still `--flags 3` (unverified), stock VINTF, stock kernel config |
+| 2b | `--flags 3` removed → verity and hashtree enforcement on | planned | needs the images built with our key to actually verify at boot |
+| 2c | appliance VINTF manifest + matrices | planned | the DEBUG44 removal; expect HAL compatibility fallout |
+| 2d | kernel `phonevault.config` fragment | planned | the build-19/20 suspect; serial console would help |
+| 3 | USB gadget rc (`init.phonevault.usb.rc`, no adb function on user), `persist.sys.usb.config=none`, peripheral-only | planned | chunk-4 item 3 |
+| 4… | `Android.bp` overrides in slices (apps → media/camera → telephony/radio + system_server gating → APEXes → vendor prune) | planned | chunk-4 item 4 |
+| final | `common.mk` release version, no `debug_adbkey.pub`, `user` variant | planned | chunk-4 item 5 |
 
 ## Per-rung checklist (all must pass before the next rung)
 

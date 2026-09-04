@@ -100,6 +100,15 @@ below are closed and re-audited.
 | Threat model / product notes describe the pre-seed, pre-PIN implementation | ✅ closed in round 3. |
 | Dependency advisories (Jackson, Bouncy Castle via web3j) | ✅ round 4: BC pinned to 1.85.2, blanket keep rule removed, Jackson/PQC absent from the release DEX (policy-tested). Jackson stays in the graph at 2.17.1 (unpackaged); web3j 6.x migration is a separate item. |
 
+## 0.6 Chunk 4 — re-hardening ladder (in progress, 2026-09-04)
+
+Tracked rung by rung in `vault-os/dev-ladder/README.md` (rung log + per-rung checklist). Order
+agreed with the auditor: (1) automatic owner provisioning, (2) wire `BoardConfigVault.mk`,
+(3) OS-level USB data-lock + peripheral-only enforcement, (4) package/service/HAL/kernel
+stripping in small slices, (5) a `user` build with no ADB, dump hook, debug keys or update
+exceptions. Every rung: policy gates → build → sideload → boot → owner/kiosk → PIN lifecycle →
+persisted identity → USB signing, with the 2026-09-02 image kept as rollback.
+
 ## 1. Tier 1 — A *usable* signer (functional gaps)
 
 Ordered by impact. Each is app-layer work on the fast loop unless noted.
