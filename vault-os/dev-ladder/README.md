@@ -40,7 +40,8 @@ carries the adb deviation), then flash with the sideload flow in `NOTES.md`.
 | Rung | Deviation removed | Boot-tested | Notes |
 |---|---|---|---|
 | 0 | — (known-good baseline) | ✅ 2026-09-02 | overrides disabled (DEBUG48), AVB/VINTF/kernel fragment disabled (DEBUG44), minimal `common.mk` with insecure adb + pre-authorised key (DEBUG-47), owner string emptied (DEBUG-40), wifi-keystore HAL `optional`, branding boot animation |
-| 1 | `config.xml` — `config_fixedFunctionDeviceOwner` restored; app self-provisions HOME/keyguard | ⏳ | first boot on a wiped /data must land in the kiosk with no adb `dpm` step |
+| 1 | `config.xml` — `config_fixedFunctionDeviceOwner` restored | ⚠️ partial 2026-09-04 | OS provisioned the owner on a wiped /data (`mProvisioningContext=fixed-function-system-image`, `device_provisioned=1`) but HOME resolved to `org.lineageos.setupwizard` (priority 9) behind the keyguard: the app had never run, so its HOME preference did not exist |
+| 1b | app provisions itself from `DeviceAdminReceiver.onEnabled` (`ApplianceProvisioning`: lock-task packages, persistent HOME, keyguard off, setup wizards hidden); `Android.bp` strips `LineageSetupWizard` | ⏳ | first boot must land in the kiosk with no adb step |
 | 2a | `BoardConfigVault.mk` partially: `WITH_AVB`, our AVB key/algorithm for vbmeta + vbmeta_system, `board-info.txt` | ⏳ | still `--flags 3` (unverified), stock VINTF, stock kernel config |
 | 2b | `--flags 3` removed → verity and hashtree enforcement on | planned | needs the images built with our key to actually verify at boot |
 | 2c | appliance VINTF manifest + matrices | planned | the DEBUG44 removal; expect HAL compatibility fallout |

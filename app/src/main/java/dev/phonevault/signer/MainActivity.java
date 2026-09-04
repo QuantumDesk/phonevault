@@ -397,16 +397,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private boolean enterVaultMode(DevicePolicyManager policy) {
         try {
-            ComponentName admin = VaultDeviceAdminReceiver.component(this);
-            policy.setLockTaskPackages(admin, new String[]{getPackageName()});
-            // Self-provisioning: everything a factory-fresh unit needs after the OS made this
-            // app device owner on first boot. Idempotent; replaces the former adb-only steps
-            // (`cmd package set-home-activity`, `locksettings set-disabled`).
-            android.content.IntentFilter home = new android.content.IntentFilter(Intent.ACTION_MAIN);
-            home.addCategory(Intent.CATEGORY_HOME);
-            home.addCategory(Intent.CATEGORY_DEFAULT);
-            policy.addPersistentPreferredActivity(admin, home, new ComponentName(this, MainActivity.class));
-            policy.setKeyguardDisabled(admin, true); // false only if a credential exists — never on an appliance
+            // Self-provisioning (HOME preference, keyguard off, lock-task packages, setup
+            // wizards hidden). Also runs from the admin receiver on first boot; idempotent.
+            if (!ApplianceProvisioning.apply(this, policy)) return false;
             if (isPhoneVaultApplianceBuild()) {
                 enforceApplianceRestrictions(policy);
             }
