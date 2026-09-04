@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="config_fixedFunctionDeviceOwner" translatable="false"></string> <!-- DEBUG-40: emptied to test system_server boot crash from device-owner provisioning -->
+    <!-- Provisioned as device owner by DevicePolicyManagerService on the first boot of a
+         fresh /data (frameworks-base patch 0003). The app then installs its own HOME
+         preference, keyguard, kiosk and user-restriction policy — no adb step exists. -->
+    <string name="config_fixedFunctionDeviceOwner" translatable="false">dev.phonevault.signer/.VaultDeviceAdminReceiver</string>
 </resources>

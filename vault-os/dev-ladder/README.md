@@ -1,0 +1,53 @@
+# Re-hardening ladder (chunk 4)
+
+`vault-os/vendor/phonevault/`, `device/phonevault/` and `patches/` describe the **release
+intent**. The development phone, however, boots an image whose tree deliberately deviates from
+that intent: the multi-week boot failures were debugged by peeling hardening off until the
+image booted (the DEBUG-40/44/47/48 markers), and the working state was never written down as
+files — only as a tree on the build box.
+
+This directory makes each step of putting the hardening back an explicit, reviewable,
+boot-tested **rung**:
+
+```
+dev-ladder/
+  rung-0/   the exact deviations that produced the known-good boot of 2026-09-02
+  rung-1/   rung-0 minus one deviation (owner provisioning restored)
+  rung-N/   …
+```
+
+A rung directory contains **only the files that still override release intent** at that rung,
+plus `device-google-crosshatch.diff` for the two upstream device-tree edits. Climbing a rung
+means deleting a file from the next rung directory, syncing, building, sideloading, and running
+the boot-test checklist. When the last rung directory is empty, the tree *is* the release intent.
+
+`scripts/dev-ladder-sync.sh RUNG /path/to/lineage` does the sync:
+
+1. `rsync` the release `vendor/phonevault/` and `device/phonevault/` into the tree
+   (keeping the tree's `keys/` — never versioned);
+2. copy the rung's override files over their targets;
+3. apply the rung's device-tree diff if it is not already applied;
+4. bake the current **dev-appliance** APK as `prebuilt/PhoneVault.apk` (rungs are dev images:
+   `verify-signer-apk.sh` correctly refuses this variant, so the release path —
+   `install-overlay.sh` with a release-signed APK — is not used here);
+5. append the `BoardConfigVault.mk` include to the Lineage board file if missing.
+
+Build with `dev-ladder/build-rung.sh` (userdebug, `WITH_ADB_INSECURE` while a rung still
+carries the adb deviation), then flash with the sideload flow in `NOTES.md`.
+
+## Rung log
+
+| Rung | Deviation removed | Boot-tested | Notes |
+|---|---|---|---|
+| 0 | — (known-good baseline) | ✅ 2026-09-02 | overrides disabled (DEBUG48), AVB/VINTF/kernel fragment disabled (DEBUG44), minimal `common.mk` with insecure adb + pre-authorised key (DEBUG-47), owner string emptied (DEBUG-40), wifi-keystore HAL `optional`, branding boot animation |
+| 1 | `config.xml` — `config_fixedFunctionDeviceOwner` restored; app self-provisions HOME/keyguard | ⏳ | first boot on a wiped /data must land in the kiosk with no adb `dpm` step |
+
+## Per-rung checklist (all must pass before the next rung)
+
+1. `vault-os/tests/*.sh` policy gates on the repo.
+2. Build → OTA → sideload (recovery signature tap until the OTA key is trusted) → boot.
+3. Owner + kiosk: `dumpsys device_policy` shows the owner, `mLockTaskModeState=LOCKED`,
+   `settings get global device_provisioned` = 1, no setup wizard.
+4. PIN lifecycle (`tools/dev-device/pintest.sh` on a throwaway wallet), identity persists
+   across a reboot, USB signing round-trip with `tools/aoa_client.py`.
+5. Rollback image at hand: `/root/rollback/known-good-2026-09-02.zip` (sha256 `0de27021…`).
