@@ -7,8 +7,9 @@ set -o pipefail
 RUNG="${1:?rung}"
 INSECURE="${2:-1}"
 TREE="${PV_TREE:-/root/lineage-src}"
-OUT_DIR="${PV_OUT_DIR:-${HOME}}"   # the tree owner's home: this script must run as the tree owner
-OUT="${OUT_DIR}/rung-${RUNG}-ota.zip"
+# NOTE: lunch exports OUT and OUT_DIR itself — never reuse those names here.
+PV_OTA_DIR="${PV_OUT_DIR:-${HOME}}"   # the tree owner's home: this script must run as the tree owner
+PV_OTA="${PV_OTA_DIR}/rung-${RUNG}-ota.zip"
 cd "${TREE}" || exit 9
 export LC_ALL=C
 # shellcheck disable=SC1091
@@ -24,7 +25,9 @@ echo "=== target-files rc=${rc} $(date)"
 [[ ${rc} -eq 0 ]] || { echo "TARGET-FILES FAILED"; exit "${rc}"; }
 TF="$(ls -t out/target/product/crosshatch/obj/PACKAGING/target_files_intermediates/*target_files*.zip | head -1)"
 echo "TF=${TF}"
-./out/host/linux-x86/bin/ota_from_target_files --skip_compatibility_check "${TF}" "${OUT}" 2>&1 | tail -20
-echo "=== OTA rc=${PIPESTATUS[0]} $(date)"
-sha256sum "${OUT}" | cut -c1-16
+./out/host/linux-x86/bin/ota_from_target_files --skip_compatibility_check "${TF}" "${PV_OTA}" 2>&1 | tail -20
+ota_rc=${PIPESTATUS[0]}
+echo "=== OTA rc=${ota_rc} $(date)"
+[[ ${ota_rc} -eq 0 && -s "${PV_OTA}" ]] || { echo "OTA FAILED"; exit 1; }
+sha256sum "${PV_OTA}" | cut -c1-16
 echo "=== ALL DONE $(date)"
