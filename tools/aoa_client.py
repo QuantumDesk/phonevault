@@ -206,13 +206,40 @@ DEFAULT_PAIRING_FILE = os.path.join(
 ADDRESS_PATTERN = r"0x[0-9a-fA-F]{40}"
 
 
+def _check_private_file(path, status):
+    """The pairing file is trusted input: refuse anything that is not a plain, private,
+    owner-owned regular file (symlink swaps, group/world access, foreign ownership)."""
+    import stat as statmod
+    if statmod.S_ISLNK(status.st_mode):
+        raise ValueError(f"pairing file must not be a symlink: {path}")
+    if not statmod.S_ISREG(status.st_mode):
+        raise ValueError(f"pairing file is not a regular file: {path}")
+    if hasattr(os, "getuid") and status.st_uid != os.getuid():
+        raise ValueError(f"pairing file is not owned by the current user: {path}")
+    if status.st_mode & 0o077:
+        raise ValueError(
+            f"pairing file is group/world accessible (mode {oct(status.st_mode & 0o777)}): {path}")
+
+
 def load_paired_signer(path):
     """The signer address pinned at pairing time, or None if this host has never paired."""
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            record = json.load(handle)
+        status = os.lstat(path)
     except FileNotFoundError:
         return None
+    _check_private_file(path, status)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (status.st_dev, status.st_ino):
+            raise ValueError(f"pairing file changed while being read: {path}")
+        with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+            descriptor = None
+            record = json.load(handle)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     address = record.get("address") if isinstance(record, dict) else None
     if not isinstance(address, str) or not re.fullmatch(ADDRESS_PATTERN, address):
         raise ValueError(f"pairing file is malformed: {path}")
@@ -220,16 +247,38 @@ def load_paired_signer(path):
 
 
 def save_paired_signer(path, address):
+    """Write the pairing file privately and atomically: a fresh O_EXCL|O_NOFOLLOW temp file in
+    the same directory, fchmod 0600 (so a pre-existing permissive file is REPLACED, never
+    reused), fsync, then rename over the destination."""
     if not isinstance(address, str) or not re.fullmatch(ADDRESS_PATTERN, address):
         raise ValueError("refusing to pin an invalid signer address")
-    directory = os.path.dirname(path)
-    if directory:
-        os.makedirs(directory, exist_ok=True)
+    directory = os.path.dirname(path) or "."
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    if os.path.lexists(path) and os.path.islink(path):
+        raise ValueError(f"refusing to write through a symlink: {path}")
     record = {"address": address.lower(), "pairedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-    payload = json.dumps(record, indent=2) + "\n"
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(payload)
+    payload = (json.dumps(record, indent=2) + "\n").encode("utf-8")
+    temp_path = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temp_path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        os.write(descriptor, payload)
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.replace(temp_path, path)
+    except OSError:
+        os.unlink(temp_path)
+        raise
+    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    except OSError:
+        pass  # not every filesystem allows fsync on a directory; the rename is still atomic
+    finally:
+        os.close(directory_fd)
 
 
 def address_fingerprint(address):

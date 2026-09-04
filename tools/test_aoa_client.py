@@ -136,6 +136,37 @@ class SignedTransactionValidationTest(unittest.TestCase):
                 aoa_client.save_paired_signer(path, "0xzz")
         self.assertEqual(len(aoa_client.address_fingerprint(self.SIGNER)), 8)
 
+    def test_pairing_file_permissions_are_enforced_not_assumed(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = f"{tmp}/paired-signer.json"
+            # A pre-existing world-readable file is REPLACED by a 0600 one, not reused.
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            os.chmod(path, 0o666)
+            aoa_client.save_paired_signer(path, self.SIGNER)
+            self.assertEqual(oct(os.stat(path).st_mode & 0o777), oct(0o600))
+            self.assertEqual(aoa_client.load_paired_signer(path), self.SIGNER)
+            self.assertFalse(any(name.endswith(".tmp") for name in os.listdir(tmp)), "no temp left behind")
+            # A loosened file is refused on load.
+            os.chmod(path, 0o644)
+            with self.assertRaisesRegex(ValueError, "group/world accessible"):
+                aoa_client.load_paired_signer(path)
+            os.chmod(path, 0o600)
+            # A symlink in place of the file is refused on load and on save.
+            link = f"{tmp}/link.json"
+            os.symlink(path, link)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                aoa_client.load_paired_signer(link)
+            with self.assertRaisesRegex(ValueError, "symlink"):
+                aoa_client.save_paired_signer(link, self.SIGNER)
+            self.assertEqual(aoa_client.load_paired_signer(path), self.SIGNER, "target untouched")
+            # A directory is not a pairing file.
+            os.mkdir(f"{tmp}/dir.json")
+            with self.assertRaisesRegex(ValueError, "not a regular file"):
+                aoa_client.load_paired_signer(f"{tmp}/dir.json")
+
     def test_rejects_field_substitution_in_signed_payload(self):
         request = self.request()
         request["gasLimit"] = "0x5209"

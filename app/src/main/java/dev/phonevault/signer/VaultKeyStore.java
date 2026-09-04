@@ -10,7 +10,6 @@ import android.security.keystore.StrongBoxUnavailableException;
 import android.util.AtomicFile;
 
 import org.web3j.crypto.Credentials;
-import org.web3j.utils.Numeric;
 
 import java.io.File;
 import java.io.FileNotFoundException;
@@ -21,6 +20,8 @@ import java.security.KeyStore;
 import java.security.spec.InvalidKeySpecException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
@@ -33,65 +34,44 @@ import javax.crypto.spec.GCMParameterSpec;
  * non-exportable StrongBox-backed Android Keystore key. The EVM key is derived from the mnemonic
  * at m/44'/60'/0'/0/0; the 24-word backup is revealable for the user.
  *
- * <h3>Durability model</h3>
- * The wallet is ONE self-checking record ({@link WalletRecord}) in ONE file written with
- * {@link AtomicFile} (write temp → fsync → rename) and then read back from disk and compared.
- * Before a write starts, a {@code write_pending} journal flag is committed; it is cleared only
- * after the read-back matches. If the app dies or the write fails, the flag survives and
- * {@link #loadOrCreate()} refuses to generate a new wallet — it will only load a record that
- * decodes and verifies from disk. Callers must treat {@link PersistenceException} as
- * "the active identity is unknown until reconciled from disk" — never keep using the old
- * in-memory key.
+ * <p>Durability lives in {@link WalletPersistence} (journal → atomic write → read-back → settled
+ * flags, permanent v3 marker, verified erase), which is fault-injected in unit tests; this class
+ * only supplies the Android storage primitives and the StrongBox crypto. Any
+ * {@link WalletPersistence.PersistenceException} means "the active identity is unknown until
+ * reconciled from disk" — callers must never keep using the old in-memory key.
  */
 final class VaultKeyStore {
     private static final String ANDROID_KEYSTORE = "AndroidKeyStore";
     private static final String KEY_ALIAS = "phone-vault-wrapping-key-v1";
     private static final String PREFS = "vault";
-    /** Legacy (pre-record) storage, migrated on first load. */
-    private static final String LEGACY_ENCRYPTED_MNEMONIC = "encrypted_mnemonic_v2";
-    private static final String LEGACY_IV = "mnemonic_iv_v2";
-    /** Journal flag: a record write was started and not yet verified. */
-    private static final String WRITE_PENDING = "wallet_write_pending_v3";
     private static final String RECORD_FILE = "wallet.pvw3";
     private static final int ACCOUNT_INDEX = 0;
 
-    /** Durable state is uncertain (write, fsync, rename or read-back failed). */
-    static final class PersistenceException extends Exception {
-        PersistenceException(String message, Throwable cause) { super(message, cause); }
-        PersistenceException(String message) { super(message); }
-    }
-
-    private final SharedPreferences preferences;
-    private final File recordFile;
+    private final WalletPersistence persistence;
     private volatile List<SeedVault.SourceReport> lastReports;
 
     VaultKeyStore(Context context) {
-        preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        recordFile = new File(context.getFilesDir(), RECORD_FILE);
+        SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+        File recordFile = new File(context.getFilesDir(), RECORD_FILE);
+        persistence = new WalletPersistence(new AndroidWalletStorage(recordFile, preferences));
     }
 
-    /** True once a seed record exists (throws if the record is present but corrupt). */
+    /** True once a seed record exists (throws if storage is sealed or corrupt). */
     synchronized boolean hasWallet() throws Exception {
-        return readRecordOrMigrate() != null;
+        return persistence.load() != null;
     }
 
     /**
-     * Load the wallet from durable storage, or generate one if — and only if — no record exists
-     * and no write is pending. A pending write with no verifiable record means the identity is
-     * unknown: refuse (sealed) rather than silently minting a fresh wallet over it.
+     * Load the wallet from durable storage, or generate one only if storage is genuinely empty
+     * (no record, no journal, no v3 marker, no legacy keys). Every uncertain state throws.
      */
     synchronized Credentials loadOrCreate() throws Exception {
         ensureWrappingKey();
         enforceSecureHardwarePolicy();
-        WalletRecord record = readRecordOrMigrate();
-        if (record != null) {
-            Credentials credentials = SeedVault.deriveEvm(decrypt(record), "", ACCOUNT_INDEX);
-            clearWritePending(); // a verifiable record on disk IS the identity; the journal is settled
-            return credentials;
-        }
-        if (preferences.getBoolean(WRITE_PENDING, false)) {
-            throw new PersistenceException("wallet storage is sealed: a write was interrupted and no "
-                    + "verifiable wallet record exists; refusing to generate a new wallet");
+        WalletRecord record = persistence.load();
+        if (record != null) return SeedVault.deriveEvm(decrypt(record), "", ACCOUNT_INDEX);
+        if (!persistence.creationAllowed()) {
+            throw new WalletPersistence.PersistenceException("wallet storage is sealed; refusing to create");
         }
         return generateAndStore(new byte[0]);
     }
@@ -99,11 +79,9 @@ final class VaultKeyStore {
     /** Authoritative identity from disk after an uncertain commit. Throws if none verifies. */
     synchronized Credentials reconcile() throws Exception {
         ensureWrappingKey();
-        WalletRecord record = readRecordFromDisk();
-        if (record == null) throw new PersistenceException("no verifiable wallet record on disk");
-        Credentials credentials = SeedVault.deriveEvm(decrypt(record), "", ACCOUNT_INDEX);
-        clearWritePending();
-        return credentials;
+        WalletRecord record = persistence.load();
+        if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
+        return SeedVault.deriveEvm(decrypt(record), "", ACCOUNT_INDEX);
     }
 
     /** Generate a fresh seed from device entropy (+ optional user entropy) and persist it. */
@@ -124,21 +102,21 @@ final class VaultKeyStore {
 
     /**
      * Phase 2: durably replace the stored wallet with the backed-up candidate. Returns the new
-     * credentials only after the record has been read back from disk and verified. On
-     * {@link PersistenceException} the caller must NOT assume either identity — reconcile.
+     * credentials only after the record has been read back, verified AND the flags settled
+     * (legacy wallet removed, journal cleared, v3 marker set — all proven).
      */
     synchronized Credentials commitReplacement(String mnemonic) throws Exception {
         ensureWrappingKey();
         enforceSecureHardwarePolicy();
         Credentials credentials = SeedVault.deriveEvm(mnemonic, "", ACCOUNT_INDEX);
-        writeRecord(encrypt(mnemonic));
+        persistence.store(encrypt(mnemonic));
         return credentials;
     }
 
     /** Decrypt and return the 24-word backup for the reveal screen. Handle with care. */
     synchronized String revealMnemonic() throws Exception {
         ensureWrappingKey();
-        WalletRecord record = readRecordOrMigrate();
+        WalletRecord record = persistence.load();
         if (record == null) throw new IllegalStateException("No wallet to reveal");
         return decrypt(record);
     }
@@ -148,106 +126,81 @@ final class VaultKeyStore {
     }
 
     /**
-     * Destroy the wallet: the record file (and AtomicFile's backup/temp), legacy preferences AND
-     * the StrongBox wrapping alias. Verified, never assumed — an unverifiable erase throws so the
-     * PIN gate stays shut (VaultPin.Outcome.ERASE_FAILED).
+     * Destroy the wallet: record, legacy keys, every flag AND the StrongBox wrapping alias.
+     * Verified, never assumed — an unverifiable erase throws so the PIN gate stays shut
+     * (VaultPin.Outcome.ERASE_FAILED).
      */
     synchronized void secureErase() throws Exception {
         lastReports = null;
-        new AtomicFile(recordFile).delete();
-        boolean committed = preferences.edit()
-                .remove(LEGACY_ENCRYPTED_MNEMONIC).remove(LEGACY_IV).remove(WRITE_PENDING).commit();
+        persistence.erase(); // throws unless record + flags are provably gone
         KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
         keyStore.load(null);
         if (keyStore.containsAlias(KEY_ALIAS)) keyStore.deleteEntry(KEY_ALIAS);
         keyStore.load(null);
-        boolean fileGone = readRecordFromDiskLenient() == null && !recordFile.exists();
-        boolean prefsGone = preferences.getString(LEGACY_ENCRYPTED_MNEMONIC, null) == null
-                && preferences.getString(LEGACY_IV, null) == null;
-        boolean aliasGone = !keyStore.containsAlias(KEY_ALIAS);
-        if (!committed || !fileGone || !prefsGone || !aliasGone) {
-            throw new IllegalStateException("Secure erase could not be verified (fileGone=" + fileGone
-                    + ", prefsGone=" + prefsGone + ", aliasGone=" + aliasGone + ", committed=" + committed + ")");
+        if (keyStore.containsAlias(KEY_ALIAS)) {
+            throw new IllegalStateException("Secure erase could not be verified: wrapping alias still present");
         }
     }
 
-    // ------------------------------------------------------------------ record storage
+    // ------------------------------------------------------------------ Android storage shim
 
-    /** Read the record from disk, or migrate a legacy two-key preference wallet into one. */
-    private WalletRecord readRecordOrMigrate() throws Exception {
-        WalletRecord record = readRecordFromDisk();
-        if (record != null) return record;
-        String legacyCiphertext = preferences.getString(LEGACY_ENCRYPTED_MNEMONIC, null);
-        String legacyIv = preferences.getString(LEGACY_IV, null);
-        if ((legacyCiphertext == null) != (legacyIv == null)) {
-            throw new IllegalStateException("Legacy seed storage is incomplete; refusing to replace it");
-        }
-        if (legacyCiphertext == null) return null;
-        WalletRecord migrated = new WalletRecord(
-                Numeric.hexStringToByteArray(legacyIv), Numeric.hexStringToByteArray(legacyCiphertext));
-        writeRecord(migrated); // durable + verified before the legacy keys are removed
-        return migrated;
-    }
+    /** AtomicFile for the record + SharedPreferences for the small flag store. */
+    static final class AndroidWalletStorage implements WalletStorage {
+        private final File recordFile;
+        private final SharedPreferences preferences;
 
-    /** Strict read: absent → null; present-but-invalid → throws (the identity must not be guessed). */
-    private WalletRecord readRecordFromDisk() throws PersistenceException {
-        byte[] blob;
-        try {
-            blob = new AtomicFile(recordFile).readFully();
-        } catch (FileNotFoundException absent) {
-            return null;
-        } catch (IOException failure) {
-            throw new PersistenceException("wallet record unreadable", failure);
+        AndroidWalletStorage(File recordFile, SharedPreferences preferences) {
+            this.recordFile = recordFile;
+            this.preferences = preferences;
         }
-        try {
-            return WalletRecord.decode(blob);
-        } catch (IllegalArgumentException corrupt) {
-            throw new PersistenceException("wallet record corrupt: " + corrupt.getMessage(), corrupt);
-        } finally {
-            Arrays.fill(blob, (byte) 0);
-        }
-    }
 
-    private WalletRecord readRecordFromDiskLenient() {
-        try { return readRecordFromDisk(); } catch (Exception e) { return null; }
-    }
+        @Override public byte[] readBlob() throws IOException {
+            try {
+                return new AtomicFile(recordFile).readFully();
+            } catch (FileNotFoundException absent) {
+                return null;
+            }
+        }
 
-    /**
-     * Journal → atomic write → fsync → rename → read back → compare → journal cleared. Any failure
-     * leaves the journal flag set and throws {@link PersistenceException}.
-     */
-    private void writeRecord(WalletRecord record) throws PersistenceException {
-        if (!preferences.edit().putBoolean(WRITE_PENDING, true).commit()) {
-            throw new PersistenceException("could not journal the wallet write");
+        @Override public void writeBlobAtomically(byte[] blob) throws IOException {
+            AtomicFile atomic = new AtomicFile(recordFile);
+            FileOutputStream out = atomic.startWrite();
+            try {
+                out.write(blob);
+                out.flush();
+                out.getFD().sync();
+                atomic.finishWrite(out);
+            } catch (IOException failure) {
+                atomic.failWrite(out);
+                throw failure;
+            }
         }
-        AtomicFile atomic = new AtomicFile(recordFile);
-        FileOutputStream out = null;
-        byte[] encoded = record.encode();
-        try {
-            out = atomic.startWrite();
-            out.write(encoded);
-            out.flush();
-            out.getFD().sync();
-            atomic.finishWrite(out);
-            out = null;
-        } catch (IOException failure) {
-            if (out != null) atomic.failWrite(out);
-            throw new PersistenceException("wallet record write failed", failure);
-        } finally {
-            Arrays.fill(encoded, (byte) 0);
-        }
-        WalletRecord readBack = readRecordFromDisk();
-        if (readBack == null || !readBack.sameAs(record)) {
-            throw new PersistenceException("wallet record read-back does not match what was written");
-        }
-        // Only now is the new identity established; retire legacy keys and settle the journal.
-        preferences.edit().remove(LEGACY_ENCRYPTED_MNEMONIC).remove(LEGACY_IV).commit();
-        clearWritePending();
-    }
 
-    private void clearWritePending() {
-        if (preferences.getBoolean(WRITE_PENDING, false)) {
-            preferences.edit().remove(WRITE_PENDING).commit();
+        @Override public void deleteBlob() {
+            new AtomicFile(recordFile).delete(); // base, .new and legacy .bak
+        }
+
+        @Override public boolean blobExists() {
+            return recordFile.exists() || new File(recordFile.getPath() + ".bak").exists();
+        }
+
+        @Override public String getFlag(String key) {
+            return preferences.getString(key, null);
+        }
+
+        @Override public boolean getBooleanFlag(String key) {
+            return preferences.getBoolean(key, false);
+        }
+
+        @Override public boolean commitFlags(Map<String, Object> puts, Set<String> removes) {
+            SharedPreferences.Editor editor = preferences.edit();
+            for (String key : removes) editor.remove(key);
+            for (Map.Entry<String, Object> entry : puts.entrySet()) {
+                Object value = entry.getValue();
+                if (value instanceof Boolean) editor.putBoolean(entry.getKey(), (Boolean) value);
+                else editor.putString(entry.getKey(), String.valueOf(value));
+            }
+            return editor.commit();
         }
     }
 

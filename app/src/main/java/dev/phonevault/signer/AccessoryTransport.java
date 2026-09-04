@@ -19,11 +19,28 @@ import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+/**
+ * One USB accessory session: a reader thread (framed JSON requests in) and a single writer
+ * thread draining a small bounded queue (responses out).
+ *
+ * <p>{@link #send} never performs I/O: it enqueues and returns. A host that stops reading fills
+ * the queue and the session is failed — it can never stall a caller that holds the activity's
+ * state lock. {@link #close} is likewise non-blocking: it flips the closed flag, closes the
+ * descriptor (which unblocks a stuck write on a released fd where the driver honours it) and
+ * interrupts the writer.
+ */
 final class AccessoryTransport implements Closeable {
     static final int MAX_REQUEST_BYTES = 32_768;
+    /** Responses a non-reading host may leave unread before the session is failed. */
+    static final int MAX_QUEUED_RESPONSES = 4;
+
     interface Listener {
         void onConnected(AccessoryTransport source);
         void onRequest(AccessoryTransport source, JSONObject request);
@@ -33,12 +50,12 @@ final class AccessoryTransport implements Closeable {
     private final Closeable descriptor;
     private final InputStream input;
     private final OutputStream output;
-    private final ExecutorService executor = Executors.newSingleThreadExecutor();
+    private final ExecutorService reader = Executors.newSingleThreadExecutor();
+    private final BlockingQueue<byte[]> outbound = new ArrayBlockingQueue<>(MAX_QUEUED_RESPONSES);
+    private final Thread writer;
     private final Listener listener;
-    private final java.util.concurrent.atomic.AtomicBoolean closed =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
-    private final java.util.concurrent.atomic.AtomicBoolean started =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean started = new AtomicBoolean(false);
 
     private AccessoryTransport(Closeable descriptor, InputStream input, OutputStream output,
                                Listener listener) {
@@ -46,6 +63,8 @@ final class AccessoryTransport implements Closeable {
         this.input = input;
         this.output = output;
         this.listener = listener;
+        this.writer = new Thread(this::drainOutbound, "aoa-writer");
+        this.writer.setDaemon(true);
     }
 
     /**
@@ -72,10 +91,11 @@ final class AccessoryTransport implements Closeable {
         return new AccessoryTransport(descriptor, input, output, listener);
     }
 
-    /** Begin the session loop. Idempotent; a no-op once closed. */
+    /** Begin the session loops. Idempotent; a no-op once closed. */
     void start() {
         if (closed.get() || !started.compareAndSet(false, true)) return;
-        executor.execute(() -> {
+        writer.start();
+        reader.execute(() -> {
             try {
                 listener.onConnected(this); // a throwing listener ends the session like any error
                 String line;
@@ -89,9 +109,25 @@ final class AccessoryTransport implements Closeable {
         });
     }
 
+    private void drainOutbound() {
+        try {
+            while (!closed.get()) {
+                byte[] frame = outbound.poll(250, TimeUnit.MILLISECONDS);
+                if (frame == null) continue;
+                output.write(frame);
+                output.flush();
+            }
+        } catch (InterruptedException interrupted) {
+            // close() interrupted us: nothing to report, the session is already ending
+        } catch (Exception exception) {
+            fail("USB write failed: " + exception.getMessage());
+        }
+    }
+
     /**
-     * Any read/parse/send failure ends the session: the descriptor and reader are released and
-     * the listener is told exactly once. A malformed host cannot keep a half-open session alive.
+     * Any read/parse/write failure ends the session: the descriptor and threads are released and
+     * the listener is told exactly once. A malformed or non-reading host cannot keep a half-open
+     * session alive.
      */
     private void fail(String reason) {
         if (!closed.compareAndSet(false, true)) return;
@@ -100,7 +136,9 @@ final class AccessoryTransport implements Closeable {
     }
 
     private void releaseResources() {
-        executor.shutdownNow();
+        reader.shutdownNow();
+        writer.interrupt();
+        outbound.clear();
         try { input.close(); } catch (Exception ignored) {}
         try { output.close(); } catch (Exception ignored) {}
         try { descriptor.close(); } catch (Exception ignored) {}
@@ -158,17 +196,25 @@ final class AccessoryTransport implements Closeable {
         return request;
     }
 
-    synchronized void send(JSONObject response) {
-        if (closed.get()) return;
-        try {
-            output.write((response.toString() + "\n").getBytes(StandardCharsets.UTF_8));
-            output.flush();
-        } catch (Exception exception) {
-            fail(exception.getMessage());
+    /**
+     * Enqueue a response for the writer thread. Never blocks and never performs I/O. Returns
+     * false if the session is closed or the host has stopped reading (queue full → session
+     * failed).
+     */
+    boolean send(JSONObject response) {
+        if (closed.get()) return false;
+        byte[] frame = (response.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        if (!outbound.offer(frame)) {
+            fail("USB host is not reading responses (" + MAX_QUEUED_RESPONSES + " unread)");
+            return false;
         }
+        return true;
     }
 
     boolean isClosed() { return closed.get(); }
+
+    /** Number of responses still waiting for the writer (tests / diagnostics). */
+    int queuedResponses() { return outbound.size(); }
 
     /** Local close (lock, replacement, new session): releases resources, no listener callback. */
     @Override public void close() {

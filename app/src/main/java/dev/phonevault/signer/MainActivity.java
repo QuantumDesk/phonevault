@@ -675,7 +675,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         }
                         try {
                             fresh = vault.commitReplacement(candidate.mnemonic);
-                        } catch (VaultKeyStore.PersistenceException uncertain) {
+                        } catch (WalletPersistence.PersistenceException uncertain) {
                             // The durable identity is unknown: drop the OLD runtime key too and
                             // force a reconcile-from-disk on the next unlock (loadOrCreate refuses
                             // to mint a wallet while the write journal is pending).
@@ -1070,7 +1070,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                 throw new IllegalStateException("Vault locked or USB session is no longer active");
                             }
                             response = approval.signIfIdentityUnchanged(credentials);
-                            source.send(response);
+                            // send() only ENQUEUES (bounded, single writer thread): no USB I/O
+                            // happens under stateLock, so a host that stops reading can never
+                            // hold up lock()/deactivate().
+                            if (!source.send(response)) {
+                                throw new IllegalStateException("USB host is not reading responses; signature not sent");
+                            }
                         }
                         runOnUiThread(() -> {
                             statusView.setText("USB: signature returned");
