@@ -109,6 +109,39 @@ stripping in small slices, (5) a `user` build with no ADB, dump hook, debug keys
 exceptions. Every rung: policy gates → build → sideload → boot → owner/kiosk → PIN lifecycle →
 persisted identity → USB signing, with the 2026-09-02 image kept as rollback.
 
+## 0.7 UX review (2026-09-04) — what "product-ready" means for the app chunk after the ladder
+
+Keep the visual language (high-contrast appliance identity, simple locked/home/recovery/approval
+states, prominent address + QR, review discipline, attempt feedback, two-phase regeneration).
+The gap is **onboarding**: a real user must never reach Home with an unverified backup.
+
+**One enforced first-run flow:** `Set PIN → Create or Restore → Show phrase → Verify random
+words → Confirm address → Home`. Receiving and signing are blocked until backup verification
+completes.
+
+Must-haves before real users (in this order, after OS rungs 1–5):
+
+1. Restore from seed.
+2. Mandatory backup verification (random-word re-entry; a full ordered confirmation or a
+   restore-and-address-match drill for real funds).
+3. PIN-derived storage wrapping and Change PIN.
+4. MetaMask-compatible transport (see §3 item 1: exact Keystone/EIP-4527 UR flows, which need
+   an inbound path or a host bridge — outbound QR alone is insufficient) plus watch-only/xpub
+   export, which it depends on.
+5. `personal_sign` and EIP-712 for dApp authentication.
+6. An integrity screen: release signature, verified-boot state, StrongBox, OS version, battery
+   condition.
+
+UI changes queued with that chunk: move **Regenerate wallet** out of Home into an
+advanced/settings area; approvals show action, amount, recipient, network and maximum fee first
+with raw technical details collapsed below; raise the 7 sp pixel labels (accessibility); mark
+the receive address as network-agnostic and warn to verify the destination chain; show the
+wipe policy on every PIN screen, not only on creation.
+
+Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `transfer`/
+`approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until
+items 4–5 exist.
+
 ## 1. Tier 1 — A *usable* signer (functional gaps)
 
 Ordered by impact. Each is app-layer work on the fast loop unless noted.
