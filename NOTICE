@@ -1,0 +1,24 @@
+Phone Vault
+Copyright 2026 QuantumDesk / Phone Vault contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Licensing boundaries (open-core, as recorded in vault-os/docs/roadmap.md §5):
+
+* Everything inside the trust boundary — the signer app (app/), the host
+  tooling (tools/), the Vault OS overlay, scripts, tests and documentation
+  (vault-os/) — is Apache-2.0 and intended to be reproducible by anyone.
+
+* Patches under vault-os/patches/ that modify GPL-2.0 code (the Linux kernel
+  and any other GPL component of LineageOS/AOSP) are, and must remain,
+  licensed under the same GPL-2.0 terms as the code they modify. The
+  Apache-2.0 grant above does not apply to those patches.
+
+* Third-party components retain their own licenses: LineageOS/AOSP
+  (Apache-2.0 / GPL-2.0 as applicable), web3j (Apache-2.0), Bouncy Castle
+  (MIT), ZXing (Apache-2.0), PyUSB (BSD-3-Clause), the Press Start 2P font
+  (SIL OFL 1.1), and the Pixel 3 XL vendor blobs (proprietary; never
+  redistributed by this repository).
+
+* Companion software and services outside the trust boundary may be
+  licensed separately.
