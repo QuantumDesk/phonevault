@@ -25,9 +25,13 @@ pass "activate swaps the identity"
 relock; unlock
 [[ "$(addr)" == "$AFTER" ]] || die "new wallet did not persist across relock: $AFTER → $(addr)"
 pass "new wallet persisted"
-JOURNAL="$("$A" shell "grep -c wallet_write_pending /data/data/$PKG/shared_prefs/vault.xml" | tr -d '\r' || true)"
-[[ "${JOURNAL:-0}" == "0" ]] || die "write journal still pending after a successful replacement"
-"$A" shell "test -s /data/data/$PKG/files/wallet.pvw3" || die "wallet record file missing"
-pass "record settled on disk"
+if adb_is_root; then
+  JOURNAL="$("$A" shell "grep -c wallet_write_pending /data/data/$PKG/shared_prefs/vault.xml" | tr -d '\r' || true)"
+  [[ "${JOURNAL:-0}" == "0" ]] || die "write journal still pending after a successful replacement"
+  "$A" shell "test -s /data/data/$PKG/files/wallet.pvw3" || die "wallet record file missing"
+  pass "record settled on disk"
+else
+  echo "SKIP: on-disk record/journal check needs a root adb shell (Lineage 'Rooted debugging' toggle)"
+fi
 kiosk_locked; no_crashes; unwake
 pass "regentest complete"

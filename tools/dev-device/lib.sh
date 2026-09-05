@@ -21,8 +21,13 @@ require_dev_appliance() {
   local version
   version="$("$A" shell dumpsys package "$PKG" 2>/dev/null | grep -m1 'versionName=' | tr -d '\r' || true)"
   [[ "$version" == *dev-appliance* ]] || die "installed build is not the dev appliance (${version:-not installed}); these scripts only target it"
-  "$A" root >/dev/null 2>&1 || true
+  # NEVER call `adb root` here. On LineageOS it is gated by the "Rooted debugging" developer
+  # toggle (adbroot service), which a fresh /data resets; the refused call is harmless, but
+  # chasing it by toggling adb_enabled remotely disabled adb on a kiosk with no UI (2026-09-05).
 }
+
+# True when the adb shell is already root (never try to make it so).
+adb_is_root() { "$A" shell id 2>/dev/null | grep -q "uid=0"; }
 
 require_pin() {
   if [[ -z "${PV_TEST_PIN:-}" ]]; then
