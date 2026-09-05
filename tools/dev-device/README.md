@@ -1,5 +1,10 @@
 # Development-device scripts
 
+**0.3.0 UI update:** the legacy PIN/replacement/lifecycle/backup tests use 0.2.0 coordinates
+and navigation. Their shared gate now refuses 0.3.0 before tapping. Use the
+[0.3.0 manual handoff](../../vault-os/docs/ui-0.3.0-handoff.md) until the harness is ported.
+Do not bypass the gate or capture real recovery phrases to update the tests.
+
 Scripts that drive the **development** Pixel 3 XL (crosshatch) over ADB from the native
 build box. They exist so the physical checks the audits could not repeat are reproducible.
 They assume the dev-appliance build (`assembleAppliance`: debug-signed, `DevTools` UI dumps

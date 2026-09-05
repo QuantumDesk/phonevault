@@ -15,7 +15,8 @@ import java.io.FileOutputStream;
  *
  * <p>Renders the current view to {@code files/vault_dump.png} so the UI can be reviewed even though
  * FLAG_SECURE / device-owner screen-capture policy block screencap. This intentionally captures
- * whatever is on screen — INCLUDING the recovery phrase. Never enable on a wallet holding funds.
+ * non-sensitive screens only. Backup, reauthentication, and replacement screens are excluded.
+ * The development OS still permits external screenshots; never use it for valuable assets.
  *
  * <p>Requests are coalesced (a burst of touches yields one dump, 1.4 s after the last) and PNG
  * compression runs off the UI thread, so the hook cannot starve input dispatch during scripted
@@ -32,8 +33,13 @@ final class DevTools {
     static void dumpUi(Activity activity) {
         final View root = activity.getWindow().getDecorView();
         if (pendingDump != null) root.removeCallbacks(pendingDump);
+        if (activity instanceof MainActivity && ((MainActivity) activity).isSensitiveScreen()) {
+            pendingDump = null;
+            return;
+        }
         pendingDump = () -> {
             pendingDump = null;
+            if (activity instanceof MainActivity && ((MainActivity) activity).isSensitiveScreen()) return;
             try {
                 if (root.getWidth() == 0 || root.getHeight() == 0) return;
                 final Bitmap bmp = Bitmap.createBitmap(root.getWidth(), root.getHeight(), Bitmap.Config.ARGB_8888);

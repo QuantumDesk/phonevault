@@ -16,10 +16,17 @@ self-checking, journaled record; a 6-digit PIN gate with a verified erase after 
 session-bound lock/unlock/signing; two-phase wallet replacement; a host verifier that recovers
 the signer and requires a pinned pairing.
 
-What does not exist yet: restore from seed, mandatory backup verification, a first-run wizard,
-multiple accounts, passphrase persistence, PIN change, message/EIP-712 signing, and — most
+The 0.3.0 app sweep adds a mandatory account-bound 24-word backup check before receiving or
+signing, fresh PIN authorization for seed access/replacement, paged recovery words, full-screen
+approval, and Wallet / Security / Coming next navigation. It is built and locally tested;
+physical validation of this new interface is pending. See the
+[0.3.0 handoff](vault-os/docs/ui-0.3.0-handoff.md).
+
+What does not exist yet: restore from seed, a complete create-or-restore wizard,
+multiple accounts, passphrase persistence, PIN-derived wrapping/change, message/EIP-712 signing, and — most
 importantly — a **hardened, relocked, release-signed OS image**. The development phone runs an
-unlocked bootloader with ADB enabled and a debug build that dumps its own screen for UI review.
+unlocked bootloader with ADB enabled. The 0.3.0 development dump excludes sensitive flows, but
+the development OS still permits external screenshots.
 `vault-os/docs/roadmap.md` §0 lists every debug-only setting that must be reverted, and §0.5
 tracks the audit findings. Nothing here is "production-safe" until verified boot with a relocked
 bootloader has been demonstrated.
@@ -61,8 +68,9 @@ The desktop is the Android Open Accessory (AOA) USB host. Requests and responses
 newline-delimited UTF-8 JSON, limited to 32 KiB per request. A request must end with a newline
 before disconnect, use a short ASCII request ID, and contain exactly the fields in its method
 schema. Malformed UTF-8, truncated frames, missing fields, unknown fields, duplicate keys,
-non-string values, and trailing JSON data fail closed. The phone answers only while unlocked;
-an attach while locked or during a wallet replacement is parked until the vault is ready.
+non-string values, and trailing JSON data fail closed. The phone answers only while unlocked,
+with an authoritative loaded identity and a completed backup check. An attach while locked,
+unready, or in a sensitive flow is parked until the vault is ready.
 
 Address request:
 
@@ -90,12 +98,20 @@ EIP-1559 signing request (all integer quantities are canonical `0x` hex):
 The signer accepts only native transfers and canonical ABI-shaped `transfer(address,uint256)`
 or `approve(address,uint256)` calls; arbitrary calldata fails closed. It displays the signing
 address, network, recipient or approved address, raw `uint256` argument, target contract,
-four-byte selector, maximum fee, nonce, and decoded arguments, and requires an
+four-byte selector, maximum execution fee and its coverage, nonce, and decoded arguments, and requires an
 operation-specific review checkbox before **Sign** is enabled. The approval is bound to the
 unlock session and to an immutable credential snapshot: a lock, a wallet replacement, or an
 identity change after review cancels it. A selector and well-formed arguments do not prove the
 target implements ERC-20/721 or behaves as expected; token identity and decimals are
 unverified. Sensitive controls discard obscured touches.
+
+Reviewed chain profiles currently cover Ethereum (1), Sepolia (11155111), Base (8453),
+Optimism (10), Arbitrum One (42161), and Polygon (137). Other chain IDs are refused. Execution
+gas is not presented as a total network-fee cap on networks with additional charges.
+
+Reject is effective during review. Tapping Sign atomically commits the decision and disables
+Reject; lock still cancels work that has not reached signing. A created signature is reported as
+queued with delivery unconfirmed, never as proof of broadcast or settlement.
 
 ## Desktop client
 
@@ -113,6 +129,10 @@ a self-consistent response from an unknown device proves nothing. The pairing fi
 privately (0600, atomic replace) and rejected on load if it is a symlink, group/world readable,
 or owned by someone else. Rejections and device errors exit non-zero.
 
+The proposed macOS, Windows, and Linux GUI is documented in
+[`vault-os/docs/companion-architecture.md`](vault-os/docs/companion-architecture.md). It is an
+architecture RFC, not a shipped feature; the Python client above is the current host software.
+
 ## Layout
 
 - `app/` — the signer app (`SeedVault`, `VaultKeyStore` + `WalletPersistence`, `VaultPin`,
@@ -120,7 +140,8 @@ or owned by someone else. Rejections and device errors exit non-zero.
 - `tools/` — host client, `evm_verify.py`, and `dev-device/` scripts that drive the
   development phone (throwaway devices only; see its README).
 - `vault-os/` — the OS overlay, hardening patches, build/sign/verify scripts, policy tests,
-  and docs (`roadmap.md`, `threat-model.md`, `entropy-design.md`).
+  and docs (`roadmap.md`, `threat-model.md`, `entropy-design.md`,
+  `companion-architecture.md`).
 
 ## License
 

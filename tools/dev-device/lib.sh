@@ -21,6 +21,7 @@ require_dev_appliance() {
   local version
   version="$("$A" shell dumpsys package "$PKG" 2>/dev/null | grep -m1 'versionName=' | tr -d '\r' || true)"
   [[ "$version" == *dev-appliance* ]] || die "installed build is not the dev appliance (${version:-not installed}); these scripts only target it"
+  [[ "$version" == *0.2.0-dev-appliance* ]] || die "legacy coordinate harness supports 0.2.0 only; for 0.3.0 use the manual UI handoff checklist (do not reuse old PIN coordinates)"
   # NEVER call `adb root` here. On LineageOS it is gated by the "Rooted debugging" developer
   # toggle (adbroot service), which a fresh /data resets; the refused call is harmless, but
   # chasing it by toggling adb_enabled remotely disabled adb on a kiosk with no UI (2026-09-05).

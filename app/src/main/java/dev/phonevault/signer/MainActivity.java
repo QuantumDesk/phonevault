@@ -54,9 +54,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private TextView addressView;
     private android.widget.ImageView qrView;
     private TextView statusView;
-    private View statusDot;
-    private View homeView;
-    private AlertDialog approvalDialog;
+    private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
+    private volatile ApprovalDecision approvalDecision;
+    private volatile boolean walletLoaded, backupVerified;
+    private volatile String walletAddress;
+    private volatile android.graphics.Bitmap walletQr;
+    private BackupCheck backupCheck;
+    private boolean largeText;
+    private long idleTimeoutMs = IDLE_LOCK_MS;
+    private String screenName = "loading";
+    private String statusMessage = "USB disconnected · connect a host when ready";
+    private int activeSensitive = -1, backupPage, replacementOperation;
+    private Runnable afterReauth;
+    private String[] backupWords;
+    private String backupIdentity;
+    private BackupCheck.Challenge backupChallenge;
+    private SeedVault.Generation replacementCandidate;
+    private final java.security.SecureRandom random = new java.security.SecureRandom();
+    private long seedIdleDeadline, seedHardDeadline;
+    private TextView seedTimer;
+    private char[][] pinSetupEntries;
 
     // --- device security & lifecycle (roadmap chunk 1) ---
     /** Idle time (no touch) before the vault locks and drops the key from memory. */
@@ -69,7 +86,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private static final int SCREEN_OFF_TIMEOUT_MS = 60 * 1000;
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable idleLock = this::lock;
-    private final Runnable hideSeed = this::hideBackup;
+    private final Runnable hideSeed = this::tickSeedTimer;
     private final Runnable pixelShift = this::shiftPixels;
     private VaultPin pin;
     private PinScreen pinScreen;
@@ -125,6 +142,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     @Override public void onUserInteraction() {
         super.onUserInteraction();
         if (unlocked) armIdleLock();
+        if (sensitive.active() && backupWords != null)
+            seedIdleDeadline = android.os.SystemClock.elapsedRealtime() + SEED_TIMEOUT_MS;
         devDumpUi(); // dev-only: every touch refreshes the UI dump (no-op in release)
     }
 
@@ -133,8 +152,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * the screen to files/vault_dump.png for UI review. The release source set compiles a no-op,
      * so a release APK contains no screenshot code at all.
      */
-    private void devDumpUi() {
-        DevTools.dumpUi(this);
+    boolean isSensitiveScreen() { return sensitive.active(); }
+
+    private void devDumpUi() { DevTools.dumpUi(this); }
+
+    @Override public void onBackPressed() {
+        if (!unlocked) { lock(); return; }
+        if (approvalDecision != null) return; // use the explicit Reject action
+        if (sensitive.active()) { hideBackup(); return; }
+        if ("wallet".equals(screenName)) lock();
+        else showHome();
     }
 
     private void activateIfPolicyReady() {
@@ -152,6 +179,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!operational) {
             vault = new VaultKeyStore(this);
             pin = new VaultPin(this);
+            backupCheck = new BackupCheck(getSharedPreferences("vault", MODE_PRIVATE));
             operational = true;
             if (managed) applyIdlePolicy(policy);
             // The key is only loaded (and USB only answered) once the PIN gate has been passed.
@@ -168,7 +196,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         final boolean creating = !pin.isSet();
         final boolean sealed = pin.eraseOutstanding();
+        clearPinEntry();
         final char[][] firstEntry = {null};
+        pinSetupEntries = firstEntry;
         String title = creating ? "SET PIN" : sealed ? "SEALED" : "LOCKED";
         String subtitle;
         if (creating) {
@@ -178,7 +208,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             subtitle = "Attempt limit reached but the wallet could not be verifiably erased. "
                     + "The vault stays sealed. Enter any PIN to retry the erase.";
         } else {
-            subtitle = "Enter PIN to unlock." + (pendingUsb != null ? "  USB host is waiting." : "");
+            subtitle = "Enter your six-digit PIN." + (pendingUsb != null ? " USB host is waiting." : "");
         }
         if (gateNotice != null) { subtitle = gateNotice + "\n\n" + subtitle; gateNotice = null; }
         final int s = session.get(); // PIN operations are bound to this gate's session
@@ -186,8 +216,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (creating) onCreatePinEntry(entered, firstEntry, s);
             else onUnlockEntry(entered, s);
         });
+        updatePinPolicy(pinScreen);
+        screenName = "pin";
         setContentView(pinScreen.view());
         devDumpUi();
+    }
+
+    private void clearPinEntry() {
+        if (pinScreen != null) pinScreen.dispose();
+        pinScreen = null;
+        if (pinSetupEntries != null && pinSetupEntries[0] != null) java.util.Arrays.fill(pinSetupEntries[0], '0');
+        pinSetupEntries = null;
     }
 
     private void onCreatePinEntry(char[] entered, char[][] firstEntry, int s) {
@@ -244,9 +283,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             unlock(s);
                             break;
                         case WRONG:
-                            pinScreen.setSubtitle("Enter PIN to unlock.");
+                            pinScreen.setSubtitle("Enter your six-digit PIN.");
                             pinScreen.showError("wrong pin · " + result.attemptsRemaining
                                     + (result.attemptsRemaining == 1 ? " attempt left" : " attempts left"));
+                            updatePinPolicy(pinScreen);
                             break;
                         case WIPED:
                             gateNotice = "VAULT ERASED: too many wrong attempts. The wallet and PIN were destroyed. Set a new PIN to create a new wallet.";
@@ -276,6 +316,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void wipeWalletForFailedPin() throws Exception {
         credentials = null;
         vault.secureErase();
+        backupCheck.clear();
         android.util.Log.w("Vault", "wallet erased after " + VaultPin.MAX_ATTEMPTS + " failed PIN attempts");
     }
 
@@ -285,15 +326,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             android.util.Log.i("Vault", "unlock refused: stale session or activity not visible");
             return;
         }
+        clearPinEntry();
         unlocked = true;
-        pinScreen = null;
-        setContentView(this.homeView);
         loadKey();
         armIdleLock();
-        Intent usb = pendingUsb;
-        pendingUsb = null;
-        if (usb != null) handleIntent(usb);
-        devDumpUi();
     }
 
     /**
@@ -301,27 +337,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * the key from memory, end any USB session, and return to the PIN gate.
      */
     private void lock() {
-        boolean wasUnlocked;
         AccessoryTransport staleTransport;
         synchronized (stateLock) {
             session.incrementAndGet(); // invalidates any in-flight PIN op / load / regeneration
-            wasUnlocked = unlocked;
             unlocked = false;
             credentials = null;
             // An un-activated candidate is discarded; a commit or a signing in progress holds
             // stateLock, so by now it has either finished (key dropped above) or never ran.
             replacement.reset();
+            sensitive.reset();
+            cancelApproval();
+            clearReceivingIdentity();
             // USB data-lock (app layer): the session is closed INSIDE the lock so a signing task
             // can never send after this point (send + close are linearized with signing).
             staleTransport = transport;
             transport = null;
             if (staleTransport != null) staleTransport.close();
         }
-        if (!operational || !wasUnlocked) return;
+        clearSensitiveUi();
+        clearPinEntry();
+        if (!operational) return;
         requestPending.set(false);
-        AlertDialog pending = approvalDialog;
-        approvalDialog = null;
-        if (pending != null) pending.dismiss();
         ui.removeCallbacks(idleLock);
         ui.removeCallbacks(hideSeed);
         showPinGate(null);
@@ -329,7 +365,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void armIdleLock() {
         ui.removeCallbacks(idleLock);
-        ui.postDelayed(idleLock, IDLE_LOCK_MS);
+        ui.postDelayed(idleLock, idleTimeoutMs);
     }
 
     /** Recovery phrase: back to home (button or timeout). */
@@ -338,19 +374,34 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * the single terminal path for cancel / timeout / success: the state goes IDLE (unless a
      * commit is in progress, which owns its own outcome) and a parked USB host is replayed.
      */
-    private void hideBackup() {
+    private void clearSensitiveUi() {
         ui.removeCallbacks(hideSeed);
-        replacement.cancelCurrent(); // no-op when IDLE or COMMITTING
-        if (unlocked && homeView != null) setContentView(this.homeView);
+        sensitive.reset();
+        activeSensitive = -1;
+        afterReauth = null;
+        if (backupWords != null) java.util.Arrays.fill(backupWords, null);
+        backupWords = null;
+        if (backupChallenge != null) backupChallenge.destroy();
+        backupChallenge = null;
+        backupIdentity = null;
+        replacementCandidate = null;
+        seedTimer = null;
+    }
+
+    private void hideBackup() {
+        if (replacement.state() == ReplacementState.COMMITTING) return;
+        replacement.cancelCurrent();
+        clearPinEntry();
+        clearSensitiveUi();
+        if (unlocked) showHome();
         drainPendingUsb();
     }
 
-    /** Replay a parked accessory attach exactly once; handleIntent re-parks it if still blocked. */
     private void drainPendingUsb() {
+        if (!unlocked || !operational || !walletLoaded || !backupVerified || sensitive.active()) return;
         Intent usb = pendingUsb;
         pendingUsb = null;
-        if (usb != null && unlocked && operational) handleIntent(usb);
-        else if (usb != null && !unlocked) pendingUsb = usb; // locked: keep for the next unlock
+        if (usb != null) handleIntent(usb);
     }
 
     private boolean replacementActive() { return replacement.active(); }
@@ -358,7 +409,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private boolean markPrepared(int op) { return replacement.markPrepared(op); }
     private boolean beginCommit(int op) { return replacement.beginCommit(op); }
     private void endReplacement(int op) { replacement.end(op); }
-    private boolean cancelReplacement(int op) { return replacement.cancel(op); }
 
     /** OLED burn-in mitigation: cycle the content through a 2 px square every PIXEL_SHIFT_MS. */
     private void shiftPixels() {
@@ -459,27 +509,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void deactivate(String reason) {
-        // Same serialized invalidation as lock(): a commit in flight finishes under stateLock
-        // first, then its key is dropped here; nothing can publish after this block.
-        AccessoryTransport staleTransport;
         synchronized (stateLock) {
             session.incrementAndGet();
             operational = false;
             unlocked = false;
             credentials = null;
             replacement.reset();
-            staleTransport = transport;
+            sensitive.reset();
+            cancelApproval();
+            clearReceivingIdentity();
+            AccessoryTransport previous = transport;
             transport = null;
-            if (staleTransport != null) staleTransport.close();
+            if (previous != null) previous.close();
         }
         ui.removeCallbacks(idleLock);
-        ui.removeCallbacks(hideSeed);
-        if (homeView != null) setContentView(this.homeView);
+        clearSensitiveUi();
+        clearPinEntry();
         vault = null;
-        requestPending.set(false);
-        AlertDialog pending = approvalDialog;
-        if (pending != null) pending.dismiss();
-        statusView.setText(reason);
+        LinearLayout root = page("DEVICE NOT READY", "Policy check failed", reason);
+        card(root, "Signing is disabled", "Have the image provisioning checked. No wallet identity is displayed.");
+        present(root, "policy-error");
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -488,421 +537,616 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (operational) handleIntent(intent);
     }
 
-    private void buildUi() {
-        getWindow().setStatusBarColor(VaultTheme.BG);
-        getWindow().setNavigationBarColor(VaultTheme.BG);
-        int pad = dp(26);
-        LinearLayout content = new LinearLayout(this);
-        content.setOrientation(LinearLayout.VERTICAL);
-        content.setPadding(pad, dp(56), pad, dp(34));
-        content.setBackgroundColor(VaultTheme.BG);
 
-        // Brand header: crisp pixel padlock + pixel wordmark
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.addView(VaultTheme.pixelLock(this, dp(3), VaultTheme.INK));
-        TextView title = VaultTheme.pixelText(this, "PHONE VAULT", 17, VaultTheme.INK);
-        title.setPadding(dp(18), 0, 0, 0);
-        header.addView(title);
-        content.addView(header);
+    // ---------- Native, scrollable pages. Sensitive operations never use floating dialogs.
 
-        TextView tagline = VaultTheme.monoText(this, "OFFLINE EVM SIGNER · phonevault.org", 12, VaultTheme.DIM);
-        tagline.setPadding(0, dp(14), 0, 0);
-        content.addView(tagline);
+    private float bodySize() { return largeText ? 19 : 16; }
 
-        // Flexible spacer above centers the wallet block vertically
-        content.addView(new View(this), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        // QR of the receiving address — scannable, and black/white suits the mono theme
-        LinearLayout qrBox = new LinearLayout(this);
-        qrBox.setOrientation(LinearLayout.VERTICAL);
-        qrBox.setGravity(Gravity.CENTER_HORIZONTAL);
-        qrBox.setBackgroundColor(VaultTheme.INK);
-        int qp = dp(16);
-        qrBox.setPadding(qp, qp, qp, dp(13));
-        qrView = new android.widget.ImageView(this);
-        int qs = dp(220);
-        qrView.setLayoutParams(new LinearLayout.LayoutParams(qs, qs));
-        qrBox.addView(qrView);
-        TextView qrLabel = VaultTheme.pixelText(this, "SCAN TO RECEIVE", 7, VaultTheme.BG);
-        qrLabel.setPadding(0, dp(11), 0, 0);
-        qrBox.addView(qrLabel);
-        LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        qlp.gravity = Gravity.CENTER_HORIZONTAL;
-        content.addView(qrBox, qlp);
-
-        // Signing address (full, wraps to two lines)
-        LinearLayout addrBox = VaultTheme.box(this);
-        addrBox.addView(VaultTheme.pixelText(this, "SIGNING ADDRESS", 7, VaultTheme.FAINT));
-        addressView = VaultTheme.monoText(this, "generating…", 15, VaultTheme.INK);
-        addressView.setTextIsSelectable(true);
-        addressView.setPadding(0, dp(14), 0, dp(2));
-        addrBox.addView(addressView);
-        content.addView(addrBox, matchWrap(dp(24)));
-
-        // Status row: pixel indicator (fills when a host connects) + uppercase mono status
-        LinearLayout statusRow = new LinearLayout(this);
-        statusRow.setOrientation(LinearLayout.HORIZONTAL);
-        statusRow.setGravity(Gravity.CENTER_VERTICAL);
-        statusRow.setPadding(dp(4), dp(20), 0, 0);
-        statusDot = VaultTheme.statusDot(this, false);
-        statusRow.addView(statusDot);
-        statusView = VaultTheme.monoText(this, "usb: waiting for host", 12, VaultTheme.DIM);
-        statusView.setAllCaps(true);
-        statusView.setLetterSpacing(0.06f);
-        statusView.setPadding(dp(12), 0, 0, 0);
-        statusRow.addView(statusView);
-        content.addView(statusRow);
-
-        // Flexible spacer below — keeps actions + footer anchored to the bottom
-        content.addView(new View(this), new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
-
-        // Actions
-        TextView backup = VaultTheme.pixelButton(this, "Recovery phrase", false);
-        hardenTouch(backup);
-        backup.setOnClickListener(v -> confirmRevealBackup());
-        content.addView(backup, matchWrap(0));
-
-        TextView replace = VaultTheme.pixelButton(this, "Regenerate wallet", false);
-        hardenTouch(replace);
-        replace.setOnClickListener(v -> confirmReplace());
-        content.addView(replace, matchWrap(dp(14)));
-
-        // Footer anchored at the bottom
-        content.addView(VaultTheme.divider(this));
-        TextView warning = VaultTheme.monoText(this,
-                "TEST ASSETS ONLY — unaudited prototype. Do not store real funds.",
-                12, VaultTheme.BG);
-        warning.setBackgroundColor(VaultTheme.INK);
-        warning.setPadding(dp(14), dp(13), dp(14), dp(13));
-        content.addView(warning, matchWrap(dp(4)));
-
-        TextView version = VaultTheme.monoText(this,
-                "PHONE VAULT OS 0.1.0 · " + BuildConfig.VERSION_NAME + " · m/44'/60'/0'/0/0",
-                10, VaultTheme.FAINT);
-        version.setPadding(dp(2), dp(14), 0, 0);
-        content.addView(version);
-
-        homeView = content;
-        setContentView(content);
-    }
-
-    private void setStatusActive(boolean active) {
-        if (statusDot == null) return;
-        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
-        d.setColor(active ? VaultTheme.INK : VaultTheme.BG);
-        d.setStroke(VaultTheme.px(this, 2), VaultTheme.INK);
-        d.setCornerRadius(0f);
-        statusDot.setBackground(d);
-    }
-
-    private void confirmRevealBackup() {
-        if (!operational || !unlocked) { statusView.setText("vault disabled: appliance policy is not active"); return; }
-        if (transport != null || requestPending.get() || replacementActive()) {
-            statusView.setText("disconnect usb and finish any approval first");
-            return;
-        }
-        AlertDialog dialog = darkDialog()
-                .setTitle("Show recovery phrase?")
-                .setMessage("Your 24 words control all funds. Make sure no camera or person can see the screen. "
-                        + "Never type them into a computer or website.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Show", (d, w) -> showBackup())
-                .create();
-        secure(dialog.getWindow());
-        dialog.setOnShowListener(i -> {
-            hardenTouch(dialog.getButton(AlertDialog.BUTTON_NEGATIVE));
-            hardenTouch(dialog.getButton(AlertDialog.BUTTON_POSITIVE));
-        });
-        dialog.show();
-    }
-
-    private void showBackup() {
-        final int s = session.get(); // a reveal never crosses into a later unlock session
-        cryptoExecutor.execute(() -> {
-            try {
-                String mnemonic = vault.revealMnemonic();
-                String[] words = mnemonic.split(" ");
-                runOnUiThread(() -> {
-                    if (s != session.get() || !unlocked) return;
-                    setContentView(buildBackupView(words));
-                    ui.removeCallbacks(hideSeed);
-                    ui.postDelayed(hideSeed, SEED_TIMEOUT_MS);
-                    devDumpUi();
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> statusView.setText("backup error: " + e.getMessage()));
-            }
-        });
-    }
-
-    /** Full-screen recovery-phrase view: 24 words in an aligned two-column grid. */
-    /**
-     * Phase 2 UI of a wallet replacement: the NEW phrase is shown for backup with an explicit
-     * activate step. Only "Activate" commits; Cancel, timeout, or lock keep the current wallet.
-     */
-    private void showReplacementPhrase(SeedVault.Generation candidate, int s, int op) {
-        final TextView activate = VaultTheme.pixelButton(this, "Activate new wallet", true);
-        final TextView cancel = VaultTheme.pixelButton(this, "Cancel · keep current wallet", false);
-        hardenTouch(activate);
-        hardenTouch(cancel);
-        activate.setOnClickListener(v -> {
-            // PREPARED → COMMITTING is the single serialized transition; after it, Cancel and the
-            // timeout are inert and the commit owns the outcome.
-            if (s != session.get() || !beginCommit(op)) return;
-            activate.setEnabled(false);
-            cancel.setEnabled(false);
-            ui.removeCallbacks(hideSeed);
-            cryptoExecutor.execute(() -> {
-                try {
-                    final Credentials fresh;
-                    // Commit + publish are one step under stateLock: lock()/deactivate() either run
-                    // before (session changed → nothing written) or after (new key already dropped).
-                    synchronized (stateLock) {
-                        boolean owner = replacement.owns(op);
-                        boolean usbQuiet = transport == null && !requestPending.get();
-                        if (s != session.get() || !unlocked || !operational || !owner || !usbQuiet) {
-                            endReplacement(op);
-                            runOnUiThread(() -> {
-                                statusView.setText(usbQuiet ? "replacement cancelled"
-                                        : "replacement cancelled: USB became active");
-                                hideBackup(); // terminal path: → home, parked USB replayed
-                            });
-                            return;
-                        }
-                        try {
-                            fresh = vault.commitReplacement(candidate.mnemonic);
-                        } catch (WalletPersistence.PersistenceException uncertain) {
-                            // The durable identity is unknown: drop the OLD runtime key too and
-                            // force a reconcile-from-disk on the next unlock (loadOrCreate refuses
-                            // to mint a wallet while the write journal is pending).
-                            credentials = null;
-                            endReplacement(op);
-                            runOnUiThread(() -> {
-                                statusView.setText("storage error: wallet identity must be reconciled — re-enter PIN");
-                                lock();
-                            });
-                            return;
-                        }
-                        credentials = fresh;
-                        endReplacement(op); // identity swapped; USB may resume
-                    }
-                    final String address = fresh.getAddress();
-                    final android.graphics.Bitmap qr = qrFor(address);
-                    runOnUiThread(() -> {
-                        if (s != session.get()) return;
-                        renderAddress(address, qr); // text + QR together, never one without the other
-                        hideBackup();               // terminal path: → home, parked USB replayed
-                        statusView.setText("new wallet active");
-                        devDumpUi();
-                    });
-                } catch (Exception exception) {
-                    endReplacement(op);
-                    runOnUiThread(() -> {
-                        statusView.setText("Key error: " + exception.getMessage());
-                        hideBackup(); // terminal path
-                    });
-                }
-            });
-        });
-        cancel.setOnClickListener(v -> {
-            if (!cancelReplacement(op)) return; // COMMITTING: too late, ignore
-            hideBackup();
-            devDumpUi();
-        });
-        setContentView(buildBackupView(candidate.mnemonic.split(" "), "NEW RECOVERY PHRASE",
-                "This wallet is NOT active yet. Write all 24 words down on paper first, then activate. Cancel keeps your current wallet.",
-                activate, cancel));
-        ui.removeCallbacks(hideSeed);
-        ui.postDelayed(hideSeed, SEED_TIMEOUT_MS);
-        devDumpUi();
-    }
-
-    private View buildBackupView(String[] words) {
-        TextView hide = VaultTheme.pixelButton(this, "Hide phrase", true);
-        hardenTouch(hide);
-        hide.setOnClickListener(v -> { hideBackup(); devDumpUi(); });
-        return buildBackupView(words, "RECOVERY PHRASE",
-                "Write these 24 words down in order on paper. This is the only backup — never photograph them or type them into any device.",
-                hide);
-    }
-
-    private View buildBackupView(String[] words, String titleText, String captionText, View... actions) {
-        int pad = dp(26);
+    private LinearLayout page(String eyebrow, String title, String description) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, dp(56), pad, dp(32));
+        root.setPadding(dp(24), dp(48), dp(24), dp(30));
         root.setBackgroundColor(VaultTheme.BG);
-
-        // Header with brand mark for continuity
-        LinearLayout head = new LinearLayout(this);
-        head.setOrientation(LinearLayout.HORIZONTAL);
-        head.setGravity(Gravity.CENTER_VERTICAL);
-        head.addView(VaultTheme.pixelLock(this, dp(2), VaultTheme.INK));
-        TextView title = VaultTheme.pixelText(this, titleText, 13, VaultTheme.INK);
-        title.setPadding(dp(14), 0, 0, 0);
-        head.addView(title);
-        root.addView(head);
-        TextView caption = VaultTheme.monoText(this, captionText, 12, VaultTheme.DIM);
-        caption.setPadding(0, dp(14), 0, 0);
-        root.addView(caption);
-
-        // Two aligned, ruled columns: 1–12 | 13–24 ("ledger paper")
-        LinearLayout grid = new LinearLayout(this);
-        grid.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout colL = new LinearLayout(this);
-        colL.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout colR = new LinearLayout(this);
-        colR.setOrientation(LinearLayout.VERTICAL);
-        colR.setPadding(dp(18), 0, 0, 0);
-        int half = words.length / 2;
-        for (int i = 0; i < words.length; i++) {
-            LinearLayout col = i < half ? colL : colR;
-            col.addView(wordCell(i + 1, words[i]));
-            if ((i % half) != half - 1) col.addView(VaultTheme.rule(this, 0, 0));
-        }
-        grid.addView(colL, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        grid.addView(colR, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        // grid gets the flexible weight so rows spread to fill the screen
-        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f);
-        glp.topMargin = dp(26);
-        glp.bottomMargin = dp(22);
-        grid.setGravity(Gravity.CENTER_VERTICAL);
-        root.addView(grid, glp);
-
-        for (int i = 0; i < actions.length; i++) {
-            root.addView(actions[i], matchWrap(i == 0 ? 0 : dp(10)));
+        TextView brand = VaultTheme.pixelText(this, "PHONE VAULT", 10, VaultTheme.ACCENT);
+        root.addView(brand);
+        TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(java.util.Locale.ROOT), 12, VaultTheme.FAINT);
+        label.setPadding(0, dp(30), 0, dp(8));
+        root.addView(label);
+        TextView heading = VaultTheme.bodyText(this, title, largeText ? 32 : 28, VaultTheme.INK);
+        heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        root.addView(heading);
+        if (description != null && !description.isEmpty()) {
+            TextView caption = VaultTheme.bodyText(this, description, bodySize(), VaultTheme.DIM);
+            caption.setPadding(0, dp(12), 0, dp(12));
+            root.addView(caption);
         }
         return root;
     }
 
-    /** One numbered word, with the index in a fixed-width mono column so words line up. */
-    private View wordCell(int n, String word) {
+    private void present(LinearLayout root, String screen) {
+        if ((screen.startsWith("backup") || "phrase".equals(screen) || "replace-confirm".equals(screen))
+                && !sensitive.active()) return;
+        screenName = screen;
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(VaultTheme.BG);
+        scroll.addView(root);
+        setContentView(scroll);
+        devDumpUi();
+    }
+
+    private void action(LinearLayout parent, String label, boolean primary, Runnable run) {
+        TextView button = VaultTheme.pixelButton(this, label, primary);
+        hardenTouch(button);
+        button.setOnClickListener(v -> {
+            if (unlocked && operational) run.run();
+        });
+        parent.addView(button, matchWrap(dp(12)));
+    }
+
+    private void card(LinearLayout parent, String label, String value) {
+        LinearLayout box = VaultTheme.box(this);
+        box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
+        TextView text = VaultTheme.bodyText(this, value, bodySize(), VaultTheme.INK);
+        text.setPadding(0, dp(6), 0, 0);
+        box.addView(text);
+        parent.addView(box, matchWrap(dp(12)));
+    }
+
+    private void nav(LinearLayout parent, String selected) {
         LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(0, dp(9), 0, dp(9));
-        TextView num = VaultTheme.monoText(this, String.format("%02d", n), 15, VaultTheme.FAINT);
-        num.setWidth(dp(34));
-        TextView w = VaultTheme.monoText(this, word, 17, VaultTheme.INK);
-        row.addView(num);
-        row.addView(w);
-        return row;
-    }
-
-    private AlertDialog.Builder darkDialog() {
-        return new AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert);
-    }
-
-    /** Adds FLAG_SECURE unless this is a dev build that permits screenshots for UI review. */
-    private static void secure(android.view.Window window) {
-        if (!DevTools.SCREENSHOTS) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+        for (String item : new String[] {"Wallet", "Security", "Coming next"}) {
+            TextView tab = VaultTheme.pixelButton(this, item, item.equals(selected));
+            tab.setTextSize(13);
+            tab.setPadding(dp(8), dp(10), dp(8), dp(10));
+            hardenTouch(tab);
+            tab.setOnClickListener(v -> {
+                if (!unlocked || sensitive.active() || approvalDecision != null) return;
+                if ("Wallet".equals(item)) showHome();
+                else if ("Security".equals(item)) showSecurity();
+                else showFeatures();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(56), 1);
+            lp.setMargins(dp(2), 0, dp(2), 0);
+            row.addView(tab, lp);
         }
+        parent.addView(row, matchWrap(dp(22)));
+    }
+
+    private void buildUi() {
+        getWindow().setStatusBarColor(VaultTheme.BG);
+        getWindow().setNavigationBarColor(VaultTheme.BG);
+        largeText = getPreferences(MODE_PRIVATE).getBoolean("large_text", false);
+        int saved = getPreferences(MODE_PRIVATE).getInt("idle_seconds", 120);
+        idleTimeoutMs = (saved == 30 || saved == 60 || saved == 120) ? saved * 1000L : IDLE_LOCK_MS;
+        statusView = VaultTheme.bodyText(this, "", bodySize(), VaultTheme.DIM);
+        showLoading("Opening Phone Vault", "Checking appliance policy…");
+    }
+
+    private void showLoading(String title, String caption) {
+        LinearLayout root = page("PLEASE WAIT", title, caption);
+        card(root, "Privacy", "Your receiving address stays hidden until the wallet is ready.");
+        action(root, "Lock now", false, this::lock);
+        present(root, "loading");
+    }
+
+    private void showHome() {
+        if (!walletLoaded) {
+            showLoading("Opening your wallet", "Verifying the wallet saved on this device…");
+            return;
+        }
+        LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Protect your recovery",
+                backupVerified ? "Review every request here. Your keys stay on this phone."
+                        : "Before receiving or signing, write down your recovery phrase and check all 24 words.");
+        nav(root, "Wallet");
+        if (backupVerified && walletAddress != null && walletQr != null) {
+            LinearLayout box = VaultTheme.box(this);
+            box.setGravity(Gravity.CENTER_HORIZONTAL);
+            qrView = new android.widget.ImageView(this);
+            qrView.setContentDescription("Receiving address QR. Full address follows.");
+            qrView.setImageBitmap(walletQr);
+            qrView.setAdjustViewBounds(true);
+            LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(dp(216), dp(216));
+            qlp.gravity = Gravity.CENTER_HORIZONTAL;
+            box.addView(qrView, qlp);
+            box.addView(VaultTheme.bodyText(this, "ACCOUNT 1 · RECEIVE", 13, VaultTheme.FAINT));
+            addressView = VaultTheme.monoText(this, formatAddress(
+                    org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), largeText ? 18 : 16, VaultTheme.INK);
+            addressView.setPadding(0, dp(12), 0, dp(8));
+            box.addView(addressView);
+            root.addView(box, matchWrap(dp(22)));
+            card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
+        } else {
+            card(root, "Backup check required", "Receiving and signing are paused. If you already have a backup, check it now. Your existing wallet has not been replaced.");
+            action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
+            action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
+        }
+        statusView = VaultTheme.bodyText(this, statusMessage, bodySize(), VaultTheme.DIM);
+        statusView.setPadding(dp(2), dp(20), 0, dp(4));
+        root.addView(statusView);
+        action(root, "Lock now", false, this::lock);
+        card(root, DevTools.SCREENSHOTS ? "Development appliance" : "Prototype",
+                "Test assets only. Hardware release verification is still pending.");
+        present(root, "wallet");
+    }
+
+    private void showSecurity() {
+        LinearLayout root = page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
+        nav(root, "Security");
+        card(root, "Recovery backup", backupVerified
+                ? "All 24 words checked for Account 1. Keep your written backup safe."
+                : "Not checked. Receiving and signing remain paused.");
+        action(root, "Check my backup", true, () -> startBackupAccess(true));
+        action(root, "Show recovery phrase", false, this::confirmRevealBackup);
+        action(root, "Lock now", false, this::lock);
+        action(root, "Display & auto-lock", false, this::showPreferences);
+        action(root, "Device information", false, this::showIntegrity);
+        action(root, "Change PIN · planned", false, () -> showPlanned("Change PIN",
+                "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect."));
+        action(root, "Replace wallet", false, this::confirmReplace);
+        present(root, "security");
+    }
+
+    private void showPreferences() {
+        LinearLayout root = page("SECURITY / PREFERENCES", "Make it comfortable", "Larger text and shorter idle locking are available now.");
+        card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
+        action(root, largeText ? "Use standard text" : "Use larger text", true, () -> {
+            boolean next = !largeText;
+            if (getPreferences(MODE_PRIVATE).edit().putBoolean("large_text", next).commit()) {
+                largeText = next;
+                showPreferences();
+            } else showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
+        });
+        card(root, "Idle lock", (idleTimeoutMs / 1000) + " seconds without interaction. Screen off always locks immediately; the appliance screen-off policy is 60 seconds.");
+        for (int seconds : new int[] {30, 60, 120}) {
+            action(root, seconds == 120 ? "Lock after 2 minutes" : "Lock after " + seconds + " seconds",
+                    idleTimeoutMs == seconds * 1000L, () -> {
+                if (getPreferences(MODE_PRIVATE).edit().putInt("idle_seconds", seconds).commit()) {
+                    idleTimeoutMs = seconds * 1000L;
+                    armIdleLock();
+                    showPreferences();
+                } else showInfo("Setting not saved", "Your previous idle timeout is still active.", this::showPreferences);
+            });
+        }
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "preferences");
+    }
+
+    private void showIntegrity() {
+        LinearLayout root = page("SECURITY / DEVICE", "Know what is verified", "These are local observations, not independent attestation.");
+        card(root, "App build", BuildConfig.VERSION_NAME + " · " + (DevTools.SCREENSHOTS ? "development capture enabled" : "release capture disabled"));
+        card(root, "Platform", Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid " + Build.VERSION.RELEASE + "\nReported patch: " + Build.VERSION.SECURITY_PATCH);
+        card(root, "Device policy", isPhoneVaultApplianceBuild() && operational ? "Appliance policy active" : "Development environment · appliance policy not established");
+        card(root, "Key boundary", BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE
+                ? "StrongBox wrapping is required when loading. EVM signing runs in Android memory."
+                : "Development build permits software wrapping. EVM signing runs in Android memory.");
+        card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
+        card(root, "Account path", "m/44'/60'/0'/0/0 · no passphrase");
+        card(root, "PIN protection", "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
+        card(root, "Entropy", "Kernel CSPRNG + software jitter. Independent Titan M input and diagnostics are planned.");
+        android.content.Intent battery = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        if (battery != null) {
+            int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
+        }
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "integrity");
+    }
+
+    private void showFeatures() {
+        LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "Explore the plan. These features cannot be enabled in this build.");
+        nav(root, "Coming next");
+        String[][] items = {
+            {"Restore wallet", "On-device word entry, checksum validation, and an address-match recovery drill. Never enter your seed into a desktop companion."},
+            {"Multiple accounts", "Account discovery, explicit derivation paths, and watch-only export."},
+            {"Passphrase wallets", "A separate wallet for each exact passphrase. A typo creates a different wallet; recovery must be tested before release."},
+            {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
+            {"Browser wallets", "MetaMask and other integrations need a supported adapter. This build does not impersonate Ledger or Trezor."},
+            {"Typed-data signing", "Permission-aware EIP-712 review for permits, orders, and authentication. Unsupported signing requests remain refused."},
+            {"Verified token details", "Authenticated token identity and decimals. Current token calls show unverified raw arguments."},
+            {"Signed updates", "A verified release chain, rollback protection, and recovery from interrupted updates."},
+            {"Advanced recovery", "Multisig, optional stateless use, and additional backup formats after core recovery is proven."},
+            {"Passkeys", "A future hardware-backed authenticator with its own transport and recovery review."}
+        };
+        for (String[] item : items) action(root, item[0] + " · planned", false,
+                () -> showPlanned(item[0], item[1]));
+        present(root, "features");
+    }
+
+    private void showPlanned(String title, String description) {
+        LinearLayout root = page("PLANNED · NOT AVAILABLE", title, description);
+        card(root, "Availability", "No wallet setting was changed. This screen describes upcoming work.");
+        action(root, "Back to roadmap", true, this::showFeatures);
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "planned");
+    }
+
+    private void showInfo(String title, String description, Runnable back) {
+        LinearLayout root = page("PHONE VAULT", title, description);
+        action(root, "Continue", true, back);
+        present(root, "information");
+    }
+
+    private void setStatusActive(boolean active) {
+        statusMessage = active ? "USB connected · waiting for a request" : "USB disconnected";
+        if (statusView != null) statusView.setText(statusMessage);
+    }
+
+
+    private boolean sensitiveValid(int token, int s) {
+        return operational && unlocked && foreground && s == session.get() && sensitive.owns(token);
+    }
+
+    private void beginSensitive(String purpose, Runnable afterPin) {
+        if (!walletLoaded || credentials == null || !unlocked) return;
+        if (transport != null || requestPending.get()) {
+            showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", this::showSecurity);
+            return;
+        }
+        int token;
+        synchronized (stateLock) {
+            token = sensitive.begin();
+            if (token < 0) return;
+            activeSensitive = token;
+        }
+        final int s = session.get();
+        afterReauth = afterPin;
+        pinScreen = new PinScreen(this, "VERIFY PIN", "Enter your PIN to " + purpose + ".", entered -> {
+            if (!sensitiveValid(token, s)) { java.util.Arrays.fill(entered, '0'); return; }
+            final PinScreen gate = pinScreen;
+            gate.setSubtitle("Checking PIN…");
+            cryptoExecutor.execute(() -> {
+                try {
+                    if (!sensitiveValid(token, s)) return;
+                    VaultPin.Result result = pin.verify(entered, this::wipeWalletForFailedPin);
+                    runOnUiThread(() -> {
+                        if (!sensitiveValid(token, s) || pinScreen != gate) return;
+                        if (result.outcome == VaultPin.Outcome.OK) {
+                            Runnable next = afterReauth;
+                            afterReauth = null;
+                            gate.dispose();
+                            pinScreen = null;
+                            if (next != null) next.run();
+                        } else if (result.outcome == VaultPin.Outcome.WRONG) {
+                            gate.setSubtitle("Enter your PIN to " + purpose + ".");
+                            gate.showError("Wrong PIN · " + result.attemptsRemaining + " attempts left");
+                            updatePinPolicy(gate);
+                        } else {
+                            gateNotice = result.outcome == VaultPin.Outcome.WIPED
+                                    ? "Wallet erased after the attempt limit."
+                                    : "Erase could not be verified. The vault is sealed.";
+                            lock();
+                            showPinGate(null);
+                        }
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> {
+                        if (sensitiveValid(token, s) && pinScreen == gate) {
+                            gate.showError("PIN check failed. Try again.");
+                            updatePinPolicy(gate);
+                        }
+                    });
+                } finally { java.util.Arrays.fill(entered, '0'); }
+            });
+        });
+        updatePinPolicy(pinScreen);
+        pinScreen.addCancel(this::hideBackup);
+        screenName = "reauth";
+        setContentView(pinScreen.view());
+        devDumpUi();
+    }
+
+    private void updatePinPolicy(PinScreen gate) {
+        gate.setLargeText(largeText);
+        int remaining = pin.attemptsRemaining();
+        gate.setPolicy((DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
+                + remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet.");
+        gate.setSubmitRequired(remaining == 1 && !pin.eraseOutstanding());
+    }
+
+    private void confirmRevealBackup() { startBackupAccess(false); }
+
+    private void startBackupAccess(boolean checkOnly) {
+        beginSensitive(checkOnly ? "check your backup" : "view your recovery phrase", () -> {
+            int token = activeSensitive, s = session.get();
+            showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
+            cryptoExecutor.execute(() -> {
+                try {
+                    if (!sensitiveValid(token, s)) return;
+                    String mnemonic = vault.revealMnemonic(() -> sensitiveValid(token, s));
+                    String[] words = mnemonic.split(" ");
+                    runOnUiThread(() -> {
+                        if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
+                        backupWords = words;
+                        backupIdentity = walletAddress;
+                        backupPage = 0;
+                        startSeedTimer();
+                        if (checkOnly) startWordCheck();
+                        else showPhrasePage();
+                    });
+                } catch (Exception e) {
+                    runOnUiThread(() -> {
+                        if (sensitiveValid(token, s))
+                            showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
+                    });
+                }
+            });
+        });
+    }
+
+    private void startSeedTimer() {
+        long now = android.os.SystemClock.elapsedRealtime();
+        seedHardDeadline = now + 5 * 60 * 1000L;
+        seedIdleDeadline = now + SEED_TIMEOUT_MS;
+        ui.removeCallbacks(hideSeed);
+        ui.post(hideSeed);
+    }
+
+    private void tickSeedTimer() {
+        if (!sensitive.active() || backupWords == null || replacement.state() == ReplacementState.COMMITTING) return;
+        long remaining = Math.min(seedHardDeadline, seedIdleDeadline) - android.os.SystemClock.elapsedRealtime();
+        if (remaining <= 0) {
+            boolean discarded = replacementCandidate != null;
+            hideBackup();
+            statusMessage = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
+                    : "Backup hidden. Verify your PIN to resume with the same wallet.";
+            showInfo("Backup hidden", statusMessage, this::showHome);
+            return;
+        }
+        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · touch to stay active · 5 minute session limit");
+        ui.postDelayed(hideSeed, 1000);
+    }
+
+    private void addSeedTimer(LinearLayout root) {
+        seedTimer = VaultTheme.bodyText(this, "", 14, VaultTheme.FAINT);
+        seedTimer.setPadding(0, dp(18), 0, 0);
+        root.addView(seedTimer);
+        ui.removeCallbacks(hideSeed);
+        tickSeedTimer();
+    }
+
+    private void showPhrasePage() {
+        if (!sensitive.active() || backupWords == null) return;
+        LinearLayout root = page(replacementCandidate == null ? "RECOVERY PHRASE" : "NEW WALLET · NOT ACTIVE",
+                "Write words " + (backupPage * 4 + 1) + "–" + (backupPage * 4 + 4),
+                "Page " + (backupPage + 1) + " of 6. Write each word beside its number. Never photograph or share your phrase.");
+        for (int i = backupPage * 4; i < backupPage * 4 + 4; i++) {
+            LinearLayout row = VaultTheme.box(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            TextView number = VaultTheme.monoText(this, String.format(java.util.Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
+            number.setWidth(dp(44));
+            row.addView(number);
+            row.addView(VaultTheme.monoText(this, backupWords[i], largeText ? 26 : 23, VaultTheme.INK),
+                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+            root.addView(row, matchWrap(dp(12)));
+        }
+        if (backupPage < 5) action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
+        else action(root, "I've written all 24 · check backup", true, this::startWordCheck);
+        if (backupPage > 0) action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
+        action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
+        addSeedTimer(root);
+        present(root, "phrase");
+    }
+
+    private void startWordCheck() {
+        if (backupWords == null || !sensitive.active()) return;
+        if (backupChallenge != null) backupChallenge.destroy();
+        backupChallenge = new BackupCheck.Challenge(backupWords, random);
+        showWordCheck();
+    }
+
+    private void showWordCheck() {
+        if (backupChallenge == null || !sensitive.active()) return;
+        int position = backupChallenge.position();
+        LinearLayout root = page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF 24",
+                "Find word " + (position + 1), "Use your written backup. Select the word beside this number.");
+        java.util.List<String> choices = new java.util.ArrayList<>();
+        choices.add(backupWords[position]);
+        java.util.List<String> dictionary = org.web3j.crypto.MnemonicUtils.getWords();
+        while (choices.size() < 6) {
+            String next = dictionary.get(random.nextInt(dictionary.size()));
+            if (!choices.contains(next)) choices.add(next);
+        }
+        java.util.Collections.shuffle(choices, random);
+        final BackupCheck.Challenge challenge = backupChallenge;
+        final int token = activeSensitive, s = session.get();
+        for (String choice : choices) action(root, choice, false, () -> {
+            if (!sensitiveValid(token, s) || backupChallenge != challenge) return;
+            if (!challenge.answer(choice)) {
+                challenge.destroy();
+                LinearLayout failed = page("BACKUP NEEDS ATTENTION", "That word did not match", "Check the number and spelling on your paper. Receiving stays paused until the full check is complete.");
+                action(failed, "Review recovery words", true, () -> { backupPage = 0; showPhrasePage(); });
+                action(failed, "Restart the 24-word check", false, this::startWordCheck);
+                action(failed, "Cancel", false, this::hideBackup);
+                addSeedTimer(failed);
+                present(failed, "backup-error");
+            } else if (challenge.complete()) showBackupChecked();
+            else showWordCheck();
+        });
+        action(root, "Cancel check", false, this::hideBackup);
+        addSeedTimer(root);
+        present(root, "backup-check");
+    }
+
+    private void showBackupChecked() {
+        if (backupChallenge == null || !backupChallenge.complete()) return;
+        ui.removeCallbacks(hideSeed);
+        if (backupWords != null) java.util.Arrays.fill(backupWords, null);
+        backupWords = null;
+        backupChallenge.destroy();
+        backupChallenge = null;
+        String address = replacementCandidate == null ? backupIdentity : replacementCandidate.address;
+        LinearLayout root = page("24 OF 24 WORDS CHECKED",
+                replacementCandidate == null ? "Your backup matches" : "Ready to replace?",
+                replacementCandidate == null ? "Confirm the account below. This check does not replace an independent restore drill."
+                        : "Your current wallet will be replaced. Keep its backup if it controls any assets. The new wallet is not active until you confirm.");
+        card(root, replacementCandidate == null ? "Account 1" : "New Account 1",
+                org.web3j.crypto.Keys.toChecksumAddress(address));
+        card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
+        action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
+                replacementCandidate == null ? this::saveBackupCheck : this::activateReplacement);
+        action(root, "Cancel", false, this::hideBackup);
+        present(root, "backup-confirm");
+    }
+
+    private void saveBackupCheck() {
+        final int token = activeSensitive, s = session.get();
+        final String address = backupIdentity;
+        showLoading("Saving backup check", "Confirming this account's recovery status…");
+        cryptoExecutor.execute(() -> {
+            try {
+                synchronized (stateLock) {
+                    if (!sensitiveValid(token, s) || credentials == null || !credentials.getAddress().equalsIgnoreCase(address)) return;
+                    backupCheck.record(address);
+                    backupVerified = true;
+                }
+                runOnUiThread(() -> {
+                    if (!sensitiveValid(token, s)) return;
+                    statusMessage = "Backup checked · ready to receive";
+                    hideBackup();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (sensitiveValid(token, s))
+                        showInfo("Backup status not saved", "Your wallet is unchanged. Please repeat the check before receiving or signing.", this::hideBackup);
+                });
+            }
+        });
+    }
+
+    private void confirmReplace() {
+        if (!backupVerified) {
+            showInfo("Check your existing backup first", "Replacing a wallet requires a verified backup of the current account.", this::showHome);
+            return;
+        }
+        beginSensitive("replace your wallet", () -> {
+            final int token = activeSensitive, s = session.get();
+            LinearLayout root = page("SECURITY / REPLACE WALLET", "Keep your current backup", "Replacement creates a different account. Assets on the old account remain controlled by its original phrase.");
+            card(root, "Nothing changes yet", "You will record and check all 24 new words before a separate Activate step. Cancellation keeps your current wallet.");
+            action(root, "Prepare a new wallet", true, () -> {
+                if (!sensitiveValid(token, s)) return;
+                int op = beginReplacement();
+                if (op < 0) return;
+                replacementOperation = op;
+                showLoading("Preparing a new wallet", "Your current wallet remains active until the final confirmation.");
+                cryptoExecutor.execute(() -> {
+                    try {
+                        if (!sensitiveValid(token, s)) return;
+                        SeedVault.Generation candidate = vault.prepareReplacement(new byte[0]);
+                        runOnUiThread(() -> {
+                            if (!sensitiveValid(token, s) || !markPrepared(op)) return;
+                            replacementCandidate = candidate;
+                            backupWords = candidate.mnemonic.split(" ");
+                            backupPage = 0;
+                            startSeedTimer();
+                            showPhrasePage();
+                        });
+                    } catch (Exception e) {
+                        endReplacement(op);
+                        runOnUiThread(() -> {
+                            if (sensitiveValid(token, s))
+                                showInfo("Could not prepare a wallet", "Your current wallet is unchanged. Lock and retry.", this::hideBackup);
+                        });
+                    }
+                });
+            });
+            action(root, "Cancel · keep current wallet", false, this::hideBackup);
+            present(root, "replace-confirm");
+        });
+    }
+
+    private void activateReplacement() {
+        final int token = activeSensitive, s = session.get(), op = replacementOperation;
+        final SeedVault.Generation candidate = replacementCandidate;
+        if (candidate == null || !sensitiveValid(token, s) || !beginCommit(op)) return;
+        ui.removeCallbacks(hideSeed);
+        clearReceivingIdentity();
+        showLoading("Activating your new wallet", "Saving and checking the new identity. This step can no longer be cancelled.");
+        cryptoExecutor.execute(() -> {
+            try {
+                synchronized (stateLock) {
+                    if (!sensitiveValid(token, s) || !replacement.owns(op) || transport != null || requestPending.get()) return;
+                    credentials = null;
+                    Credentials fresh = vault.commitReplacement(candidate.mnemonic);
+                    backupCheck.record(fresh.getAddress());
+                    credentials = fresh;
+                    walletAddress = fresh.getAddress();
+                    backupVerified = true;
+                    walletLoaded = true;
+                    endReplacement(op);
+                }
+                android.graphics.Bitmap qr = qrFor(candidate.address);
+                runOnUiThread(() -> {
+                    if (!sensitiveValid(token, s)) return;
+                    walletQr = qr;
+                    statusMessage = "New wallet active · backup checked";
+                    hideBackup();
+                });
+            } catch (Exception e) {
+                synchronized (stateLock) { credentials = null; clearReceivingIdentity(); endReplacement(op); }
+                runOnUiThread(() -> {
+                    if (s != session.get()) return;
+                    gateNotice = "Storage could not confirm the wallet. Re-enter your PIN to reconcile it. No receiving address is available until loading succeeds.";
+                    lock();
+                });
+            }
+        });
+    }
+
+    private static void secure(android.view.Window window) {
+        if (!DevTools.SCREENSHOTS) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
+    }
+
+    private void clearReceivingIdentity() {
+        walletLoaded = false;
+        backupVerified = false;
+        walletAddress = null;
+        walletQr = null;
     }
 
     private void loadKey() {
         final int s = session.get();
+        final VaultKeyStore store = vault;
+        clearReceivingIdentity();
+        showLoading("Opening your wallet", "Checking the saved identity before displaying an address…");
         cryptoExecutor.execute(() -> {
             try {
-                if (pin.eraseOutstanding()) {
-                    throw new IllegalStateException("vault is sealed: erase outstanding");
-                }
-                final Credentials loaded = vault.loadOrCreate();
-                final String address = loaded.getAddress();
-                final android.graphics.Bitmap qr = qrFor(address);
+                if (s != session.get() || !unlocked || pin.eraseOutstanding()) return;
+                Credentials loaded = store.loadOrCreate();
+                String address = loaded.getAddress();
+                android.graphics.Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
-                    if (s != session.get() || !unlocked || !operational) return; // locked/deactivated: drop it
+                    if (s != session.get() || !unlocked || !operational) return;
                     credentials = loaded;
+                    walletAddress = address;
+                    walletQr = qr;
+                    backupVerified = backupCheck.verified(address);
+                    walletLoaded = true;
                 }
                 runOnUiThread(() -> {
-                    if (s != session.get()) return;
-                    renderAddress(address, qr);
+                    if (s != session.get() || !unlocked) return;
+                    showHome();
+                    drainPendingUsb();
                 });
-            } catch (Exception exception) {
-                runOnUiThread(() -> statusView.setText("Key error: " + exception.getMessage()));
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    credentials = null;
+                    clearReceivingIdentity();
+                    LinearLayout root = page("WALLET UNAVAILABLE", "Your address is hidden", "The stored identity could not be verified. Do not replace or reset the wallet to fix this error.");
+                    card(root, "Next step", "Lock and retry. If the problem continues, preserve this device and use your written backup with a compatible recovery tool.");
+                    action(root, "Lock & retry", true, this::lock);
+                    present(root, "wallet-error");
+                });
             }
         });
     }
 
     private android.graphics.Bitmap qrFor(String address) {
-        android.graphics.Bitmap raw = VaultTheme.qrBitmap(address, dp(180));
-        return raw == null ? null : VaultTheme.framedQr(raw, dp(14), dp(3), dp(6));
-    }
-
-    /** Address text and QR always change together — a stale QR is a funds-loss bug. */
-    private void renderAddress(String address, android.graphics.Bitmap qr) {
-        addressView.setText(formatAddress(address));
-        if (qrView != null) qrView.setImageBitmap(qr);
-    }
-
-    private void confirmReplace() {
-        if (!operational || !unlocked) {
-            statusView.setText("Vault disabled: appliance policy is not active");
-            return;
-        }
-        if (transport != null || requestPending.get() || replacementActive()) {
-            statusView.setText("Disconnect USB and finish any approval before replacing the key");
-            return;
-        }
-        AlertDialog dialog = darkDialog()
-                .setTitle("Regenerate wallet?")
-                .setMessage("A brand-new seed will be generated and its recovery phrase shown. Nothing changes until you activate it. Once activated, the current phrase and any funds it controls are UNRECOVERABLE unless you have written the current phrase down.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Continue", (ignoredDialog, which) -> {
-                    if (transport != null || requestPending.get()) {
-                        statusView.setText(
-                                "Disconnect USB and finish any approval before replacing the key");
-                        return;
-                    }
-                    final int op = beginReplacement(); // IDLE → PREPARING; this flow owns the token
-                    if (op < 0) {
-                        statusView.setText("A wallet replacement is already in progress");
-                        return;
-                    }
-                    final int s = session.get();
-                    cryptoExecutor.execute(() -> {
-                        try {
-                            // Requests arriving after the CAS above observe
-                            // replacement.active() and are parked/rejected.
-                            if (transport != null || requestPending.get()) {
-                                endReplacement(op);
-                                runOnUiThread(() -> {
-                                    statusView.setText("Key replacement cancelled because USB became active");
-                                    drainPendingUsb();
-                                });
-                                return;
-                            }
-                            // Phase 1: candidate only — the stored wallet is untouched.
-                            final SeedVault.Generation candidate = vault.prepareReplacement(new byte[0]);
-                            runOnUiThread(() -> {
-                                if (s != session.get() || !unlocked || !markPrepared(op)) {
-                                    endReplacement(op);
-                                    drainPendingUsb();
-                                    return;
-                                }
-                                showReplacementPhrase(candidate, s, op);
-                            });
-                        } catch (Exception exception) {
-                            endReplacement(op);
-                            runOnUiThread(() -> {
-                                statusView.setText("Key error: " + exception.getMessage());
-                                drainPendingUsb();
-                            });
-                        }
-                    });
-                }).create();
-        secure(dialog.getWindow());
-        dialog.setOnShowListener(ignored -> {
-            hardenTouch(dialog.getButton(AlertDialog.BUTTON_NEGATIVE));
-            hardenTouch(dialog.getButton(AlertDialog.BUTTON_POSITIVE));
-        });
-        dialog.show();
+        android.graphics.Bitmap raw = VaultTheme.qrBitmap(address, dp(216));
+        if (raw == null) throw new IllegalStateException("QR could not be generated");
+        return VaultTheme.framedQr(raw, dp(14), dp(3), dp(6));
     }
 
     private void handleIntent(Intent intent) {
@@ -914,11 +1158,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
             return;
         }
-        if (replacementActive()) {
-            // Threat-model invariant: replacement and USB are mutually exclusive. Park the host
+        if (replacementActive() || sensitive.active() || !walletLoaded || !backupVerified) {
+            // Sensitive screens, incomplete backup, and USB are mutually exclusive. Park the host
             // until the replacement completes or is cancelled (then replayed from there).
             pendingUsb = intent;
-            statusView.setText("USB host waiting: finish the wallet replacement first");
+            statusMessage = "USB host waiting · finish wallet setup or security action";
+            if (statusView != null) statusView.setText(statusMessage);
             return;
         }
         UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
@@ -928,187 +1173,215 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             transport = null;
             previous.close();
         }
-        requestPending.set(false);
-        AlertDialog previousApproval = approvalDialog;
-        if (previousApproval != null) previousApproval.dismiss();
+        boolean replacedRequest = approvalDecision != null;
+        cancelApproval();
+        if (replacedRequest) showReceipt("USB session changed", "The previous request ended. If you tapped Sign, check the host for a possible signature before retrying.", null);
         try {
             AccessoryTransport opened = AccessoryTransport.open(
                     (UsbManager) getSystemService(USB_SERVICE), accessory, this);
             transport = opened;  // publish first …
             opened.start();      // … then let callbacks fire; none can be mis-attributed now
-            statusView.setText("USB: connected — waiting for request");
+            statusMessage = "USB connected · waiting for a request";
+            if (statusView != null) statusView.setText(statusMessage);
         } catch (Exception exception) {
             transport = null;
-            statusView.setText("USB error: " + exception.getMessage());
+            statusMessage = "USB connection failed · reconnect the host";
+            if (statusView != null) statusView.setText(statusMessage);
         }
     }
 
     @Override public void onConnected(AccessoryTransport source) {
         if (source != transport) return;
         runOnUiThread(() -> {
-            statusView.setText("USB: connected — waiting for request");
+            if (source != transport || !unlocked) return;
             setStatusActive(true);
         });
     }
 
+
     @Override public void onRequest(AccessoryTransport source, JSONObject json) {
-        if (!operational) {
-            sendError(source, json.optString("id", "unknown"), "Appliance policy is not active");
-            return;
-        }
         if (source != transport) return;
         String id = json.optString("id", "unknown");
-        if (replacementActive()) {
-            sendError(source, id, "Signing key replacement is in progress");
-            return;
+        final int s = session.get();
+        synchronized (stateLock) {
+            if (!operational || !unlocked || !walletLoaded || !backupVerified
+                    || sensitive.active() || replacementActive()) {
+                sendError(source, id, "Wallet is not ready: unlock and complete the backup check first");
+                return;
+            }
         }
         if ("getAddress".equals(json.optString("method"))) {
             try {
                 Eip1559Request.requireExactFields(json, "id", "method");
                 id = Eip1559Request.validatedId(json.getString("id"));
-                Credentials current = credentials;
-                if (current == null) {
-                    sendError(source, id, "Key is not ready");
-                } else {
-                    source.send(json("id", id, "status", "ok", "address", current.getAddress()));
+                synchronized (stateLock) {
+                    if (s != session.get() || source != transport || !unlocked || !backupVerified || sensitive.active()) return;
+                    source.send(json("id", id, "status", "ok", "address", credentials.getAddress()));
                 }
-            } catch (Exception exception) {
-                sendError(source, id, exception.getMessage());
-            }
+            } catch (Exception e) { sendError(source, id, e.getMessage()); }
             return;
         }
-        if (!requestPending.compareAndSet(false, true)) {
-            sendError(source, id, "Another approval is pending");
-            return;
+        final ApprovalDecision decision;
+        synchronized (stateLock) {
+            if (!requestPending.compareAndSet(false, true)) {
+                sendError(source, id, "Another approval is pending");
+                return;
+            }
+            decision = new ApprovalDecision(stateLock);
+            approvalDecision = decision;
         }
         try {
             Eip1559Request request = Eip1559Request.parse(json);
-            Credentials reviewedCredentials = credentials;
-            if (reviewedCredentials == null) {
-                throw new IllegalStateException("Key is not ready");
-            }
-            ApprovalSession approval = new ApprovalSession(request, reviewedCredentials);
-            runOnUiThread(() -> showApproval(source, approval));
-        } catch (Exception exception) {
-            requestPending.set(false);
-            sendError(source, id, exception.getMessage());
+            ApprovalSession approval = new ApprovalSession(request, credentials);
+            runOnUiThread(() -> showApproval(source, approval, decision, s));
+        } catch (Exception e) {
+            finishApproval(decision);
+            sendError(source, id, e.getMessage());
         }
     }
 
-    private void showApproval(AccessoryTransport source, ApprovalSession approval) {
-        final int s = session.get(); // the approval is bound to THIS unlock session
-        if (source != transport || !unlocked) {
+    private void finishApproval(ApprovalDecision owner) {
+        synchronized (stateLock) {
+            if (approvalDecision != owner) return;
+            approvalDecision = null;
             requestPending.set(false);
-            sendError(source, approval.request.id, "Vault is locked");
+        }
+    }
+
+    private void cancelApproval() {
+        synchronized (stateLock) {
+            if (approvalDecision != null) approvalDecision.cancel();
+            approvalDecision = null;
+            requestPending.set(false);
+        }
+    }
+
+    private void showApproval(AccessoryTransport source, ApprovalSession approval,
+                              ApprovalDecision decision, int s) {
+        if (source != transport || s != session.get() || !unlocked || sensitive.active()
+                || approvalDecision != decision || !walletLoaded || !backupVerified) {
+            decision.cancel();
+            finishApproval(decision);
             return;
         }
         Eip1559Request request = approval.request;
-        LinearLayout details = new LinearLayout(this);
-        details.setOrientation(LinearLayout.VERTICAL);
-        details.setBackgroundColor(VaultTheme.BG);
-        int padding = dp(20);
-        details.setPadding(padding, dp(8), padding, 0);
-        details.addView(detail("Transaction type", request.transactionTypeLabel()));
-        details.addView(detail("Signing address", approval.signerAddressLabel()));
-        details.addView(detail("Network", request.networkLabel()));
-        details.addView(detail(request.displayedAmountTitle(), request.displayedAmountLabel()));
-        details.addView(detail(request.displayedPartyTitle(), request.displayedRecipientLabel()));
+        String intent = request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Review permission"
+                : request.kind == Eip1559Request.Kind.TOKEN_TRANSFER ? "Review contract transfer" : "Review transfer";
+        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : "TRANSACTION REVIEW",
+                intent, "Compare these details with your intended action. This phone is the approval screen.");
+        root.addView(detail("Action", request.transactionTypeLabel()));
+        root.addView(detail(request.displayedAmountTitle(), request.displayedAmountLabel()));
+        root.addView(detail(request.displayedPartyTitle(), request.displayedRecipientLabel()));
+        root.addView(detail("Network", request.networkLabel()));
+        root.addView(detail("From · Account 1", approval.signerAddressLabel()));
         if (request.kind != Eip1559Request.Kind.NATIVE_TRANSFER) {
-            details.addView(detail("Target contract", request.contractLabel()));
+            root.addView(detail("Target contract", request.contractLabel()));
+            root.addView(detail(request.contractWarningTitle(), request.contractWarningLabel()));
         }
-        details.addView(detail(request.contractWarningTitle(), request.contractWarningLabel()));
-        details.addView(detail("Maximum network fee", request.maximumFeeEth()));
-        details.addView(detail("Gas limit", request.gasLimitLabel()));
-        details.addView(detail("Maximum fee per gas", request.maxFeePerGasLabel()));
-        details.addView(detail("Priority fee per gas", request.maxPriorityFeePerGasLabel()));
-        details.addView(detail("Nonce", request.nonce.toString()));
-        details.addView(detail("Contract data", request.contractDataLabel()));
+        root.addView(detail("Maximum execution fee", request.maximumFeeEth()));
+        root.addView(detail("Fee coverage", request.feeCoverageLabel()));
+        LinearLayout raw = new LinearLayout(this);
+        raw.setOrientation(LinearLayout.VERTICAL);
+        raw.addView(detail("Gas limit", request.gasLimitLabel()));
+        raw.addView(detail("Maximum fee per gas", request.maxFeePerGasLabel()));
+        raw.addView(detail("Priority fee per gas", request.maxPriorityFeePerGasLabel()));
+        raw.addView(detail("Nonce", request.nonce.toString()));
+        raw.addView(detail("Contract data", request.contractDataLabel()));
+        raw.setVisibility(View.GONE);
+        TextView details = VaultTheme.pixelButton(this, "Show technical details", false);
+        hardenTouch(details);
+        details.setOnClickListener(v -> {
+            boolean visible = raw.getVisibility() == View.VISIBLE;
+            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
+            details.setText(visible ? "Show technical details" : "Hide technical details");
+        });
+        root.addView(details, matchWrap(dp(8)));
+        root.addView(raw);
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(request.reviewPrompt());
+        reviewed.setTextSize(bodySize());
         reviewed.setTextColor(VaultTheme.INK);
-        reviewed.setTypeface(VaultTheme.mono());
-        reviewed.setPadding(dp(8), dp(10), 0, dp(10));
+        reviewed.setMinHeight(dp(56));
+        reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
         hardenTouch(reviewed);
-        details.addView(reviewed);
-
-        ScrollView scroll = new ScrollView(this);
-        scroll.setBackgroundColor(VaultTheme.BG);
-        scroll.addView(details);
-        AlertDialog dialog = darkDialog()
-                .setTitle("Approve transaction?")
-                .setView(scroll)
-                .setCancelable(false)
-                .setNegativeButton("Reject", (d, which) -> {
-                    requestPending.set(false);
-                    source.send(json("id", request.id, "status", "rejected"));
-                    statusView.setText("USB: transaction rejected");
-                })
-                .setPositiveButton("Sign", null)
-                .create();
-        secure(dialog.getWindow());
-        dialog.setOnShowListener(ignored -> {
-            Button signButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            signButton.setEnabled(false);
-            reviewed.setOnCheckedChangeListener((button, checked) -> signButton.setEnabled(checked));
-            signButton.setOnClickListener(view -> {
-                if (source != transport || s != session.get() || !unlocked) {
-                    requestPending.set(false);
-                    dialog.dismiss();
-                    return;
-                }
-                signButton.setEnabled(false);
-                reviewed.setEnabled(false);
-                statusView.setText("Signing approved transaction…");
-                cryptoExecutor.execute(() -> {
-                    try {
-                        JSONObject response;
-                        // Check-sign-send is one step under stateLock: lock()/deactivate() close the
-                        // transport inside the same lock, so the outcome is linearized — either the
-                        // signature is sent before the lock, or nothing is computed after it.
-                        synchronized (stateLock) {
-                            if (!operational || !unlocked || s != session.get()
-                                    || source != transport || source.isClosed()) {
-                                throw new IllegalStateException("Vault locked or USB session is no longer active");
-                            }
-                            response = approval.signIfIdentityUnchanged(credentials);
-                            // send() only ENQUEUES (bounded, single writer thread): no USB I/O
-                            // happens under stateLock, so a host that stops reading can never
-                            // hold up lock()/deactivate().
-                            if (!source.send(response)) {
-                                throw new IllegalStateException("USB host is not reading responses; signature not sent");
-                            }
-                        }
-                        runOnUiThread(() -> {
-                            statusView.setText("USB: signature returned");
-                            dialog.dismiss();
-                        });
-                    } catch (Exception exception) {
-                        sendError(source, request.id, exception.getMessage());
-                        runOnUiThread(dialog::dismiss);
-                    } finally {
-                        requestPending.set(false);
+        root.addView(reviewed, matchWrap(dp(12)));
+        TextView sign = VaultTheme.pixelButton(this,
+                request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Approve permission & sign" : "Approve & sign", true);
+        TextView reject = VaultTheme.pixelButton(this, "Reject request", false);
+        hardenTouch(sign);
+        hardenTouch(reject);
+        sign.setEnabled(false);
+        reviewed.setOnCheckedChangeListener((v, checked) -> sign.setEnabled(checked && decision.state() == ApprovalDecision.State.REVIEW));
+        reject.setOnClickListener(v -> {
+            if (!decision.reject()) return;
+            source.send(json("id", request.id, "status", "rejected"));
+            finishApproval(decision);
+            statusMessage = "Request rejected · no signature created";
+            showReceipt("Request rejected", "No signature was created for this request.", null);
+        });
+        sign.setOnClickListener(v -> {
+            synchronized (stateLock) {
+                if (source != transport || s != session.get() || !unlocked
+                        || approvalDecision != decision || !reviewed.isChecked() || !decision.beginSigning()) return;
+            }
+            // The decision is now irreversible through Reject. Lock still invalidates queued work.
+            sign.setEnabled(false);
+            reject.setEnabled(false);
+            reviewed.setEnabled(false);
+            sign.setText("Signing…");
+            statusMessage = "Signing approved request";
+            cryptoExecutor.execute(() -> {
+                try {
+                    JSONObject response;
+                    synchronized (stateLock) {
+                        if (!operational || !unlocked || s != session.get() || sensitive.active()
+                                || !backupVerified || source != transport || source.isClosed()
+                                || approvalDecision != decision || !decision.maySign())
+                            throw new IllegalStateException("Session ended before signing");
+                        response = approval.signIfIdentityUnchanged(credentials);
+                        if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
+                        decision.finish();
                     }
-                });
+                    runOnUiThread(() -> {
+                        if (s != session.get() || !unlocked || approvalDecision != decision) return;
+                        finishApproval(decision);
+                        statusMessage = "Signature created · delivery not confirmed";
+                        showReceipt("Signature created", "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
+                                response.optString("transactionHash"));
+                    });
+                } catch (Exception e) {
+                    sendError(source, request.id, e.getMessage());
+                    runOnUiThread(() -> {
+                        if (s != session.get() || !unlocked || approvalDecision != decision) return;
+                        finishApproval(decision);
+                        showReceipt("Check the host", "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction.", null);
+                    });
+                }
             });
         });
-        dialog.setOnDismissListener(ignored -> {
-            if (approvalDialog == dialog) approvalDialog = null;
-        });
-        approvalDialog = dialog;
-        dialog.show();
-        hardenTouch(dialog.getButton(AlertDialog.BUTTON_NEGATIVE));
-        hardenTouch(dialog.getButton(AlertDialog.BUTTON_POSITIVE));
+        root.addView(sign, matchWrap(dp(8)));
+        root.addView(reject, matchWrap(dp(10)));
+        present(root, "approval");
+    }
+
+    private void showReceipt(String title, String message, String hash) {
+        LinearLayout root = page("REQUEST OUTCOME", title, message);
+        if (hash != null && !hash.isEmpty()) card(root, "Transaction hash", hash);
+        card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
+        action(root, "Back to Wallet", true, this::showHome);
+        action(root, "Lock now", false, this::lock);
+        present(root, "receipt");
     }
 
     private View detail(String label, String value) {
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         boolean danger = "DANGER".equalsIgnoreCase(label) || "WARNING".equalsIgnoreCase(label);
-        TextView labelView = VaultTheme.pixelText(this, label.toUpperCase(), 7,
+        TextView labelView = VaultTheme.bodyText(this, label.toUpperCase(java.util.Locale.ROOT), 13,
                 danger ? VaultTheme.DANGER_INK : VaultTheme.FAINT);
-        TextView valueView = VaultTheme.monoText(this, value, 14,
+        TextView valueView = VaultTheme.monoText(this, value, bodySize(),
                 danger ? VaultTheme.DANGER_INK : VaultTheme.INK);
-        valueView.setTextIsSelectable(true);
+        valueView.setTextIsSelectable(false);
         valueView.setPadding(0, dp(6), 0, dp(15));
         row.addView(labelView);
         row.addView(valueView);
@@ -1117,24 +1390,41 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void sendError(AccessoryTransport source, String id, String message) {
         if (source != null) source.send(json("id", id, "status", "error", "error", message));
-        runOnUiThread(() -> statusView.setText("Request error: " + message));
+        final int s = session.get();
+        runOnUiThread(() -> {
+            if (s == session.get() && unlocked && source == transport) {
+                statusMessage = "Request error: " + message;
+                if (statusView != null) statusView.setText(statusMessage);
+            }
+        });
     }
 
     @Override public void onDisconnected(AccessoryTransport source, String reason) {
-        if (source != transport) return;
-        transport = null;
-        requestPending.set(false);
         runOnUiThread(() -> {
-            AlertDialog pending = approvalDialog;
-            if (pending != null) pending.dismiss();
-            statusView.setText("USB: disconnected" + (reason == null ? "" : " — " + reason));
+            if (source != transport) return;
+            boolean hadApproval = approvalDecision != null;
+            transport = null;
+            cancelApproval();
             setStatusActive(false);
+            if (unlocked && hadApproval)
+                showReceipt("USB disconnected", "The request session ended. If you tapped Sign, delivery may be uncertain. Check the host before trying another transaction.", null);
         });
     }
 
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
-        if (transport != null) transport.close();
+        synchronized (stateLock) {
+            session.incrementAndGet();
+            unlocked = false;
+            operational = false;
+            credentials = null;
+            cancelApproval();
+            sensitive.reset();
+            if (transport != null) transport.close();
+            transport = null;
+        }
+        clearSensitiveUi();
+        clearPinEntry();
         cryptoExecutor.shutdownNow();
         super.onDestroy();
     }

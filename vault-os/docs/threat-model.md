@@ -121,8 +121,10 @@ Android does not remove those supply-chain or end-of-life risks.
   the eventual high-assurance recommendation.
 - The wallet is a BIP39 24-word seed (see `entropy-design.md` "Implementation
   status" for what the generator does and does not meet) behind an in-app 6-digit
-  PIN with a verified erase after 10 failures. There is still no seed import,
-  mandatory backup verification, duress, inheritance, or recovery design, and the
+  PIN with a verified erase after 10 failures. The 0.3.0 source requires an account-bound
+  24-word backup check before receiving or signing, and fresh PIN authorization for seed
+  access/replacement; physical validation of the new UI is pending. There is still no seed
+  import, independent restore drill in-app, duress, or inheritance, and the
   PIN is not yet folded into the at-rest wrapping (a rooted attacker with the
   StrongBox key does not need it). Replacing the wallet (two-phase: new phrase
   shown, then explicit activate) changes the active key but does not prove
@@ -146,3 +148,26 @@ Android does not remove those supply-chain or end-of-life risks.
 
 New features must preserve these invariants or update this document with the
 new trusted components and corresponding negative tests.
+
+## 0.3.0 app interaction boundary (2026-09-05)
+
+The updated app presents full-screen native pages for review and sensitive work. A request owns
+an `ApprovalDecision`: reject can win during review, while a successful Sign transition disables
+rejection. Session invalidation can still cancel queued signing. A successful transport enqueue
+does not prove delivery; receipt copy must preserve that uncertainty.
+
+`SensitiveFlow` excludes USB while PIN reauthentication, seed viewing/checking, or replacement is
+active. Authorization is checked before secret access, after acquiring the store, and before UI
+publication. Lock can invalidate a secret operation already authorized; this is not a claim of
+cancelling a keystore operation mid-execution or of erasing every managed-memory copy.
+
+`BackupCheck` stores a public account address after every position in a 24-word recognition
+challenge is answered correctly and the account is confirmed. Receiving/signing are gated on
+that proof matching the loaded identity. This is a usability safeguard, not an anti-root or
+rollback-resistant hardware record and not an independent restoration test. Missing proof on
+upgrade requires a check without replacing the wallet. Replacement requires the old proof and
+a new full challenge before activation. Backup/PIN state remains app-managed until PIN-derived
+wrapping and stronger storage threat-model work land.
+
+The development dump skips sensitive flows, but external screen capture remains available on
+the development OS. Physical UI verification and the hardened/relocked release remain required.

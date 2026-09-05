@@ -16,7 +16,7 @@ final class ApprovalSession {
         }
         this.request = request;
         this.reviewedCredentials = credentials;
-        this.reviewedAddress = credentials.getAddress().toLowerCase();
+        this.reviewedAddress = credentials.getAddress().toLowerCase(java.util.Locale.ROOT);
     }
 
     String signerAddressLabel() {
@@ -25,7 +25,7 @@ final class ApprovalSession {
 
     JSONObject signIfIdentityUnchanged(Credentials currentCredentials) throws Exception {
         if (currentCredentials == null
-                || !reviewedAddress.equals(currentCredentials.getAddress().toLowerCase())) {
+                || !reviewedAddress.equals(currentCredentials.getAddress().toLowerCase(java.util.Locale.ROOT))) {
             throw new IllegalStateException(
                     "Signing identity changed after review; request must be reviewed again");
         }

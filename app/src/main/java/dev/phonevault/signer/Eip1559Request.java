@@ -77,6 +77,7 @@ final class Eip1559Request {
         String data = json.getString("data");
 
         if (chainId <= 0) throw new JSONException("chainId must be positive");
+        if (!supportedChain(chainId)) throw new JSONException("Unsupported network: no reviewed chain profile for " + chainId);
         if (!to.matches("0x[0-9a-fA-F]{40}")) throw new JSONException("Invalid destination address");
         if (nonce.signum() < 0 || priority.signum() < 0 || fee.signum() < 0 || gas.signum() <= 0 || value.signum() < 0) {
             throw new JSONException("Transaction quantities must not be negative");
@@ -106,7 +107,7 @@ final class Eip1559Request {
             displayedAmount = call.amount;
         }
         return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
-                normalizedTo, value, data.toLowerCase(), kind, recipient, displayedAmount);
+                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount);
     }
 
     static String validatedId(String id) throws JSONException {
@@ -141,7 +142,7 @@ final class Eip1559Request {
         if (clean.length() != TOKEN_CALL_DATA_BYTES * 2) {
             throw new JSONException("Only canonical transfer(address,uint256) and approve(address,uint256) calldata is supported");
         }
-        String selector = clean.substring(0, 8).toLowerCase();
+        String selector = clean.substring(0, 8).toLowerCase(java.util.Locale.ROOT);
         Kind kind;
         String partyName;
         String callName;
@@ -167,7 +168,7 @@ final class Eip1559Request {
     }
 
     private static String normalizeAddress(String address) throws JSONException {
-        String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase();
+        String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase(java.util.Locale.ROOT);
         if (normalized.matches("0x0{40}")) throw new JSONException("Zero destination address is not allowed");
         return normalized;
     }
@@ -203,6 +204,20 @@ final class Eip1559Request {
         if (chainId == 137) return "Polygon (chain ID 137)";
         if (chainId == 11155111) return "Sepolia Testnet (chain ID 11155111)";
         return "Unknown network (chain ID " + chainId + ")";
+    }
+
+    private static boolean supportedChain(long id) {
+        return id == 1 || id == 11155111 || id == 8453 || id == 10 || id == 42161 || id == 137;
+    }
+
+    String feeCoverageLabel() {
+        if (chainId == 1 || chainId == 11155111)
+            return "This bounds execution gas, not the amount sent. Actual execution fees may be lower.";
+        if (chainId == 10 || chainId == 8453)
+            return "Not a total fee cap. This network may also charge L1 data and operator fees that this offline phone cannot independently bound.";
+        if (chainId == 42161)
+            return "This is the transaction gas bound. L1 posting charges and network-specific accounting cannot be independently checked offline.";
+        return "Execution gas bound only. Verify network-specific charges with your host; this phone has no live network state.";
     }
 
     String displayedRecipientLabel() {

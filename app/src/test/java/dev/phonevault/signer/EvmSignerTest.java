@@ -171,6 +171,21 @@ public final class EvmSignerTest {
     }
 
     @Test(expected = org.json.JSONException.class)
+    public void rejectsNetworksWithoutReviewedUnitsAndFeeProfile() throws Exception {
+        Eip1559Request.parse(baseRequest().put("chainId", "0x123456"));
+    }
+
+    @Test public void feeCoverageDoesNotPromiseAnOpStackTotalCap() throws Exception {
+        Eip1559Request ethereum = Eip1559Request.parse(baseRequest().put("chainId", "0x1"));
+        Eip1559Request optimism = Eip1559Request.parse(baseRequest().put("chainId", "0xa"));
+        Eip1559Request base = Eip1559Request.parse(baseRequest().put("chainId", "0x2105"));
+        assertTrue(ethereum.feeCoverageLabel().contains("bounds execution gas"));
+        assertTrue(optimism.feeCoverageLabel().contains("Not a total fee cap"));
+        assertTrue(base.feeCoverageLabel().contains("L1 data and operator fees"));
+        assertEquals(ethereum.maximumFeeEth(), optimism.maximumFeeEth());
+    }
+
+    @Test(expected = org.json.JSONException.class)
     public void rejectsSelectorShapedTransferWithNativeValue() throws Exception {
         Eip1559Request.parse(baseRequest()
                 .put("value", "0x1")

@@ -142,7 +142,32 @@ Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `tr
 `approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until
 items 4–5 exist.
 
+## 0.8 Feature, UX/UI, and security audit (2026-09-05)
+
+The [audit report](feature-ux-security-audit-2026-09-05.md) reviews source at `1483fbe`,
+records fresh JVM/host tests, and defines device acceptance tests. It is a source-based review;
+no phone was connected to the audit host. Findings remain open until implemented and verified.
+
+New priorities affecting the current app: make Reject/Sign a single terminal state transition;
+bind all sensitive confirmations and secret access to their originating session; hide receiving
+addresses/QRs until authoritative wallet loading succeeds; and prevent USB approvals during
+seed viewing. Correct the total-fee promise on chains with additional fee components and distinguish
+queued signatures from delivered responses.
+
+The report also carries forward the recovery/onboarding and PIN-wrapping blockers, measures the
+small-label contrast gap, and specifies an approval/recovery redesign. Broader product claims
+require a maintained hardware target, an explicit software-signing threat model, completed
+relock/release evidence, and independent review. See its feature matrix and delivery sequence
+before expanding the companion, message signing, or advanced wallet features.
+
 ## 1. Tier 1 — A *usable* signer (functional gaps)
+
+**0.3.0 source update (2026-09-05; not yet phone-verified):** the
+[UI handoff](ui-0.3.0-handoff.md) records the implemented app sweep, full 24-word backup gate,
+fresh PIN for sensitive actions, approval-state fixes, honest fee coverage, and settings/feature
+pages. Historical rows above still describe 0.2.0 hardware evidence. Planned feature pages are
+informational; restore, PIN-derived wrapping/change, accounts, passphrases, and browser adapters
+remain unimplemented. Audit findings are not considered hardware-closed by the local build.
 
 Ordered by impact. Each is app-layer work on the fast loop unless noted.
 
@@ -208,7 +233,10 @@ None of these are optional for a release; several are hard rules.
    us" — speak the transport they already speak.
 2. **Watch-only export (xpub).** Balances on a normal phone/desktop without touching the vault.
 3. **Multisig (Safe) co-signer flow.** The serious-holder use case.
-4. **Companion app** (the online half) and **phonevault.org** (docs, verifier, release digests).
+4. **Companion app** (the online half): the cross-platform design, trust boundary, browser
+   integration options, and delivery gates are tracked in
+   [`companion-architecture.md`](companion-architecture.md). This is planning, not a shipped GUI.
+   **phonevault.org** remains the home for docs, verifier, and release digests.
 5. **Signing history / audit log** (offline, local): hashes, timestamps, outcomes.
 6. **Integrity dashboard**: entropy health (R7), StrongBox state, verified-boot state, app
    signature, battery — "is my device okay?"

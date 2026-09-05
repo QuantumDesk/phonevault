@@ -121,6 +121,14 @@ final class VaultKeyStore {
         return decrypt(record);
     }
 
+    /** Check the originating authorization after acquiring the store, before secret access. */
+    synchronized String revealMnemonic(java.util.function.BooleanSupplier authorized) throws Exception {
+        if (!authorized.getAsBoolean()) throw new IllegalStateException("Backup authorization expired");
+        // A lock may cancel an operation already authorized here; its result is never published
+        // by the activity unless the same sensitive flow and unlock session still own it.
+        return revealMnemonic();
+    }
+
     List<SeedVault.SourceReport> lastGenerationReports() {
         return lastReports;
     }

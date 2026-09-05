@@ -6,6 +6,7 @@
         android:allowBackup="false"
         android:fullBackupContent="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@drawable/ic_vault"
         android:label="Phone Vault"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="false">

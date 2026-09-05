@@ -24,6 +24,10 @@ final class PinScreen {
     private final TextView subtitle;
     private final TextView dots;
     private final TextView error;
+    private final TextView policy;
+    private final TextView submit;
+    private final android.widget.ScrollView scroll;
+    private boolean submitRequired;
     /** Fixed buffer + length instead of a StringBuilder, so digits can be zeroed, not just hidden. */
     private final char[] entered = new char[VaultPin.PIN_LENGTH];
     private int enteredLength;
@@ -48,7 +52,7 @@ final class PinScreen {
         head.addView(title);
         root.addView(head);
 
-        subtitle = VaultTheme.monoText(c, subtitleText, 12, VaultTheme.DIM);
+        subtitle = VaultTheme.bodyText(c, subtitleText, 16, VaultTheme.DIM);
         subtitle.setPadding(0, VaultTheme.dp(c, 14), 0, 0);
         root.addView(subtitle);
 
@@ -56,12 +60,12 @@ final class PinScreen {
         root.addView(new View(c), new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        dots = VaultTheme.pixelText(c, "", 22, VaultTheme.INK);
+        dots = VaultTheme.monoText(c, "", 22, VaultTheme.INK);
         dots.setGravity(Gravity.CENTER);
-        dots.setLetterSpacing(0.35f);
+        dots.setLetterSpacing(0.12f);
         root.addView(dots, matchWrap(0));
 
-        error = VaultTheme.monoText(c, "", 12, VaultTheme.DANGER_INK);
+        error = VaultTheme.bodyText(c, "", 15, VaultTheme.DANGER_INK);
         error.setGravity(Gravity.CENTER);
         error.setAllCaps(true);
         error.setLetterSpacing(0.06f);
@@ -74,10 +78,45 @@ final class PinScreen {
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
         root.addView(keypad(), matchWrap(0));
+        policy = VaultTheme.bodyText(c, "", 14, VaultTheme.FAINT);
+        policy.setPadding(0, VaultTheme.dp(c, 16), 0, 0);
+        root.addView(policy);
+        submit = VaultTheme.pixelButton(c, "Submit PIN · last attempt", true);
+        submit.setVisibility(View.GONE);
+        hardenTouch(submit);
+        submit.setOnClickListener(v -> submit());
+        root.addView(submit, matchWrap(VaultTheme.dp(c, 12)));
+        scroll = new android.widget.ScrollView(c);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(VaultTheme.BG);
+        scroll.addView(root);
         renderDots();
     }
 
-    View view() { return root; }
+    View view() { return scroll; }
+
+    void setPolicy(String text) { policy.setText(text); }
+    void setLargeText(boolean large) {
+        subtitle.setTextSize(large ? 19 : 16);
+        error.setTextSize(large ? 18 : 15);
+        policy.setTextSize(large ? 17 : 14);
+    }
+    void setSubmitRequired(boolean required) {
+        submitRequired = required;
+        submit.setVisibility(required ? View.VISIBLE : View.GONE);
+        submit.setEnabled(enteredLength == VaultPin.PIN_LENGTH && !locked);
+    }
+    void addCancel(Runnable action) {
+        TextView cancel = VaultTheme.pixelButton(context, "Cancel", false);
+        hardenTouch(cancel);
+        cancel.setOnClickListener(v -> action.run());
+        root.addView(cancel, matchWrap(VaultTheme.dp(context, 8)));
+    }
+    void dispose() {
+        java.util.Arrays.fill(entered, '0');
+        enteredLength = 0;
+        locked = true;
+    }
 
     void setTitle(String t) { title.setText(t); }
 
@@ -92,6 +131,7 @@ final class PinScreen {
         java.util.Arrays.fill(entered, '0');
         enteredLength = 0;
         locked = false;
+        submit.setEnabled(false);
         renderDots();
     }
 
@@ -117,7 +157,8 @@ final class PinScreen {
 
     private TextView keyButton(String key) {
         TextView b = VaultTheme.pixelButton(context, key, false);
-        b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 13f);
+        b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 22f);
+        if ("⌫".equals(key)) b.setContentDescription("Delete last digit");
         hardenTouch(b);
         b.setOnClickListener(v -> press(key));
         return b;
@@ -128,14 +169,21 @@ final class PinScreen {
         if ("⌫".equals(key)) {
             if (enteredLength > 0) entered[--enteredLength] = '0';
             renderDots();
+            submit.setEnabled(false);
             return;
         }
         if (enteredLength >= VaultPin.PIN_LENGTH) return;
         entered[enteredLength++] = key.charAt(0);
         error.setText("");
         renderDots();
-        if (enteredLength == VaultPin.PIN_LENGTH) {
+        submit.setEnabled(enteredLength == VaultPin.PIN_LENGTH);
+        if (enteredLength == VaultPin.PIN_LENGTH && !submitRequired) submit();
+    }
+
+    private void submit() {
+        if (!locked && enteredLength == VaultPin.PIN_LENGTH) {
             locked = true;
+            submit.setEnabled(false);
             char[] pin = entered.clone(); // the callee zeroes its copy; we zero ours now
             java.util.Arrays.fill(entered, '0');
             enteredLength = 0;
