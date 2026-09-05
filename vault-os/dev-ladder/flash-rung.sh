@@ -23,7 +23,10 @@ for attempt in 1 2 3; do
   end=$((SECONDS+180)); while [[ $SECONDS -lt $end && "$(state)" != "sideload" ]]; do sleep 3; done
   [[ "$(state)" == "sideload" ]] || { log "attempt $attempt: no sideload mode (st=[$(state)])"; continue; }
   log "attempt $attempt: sideloading (tap 'Install anyway' on the phone when it pauses near 47%)"
-  timeout 1800 "$A" sideload "$OTA" > "/root/rung-${RUNG}-sideload.log" 2>&1; rc=$?
+  # Long timeout: the transfer finishes in minutes but the recovery waits at ~47% for the
+  # physical "Install anyway" tap (unsigned OTA). A short timeout just wastes the session; give
+  # a late tap up to 2 h so one attempt still completes cleanly and the boot-watch runs.
+  timeout 7200 "$A" sideload "$OTA" > "/root/rung-${RUNG}-sideload.log" 2>&1; rc=$?
   log "attempt $attempt rc=$rc ($(tail -c 80 "/root/rung-${RUNG}-sideload.log" | tr -d '\r\n'))"
   [[ $rc -eq 0 ]] && break; sleep 8
 done
