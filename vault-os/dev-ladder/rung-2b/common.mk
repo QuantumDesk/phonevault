@@ -7,8 +7,7 @@ PRODUCT_PACKAGES += \
 PRODUCT_PROPERTY_OVERRIDES += \
     persist.sys.usb.config=adb \
     ro.adb.secure=0 \
-    persist.adb.notify=0 \
-    persist.log.tag=V
+    persist.adb.notify=0
 
 # --- boot diagnosis: auto-authorize the build host over adb (userdebug only) ---
 PRODUCT_ADB_KEYS := vendor/phonevault/config/debug_adbkey.pub

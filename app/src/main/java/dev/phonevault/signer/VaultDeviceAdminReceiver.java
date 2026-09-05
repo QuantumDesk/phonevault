@@ -11,8 +11,14 @@ import android.util.Log;
 
 public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
     private static final String TAG = "VaultProvision";
-    private static final int MAX_RETRIES = 20;
-    private static final long RETRY_MS = 500;
+    /**
+     * A first boot on a freshly formatted /data is slow; the owner record can land well after the
+     * enable broadcast reaches us. Keep trying for ten minutes rather than ten seconds — this
+     * receiver is the ONLY thing that starts the app on a factory boot, so giving up early leaves
+     * the device outside the kiosk until something else launches the activity.
+     */
+    private static final int MAX_RETRIES = 300;
+    private static final long RETRY_MS = 2000;
 
     public static ComponentName component(Context context) {
         return new ComponentName(context, VaultDeviceAdminReceiver.class);
@@ -40,9 +46,10 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
                     done = false;
                 }
                 if (done) {
-                    Log.i(TAG, "appliance provisioned on admin enable (attempt " + (attempts + 1) + ")");
+                    Log.w(TAG, "appliance provisioned on admin enable (attempt " + (attempts + 1) + ")");
                     pending.finish();
                 } else if (++attempts < MAX_RETRIES) {
+                    if (attempts % 15 == 0) Log.w(TAG, "waiting to become device owner (" + attempts + " attempts)");
                     handler.postDelayed(this, RETRY_MS);
                 } else {
                     Log.w(TAG, "not device owner after " + MAX_RETRIES + " attempts; the activity will retry");
