@@ -9,6 +9,10 @@ wake
 expect_screen "SET PIN"
 require_pin
 WRONG="$(wrong_pin)"
+clear_entry
+# First activation of the device-owner app can re-enumerate USB (restrictions applied): give
+# adb a moment to settle before the timed keypad sequence.
+sleep 3; wait_adb 12
 
 tap_digits "${PV_TEST_PIN:0:3}"; sleep 1
 has_text "■ ■ ■ □ □ □" || die "partial entry not reflected: $(texts)"

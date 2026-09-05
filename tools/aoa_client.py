@@ -79,8 +79,17 @@ def switch_to_accessory(device):
 def open_endpoints(device):
     if device.idVendor != GOOGLE_VENDOR_ID or device.idProduct not in AOA_ACCESSORY_PRODUCTS:
         raise RuntimeError("USB device is not an allowed Android Open Accessory product")
-    device.set_configuration()
-    interface = device.get_active_configuration()[(0, 0)]
+    # Only configure a device that has no active configuration. On Linux, re-issuing
+    # SET_CONFIGURATION to an already-configured Android gadget resets it: the phone drops out
+    # of accessory mode and re-enumerates as plain adb (observed 2026-09-05 on the build box).
+    try:
+        configuration = device.get_active_configuration()
+    except usb.core.USBError:
+        configuration = None
+    if configuration is None:
+        device.set_configuration()
+        configuration = device.get_active_configuration()
+    interface = configuration[(0, 0)]
     if (interface.bInterfaceClass, interface.bInterfaceSubClass,
             interface.bInterfaceProtocol) != (0xFF, 0xFF, 0x00):
         raise RuntimeError("Accessory interface has an unexpected USB class")

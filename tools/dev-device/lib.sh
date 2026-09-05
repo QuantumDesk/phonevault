@@ -47,6 +47,12 @@ declare -A K=([1]="300 1971" [2]="719 1971" [3]="1138 1971" [4]="300 2223" [5]="
 tap_digits() { local d i; for (( i = 0; i < ${#1}; i++ )); do d="${1:$i:1}"; "$A" shell input tap ${K[$d]}; sleep 0.35; done; }
 # shellcheck disable=SC2086
 tap_key()    { "$A" shell input tap ${K[$1]}; }
+# Backspace six times: clears any partial entry left by an interrupted run before typing a PIN.
+clear_entry() { local i; for i in 1 2 3 4 5 6; do tap_key b; sleep 0.25; done; }
+
+# adb drops for a few seconds when the device owner (re)applies USB restrictions on first
+# activation; wait for it instead of dying on the first failed shell command.
+wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" devices | grep -q "device$" && return 0; sleep 5; done; die "adb did not come back"; }
 
 uidump() { "$A" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; "$A" exec-out cat /sdcard/ui.xml; }
 texts()  { uidump | grep -o 'text="[^"]\{1,60\}"' | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫]$' | head -"${1:-6}" | tr '\n' '|'; }
@@ -72,5 +78,7 @@ unwake() { "$A" shell svc power stayon false; }
 relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 3; "$A" shell input tap 700 1200; sleep 1.5; expect_screen LOCKED; }
 unlock() { expect_screen LOCKED; tap_digits "$PV_TEST_PIN"; sleep 6; expect_screen "PHONE VAULT"; }
 
-no_crashes() { [[ "$("$A" logcat -d -s AndroidRuntime:E | grep -c FATAL || true)" == "0" ]] || die "app crashed (see logcat AndroidRuntime:E)"; }
+# Only OUR process counts: the dev image still ships vendor apps (e.g. Google's eSIM app) that
+# crash for lack of GSF; those are noise until the stripping rungs remove them.
+no_crashes() { [[ "$("$A" logcat -d -s AndroidRuntime:E | grep -A1 FATAL | grep -c "Process: $PKG" || true)" == "0" ]] || die "app crashed (see logcat AndroidRuntime:E)"; }
 kiosk_locked() { "$A" shell dumpsys activity activities | grep -q 'mLockTaskModeState=LOCKED' || die "kiosk is not LOCKED"; }
