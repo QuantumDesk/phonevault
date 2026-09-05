@@ -11,6 +11,11 @@ android_app_import {
     // Android expands inherited product lists after evaluating the leaf
     // product, so Make's -= cannot reliably remove upstream entries. Module
     // overrides are applied to the fully expanded install graph.
+    // Rung 1b: the appliance has no setup wizard (first override restored; the rest below
+    // stay disabled until their own boot-tested rungs).
+    overrides: [
+        "LineageSetupWizard",
+    ],
     // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests)
     // overrides: [
     // "Aperture",
