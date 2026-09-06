@@ -113,6 +113,16 @@ final class VaultKeyStore {
         return credentials;
     }
 
+    /**
+     * Import an existing BIP39 phrase as the wallet (restore). Same durable, verified path as
+     * {@link #commitReplacement(String)} — journal → atomic write → read-back → settle — but the
+     * caller reaches it only from the restore flow (validated by {@link SeedRestore}) and marks
+     * the backup as already verified, since the user provided the words.
+     */
+    synchronized Credentials restore(String mnemonic) throws Exception {
+        return commitReplacement(mnemonic);
+    }
+
     /** Decrypt and return the 24-word backup for the reveal screen. Handle with care. */
     synchronized String revealMnemonic() throws Exception {
         ensureWrappingKey();
