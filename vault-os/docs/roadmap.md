@@ -28,21 +28,22 @@ Working today, on the Pixel 3 XL (crosshatch), LineageOS 22.2 / Android 15 base:
 | UI | Home (QR receive + address + status), full-screen recovery phrase, dark approval sheet |
 | Build loop | gradle on cachy → `adb install -r` in seconds; OS image via sideload OTA |
 
-**Flashed-device state vs. checked-in source.** The table above and the list below describe the
-*development device as flashed* (built from a working tree on the build box with debug knobs).
-The checked-in `vault-os/` pipeline still declares the appliance stripping, `BoardConfigVault.mk`
-and the release gates; those are *not what is running on the phone*. Do not read either as the
-other.
+**Flashed-device state vs. checked-in source.** This section is superseded by the re-hardening
+ladder (`vault-os/dev-ladder/README.md`), which is the authoritative record of what the phone
+runs. As of 2026-09-05 the device is on **rung 2c**: automatic owner provisioning, wired
+`BoardConfigVault.mk`, verity/hashtree **enforcing** under our AVB key (`ro.boot.veritymode=
+enforcing`), and the appliance VINTF manifest are all live and boot-tested. The remaining debug
+state below is what the LATER rungs still remove; each line notes its rung.
 
 **Debug-only state that MUST be reverted for any release** (tracked so it can't be forgotten):
 
-- `WITH_ADB_INSECURE=true`, `PRODUCT_ADB_KEYS` (pre-authorized host key), `ro.adb.secure=0`
-- `VAULT_ALLOW_SCREENSHOTS=true` in the appliance build type (lifts FLAG_SECURE + DO screen-capture block)
-- `DISALLOW_INSTALL_APPS` / `DISALLOW_UNINSTALL_APPS` removed from the kiosk restriction set
-- The 235-line `overrides:` appliance stripping is fully disabled (`DEBUG48`)
-- OTA is test-key signed and the recovery does not trust it ("install anyway")
-- Verity is off (`--flags 3`); bootloader unlocked
-- `BoardConfigVault.mk` is orphaned (never included) — the board-level hardening is not applied
+- `WITH_ADB_INSECURE=true`, `PRODUCT_ADB_KEYS` (pre-authorized host key), `ro.adb.secure=0` — **still present** (rung 5, user build)
+- `VAULT_ALLOW_SCREENSHOTS=true` in the appliance build type (lifts FLAG_SECURE + DO screen-capture block) — **still present** (rung 5)
+- `DISALLOW_INSTALL_APPS` / `DISALLOW_UNINSTALL_APPS` removed from the kiosk restriction set — **still present in dev** (release build re-adds them via `VAULT_ALLOW_APP_UPDATES=false`)
+- The 235-line `overrides:` appliance stripping is disabled — **partially reverted**: `LineageSetupWizard` restored at rung 1b; the rest is rung 4 (in slices)
+- OTA is test-key signed and the recovery does not trust it ("install anyway") — **still present** (chunk 5, signed OTA + trusted recovery)
+- Verity — ✅ **now enforcing** under our key (rung 2b); bootloader still **unlocked** (relock is chunk 5)
+- `BoardConfigVault.mk` — ✅ **now wired** (rung 2a): AVB key + board-info + VINTF (rung 2c); kernel fragment is rung 2d, USB peripheral-lock is rung 3
 
 ## 0.5 Tier 0 — coherent and safe baseline (from the 2026-09-04 audit)
 
@@ -136,7 +137,20 @@ UI changes queued with that chunk: move **Regenerate wallet** out of Home into a
 advanced/settings area; approvals show action, amount, recipient, network and maximum fee first
 with raw technical details collapsed below; raise the 7 sp pixel labels (accessibility); mark
 the receive address as network-agnostic and warn to verify the destination chain; show the
-wipe policy on every PIN screen, not only on creation.
+wipe policy on every PIN screen, not only on creation. (0.3.0 addressed most of these.)
+
+For the eventual **release** UI (audit note 2026-09-08): move **Coming next** out of primary
+navigation — keep it during development, but the shipped device should center working actions,
+not a menu of planned features.
+
+**Restore-from-seed status (2026-09-08):** the validated import core is in and tested against
+external reference vectors (`SeedRestore` + `SeedRestoreTest`: the canonical 12-word phrase
+derives the world-published `0x9858…eda94`, proving BIP39/BIP44 correctness independently, not
+against itself). Storage reuses the journaled commit path (`VaultKeyStore.restore`). Still
+missing for a *usable, proven* restore: the on-device word-entry screen, wiring into a
+first-run Create-or-Restore choice, and a full restore→reboot→sign drill on the phone. The
+one complete journey to prove next: **create → back up → restore → verify address → sign →
+reboot.**
 
 Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `transfer`/
 `approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until

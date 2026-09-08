@@ -9,21 +9,35 @@ import org.junit.Test;
 
 /** BIP39 restore validation: count, wordlist membership, checksum, normalization, derivation. */
 public class SeedRestoreTest {
-    // A standard BIP39 test vector (all-zero entropy) → known 24-word phrase and m/44'/60'/0'/0/0.
+    // Standard BIP39 all-zero-entropy 24-word phrase (what Phone Vault generates the length of).
     private static final String VALID =
             "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
             + "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
             + "abandon abandon abandon art";
+    // EXTERNAL, independently-published reference vectors (iancoleman / ethers.js / Trezor), so
+    // these tests prove our derivation matches the wider ecosystem — not that it agrees with
+    // itself. m/44'/60'/0'/0/0, lowercased.
+    // Canonical 12-word "abandon×11 about" — one of the most-cited Ethereum test vectors.
+    private static final String KNOWN_12 =
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    private static final String KNOWN_12_ADDR = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
+    // 24-word all-zero entropy → its published account-0 address.
+    private static final String KNOWN_24_ADDR = "0xf278cf59f82edcf871d630f28ecc8056f25c1cdb";
 
-    @Test public void validPhrasePassesAndDerivesDeterministically() throws Exception {
+    @Test public void derivationMatchesExternalReferenceVectors() {
+        // Independent compatibility: a standard wallet importing these phrases lands on the same
+        // address. This is the anchor that makes the other assertions meaningful.
+        assertEquals(KNOWN_12_ADDR, SeedVault.deriveEvm(KNOWN_12, "", 0).getAddress().toLowerCase());
+        assertEquals(KNOWN_24_ADDR, SeedVault.deriveEvm(VALID, "", 0).getAddress().toLowerCase());
+    }
+
+    @Test public void restoredPhraseYieldsTheExternallyKnownAddress() throws Exception {
         String m = SeedRestore.validate(VALID);
         assertEquals(VALID, m);
-        String address = SeedRestore.deriveAddress(m, 0);
-        assertTrue(address.matches("0x[0-9a-fA-F]{40}"));
-        // Re-deriving the same phrase gives the same account (that IS recoverability).
-        assertEquals(address, SeedRestore.deriveAddress(m, 0));
-        // Matches the app's own generator path for the same words.
-        assertEquals(address, SeedVault.deriveEvm(m, "", 0).getAddress());
+        // The restore path must reproduce the SAME externally-known account, not merely a stable one.
+        assertEquals(KNOWN_24_ADDR, SeedRestore.deriveAddress(m, 0).toLowerCase());
+        // A different account index is a different address (BIP44 path is honoured).
+        assertFalse(KNOWN_24_ADDR.equalsIgnoreCase(SeedRestore.deriveAddress(m, 1)));
     }
 
     @Test public void normalizationHandlesCaseAndWhitespace() throws Exception {
