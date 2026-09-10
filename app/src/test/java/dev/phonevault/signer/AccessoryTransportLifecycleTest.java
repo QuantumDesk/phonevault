@@ -213,4 +213,40 @@ public class AccessoryTransportLifecycleTest {
         assertEquals(1, fd.closes.get());
         assertTrue(t.isClosed());
     }
+
+    /**
+     * Regression: the Android accessory device node returns one USB packet per read() and drops
+     * whatever was not requested. Byte-wise reads therefore lose all but the first byte of every
+     * request. This fake enforces that contract: a single-byte read() is a bug.
+     */
+    static final class PacketInputStream extends java.io.InputStream {
+        private final java.util.ArrayDeque<byte[]> packets = new java.util.ArrayDeque<>();
+        PacketInputStream(String... frames) { for (String f : frames) packets.add(f.getBytes(java.nio.charset.StandardCharsets.UTF_8)); }
+        @Override public int read() { throw new AssertionError("byte-wise read() on the accessory node drops the rest of the USB packet"); }
+        @Override public int read(byte[] b, int off, int len) {
+            byte[] p = packets.poll();
+            if (p == null) return -1;
+            int n = Math.min(len, p.length); // the driver copies min(actual, count) and discards the remainder
+            System.arraycopy(p, 0, b, off, n);
+            return n;
+        }
+    }
+
+    @Test public void wholeUsbPacketsAreConsumedNotByteWise() throws Exception {
+        java.util.concurrent.CountDownLatch got = new java.util.concurrent.CountDownLatch(2);
+        java.util.List<String> ids = java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+        AccessoryTransport.Listener listener = new AccessoryTransport.Listener() {
+            @Override public void onConnected(AccessoryTransport s) {}
+            @Override public void onRequest(AccessoryTransport s, org.json.JSONObject j) { ids.add(j.optString("id")); got.countDown(); }
+            @Override public void onDisconnected(AccessoryTransport s, String reason) {}
+        };
+        java.io.Closeable fd = () -> {};
+        AccessoryTransport t = AccessoryTransport.openForTest(fd,
+                new PacketInputStream("{\"id\":\"a\",\"method\":\"getAddress\"}\n", "{\"id\":\"b\",\"method\":\"getAddress\"}\n"),
+                new ByteArrayOutputStream(), listener);
+        t.start();
+        assertTrue("both framed requests must arrive intact from packet-sized reads", got.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(java.util.Arrays.asList("a", "b"), ids);
+        t.close();
+    }
 }

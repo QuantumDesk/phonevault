@@ -8,6 +8,7 @@ import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
+import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.Closeable;
 import java.io.FileInputStream;
@@ -38,6 +39,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class AccessoryTransport implements Closeable {
     static final int MAX_REQUEST_BYTES = 32_768;
+    /** ≥ the gadget's 16 KiB bulk buffer, so a single read() drains a whole USB packet. */
+    static final int PACKET_BUFFER_BYTES = 16384;
+
     /** Responses a non-reading host may leave unread before the session is failed. */
     static final int MAX_QUEUED_RESPONSES = 4;
 
@@ -60,7 +64,11 @@ final class AccessoryTransport implements Closeable {
     private AccessoryTransport(Closeable descriptor, InputStream input, OutputStream output,
                                Listener listener) {
         this.descriptor = descriptor;
-        this.input = input;
+        // The accessory character device (f_accessory) delivers one USB packet per read() and
+        // DISCARDS whatever the caller did not ask for: a byte-at-a-time read keeps the first
+        // byte of every packet and silently drops the rest, so a framed request never completes.
+        // Always pull whole packets into a buffer and parse from there.
+        this.input = new BufferedInputStream(input, PACKET_BUFFER_BYTES);
         this.output = output;
         this.listener = listener;
         this.writer = new Thread(this::drainOutbound, "aoa-writer");
