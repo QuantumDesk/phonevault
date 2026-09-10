@@ -387,6 +387,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         replacementCandidate = null;
         seedTimer = null;
         clearRestoreEntry(); // typed recovery words never outlive the unlocked session
+        clearDice();
     }
 
     private void hideBackup() {
@@ -699,19 +700,74 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         action(root, "Create new wallet", true, this::createFirstWallet);
         card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
         action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
+        action(root, "Advanced · add your own dice rolls", false, this::showDiceEntry);
         action(root, "Lock now", false, this::lock);
         present(root, "first-run");
     }
 
+    // --- optional user entropy: physical dice rolls, mixed with the two device sources.
+
+    /** Rolls as bytes '1'..'6'; never shown back on screen, zeroed after use and on lock. */
+    private final StringBuilder diceRolls = new StringBuilder();
+    /** 99 rolls of a fair d6 ≈ 256 bits, the full width of the seed. */
+    private static final int DICE_FULL = 99;
+
+    private void clearDice() {
+        for (int i = 0; i < diceRolls.length(); i++) diceRolls.setCharAt(i, '0');
+        diceRolls.setLength(0);
+    }
+
+    private void showDiceEntry() {
+        int rolls = diceRolls.length();
+        int bits = (int) Math.floor(rolls * 2.585);
+        LinearLayout root = page("SET UP · ADVANCED", "Add your own randomness",
+                "Roll a real die and tap each result. Your rolls are hashed together with the phone's two hardware entropy sources, so the wallet never depends on the phone's randomness alone. The rolls are not displayed and are discarded after the wallet is created.");
+        card(root, "Rolls so far", rolls + " of " + DICE_FULL + " · about " + Math.min(bits, 256) + " of 256 bits"
+                + (rolls >= DICE_FULL ? " · full strength" : ""));
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (int face = 1; face <= 6; face++) {
+            final char c = (char) ('0' + face);
+            TextView b = VaultTheme.pixelButton(this, String.valueOf(face), true);
+            b.setTextSize(20);
+            hardenTouch(b);
+            b.setOnClickListener(v -> {
+                if (!unlocked || !operational) return;
+                if (diceRolls.length() < 512) diceRolls.append(c);
+                showDiceEntry();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(60), 1f);
+            lp.setMargins(dp(3), dp(6), dp(3), dp(6));
+            row.addView(b, lp);
+        }
+        root.addView(row);
+        if (rolls > 0) {
+            action(root, "Create wallet with these rolls", true, this::createFirstWallet);
+            action(root, "Undo last roll", false, () -> {
+                diceRolls.setCharAt(rolls - 1, '0');
+                diceRolls.setLength(rolls - 1);
+                showDiceEntry();
+            });
+        }
+        action(root, "Back · without dice", false, () -> { clearDice(); showFirstRunChoice(); });
+        present(root, "first-run-dice");
+    }
+
     private void createFirstWallet() {
         final int s = session.get();
-        showLoading("Creating your wallet", "Generating a new recovery phrase from device entropy…");
+        final byte[] userEntropy = diceRolls.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        clearDice();
+        showLoading("Creating your wallet", userEntropy.length == 0
+                ? "Generating a new recovery phrase from device entropy…"
+                : "Mixing " + userEntropy.length + " dice rolls with device entropy…");
         cryptoExecutor.execute(() -> {
             try {
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational || walletLoaded) return;
                 }
-                Credentials fresh = vault.generateAndStore(new byte[0]);
+                Credentials fresh;
+                try { fresh = vault.generateAndStore(userEntropy); }
+                finally { java.util.Arrays.fill(userEntropy, (byte) 0); }
                 String address = fresh.getAddress();
                 android.graphics.Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
