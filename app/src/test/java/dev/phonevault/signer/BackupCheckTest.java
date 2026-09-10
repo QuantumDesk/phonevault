@@ -27,14 +27,16 @@ public class BackupCheckTest {
         check.record(ADDRESS);
         assertTrue(check.verified(ADDRESS));
     }
-    @Test public void everyWordPositionMustBeCheckedIncludingRepeatedWords() {
+    @Test public void spotChecksARandomSubsetOfDistinctPositions() {
         String[] words = MnemonicUtils.generateMnemonic(new byte[32]).split(" ");
         BackupCheck.Challenge challenge = new BackupCheck.Challenge(words, new SecureRandom());
+        assertEquals("default spot-check is a handful, not all 24", BackupCheck.SPOT_CHECK, challenge.total());
+        assertTrue(challenge.total() >= 1 && challenge.total() < 24);
         boolean[] seen = new boolean[24];
-        for (int i = 0; i < 24; i++) {
+        for (int i = 0; i < challenge.total(); i++) {
             assertFalse(challenge.complete());
             int position = challenge.position();
-            assertFalse(seen[position]);
+            assertFalse("each checked position is distinct", seen[position]);
             seen[position] = true;
             assertTrue(challenge.answer(words[position]));
         }
@@ -42,6 +44,14 @@ public class BackupCheckTest {
         assertFalse(challenge.answer(words[0]));
         challenge.destroy();
         assertFalse(challenge.complete());
+    }
+
+    @Test public void checkCountIsConfigurableUpToAllPositions() {
+        String[] words = MnemonicUtils.generateMnemonic(new byte[32]).split(" ");
+        BackupCheck.Challenge full = new BackupCheck.Challenge(words, new SecureRandom(), 24);
+        assertEquals(24, full.total());
+        for (int i = 0; i < 24; i++) assertTrue(full.answer(words[full.position()]));
+        assertTrue(full.complete());
     }
     @Test public void wrongWordInvalidatesWholeCheck() {
         String[] words = MnemonicUtils.generateMnemonic(new byte[32]).split(" ");

@@ -637,7 +637,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Protect your recovery",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
-                        : "Before receiving or signing, write down your recovery phrase and check all 24 words.");
+                        : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
         nav(root, "Wallet");
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
@@ -674,7 +674,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
         nav(root, "Security");
         card(root, "Recovery backup", backupVerified
-                ? "All 24 words checked for Account 1. Keep your written backup safe."
+                ? "Backup spot-checked for Account 1. Keep your written 24-word backup safe."
                 : "Not checked. Receiving and signing remain paused.");
         action(root, "Check my backup", true, () -> startBackupAccess(true));
         action(root, "Show recovery phrase", false, this::confirmRevealBackup);
@@ -922,7 +922,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             root.addView(row, matchWrap(dp(12)));
         }
         if (backupPage < 5) action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
-        else action(root, "I've written all 24 · check backup", true, this::startWordCheck);
+        else action(root, "I've written them down · spot-check", true, this::startWordCheck);
         if (backupPage > 0) action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
         action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
         addSeedTimer(root);
@@ -939,7 +939,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showWordCheck() {
         if (backupChallenge == null || !sensitive.active()) return;
         int position = backupChallenge.position();
-        LinearLayout root = page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF 24",
+        LinearLayout root = page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF " + backupChallenge.total(),
                 "Find word " + (position + 1), "Use your written backup. Select the word beside this number.");
         java.util.List<String> choices = new java.util.ArrayList<>();
         choices.add(backupWords[position]);
@@ -1023,7 +1023,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         beginSensitive("replace your wallet", () -> {
             final int token = activeSensitive, s = session.get();
             LinearLayout root = page("SECURITY / REPLACE WALLET", "Keep your current backup", "Replacement creates a different account. Assets on the old account remain controlled by its original phrase.");
-            card(root, "Nothing changes yet", "You will record and check all 24 new words before a separate Activate step. Cancellation keeps your current wallet.");
+            card(root, "Nothing changes yet", "You will write down all 24 new words and pass a spot-check before a separate Activate step. Cancellation keeps your current wallet.");
             action(root, "Prepare a new wallet", true, () -> {
                 if (!sensitiveValid(token, s)) return;
                 int op = beginReplacement();

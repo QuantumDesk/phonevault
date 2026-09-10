@@ -34,18 +34,38 @@ final class BackupCheck {
         uncertain = false;
     }
 
+    /**
+     * How many of the 24 words we spot-check, chosen at random. Real hardware wallets verify a
+     * handful, not the whole phrase: a full 24-position gauntlet is an onboarding wall that most
+     * people abandon. This confirms the user actually wrote the phrase down; the strong
+     * recoverability proof is a full restore (type the phrase back, match the address).
+     */
+    static final int SPOT_CHECK = 3;
+
     static final class Challenge {
         private final String[] words;
         private final List<Integer> order = new ArrayList<>();
+        private final int checkCount;
         private int progress;
         private boolean failed;
+
         Challenge(String[] words, SecureRandom random) {
-            if (words.length != 24) throw new IllegalArgumentException("Expected 24 recovery words");
-            this.words = words.clone();
-            for (int i = 0; i < words.length; i++) order.add(i);
-            Collections.shuffle(order, random);
+            this(words, random, SPOT_CHECK);
         }
+
+        Challenge(String[] words, SecureRandom random, int checkCount) {
+            if (words.length != 24) throw new IllegalArgumentException("Expected 24 recovery words");
+            if (checkCount < 1 || checkCount > words.length) throw new IllegalArgumentException("bad checkCount");
+            this.words = words.clone();
+            this.checkCount = checkCount;
+            List<Integer> all = new ArrayList<>();
+            for (int i = 0; i < words.length; i++) all.add(i);
+            Collections.shuffle(all, random);
+            order.addAll(all.subList(0, checkCount)); // a random subset, kept in a random order
+        }
+
         int progress() { return progress; }
+        int total() { return checkCount; }
         int position() {
             if (complete() || failed) throw new IllegalStateException("Challenge is no longer active");
             return order.get(progress);
@@ -56,7 +76,7 @@ final class BackupCheck {
             progress++;
             return true;
         }
-        boolean complete() { return !failed && progress == 24; }
+        boolean complete() { return !failed && progress == checkCount; }
         void destroy() { Arrays.fill(words, null); failed = true; }
     }
 }
