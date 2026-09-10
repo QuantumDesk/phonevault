@@ -143,14 +143,21 @@ For the eventual **release** UI (audit note 2026-09-08): move **Coming next** ou
 navigation — keep it during development, but the shipped device should center working actions,
 not a menu of planned features.
 
-**Restore-from-seed status (2026-09-08):** the validated import core is in and tested against
+**Restore-from-seed status (2026-09-09):** the validated import core is in and tested against
 external reference vectors (`SeedRestore` + `SeedRestoreTest`: the canonical 12-word phrase
 derives the world-published `0x9858…eda94`, proving BIP39/BIP44 correctness independently, not
-against itself). Storage reuses the journaled commit path (`VaultKeyStore.restore`). Still
-missing for a *usable, proven* restore: the on-device word-entry screen, wiring into a
-first-run Create-or-Restore choice, and a full restore→reboot→sign drill on the phone. The
-one complete journey to prove next: **create → back up → restore → verify address → sign →
-reboot.**
+against itself). Storage reuses the journaled commit path (`VaultKeyStore.restore`).
+
+The **first-run wizard** now exists in the app (built, unit-tested, not yet exercised on the
+phone): after Set PIN, an empty vault no longer silently mints a wallet — `loadKey()` branches
+on `hasWallet()` to a **Create or Restore** choice. Create: generate → fresh-PIN confirm →
+phrase pages → 3-word spot check → confirm address → Home. Restore: an on-device a–z keyboard
+(no system IME, so it survives rung-4 stripping) with BIP39 autocomplete fills 24 slots →
+count/wordlist/checksum validation → the derived address is shown for confirmation *before*
+anything is saved → journaled commit → Home with the backup marked verified-by-entry. Typed
+words are wiped on lock. Still missing for a *proven* restore: the on-phone drill
+(**create → back up → restore → verify address → sign → reboot**) and restore-over-an-existing
+wallet behind the same fresh-PIN guard as Replace.
 
 Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `transfer`/
 `approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until

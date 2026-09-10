@@ -386,6 +386,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         backupIdentity = null;
         replacementCandidate = null;
         seedTimer = null;
+        clearRestoreEntry(); // typed recovery words never outlive the unlocked session
     }
 
     private void hideBackup() {
@@ -687,6 +688,261 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         present(root, "security");
     }
 
+    // ------------------------------------------------------------------ first-run wizard
+
+    /** Step 1: a fresh PIN is set and no wallet exists yet. Create or restore — never silently. */
+    private void showFirstRunChoice() {
+        clearRestoreEntry();
+        LinearLayout root = page("SET UP · STEP 1 OF 4", "Set up your wallet",
+                "Create a brand-new wallet on this phone, or restore one from a 24-word recovery phrase you already have. Nothing leaves this device either way.");
+        card(root, "Create new", "Generates a fresh recovery phrase here, offline. You'll write it down and we'll spot-check a few words.");
+        action(root, "Create new wallet", true, this::createFirstWallet);
+        card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
+        action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
+        action(root, "Lock now", false, this::lock);
+        present(root, "first-run");
+    }
+
+    private void createFirstWallet() {
+        final int s = session.get();
+        showLoading("Creating your wallet", "Generating a new recovery phrase from device entropy…");
+        cryptoExecutor.execute(() -> {
+            try {
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational || walletLoaded) return;
+                }
+                Credentials fresh = vault.generateAndStore(new byte[0]);
+                String address = fresh.getAddress();
+                android.graphics.Bitmap qr = qrFor(address);
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational) return;
+                    credentials = fresh;
+                    walletAddress = address;
+                    walletQr = qr;
+                    backupVerified = false;
+                    walletLoaded = true;
+                }
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    LinearLayout root = page("SET UP · STEP 2 OF 4", "Write down your recovery phrase",
+                            "Your new wallet is ready. Next you'll confirm your PIN, then copy 24 words onto paper, in order. Never photograph them or type them into another device.");
+                    card(root, "Then", "Step 3 spot-checks a few of the words. Step 4 shows your receiving address.");
+                    action(root, "Continue", true, this::confirmRevealBackup);
+                    action(root, "Lock now", false, this::lock);
+                    present(root, "first-run-created");
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    showInfo("Could not create a wallet", "Nothing was saved. " + e.getMessage(), this::showFirstRunChoice);
+                });
+            }
+        });
+    }
+
+    // --- restore: on-device word entry (no system keyboard), validate, confirm address, commit
+
+    private final String[] restoreWords = new String[SeedRestore.WORD_COUNT];
+    private int restoreIndex;
+    private final StringBuilder restoreBuffer = new StringBuilder();
+
+    private void clearRestoreEntry() {
+        java.util.Arrays.fill(restoreWords, null);
+        restoreIndex = 0;
+        restoreBuffer.setLength(0);
+    }
+
+    private int restoreFilled() {
+        int n = 0;
+        for (String w : restoreWords) if (w != null) n++;
+        return n;
+    }
+
+    private void showRestoreEntry() {
+        if (restoreIndex < 0) restoreIndex = 0;
+        if (restoreIndex >= SeedRestore.WORD_COUNT) restoreIndex = SeedRestore.WORD_COUNT - 1;
+        String typed = restoreBuffer.toString();
+        int filled = restoreFilled();
+        LinearLayout root = page("RESTORE · WORD " + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
+                typed.isEmpty() ? (restoreWords[restoreIndex] == null ? "Type word " + (restoreIndex + 1) : restoreWords[restoreIndex])
+                                : typed + "…",
+                "Type the first letters, then tap the matching word. " + filled + " of " + SeedRestore.WORD_COUNT + " entered.");
+
+        // Progress strip: the words so far (this IS the recovery phrase — the screen is sensitive).
+        StringBuilder strip = new StringBuilder();
+        for (int i = 0; i < SeedRestore.WORD_COUNT; i++) {
+            if (restoreWords[i] == null) continue;
+            if (strip.length() > 0) strip.append("  ");
+            strip.append(i + 1).append(' ').append(restoreWords[i]);
+        }
+        if (strip.length() > 0) {
+            TextView entered = VaultTheme.monoText(this, strip.toString(), 13, VaultTheme.DIM);
+            entered.setPadding(0, 0, 0, dp(8));
+            root.addView(entered);
+        }
+
+        // Suggestions from the BIP39 list for what's been typed.
+        java.util.List<String> suggestions = SeedRestore.suggestions(typed, 6);
+        if (!suggestions.isEmpty()) {
+            LinearLayout srow = new LinearLayout(this);
+            srow.setOrientation(LinearLayout.HORIZONTAL);
+            int shown = 0;
+            for (String word : suggestions) {
+                if (shown++ >= 3) break;
+                TextView b = VaultTheme.pixelButton(this, word, true);
+                b.setTextSize(15);
+                hardenTouch(b);
+                b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
+                lp.setMargins(dp(3), dp(4), dp(3), dp(4));
+                srow.addView(b, lp);
+            }
+            root.addView(srow);
+            if (suggestions.size() > 3) {
+                LinearLayout srow2 = new LinearLayout(this);
+                srow2.setOrientation(LinearLayout.HORIZONTAL);
+                for (int i = 3; i < suggestions.size(); i++) {
+                    final String word = suggestions.get(i);
+                    TextView b = VaultTheme.pixelButton(this, word, false);
+                    b.setTextSize(15);
+                    hardenTouch(b);
+                    b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
+                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
+                    lp.setMargins(dp(3), dp(4), dp(3), dp(4));
+                    srow2.addView(b, lp);
+                }
+                root.addView(srow2);
+            }
+        } else if (!typed.isEmpty()) {
+            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", bodySize(), VaultTheme.DANGER_INK);
+            none.setPadding(0, dp(6), 0, dp(6));
+            root.addView(none);
+        }
+
+        // On-device letter keyboard: the appliance must not depend on a system IME.
+        restoreKeyRow(root, "a b c d e f g h i".split(" "));
+        restoreKeyRow(root, "j k l m n o p q r".split(" "));
+        restoreKeyRow(root, "s t u v w x y z ⌫".split(" "));
+
+        if (filled == SeedRestore.WORD_COUNT) action(root, "Restore this wallet", true, this::validateRestore);
+        if (restoreIndex > 0 || restoreWords[restoreIndex] != null) action(root, "← Previous word", false, () -> {
+            if (restoreBuffer.length() > 0) restoreBuffer.setLength(0);
+            else if (restoreIndex > 0) restoreIndex--;
+            showRestoreEntry();
+        });
+        action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+        present(root, "restore-entry");
+    }
+
+    private void restoreKeyRow(LinearLayout parent, String[] keys) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        for (String key : keys) {
+            TextView b = VaultTheme.pixelButton(this, key, false);
+            b.setTextSize(16);
+            hardenTouch(b);
+            b.setOnClickListener(v -> {
+                if (!unlocked || !operational) return;
+                if ("⌫".equals(key)) {
+                    if (restoreBuffer.length() > 0) restoreBuffer.setLength(restoreBuffer.length() - 1);
+                    else if (restoreWords[restoreIndex] != null) restoreWords[restoreIndex] = null;
+                    else if (restoreIndex > 0) { restoreIndex--; restoreWords[restoreIndex] = null; }
+                } else if (restoreBuffer.length() < 8) {
+                    restoreBuffer.append(key);
+                }
+                showRestoreEntry();
+            });
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f);
+            lp.setMargins(dp(2), dp(3), dp(2), dp(3));
+            row.addView(b, lp);
+        }
+        parent.addView(row);
+    }
+
+    private void pickRestoreWord(String word) {
+        if (!SeedRestore.isWord(word)) return;
+        restoreWords[restoreIndex] = word;
+        restoreBuffer.setLength(0);
+        // Advance to the next empty slot (or stay on the last one).
+        int next = restoreIndex + 1;
+        while (next < SeedRestore.WORD_COUNT && restoreWords[next] != null) next++;
+        restoreIndex = Math.min(next, SeedRestore.WORD_COUNT - 1);
+        if (restoreFilled() == SeedRestore.WORD_COUNT) validateRestore();
+        else showRestoreEntry();
+    }
+
+    /** All 24 entered: validate (count, wordlist, checksum) and show the address for confirmation. */
+    private void validateRestore() {
+        final int s = session.get();
+        final String raw = String.join(" ", java.util.Arrays.asList(restoreWords).stream()
+                .map(w -> w == null ? "" : w).toArray(String[]::new));
+        final String mnemonic;
+        try {
+            mnemonic = SeedRestore.validate(raw);
+        } catch (SeedRestore.RestoreException bad) {
+            showInfo("Phrase not valid yet", bad.getMessage() + ". Go back and fix the word.", this::showRestoreEntry);
+            return;
+        }
+        showLoading("Checking your phrase", "Deriving the wallet address these 24 words produce…");
+        cryptoExecutor.execute(() -> {
+            try {
+                final String address = SeedRestore.deriveAddress(mnemonic, 0);
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    LinearLayout root = page("RESTORE · CONFIRM", "Is this your wallet?",
+                            "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
+                    card(root, "Account 1", org.web3j.crypto.Keys.toChecksumAddress(address));
+                    card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
+                    action(root, "Yes, restore this wallet", true, () -> commitRestore(mnemonic, s));
+                    action(root, "Back · fix words", false, this::showRestoreEntry);
+                    action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+                    present(root, "restore-confirm");
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> { if (s == session.get()) showInfo("Could not derive an address", e.getMessage(), this::showRestoreEntry); });
+            }
+        });
+    }
+
+    /** Persist the restored phrase; the user typed it, so the backup is considered verified. */
+    private void commitRestore(final String mnemonic, final int s) {
+        showLoading("Restoring your wallet", "Saving and verifying the restored identity on this device…");
+        cryptoExecutor.execute(() -> {
+            try {
+                Credentials restored;
+                String address;
+                android.graphics.Bitmap qr;
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational || walletLoaded) return;
+                    restored = vault.restore(mnemonic);
+                    address = restored.getAddress();
+                    backupCheck.record(address);
+                    credentials = restored;
+                    walletAddress = address;
+                    backupVerified = true;
+                    walletLoaded = true;
+                }
+                qr = qrFor(address);
+                synchronized (stateLock) { if (s == session.get()) walletQr = qr; }
+                clearRestoreEntry();
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    statusMessage = "Wallet restored · backup verified by entry";
+                    showHome();
+                    drainPendingUsb();
+                });
+            } catch (Exception e) {
+                synchronized (stateLock) { credentials = null; walletLoaded = false; }
+                clearRestoreEntry();
+                runOnUiThread(() -> {
+                    if (s != session.get()) return;
+                    gateNotice = "Storage could not confirm the restored wallet. Re-enter your PIN and try again; nothing is active until it saves.";
+                    lock();
+                });
+            }
+        });
+    }
+
     private void showPreferences() {
         LinearLayout root = page("SECURITY / PREFERENCES", "Make it comfortable", "Larger text and shorter idle locking are available now.");
         card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
@@ -738,7 +994,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "Explore the plan. These features cannot be enabled in this build.");
         nav(root, "Coming next");
         String[][] items = {
-            {"Restore wallet", "On-device word entry, checksum validation, and an address-match recovery drill. Never enter your seed into a desktop companion."},
+            {"Restore over an existing wallet", "Restore is available when setting up a fresh phone (on-device word entry, checksum, address confirmation). Replacing an existing wallet by restore, with the same fresh-PIN guard as Replace, is next."},
             {"Multiple accounts", "Account discovery, explicit derivation paths, and watch-only export."},
             {"Passphrase wallets", "A separate wallet for each exact passphrase. A typo creates a different wallet; recovery must be tested before release."},
             {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
@@ -975,9 +1231,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (backupWords != null) java.util.Arrays.fill(backupWords, null);
         backupWords = null;
         backupChallenge.destroy();
+        int checked = backupChallenge == null ? BackupCheck.SPOT_CHECK : backupChallenge.total();
         backupChallenge = null;
         String address = replacementCandidate == null ? backupIdentity : replacementCandidate.address;
-        LinearLayout root = page("24 OF 24 WORDS CHECKED",
+        LinearLayout root = page(checked + " OF " + checked + " WORDS CHECKED",
                 replacementCandidate == null ? "Your backup matches" : "Ready to replace?",
                 replacementCandidate == null ? "Confirm the account below. This check does not replace an independent restore drill."
                         : "Your current wallet will be replaced. Keep its backup if it controls any assets. The new wallet is not active until you confirm.");
@@ -1113,6 +1370,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         cryptoExecutor.execute(() -> {
             try {
                 if (s != session.get() || !unlocked || pin.eraseOutstanding()) return;
+                if (!store.hasWallet()) {
+                    // First run: never silently mint a wallet — the user chooses Create or Restore.
+                    // (hasWallet() throws when storage is sealed/corrupt → the catch below.)
+                    runOnUiThread(() -> { if (s == session.get() && unlocked) showFirstRunChoice(); });
+                    return;
+                }
                 Credentials loaded = store.loadOrCreate();
                 String address = loaded.getAddress();
                 android.graphics.Bitmap qr = qrFor(address);
