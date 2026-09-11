@@ -730,6 +730,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             final char c = (char) ('0' + face);
             TextView b = VaultTheme.pixelButton(this, String.valueOf(face), true);
             b.setTextSize(20);
+            b.setPadding(0, 0, 0, 0);
+            b.setGravity(android.view.Gravity.CENTER);
             hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
@@ -824,6 +826,40 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                 : typed + "…",
                 "Type the first letters, then tap the matching word. " + filled + " of " + SeedRestore.WORD_COUNT + " entered.");
 
+        // On-device letter keyboard: the appliance must not depend on a system IME. It stays at a
+        // fixed position (directly under the title) so keys never jump while typing.
+        restoreKeyRow(root, "a b c d e f g h i".split(" "));
+        restoreKeyRow(root, "j k l m n o p q r".split(" "));
+        restoreKeyRow(root, "s t u v w x y z ⌫".split(" "));
+
+        // Suggestions from the BIP39 list for what's been typed, in a slot of constant height.
+        java.util.List<String> suggestions = SeedRestore.suggestions(typed, 6);
+        LinearLayout slot = new LinearLayout(this);
+        slot.setOrientation(LinearLayout.VERTICAL);
+        slot.setMinimumHeight(dp(2 * 60 + 8));
+        for (int rowStart = 0; rowStart < suggestions.size(); rowStart += 3) {
+            LinearLayout srow = new LinearLayout(this);
+            srow.setOrientation(LinearLayout.HORIZONTAL);
+            for (int i = rowStart; i < Math.min(rowStart + 3, suggestions.size()); i++) {
+                final String word = suggestions.get(i);
+                TextView b = VaultTheme.pixelButton(this, word, i == 0);
+                b.setTextSize(15);
+                b.setPadding(dp(4), b.getPaddingTop(), dp(4), b.getPaddingBottom());
+                hardenTouch(b);
+                b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
+                lp.setMargins(dp(3), dp(4), dp(3), dp(4));
+                srow.addView(b, lp);
+            }
+            slot.addView(srow);
+        }
+        if (suggestions.isEmpty() && !typed.isEmpty()) {
+            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", bodySize(), VaultTheme.DANGER_INK);
+            none.setPadding(0, dp(12), 0, dp(6));
+            slot.addView(none);
+        }
+        root.addView(slot);
+
         // Progress strip: the words so far (this IS the recovery phrase — the screen is sensitive).
         StringBuilder strip = new StringBuilder();
         for (int i = 0; i < SeedRestore.WORD_COUNT; i++) {
@@ -833,52 +869,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         if (strip.length() > 0) {
             TextView entered = VaultTheme.monoText(this, strip.toString(), 13, VaultTheme.DIM);
-            entered.setPadding(0, 0, 0, dp(8));
+            entered.setPadding(0, dp(8), 0, dp(8));
             root.addView(entered);
         }
-
-        // Suggestions from the BIP39 list for what's been typed.
-        java.util.List<String> suggestions = SeedRestore.suggestions(typed, 6);
-        if (!suggestions.isEmpty()) {
-            LinearLayout srow = new LinearLayout(this);
-            srow.setOrientation(LinearLayout.HORIZONTAL);
-            int shown = 0;
-            for (String word : suggestions) {
-                if (shown++ >= 3) break;
-                TextView b = VaultTheme.pixelButton(this, word, true);
-                b.setTextSize(15);
-                hardenTouch(b);
-                b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
-                lp.setMargins(dp(3), dp(4), dp(3), dp(4));
-                srow.addView(b, lp);
-            }
-            root.addView(srow);
-            if (suggestions.size() > 3) {
-                LinearLayout srow2 = new LinearLayout(this);
-                srow2.setOrientation(LinearLayout.HORIZONTAL);
-                for (int i = 3; i < suggestions.size(); i++) {
-                    final String word = suggestions.get(i);
-                    TextView b = VaultTheme.pixelButton(this, word, false);
-                    b.setTextSize(15);
-                    hardenTouch(b);
-                    b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
-                    LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
-                    lp.setMargins(dp(3), dp(4), dp(3), dp(4));
-                    srow2.addView(b, lp);
-                }
-                root.addView(srow2);
-            }
-        } else if (!typed.isEmpty()) {
-            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", bodySize(), VaultTheme.DANGER_INK);
-            none.setPadding(0, dp(6), 0, dp(6));
-            root.addView(none);
-        }
-
-        // On-device letter keyboard: the appliance must not depend on a system IME.
-        restoreKeyRow(root, "a b c d e f g h i".split(" "));
-        restoreKeyRow(root, "j k l m n o p q r".split(" "));
-        restoreKeyRow(root, "s t u v w x y z ⌫".split(" "));
 
         if (filled == SeedRestore.WORD_COUNT) action(root, "Restore this wallet", true, this::validateRestore);
         if (restoreIndex > 0 || restoreWords[restoreIndex] != null) action(root, "← Previous word", false, () -> {
@@ -895,7 +888,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         row.setOrientation(LinearLayout.HORIZONTAL);
         for (String key : keys) {
             TextView b = VaultTheme.pixelButton(this, key, false);
-            b.setTextSize(16);
+            b.setTextSize(18);
+            b.setPadding(0, 0, 0, 0); // a ninth of the width: any horizontal padding hides the letter
+            b.setGravity(android.view.Gravity.CENTER);
             hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
