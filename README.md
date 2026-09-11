@@ -22,8 +22,8 @@ approval, and Wallet / Security / Coming next navigation. It is built and locall
 physical validation of this new interface is pending. See the
 [0.3.0 handoff](vault-os/docs/ui-0.3.0-handoff.md).
 
-What does not exist yet: restore from seed, a complete create-or-restore wizard,
-multiple accounts, passphrase persistence, PIN-derived wrapping/change, message/EIP-712 signing, and — most
+What does not exist yet: restore over an existing wallet (first-run restore exists and was
+drilled on hardware 2026-09-11), multiple accounts, passphrase persistence, PIN-derived wrapping/change, message/EIP-712 signing, and — most
 importantly — a **hardened, relocked, release-signed OS image**. The development phone runs an
 unlocked bootloader with ADB enabled. The 0.3.0 development dump excludes sensitive flows, but
 the development OS still permits external screenshots.

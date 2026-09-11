@@ -156,9 +156,18 @@ phrase pages → 3-word spot check → confirm address → Home. Restore: an on-
 (no system IME, so it survives rung-4 stripping) with BIP39 autocomplete fills 24 slots →
 count/wordlist/checksum validation → the derived address is shown for confirmation *before*
 anything is saved → journaled commit → Home with the backup marked verified-by-entry. Typed
-words are wiped on lock. Still missing for a *proven* restore: the on-phone drill
-(**create → back up → restore → verify address → sign → reboot**) and restore-over-an-existing
-wallet behind the same fresh-PIN guard as Replace.
+words are wiped on lock.
+
+**Drill proven on the Pixel 3 XL, 2026-09-11** (throwaway wallet, driven over adb with the
+`pvlib.sh` text/bounds helpers on cachy): create → phrase → 3-of-3 spot check → address confirm
+→ Home → USB pair (address matches the screen) → mainnet-shaped 0.5 ETH transfer reviewed and
+approved on the phone, host verified hash + recovered signer → wipe-after-10 erase → SET PIN →
+Create-or-Restore → 24 words typed on the on-device keyboard → "Is this your wallet?" showed the
+ORIGINAL address → restore → Home → `adb reboot` → kiosk still LOCKED, unlock shows the same
+address → sign again: identical transaction hash (deterministic signing with the same key).
+Two device-only bugs found and fixed on the way: the accessory packet-read bug (`ae39175`,
+§0.5) and invisible keyboard letters (`cc4dab5`). Still open: restore-over-an-existing wallet
+behind the same fresh-PIN guard as Replace.
 
 Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `transfer`/
 `approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until
