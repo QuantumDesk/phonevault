@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# THROWAWAY dev phone only: from the unlocked home, tap "Recovery phrase" → "Show", pull the
-# app-rendered dump of the seed screen (for UI review of a wallet that holds nothing), then hide.
+# THROWAWAY dev phone only: Security → Show recovery phrase → fresh PIN → screencap the six
+# phrase pages for UI review (dev build allows screenshots), then hide. Output dir: $OUT.
 source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
-wake
-expect_screen "PHONE VAULT"
-tap_text "Recovery phrase"; sleep 1.5; expect_screen "Show recovery phrase?"
-tap_text "Show"; sleep 4; expect_screen "RECOVERY PHRASE"
-"$A" exec-out cat "/data/data/$PKG/files/vault_dump.png" > "${OUT:-/root/backup.png}"
-echo "BACKUP_DUMP_BYTES=$(stat -c%s "${OUT:-/root/backup.png}")"
-tap_text "Hide phrase"; sleep 2; expect_screen "PHONE VAULT"
+require_pin
+OUTDIR="${OUT:-/root/backup-pages}"; umask 077; mkdir -p "$OUTDIR"
+wake; unlock_if_locked; go_home
+tap_text "Security"; sleep 1.5
+tap_text "Show recovery phrase"; sleep 2; expect_screen "VERIFY PIN"
+tap_digits "$PV_TEST_PIN"; sleep 5; expect_screen "RECOVERY PHRASE"
+for page in 1 2 3 4 5 6; do
+  "$A" exec-out screencap -p > "$OUTDIR/page-$page.png"
+  [[ $page -lt 6 ]] && { tap_text "Next four words"; sleep 1.2; }
+done
+tap_text "Hide phrase"; sleep 3; expect_not "RECOVERY PHRASE"
 unwake
-pass "recovery-phrase screen captured to ${OUT:-/root/backup.png} (dev wallet only)"
+pass "six phrase pages captured under $OUTDIR (dev wallet only; delete after review)"

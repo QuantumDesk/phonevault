@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# USB signing round trip on a THROWAWAY dev phone: pair the host client with the on-screen
-# address, request a disposable Sepolia signature, approve it on the phone (driven over adb,
-# which survives AOA because the gadget becomes accessory+adb), and let the host verify hash,
-# signer recovery and the pinned identity. Needs PV_HOST_PY (venv python with pyusb) and the
-# tools/ checkout next to it.
+# USB signing round trip on a THROWAWAY dev phone (0.3.0 UI): pair the host client with the
+# on-screen address, request a mainnet-shaped 0.5 ETH transfer to an EXAMPLE address (never
+# broadcast: the phone is offline and the host only verifies), approve it on the phone over adb,
+# and let the host recompute the hash, recover the signer and compare it to the pinned pairing.
+# Needs PV_HOST_PY (venv python with pyusb) and PV_HOST_CLIENT (tools/aoa_client.py).
 source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
@@ -11,53 +11,48 @@ require_pin
 PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
 CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
 PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
+OUT="${PV_SIGN_OUT:-/tmp/usbsign.out}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
-# Leave any stale accessory session from a prior run: reset the gadget to plain adb so the
-# next client run triggers a FRESH ACCESSORY_ATTACHED and the app opens a new transport.
-"$A" shell svc usb setFunctions >/dev/null 2>&1 || true
-sleep 6; wait_adb 12
-wake
-has_text "LOCKED" && unlock
-expect_screen "PHONE VAULT"
-SCREEN_ADDR="$(addr)"; [[ -n "$SCREEN_ADDR" ]] || die "no address on screen"
-echo "on-screen address prefix: ${SCREEN_ADDR:0:10}…"
+TO=0x7F3A9C04e2b16d58a41C0f9E6b2D7a8c5e1f4B93   # example recipient (checksummed, not a real wallet)
 
-echo "== pair (the client fetches the address over USB; we confirm it against the phone's screen)"
-rm -f "$PAIRING"
-# The host adb server holds the device's USB interfaces (EBUSY for libusb). Release them for
-# the AOA switch; once the phone is in accessory+adb mode both can coexist on separate interfaces.
-"$A" kill-server; sleep 2
-PAIR_OUT="$(printf 'yes\n' | "$PY" "$CLIENT" --pairing-file "$PAIRING" pair 2>&1)" || { echo "$PAIR_OUT" | tail -5; "$A" start-server >/dev/null 2>&1; die "pair failed"; }
-"$A" start-server >/dev/null 2>&1
-USB_ADDR="$(echo "$PAIR_OUT" | grep -oE '"address": "0x[0-9a-fA-F]{40}"' | head -1 | grep -oE '0x[0-9a-fA-F]{40}')"
-[[ -n "$USB_ADDR" ]] || { echo "$PAIR_OUT" | tail -5; die "no address in pair output"; }
-[[ "${USB_ADDR,,}" == "${SCREEN_ADDR,,}"* || "${USB_ADDR,,}" == "${SCREEN_ADDR,,}" ]] || die "USB address ${USB_ADDR:0:10}… does not match the screen ${SCREEN_ADDR:0:10}…"
-[[ -s "$PAIRING" ]] || die "pairing file not written"
+usb_reset; wake; unlock_if_locked; go_home
+expect_screen "Your offline wallet"
+SCREEN_ADDR="$(addr)"; [[ -n "$SCREEN_ADDR" ]] || die "no address on screen"
+
+echo "== pair (fresh accessory attach while unlocked; adb server down during the switch)"
+rm -f "$PAIRING"; "$A" kill-server; sleep 1
+( printf 'yes\n' | "$PY" "$CLIENT" --pairing-file "$PAIRING" pair > "$OUT.pair" 2>&1; echo $? > "$OUT.pair.rc" ) &
+sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked; wait
+[[ "$(cat "$OUT.pair.rc")" == "0" && -s "$PAIRING" ]] || { tail -5 "$OUT.pair"; die "pair failed"; }
+USB_ADDR="$(grep -oE '"address": "0x[0-9a-fA-F]{40}"' "$OUT.pair" | head -1 | grep -oE '0x[0-9a-fA-F]{40}')"
+[[ "${USB_ADDR,,}" == "${SCREEN_ADDR,,}" ]] || die "USB address ${USB_ADDR:0:10}… != screen ${SCREEN_ADDR:0:10}…"
 pass "paired: USB address matches the phone's own display"
 
-echo "== sign-test (waits for on-phone approval)"
-"$A" kill-server; sleep 2
-"$PY" "$CLIENT" --pairing-file "$PAIRING" sign-test > /tmp/usbsign.out 2>&1 &
+echo "== sign-test (a second fresh attach; the transport died with the lock or the pair exit)"
+usb_reset; unlock_if_locked; go_home
+"$A" kill-server; sleep 1
+"$PY" "$CLIENT" --pairing-file "$PAIRING" sign-test --chain-id 0x1 --nonce 0x0 \
+  --priority-fee 0x3b9aca00 --max-fee 0x4a817c800 --gas-limit 0x5208 --to "$TO" --value 0x6f05b59d3b20000 > "$OUT" 2>&1 &
 SIGN_PID=$!
-sleep 5; "$A" start-server >/dev/null 2>&1; wait_adb 12
-# Approve on the phone: find the review checkbox and the Sign button by live UI bounds.
+sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
 found=0
-for _ in $(seq 1 40); do
-  sleep 2
-  if uidump | grep -q 'text="Approve transaction?"'; then found=1; break; fi
-done
-[[ $found -eq 1 ]] || { kill $SIGN_PID 2>/dev/null; die "approval screen never appeared: $(texts)"; }
-pass "approval screen shown"
+for _ in $(seq 1 25); do sleep 2; kill -0 $SIGN_PID 2>/dev/null || break; has_text "Review transfer" && { found=1; break; }; done
+[[ $found -eq 1 ]] || { kill $SIGN_PID 2>/dev/null; tail -3 "$OUT"; die "review screen never appeared: $(texts)"; }
+has_text "Ethereum Mainnet (chain ID 1)" || die "network not decoded: $(texts 12)"
+uidump | grep -q "text=\"${TO}\"" || die "recipient not shown exactly as sent"
+pass "review screen shows action, amount, recipient, network, signer and fee"
+# The checkbox and the buttons sit below the fold.
+scroll_down; sleep 0.8; scroll_down; sleep 0.8
 box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/')"
-[[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null; die "review checkbox not found"; }
-read -r x1 y1 x2 y2 <<<"$box"; "$A" shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 )); sleep 1
-tap_text "Sign"; sleep 2
+[[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null; die "review checkbox not visible"; }
+tap_bounds "$box"; sleep 1
+tap_text "Approve &amp; sign"; sleep 3
 wait $SIGN_PID; SIGN_RC=$?
-echo "--- host client output (tail):"; tail -12 /tmp/usbsign.out | sed -E 's/("signedTransaction": ")0x[0-9a-f]{20}[0-9a-f]*/\10x…/'
+echo "--- host client output (tail):"; tail -8 "$OUT" | sed -E 's/("signedTransaction": ")0x[0-9a-f]{20}[0-9a-f]*/\10x…/'
 [[ $SIGN_RC -eq 0 ]] || die "sign-test exited $SIGN_RC"
-grep -q '"status": "approved"' /tmp/usbsign.out || die "response not approved"
+grep -q '"status": "approved"' "$OUT" || die "response not approved"
+expect_screen "Signature created"
 pass "host verified fields, recomputed hash, recovered signer == on-screen address == pinned pairing"
-sleep 2; wait_adb 12
-echo "phone status: $(texts 4)"
+tap_text "Back to Wallet" 2>/dev/null || true
 kiosk_locked; no_crashes; unwake
 pass "usbsigntest complete"

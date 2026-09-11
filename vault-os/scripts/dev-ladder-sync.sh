@@ -36,6 +36,13 @@ for name in "${!TARGET[@]}"; do
   fi
 done
 
+KCONF="${TREE}/kernel/google/msm-4.9/arch/arm64/configs"
+for frag in "${RUNG_DIR}"/*.config; do
+  [[ -f "${frag}" ]] || continue
+  install -m 0644 "${frag}" "${KCONF}/$(basename "${frag}")"
+  echo "   kernel fragment: $(basename "${frag}") → arch/arm64/configs/  (kernel fragments are per-rung slices)"
+done
+
 DEVICE="${TREE}/device/google/crosshatch"
 DIFF="${RUNG_DIR}/device-google-crosshatch.diff"
 if [[ -s "${DIFF}" ]]; then
