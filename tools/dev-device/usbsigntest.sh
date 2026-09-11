@@ -43,7 +43,7 @@ uidump | grep -q "text=\"${TO}\"" || die "recipient not shown exactly as sent"
 pass "review screen shows action, amount, recipient, network, signer and fee"
 # The checkbox and the buttons sit below the fold.
 scroll_down; sleep 0.8; scroll_down; sleep 0.8
-box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/')"
+box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true)"
 [[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null; die "review checkbox not visible"; }
 tap_bounds "$box"; sleep 1
 tap_text "Approve &amp; sign"; sleep 3

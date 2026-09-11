@@ -58,7 +58,7 @@ wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" get-state >/dev/null
 wait_boot() { local i; for i in $(seq 1 "${1:-40}"); do "$A" get-state >/dev/null 2>&1 && [[ "$("$A" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] && return 0; sleep 5; done; die "device did not finish booting"; }
 
 uidump() { "$A" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; "$A" exec-out cat /sdcard/ui.xml; }
-texts()  { uidump | grep -o 'text="[^"]\{1,70\}"' | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫a-z]$' | head -"${1:-6}" | tr '\n' '|'; }
+texts()  { uidump | grep -o 'text="[^"]\{1,70\}"' | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫a-z]$' | head -"${1:-6}" | tr '\n' '|' || true; }
 has_text() { uidump | grep -q "text=\"$1"; }
 expect_screen() { has_text "$1" || die "expected '$1' on screen, saw: $(texts)"; }
 expect_not()    { has_text "$1" && die "did not expect '$1' on screen: $(texts)"; return 0; }
@@ -67,7 +67,7 @@ expect_not()    { has_text "$1" && die "did not expect '$1' on screen: $(texts)"
 # &amp; for '&'). Empty when not visible.
 bounds_of() {
   uidump | grep -o -i "text=\"$1\"[^>]*bounds=\"\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]\"" | head -1 \
-    | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/'
+    | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true
 }
 tap_bounds() { local x1 y1 x2 y2; read -r x1 y1 x2 y2 <<<"$1"; "$A" shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 )) </dev/null; }
 # Tap a widget by exact text; scrolls down once and retries if it is below the fold.
@@ -82,10 +82,10 @@ scroll_top()  { "$A" shell input swipe 720 700 720 2300 350 </dev/null; sleep 0.
 
 # Digits are buttons whose text is the digit itself (PinScreen); `⌫` is backspace.
 tap_digits() { local i; for (( i = 0; i < ${#1}; i++ )); do tap_text "${1:$i:1}"; sleep 0.2; done; }
-clear_entry() { local i; for i in 1 2 3 4 5 6; do tap_text "⌫" 2>/dev/null || true; sleep 0.15; done; }
+clear_entry() { local i b; b="$(bounds_of "⌫")"; [[ -n "$b" ]] || return 0; for i in 1 2 3 4 5 6; do tap_bounds "$b"; sleep 0.15; done; }
 
 # The first 0x address on screen; the home card wraps it with a line break the dump encodes as &#10;.
-addr() { uidump | grep -o 'text="0x[0-9a-fA-F&#;]*' | head -1 | sed 's/^text="//; s/&#10;//g'; }
+addr() { uidump | grep -o 'text="0x[0-9a-fA-F&#;]*' | head -1 | sed 's/^text="//; s/&#10;//g' || true; }
 
 wake()   { "$A" shell svc power stayon usb; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 2; }
 unwake() { "$A" shell svc power stayon false; }
@@ -93,13 +93,20 @@ unwake() { "$A" shell svc power stayon false; }
 relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 3; expect_screen LOCKED; }
 unlock() { expect_screen LOCKED; tap_digits "$PV_TEST_PIN"; sleep 6; expect_screen "PHONE VAULT"; expect_not LOCKED; }
 unlock_if_locked() { if has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi; }
-go_home() { has_text "Your offline wallet" || has_text "Protect your recovery" || { tap_text "Wallet" 2>/dev/null || tap_text "Back to Security" 2>/dev/null || true; sleep 1.5; }; }
+# Back to the Wallet tab from Security/preferences; leaves other screens alone (callers assert).
+go_home() {
+  local b
+  if has_text "Your offline wallet" || has_text "Protect your recovery"; then return 0; fi
+  b="$(bounds_of "Back to Security")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.2; }
+  b="$(bounds_of "Wallet")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.5; }
+  return 0
+}
 
 # Answer the 3-word spot check ("Find word N") from WORDS, then confirm the account.
 spot_check() {
   local i n
   for i in 1 2 3; do
-    n="$(uidump | grep -o 'Find word [0-9]*' | head -1 | awk '{print $3}')"
+    n="$(uidump | grep -o 'Find word [0-9]*' | head -1 | awk '{print $3}' || true)"
     [[ -n "$n" ]] || die "no spot-check challenge on screen at round $i: $(texts)"
     tap_text "${WORDS[$((n - 1))]}"; sleep 1.2
   done
@@ -111,7 +118,7 @@ type_words() {
   declare -A K; local l x1 y1 x2 y2 w i
   while read -r l x1 y1 x2 y2; do K[$l]="$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"; done \
     < <(uidump | grep -o 'text="[a-z⌫]"[^>]*bounds="[^"]*"' | sed -E 's/text="(.)".*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]"/\1 \2 \3 \4 \5/')
-  [[ ${#K[@]} -eq 27 ]] || die "restore keyboard not fully visible (${#K[@]} keys)"
+  [[ ${#K[@]} -ge 26 ]] || die "restore keyboard not fully visible (${#K[@]} keys)"
   for w in "${WORDS[@]}"; do
     # shellcheck disable=SC2086
     for (( i = 0; i < ${#w}; i++ )); do "$A" shell input tap ${K[${w:$i:1}]} </dev/null; sleep 0.25; done

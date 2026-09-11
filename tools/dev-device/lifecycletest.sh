@@ -34,7 +34,7 @@ pass "reveal needs a fresh PIN; hide returns"
 
 relock
 tap_digits "$WRONG"; sleep 4
-expect_screen "9 attempts remaining"
+expect_screen "WRONG PIN · 9 ATTEMPTS LEFT"
 pass "wrong PIN counted (1 attempt consumed)"
 unlock; pass "unlock after wrong attempt resets the counter"
 

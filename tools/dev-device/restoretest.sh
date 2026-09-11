@@ -17,6 +17,8 @@ case "$MODE" in
     tap_text "Restore from recovery phrase"; sleep 2
     expect_screen "RESTORE · WORD 1 OF 24" ;;
   replace)
+    # a previous interrupted run may have left the entry screen up: cancel keeps the current wallet
+    if has_text "REPLACE BY RESTORE"; then tap_text "Cancel · keep current wallet"; sleep 2; fi
     go_home; BEFORE="$(addr)"
     tap_text "Security"; sleep 1.5
     tap_text "Restore a different wallet"; sleep 1.5

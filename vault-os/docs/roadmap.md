@@ -166,8 +166,12 @@ Create-or-Restore → 24 words typed on the on-device keyboard → "Is this your
 ORIGINAL address → restore → Home → `adb reboot` → kiosk still LOCKED, unlock shows the same
 address → sign again: identical transaction hash (deterministic signing with the same key).
 Two device-only bugs found and fixed on the way: the accessory packet-read bug (`ae39175`,
-§0.5) and invisible keyboard letters (`cc4dab5`). Still open: restore-over-an-existing wallet
-behind the same fresh-PIN guard as Replace.
+§0.5) and invisible keyboard letters (`cc4dab5`). **Restore over an existing wallet** landed
+2026-09-11 (`b34b8bd`): Security → Restore a different wallet → fresh PIN → the same entry
+screens, owned by the replacement state machine (PREPARED at address confirm, COMMITTING at
+"Yes, replace"), USB excluded, cancel keeps the current wallet. Drilled both ways on the phone
+(throwaway → public `abandon…art` vector `0xf278…1cdb` → back) via the ported harness
+(`tools/dev-device/restoretest.sh replace`).
 
 Honesty note: signing is deliberately narrow (EIP-1559 transfers + canonical `transfer`/
 `approve`). "MetaMask-compatible" and "generally usable with dApps" are future claims until
