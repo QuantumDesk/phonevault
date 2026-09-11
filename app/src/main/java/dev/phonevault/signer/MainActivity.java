@@ -388,6 +388,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         seedTimer = null;
         clearRestoreEntry(); // typed recovery words never outlive the unlocked session
         clearDice();
+        restoreReplacing = false;
+        restoreOverOp = -1;
     }
 
     private void hideBackup() {
@@ -568,6 +570,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void present(LinearLayout root, String screen) {
         if ((screen.startsWith("backup") || "phrase".equals(screen) || "replace-confirm".equals(screen))
                 && !sensitive.active()) return;
+        if (screen.startsWith("restore") && restoreReplacing && !sensitive.active()) return;
         screenName = screen;
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
@@ -686,6 +689,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         action(root, "Change PIN · planned", false, () -> showPlanned("Change PIN",
                 "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect."));
         action(root, "Replace wallet", false, this::confirmReplace);
+        action(root, "Restore a different wallet", false, this::confirmRestoreOver);
         present(root, "security");
     }
 
@@ -798,6 +802,70 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
+    // --- restore OVER an existing wallet: same entry screens, but owned by a fresh-PIN sensitive
+    //     flow and the replacement state machine, exactly like Replace (USB excluded throughout).
+
+    private boolean restoreReplacing;
+    private int restoreOverOp = -1;
+
+    private void confirmRestoreOver() {
+        if (!walletLoaded || credentials == null) return;
+        LinearLayout root = page("SECURITY / RESTORE", "Restore a different wallet?",
+                "You will type a 24-word recovery phrase on this phone. The wallet it produces REPLACES the current one on this device. Nothing changes until you confirm the address it shows.");
+        card(root, "Current Account 1", org.web3j.crypto.Keys.toChecksumAddress(walletAddress));
+        card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
+        action(root, "Continue · verify PIN", true, () -> beginSensitive("restore a different wallet", () -> {
+            int op;
+            synchronized (stateLock) { op = beginReplacement(); }
+            if (op < 0) { hideBackup(); return; }
+            restoreOverOp = op;
+            restoreReplacing = true;
+            clearRestoreEntry();
+            showRestoreEntry();
+        }));
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "security-restore");
+    }
+
+    /** Commit a restore over the existing wallet: the PREPARED → COMMITTING transition, then storage. */
+    private void commitRestoreOver(final String mnemonic) {
+        final int token = activeSensitive, s = session.get(), op = restoreOverOp;
+        if (!restoreReplacing || !sensitiveValid(token, s) || !beginCommit(op)) return;
+        clearReceivingIdentity();
+        showLoading("Restoring your wallet", "Saving and checking the restored identity. This step can no longer be cancelled.");
+        cryptoExecutor.execute(() -> {
+            try {
+                String address;
+                synchronized (stateLock) {
+                    if (!sensitiveValid(token, s) || !replacement.owns(op) || transport != null || requestPending.get()) return;
+                    credentials = null;
+                    Credentials restored = vault.restore(mnemonic);
+                    address = restored.getAddress();
+                    backupCheck.record(address);
+                    credentials = restored;
+                    walletAddress = address;
+                    backupVerified = true;
+                    walletLoaded = true;
+                    endReplacement(op);
+                }
+                android.graphics.Bitmap qr = qrFor(address);
+                runOnUiThread(() -> {
+                    if (!sensitiveValid(token, s)) return;
+                    walletQr = qr;
+                    statusMessage = "Wallet restored · backup verified by entry";
+                    hideBackup();
+                });
+            } catch (Exception e) {
+                synchronized (stateLock) { credentials = null; clearReceivingIdentity(); endReplacement(op); }
+                runOnUiThread(() -> {
+                    if (s != session.get()) return;
+                    gateNotice = "Storage could not confirm the restored wallet. Re-enter your PIN to reconcile it. No receiving address is available until loading succeeds.";
+                    lock();
+                });
+            }
+        });
+    }
+
     // --- restore: on-device word entry (no system keyboard), validate, confirm address, commit
 
     private final String[] restoreWords = new String[SeedRestore.WORD_COUNT];
@@ -821,7 +889,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (restoreIndex >= SeedRestore.WORD_COUNT) restoreIndex = SeedRestore.WORD_COUNT - 1;
         String typed = restoreBuffer.toString();
         int filled = restoreFilled();
-        LinearLayout root = page("RESTORE · WORD " + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
+        LinearLayout root = page((restoreReplacing ? "REPLACE BY RESTORE · WORD " : "RESTORE · WORD ") + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
                 typed.isEmpty() ? (restoreWords[restoreIndex] == null ? "Type word " + (restoreIndex + 1) : restoreWords[restoreIndex])
                                 : typed + "…",
                 "Type the first letters, then tap the matching word. " + filled + " of " + SeedRestore.WORD_COUNT + " entered.");
@@ -879,7 +947,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             else if (restoreIndex > 0) restoreIndex--;
             showRestoreEntry();
         });
-        action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+        if (restoreReplacing) action(root, "Cancel · keep current wallet", false, this::hideBackup);
+        else action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
         present(root, "restore-entry");
     }
 
@@ -940,13 +1009,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 final String address = SeedRestore.deriveAddress(mnemonic, 0);
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    LinearLayout root = page("RESTORE · CONFIRM", "Is this your wallet?",
-                            "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
-                    card(root, "Account 1", org.web3j.crypto.Keys.toChecksumAddress(address));
+                    boolean replacing = restoreReplacing;
+                    if (replacing && !markPrepared(restoreOverOp)) { hideBackup(); return; }
+                    LinearLayout root = page(replacing ? "REPLACE BY RESTORE · CONFIRM" : "RESTORE · CONFIRM",
+                            replacing ? "Replace with this wallet?" : "Is this your wallet?",
+                            replacing ? "This is the address your phrase produces. Confirming REPLACES the current wallet on this phone. If the address is not the one you expect, a word or its order is wrong — nothing has been saved yet."
+                                      : "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
+                    card(root, replacing ? "New Account 1" : "Account 1", org.web3j.crypto.Keys.toChecksumAddress(address));
+                    if (replacing && walletAddress != null) card(root, "Replaces current", org.web3j.crypto.Keys.toChecksumAddress(walletAddress));
                     card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
-                    action(root, "Yes, restore this wallet", true, () -> commitRestore(mnemonic, s));
+                    action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
+                            () -> { if (restoreReplacing) commitRestoreOver(mnemonic); else commitRestore(mnemonic, s); });
                     action(root, "Back · fix words", false, this::showRestoreEntry);
-                    action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+                    if (replacing) action(root, "Cancel · keep current wallet", false, this::hideBackup);
+                    else action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
                     present(root, "restore-confirm");
                 });
             } catch (Exception e) {
