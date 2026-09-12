@@ -650,9 +650,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             qrView = new android.widget.ImageView(this);
             qrView.setContentDescription("Receiving address QR. Full address follows.");
             qrView.setImageBitmap(walletQr);
-            qrView.setAdjustViewBounds(true);
-            LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(dp(216), dp(216));
+            // Shown at the bitmap's own pixel size: integer-scaled modules stay perfectly square.
+            LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(walletQr.getWidth(), walletQr.getHeight());
             qlp.gravity = Gravity.CENTER_HORIZONTAL;
+            qlp.setMargins(0, dp(4), 0, dp(18));
             box.addView(qrView, qlp);
             box.addView(VaultTheme.bodyText(this, "ACCOUNT 1 · RECEIVE", 13, VaultTheme.FAINT));
             addressView = VaultTheme.monoText(this, formatAddress(
@@ -1534,9 +1535,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private android.graphics.Bitmap qrFor(String address) {
-        android.graphics.Bitmap raw = VaultTheme.qrBitmap(address, dp(216));
-        if (raw == null) throw new IllegalStateException("QR could not be generated");
-        return VaultTheme.framedQr(raw, dp(14), dp(3), dp(6));
+        android.graphics.Bitmap qr = VaultTheme.qrBitmap(address, dp(232), dp(12));
+        if (qr == null) throw new IllegalStateException("QR could not be generated");
+        return qr;
     }
 
     private void handleIntent(Intent intent) {

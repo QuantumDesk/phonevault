@@ -138,57 +138,42 @@ final class VaultTheme {
     }
 
     /** Black-on-white QR bitmap for the given content (e.g. the receiving address). */
+    /**
+     * A crisp QR: the symbol is rendered at an integer number of pixels per module (no resampling,
+     * so every module is an exact square) inside a 4-module quiet zone on a white, rounded card.
+     * Black modules on white is what every scanner is tuned for; the card gives the dark UI a
+     * clean edge without brackets or borders.
+     */
     static android.graphics.Bitmap qrBitmap(String content, int sizePx) {
+        return qrBitmap(content, sizePx, 0);
+    }
+
+    static android.graphics.Bitmap qrBitmap(String content, int sizePx, int cornerRadiusPx) {
         try {
-            java.util.Map<com.google.zxing.EncodeHintType, Object> hints = new java.util.HashMap<>();
-            hints.put(com.google.zxing.EncodeHintType.MARGIN, 1);
-            hints.put(com.google.zxing.EncodeHintType.ERROR_CORRECTION,
-                    com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M);
-            com.google.zxing.common.BitMatrix m = new com.google.zxing.MultiFormatWriter()
-                    .encode(content, com.google.zxing.BarcodeFormat.QR_CODE, sizePx, sizePx, hints);
-            int w = m.getWidth(), h = m.getHeight();
-            int[] px = new int[w * h];
-            for (int y = 0; y < h; y++) {
-                for (int x = 0; x < w; x++) {
-                    px[y * w + x] = m.get(x, y) ? 0xFF000000 : 0xFFFFFFFF;
+            com.google.zxing.qrcode.encoder.ByteMatrix m = com.google.zxing.qrcode.encoder.Encoder
+                    .encode(content, com.google.zxing.qrcode.decoder.ErrorCorrectionLevel.M).getMatrix();
+            int n = m.getWidth(), quiet = 4;
+            int scale = Math.max(1, sizePx / (n + quiet * 2));
+            int side = (n + quiet * 2) * scale;
+            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(side, side,
+                    android.graphics.Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
+            android.graphics.Paint white = new android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG);
+            white.setColor(0xFFFFFFFF);
+            cv.drawRoundRect(0, 0, side, side, cornerRadiusPx, cornerRadiusPx, white);
+            android.graphics.Paint black = new android.graphics.Paint();
+            black.setColor(0xFF000000);
+            for (int y = 0; y < n; y++) {
+                for (int x = 0; x < n; x++) {
+                    if (m.get(x, y) != 1) continue;
+                    int left = (quiet + x) * scale, top = (quiet + y) * scale;
+                    cv.drawRect(left, top, left + scale, top + scale, black);
                 }
             }
-            android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h,
-                    android.graphics.Bitmap.Config.ARGB_8888);
-            bmp.setPixels(px, 0, w, 0, 0, w, h);
             return bmp;
         } catch (Exception e) {
             return null;
         }
-    }
-
-    /**
-     * Composite scanner-target corner brackets around a QR bitmap: a slightly larger canvas with
-     * four L-shaped pixel brackets at the corners, outside the quiet zone.
-     */
-    static android.graphics.Bitmap framedQr(android.graphics.Bitmap qr, int bracket, int thick, int gap) {
-        int pad = bracket + gap;
-        int w = qr.getWidth() + pad * 2, h = qr.getHeight() + pad * 2;
-        android.graphics.Bitmap out = android.graphics.Bitmap.createBitmap(w, h,
-                android.graphics.Bitmap.Config.ARGB_8888);
-        android.graphics.Canvas cv = new android.graphics.Canvas(out);
-        cv.drawColor(0xFFFFFFFF);
-        cv.drawBitmap(qr, pad, pad, null);
-        android.graphics.Paint p = new android.graphics.Paint();
-        p.setColor(0xFF000000);
-        // top-left
-        cv.drawRect(0, 0, bracket, thick, p);
-        cv.drawRect(0, 0, thick, bracket, p);
-        // top-right
-        cv.drawRect(w - bracket, 0, w, thick, p);
-        cv.drawRect(w - thick, 0, w, bracket, p);
-        // bottom-left
-        cv.drawRect(0, h - thick, bracket, h, p);
-        cv.drawRect(0, h - bracket, thick, h, p);
-        // bottom-right
-        cv.drawRect(w - bracket, h - thick, w, h, p);
-        cv.drawRect(w - thick, h - bracket, w, h, p);
-        return out;
     }
 
     /** A small square status indicator: hollow (waiting) or filled (active). */
