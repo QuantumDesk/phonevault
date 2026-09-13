@@ -33,6 +33,7 @@ Environment:
 * `PV_WORDS_FILE` — a 0600 file with the throwaway 24-word phrase. `firstrun.sh` writes it;
   nothing prints it. Delete it when the throwaway wallet is retired.
 * `PV_HOST_PY`, `PV_HOST_CLIENT`, `PV_PAIRING_FILE` — host client for `usbsigntest.sh`.
+* `ANDROID_SERIAL` — pick the phone when more than one is attached (adb honours it; keep `ADB` a bare binary).
 
 Conventions that bit us (see `NOTES.md` for the history):
 

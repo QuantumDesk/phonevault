@@ -57,7 +57,8 @@ require_words() {
 wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" get-state >/dev/null 2>&1 && return 0; sleep 5; done; die "adb did not come back"; }
 wait_boot() { local i; for i in $(seq 1 "${1:-40}"); do "$A" get-state >/dev/null 2>&1 && [[ "$("$A" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] && return 0; sleep 5; done; die "device did not finish booting"; }
 
-uidump() { "$A" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; "$A" exec-out cat /sdcard/ui.xml; }
+# /data/local/tmp: /sdcard is not always readable from the shell on a fresh device.
+uidump() { "$A" shell uiautomator dump /data/local/tmp/ui.xml >/dev/null 2>&1; "$A" exec-out cat /data/local/tmp/ui.xml; }
 texts()  { uidump | grep -o 'text="[^"]\{1,70\}"' | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫a-z]$' | head -"${1:-6}" | tr '\n' '|' || true; }
 has_text() { uidump | grep -q "text=\"$1"; }
 expect_screen() { has_text "$1" || die "expected '$1' on screen, saw: $(texts)"; }
