@@ -228,8 +228,15 @@ final class Eip1559Request {
         return Keys.toChecksumAddress(to);
     }
 
+    /** The native coin's ticker for the allow-listed chains; "native token" when unknown. */
+    String nativeSymbol() {
+        if (chainId == 137) return "POL";
+        if (chainId == 1 || chainId == 11155111 || chainId == 8453 || chainId == 10 || chainId == 42161) return "ETH";
+        return "native token";
+    }
+
     String valueEth() {
-        return new BigDecimal(value).movePointLeft(18).stripTrailingZeros().toPlainString() + " native token";
+        return new BigDecimal(value).movePointLeft(18).stripTrailingZeros().toPlainString() + " " + nativeSymbol();
     }
 
     String transactionTypeLabel() {
@@ -286,11 +293,16 @@ final class Eip1559Request {
         return "Offline signer cannot verify whether the recipient is a contract or what code it may execute.";
     }
 
+    /** Upper bound on what execution can cost, in the native coin: gas limit × max fee per gas. */
     String maximumFeeEth() {
         BigInteger maximumFeeWei = gasLimit.multiply(maxFeePerGas);
         String nativeAmount = new BigDecimal(maximumFeeWei).movePointLeft(18)
                 .stripTrailingZeros().toPlainString();
-        return nativeAmount + " native token (" + maximumFeeWei + " wei)";
+        return "up to " + nativeAmount + " " + nativeSymbol();
+    }
+
+    String maximumFeeWeiLabel() {
+        return gasLimit.multiply(maxFeePerGas).toString() + " wei (gas limit × max fee per gas)";
     }
 
     String gasLimitLabel() {

@@ -79,7 +79,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Idle time (no touch) before the vault locks and drops the key from memory. */
     private static final long IDLE_LOCK_MS = 2 * 60 * 1000L;
     /** The recovery phrase never stays on screen longer than this. */
-    private static final long SEED_TIMEOUT_MS = 60 * 1000L;
+    /** Idle time before the phrase hides. Copying 24 words onto paper means not touching the phone;
+     *  every touch or page turn restarts it. */
+    private static final long SEED_TIMEOUT_MS = 120 * 1000L;
+    /** Absolute cap on one reveal session, regardless of touches. */
+    private static final long SEED_SESSION_MS = 8 * 60 * 1000L;
+    /** Page to reopen at after an idle hide, so the user does not start over at word 1. */
+    private int resumeBackupPage;
+    /** True from the moment a PIN is SET in this unlocked session until it is used once or the
+     *  vault locks: the first-run wizard does not ask for the PIN again seconds after setting it. */
+    private boolean firstRunPinFresh;
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -255,7 +264,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         cryptoExecutor.execute(() -> {
             try {
                 pin.set(chosen); // zeroes the array
-                runOnUiThread(() -> unlock(s));
+                runOnUiThread(() -> { firstRunPinFresh = true; unlock(s); });
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) return;
@@ -365,7 +374,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void armIdleLock() {
         ui.removeCallbacks(idleLock);
-        ui.postDelayed(idleLock, idleTimeoutMs);
+        // While the recovery phrase (or its check) is on screen, the seed timer owns the timeout.
+        long delay = backupWords != null ? Math.max(idleTimeoutMs, SEED_TIMEOUT_MS + 10_000L) : idleTimeoutMs;
+        ui.postDelayed(idleLock, delay);
     }
 
     /** Recovery phrase: back to home (button or timeout). */
@@ -388,6 +399,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         seedTimer = null;
         clearRestoreEntry(); // typed recovery words never outlive the unlocked session
         clearDice();
+        firstRunPinFresh = false;
         restoreReplacing = false;
         restoreOverOp = -1;
     }
@@ -640,7 +652,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             showLoading("Opening your wallet", "Verifying the wallet saved on this device…");
             return;
         }
-        LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Protect your recovery",
+        LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Back up your wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
                         : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
         nav(root, "Wallet");
@@ -663,7 +675,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             root.addView(box, matchWrap(dp(22)));
             card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
         } else {
-            card(root, "Backup check required", "Receiving and signing are paused. If you already have a backup, check it now. Your existing wallet has not been replaced.");
+            card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
             action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
             action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
         }
@@ -788,7 +800,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     LinearLayout root = page("SET UP · STEP 2 OF 4", "Write down your recovery phrase",
-                            "Your new wallet is ready. Next you'll confirm your PIN, then copy 24 words onto paper, in order. Never photograph them or type them into another device.");
+                            "Your new wallet is ready. Next, copy its 24 words onto paper, in order. Never photograph them or type them into another device.");
                     card(root, "Then", "Step 3 spot-checks a few of the words. Step 4 shows your receiving address.");
                     action(root, "Continue", true, this::confirmRevealBackup);
                     action(root, "Lock now", false, this::lock);
@@ -1175,6 +1187,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             activeSensitive = token;
         }
         final int s = session.get();
+        if (firstRunPinFresh) {
+            // The PIN was set moments ago in this same unlocked session (no lock since): asking for
+            // it again reads as a bug. One use only; any lock resets it.
+            firstRunPinFresh = false;
+            afterPin.run();
+            return;
+        }
         afterReauth = afterPin;
         pinScreen = new PinScreen(this, "VERIFY PIN", "Enter your PIN to " + purpose + ".", entered -> {
             if (!sensitiveValid(token, s)) { java.util.Arrays.fill(entered, '0'); return; }
@@ -1244,7 +1263,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
                         backupWords = words;
                         backupIdentity = walletAddress;
-                        backupPage = 0;
+                        backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
                         startSeedTimer();
                         if (checkOnly) startWordCheck();
                         else showPhrasePage();
@@ -1261,7 +1280,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void startSeedTimer() {
         long now = android.os.SystemClock.elapsedRealtime();
-        seedHardDeadline = now + 5 * 60 * 1000L;
+        seedHardDeadline = now + SEED_SESSION_MS;
         seedIdleDeadline = now + SEED_TIMEOUT_MS;
         ui.removeCallbacks(hideSeed);
         ui.post(hideSeed);
@@ -1272,13 +1291,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         long remaining = Math.min(seedHardDeadline, seedIdleDeadline) - android.os.SystemClock.elapsedRealtime();
         if (remaining <= 0) {
             boolean discarded = replacementCandidate != null;
+            if (!discarded) resumeBackupPage = backupPage;
             hideBackup();
             statusMessage = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
-                    : "Backup hidden. Verify your PIN to resume with the same wallet.";
+                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of 6.";
             showInfo("Backup hidden", statusMessage, this::showHome);
             return;
         }
-        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · touch to stay active · 5 minute session limit");
+        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · any touch restarts the timer · 8 minute session limit");
         ui.postDelayed(hideSeed, 1000);
     }
 
@@ -1669,10 +1689,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             root.addView(detail("Target contract", request.contractLabel()));
             root.addView(detail(request.contractWarningTitle(), request.contractWarningLabel()));
         }
-        root.addView(detail("Maximum execution fee", request.maximumFeeEth()));
-        root.addView(detail("Fee coverage", request.feeCoverageLabel()));
+        root.addView(detail("Maximum fee", request.maximumFeeEth()));
         LinearLayout raw = new LinearLayout(this);
         raw.setOrientation(LinearLayout.VERTICAL);
+        raw.addView(detail("Maximum fee in wei", request.maximumFeeWeiLabel()));
+        raw.addView(detail("What the fee covers", request.feeCoverageLabel()));
         raw.addView(detail("Gas limit", request.gasLimitLabel()));
         raw.addView(detail("Maximum fee per gas", request.maxFeePerGasLabel()));
         raw.addView(detail("Priority fee per gas", request.maxPriorityFeePerGasLabel()));

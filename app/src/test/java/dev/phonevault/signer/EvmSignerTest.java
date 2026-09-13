@@ -135,7 +135,8 @@ public final class EvmSignerTest {
         assertEquals("21000 gas (0x5208)", request.gasLimitLabel());
         assertEquals("2 gwei (2000000000 wei, 0x77359400)", request.maxFeePerGasLabel());
         assertEquals("1 gwei (1000000000 wei, 0x3b9aca00)", request.maxPriorityFeePerGasLabel());
-        assertEquals("0.000042 native token (42000000000000 wei)", request.maximumFeeEth());
+        assertEquals("up to 0.000042 ETH", request.maximumFeeEth());
+        assertEquals("42000000000000 wei (gas limit × max fee per gas)", request.maximumFeeWeiLabel());
         assertTrue(request.reviewPrompt().contains("signing address"));
     }
 

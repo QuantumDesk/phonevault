@@ -17,11 +17,11 @@ pass "PIN set → Create-or-Restore (no wallet minted silently)"
 
 tap_text "Create new wallet"; sleep 6
 expect_screen "Write down your recovery phrase"
-tap_text "Continue"; sleep 2
-expect_screen "VERIFY PIN"
-tap_digits "$PV_TEST_PIN"; sleep 5
+tap_text "Continue"; sleep 4
+# The PIN was set seconds ago in this session: the wizard must NOT ask for it again.
+expect_not "VERIFY PIN"
 expect_screen "RECOVERY PHRASE"
-pass "wallet created; phrase shown only after a fresh PIN"
+pass "wallet created; phrase shown without a redundant PIN prompt"
 
 # Six pages of four words. The words are written to the caller's private file, never printed.
 umask 077; : > "$PV_WORDS_FILE"

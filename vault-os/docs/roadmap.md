@@ -22,7 +22,7 @@ Working today, on the Pixel 3 XL (crosshatch), LineageOS 22.2 / Android 15 base:
 | Boot | Boots straight into the vault app (device owner + kiosk/lock-task, keyguard disabled), survives reboot |
 | Brand | Mono/pixel boot animation, wallpaper, in-app theme (Press Start 2P + monospace) |
 | Keys | BIP39 24-word seed from kernel CSPRNG + a software jitter source, hash-combined with startup sanity checks (`SeedVault`; see `entropy-design.md` "Implementation status" — R2/R7 NOT met), StrongBox-wrapped at rest, EVM key at m/44'/60'/0'/0/0 |
-| Access | In-app 6-digit PIN gate, wipe-after-10 with verified erase (fail-closed), lock on screen-off / 2-min idle, seed view 60 s, USB attach parked behind the gate |
+| Access | In-app 6-digit PIN gate, wipe-after-10 with verified erase (fail-closed), lock on screen-off / 2-min idle, seed view 2 min idle per page (8 min session, resumes on the same page), USB attach parked behind the gate |
 | Signing | EIP-1559 decode → approval screen → sign (`Eip1559Request` / `EvmSigner`), strict schema, ABI-padding checks, unlimited-allowance DANGER |
 | Transport | USB accessory (AOA) JSON channel only |
 | UI | Home (QR receive + address + status), full-screen recovery phrase, dark approval sheet |
