@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phone Vault is HOME from the very first boot. PackageManager reads this directory before any
+  app runs and records the preference, so the system never shows a launcher chooser in the
+  window before the device-owner receiver installs the persistent HOME preference itself.
+  (Seen on a genuine first boot with the stock launcher still present, 2026-09-13.)
+-->
+<preferred-activities>
+    <item name="dev.phonevault.signer/dev.phonevault.signer.MainActivity" always="true">
+        <filter>
+            <action name="android.intent.action.MAIN" />
+            <category name="android.intent.category.HOME" />
+            <category name="android.intent.category.DEFAULT" />
+        </filter>
+    </item>
+</preferred-activities>

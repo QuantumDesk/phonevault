@@ -17,3 +17,9 @@ PRODUCT_PACKAGE_OVERLAYS += vendor/phonevault/overlay
 PRODUCT_SYSTEM_PROPERTIES += \
     ro.phonevault.version=0.1.0 \
     ro.phonevault.brand=PhoneVault
+
+# HOME from the first boot: the framework applies etc/preferred-apps before any app runs, so a
+# genuine first boot never shows a launcher chooser (device-owner provisioning then makes it
+# persistent). Independent of whether a stock launcher is still in the image.
+PRODUCT_COPY_FILES += \
+    vendor/phonevault/prebuilt/preferred-apps/phonevault-home.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/preferred-apps/phonevault-home.xml

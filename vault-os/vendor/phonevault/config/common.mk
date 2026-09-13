@@ -40,3 +40,9 @@ PRODUCT_VENDOR_PROPERTIES += \
 # DEBUG-41: early-adb rc to capture the post-fs-data crash (remove for release)
 PRODUCT_COPY_FILES += \
     vendor/phonevault/prebuilt/zzz-debug-earlyadb.rc:$(TARGET_COPY_OUT_SYSTEM)/etc/init/zzz-debug-earlyadb.rc
+
+# HOME from the first boot: the framework applies etc/preferred-apps before any app runs, so a
+# genuine first boot never shows a launcher chooser (device-owner provisioning then makes it
+# persistent). Independent of whether a stock launcher is still in the image.
+PRODUCT_COPY_FILES += \
+    vendor/phonevault/prebuilt/preferred-apps/phonevault-home.xml:$(TARGET_COPY_OUT_SYSTEM)/etc/preferred-apps/phonevault-home.xml
