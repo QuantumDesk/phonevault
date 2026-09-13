@@ -15,6 +15,12 @@ android_app_import {
     // stay disabled until their own boot-tested rungs).
     overrides: [
         "LineageSetupWizard",
+        // Rung 2d-a: no stock launcher. On a genuine first boot the system resolves HOME before the
+        // device-owner receiver has installed the persistent HOME preference, and with Trebuchet
+        // present that race shows a launcher chooser (seen on the second phone, 2026-09-13). With
+        // Phone Vault as the only HOME candidate there is nothing to choose.
+        "TrebuchetQuickStep",
+        "TrebuchetQuickStepGo",
     ],
     // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests)
     // overrides: [
