@@ -1,4 +1,4 @@
-# RUNG 2d-a3 (2c + sub-slice A3 of the kernel fragment: IPA + RMNET) — bisecting the 2d-a boot failure: the release BoardConfigVault.mk with the
+# RUNG 2d-a3 (2c + sub-slice A23 of the kernel fragment: WLAN/CNSS + IPA/RMNET) — bisecting the 2d-a boot failure: the release BoardConfigVault.mk with the
 # kernel fragment reintroduced in slices, each its own boot test (the full fragment was the
 # August boot-blocker):
 #   2b  remove `--flags 3` (verity + hashtree enforcement ON)
@@ -22,4 +22,4 @@ DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := vendor/phonevault/vintf/device_fra
 # 2d-a: connectivity drivers only (BT/NFC/WLAN/CNSS/IPA/RMNET). Later slices: 2d-b modem/GLINK,
 # 2d-c camera/media/sensors/DSP, 2d-d USB gadget functions. The fragment file is installed into
 # kernel/google/msm-4.9/arch/arm64/configs/ by dev-ladder-sync.sh.
-TARGET_KERNEL_CONFIG += phonevault-a3.config
+TARGET_KERNEL_CONFIG += phonevault-a23.config
