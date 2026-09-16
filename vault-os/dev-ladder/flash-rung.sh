@@ -51,7 +51,7 @@ while [[ $SECONDS -lt $end ]]; do
   fi
   sleep 5
 done
-[[ $booted -eq 1 ]] || { log "did not boot within 15 min (state=[$(state)])"; exit 1; }
+[[ $booted -eq 1 ]] || { log "did not boot within 15 min (adb state=[$(state)], usb=[$(lsusb 2>/dev/null | grep -iE "google|18d1" | sed "s/.*ID //" | tr "\n" " ")]) — an empty usb field means the phone is OFF THE CABLE, not necessarily hung"; exit 1; }
 sleep 20; "$A" root >/dev/null 2>&1; sleep 2
 log "*** BOOTED rung $RUNG: $("$A" shell getprop ro.build.date | tr -d '\r') ***"
 echo "--- owner / provisioning ---"
