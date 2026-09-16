@@ -127,9 +127,13 @@ Must-haves before real users (in this order, after OS rungs 1–5):
 2. Mandatory backup verification (random-word re-entry; a full ordered confirmation or a
    restore-and-address-match drill for real funds).
 3. PIN-derived storage wrapping and Change PIN.
-4. MetaMask-compatible transport (see §3 item 1: exact Keystone/EIP-4527 UR flows, which need
-   an inbound path or a host bridge — outbound QR alone is insufficient) plus watch-only/xpub
-   export, which it depends on.
+4. **Desktop companion first (started 2026-09-16, `companion/`, Tauri + Rust on macOS):** pairs over
+   USB, quotes nonce/fees/balance from an https node, hands the transaction to the phone, verifies
+   the returned signature independently (decode + hash + signer recovery against the pinned
+   pairing; the real phone-signature fixture is a unit test), broadcasts on an explicit click.
+   Wallet integrations come through it: the companion is the WalletConnect wallet, the phone only
+   signs. MetaMask has no plug-in point for a new USB signer, impersonating Ledger/Trezor is ruled
+   out, and the QR route needs a camera the appliance is removing (see §3 item 1).
 5. `personal_sign` and EIP-712 for dApp authentication.
 6. An integrity screen: release signature, verified-boot state, StrongBox, OS version, battery
    condition.
