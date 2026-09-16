@@ -130,7 +130,9 @@ Must-haves before real users (in this order, after OS rungs 1–5):
 4. **Desktop companion first (started 2026-09-16, `companion/`, Tauri + Rust on macOS):** pairs over
    USB, quotes nonce/fees/balance from an https node, hands the transaction to the phone, verifies
    the returned signature independently (decode + hash + signer recovery against the pinned
-   pairing; the real phone-signature fixture is a unit test), broadcasts on an explicit click.
+   pairing; the real phone-signature fixture is a unit test), broadcasts on an explicit click. **2026-09-16: first real value moved** — 0.0004 ETH on Base
+   from the dev phone to the owner's address, approved on the phone, verified and broadcast by the
+   companion (tx `0x2633523a…6475`, block 51394545). Test funds on a dev build; the release path is unchanged.
    Wallet integrations come through it: the companion is the WalletConnect wallet, the phone only
    signs. MetaMask has no plug-in point for a new USB signer, impersonating Ledger/Trezor is ruled
    out, and the QR route needs a camera the appliance is removing (see §3 item 1).
