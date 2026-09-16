@@ -4,6 +4,8 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+/* `display: flex/grid` on a class would otherwise beat the UA stylesheet's [hidden]{display:none} */
+[hidden] { display: none !important; }
 html, body { margin: 0; background: var(--ink); color: var(--paper); font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif; }
 .mono, code, .addr { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .top { display: flex; align-items: center; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--ink); }
