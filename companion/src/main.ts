@@ -30,7 +30,7 @@ const rpc = () => rpcInput.value.trim();
 // Public nodes per network. The node is untrusted input; anything it supplies is shown here and on the phone.
 const NETWORKS: Record<number, { name: string; rpc: string; explorer: string; symbol: string; l2: boolean }> = {
   1: { name: "Ethereum Mainnet", rpc: "https://ethereum-rpc.publicnode.com", explorer: "https://etherscan.io", symbol: "ETH", l2: false },
-  8453: { name: "Base", rpc: "https://base-rpc.publicnode.com", explorer: "https://basescan.org", symbol: "ETH", l2: true },
+  8453: { name: "Base", rpc: "https://mainnet.base.org", explorer: "https://basescan.org", symbol: "ETH", l2: true },
   10: { name: "Optimism", rpc: "https://optimism-rpc.publicnode.com", explorer: "https://optimistic.etherscan.io", symbol: "ETH", l2: true },
   42161: { name: "Arbitrum One", rpc: "https://arbitrum-one-rpc.publicnode.com", explorer: "https://arbiscan.io", symbol: "ETH", l2: true },
   137: { name: "Polygon", rpc: "https://polygon-bor-rpc.publicnode.com", explorer: "https://polygonscan.com", symbol: "POL", l2: false },
