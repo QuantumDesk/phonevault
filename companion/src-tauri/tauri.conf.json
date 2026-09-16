@@ -1,0 +1,45 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Phone Vault Companion",
+  "version": "0.1.0",
+  "identifier": "org.phonevault.companion",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Phone Vault Companion",
+        "width": 960,
+        "height": 760,
+        "minWidth": 720,
+        "minHeight": 600
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "copyright": "Copyright 2026 Phone Vault contributors. Apache-2.0.",
+    "category": "Utility",
+    "shortDescription": "Phone Vault Companion",
+    "longDescription": "Pairs with a Phone Vault signer over USB, quotes transactions from an Ethereum node, and broadcasts only what you approved on the phone.",
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
+  }
+}
