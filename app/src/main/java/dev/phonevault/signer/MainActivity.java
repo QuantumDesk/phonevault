@@ -96,6 +96,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable idleLock = this::lock;
     private final Runnable hideSeed = this::tickSeedTimer;
+    /** Set when a lock closed a live USB session: the host must unplug and reconnect to resume. */
+    private boolean usbReplugHint;
     private final Runnable pixelShift = this::shiftPixels;
     private VaultPin pin;
     private PinScreen pinScreen;
@@ -361,7 +363,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // can never send after this point (send + close are linearized with signing).
             staleTransport = transport;
             transport = null;
-            if (staleTransport != null) staleTransport.close();
+            if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
         }
         clearSensitiveUi();
         clearPinEntry();
@@ -564,7 +566,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.setPadding(dp(24), dp(48), dp(24), dp(30));
         root.setBackgroundColor(VaultTheme.BG);
         TextView brand = VaultTheme.pixelText(this, "PHONE VAULT", 10, VaultTheme.ACCENT);
-        root.addView(brand);
+        if (menuAvailable()) {
+            // Header row: brand on the left, ☰ on the right. One menu everywhere instead of tab rows.
+            LinearLayout header = new LinearLayout(this);
+            header.setOrientation(LinearLayout.HORIZONTAL);
+            header.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+            header.addView(brand, blp);
+            TextView menu = VaultTheme.pixelButton(this, "☰", false);
+            menu.setTextSize(22);
+            menu.setPadding(0, 0, 0, 0);
+            menu.setContentDescription("Menu");
+            hardenTouch(menu);
+            menu.setOnClickListener(v -> { if (menuAvailable()) showMenu(); });
+            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(56), dp(48));
+            mlp.setMargins(dp(8), -dp(12), 0, 0);
+            header.addView(menu, mlp);
+            root.addView(header);
+        } else {
+            root.addView(brand);
+        }
         TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(java.util.Locale.ROOT), 12, VaultTheme.FAINT);
         label.setPadding(0, dp(30), 0, dp(8));
         root.addView(label);
@@ -610,24 +631,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         parent.addView(box, matchWrap(dp(12)));
     }
 
-    private void nav(LinearLayout parent, String selected) {
-        LinearLayout row = new LinearLayout(this);
-        for (String item : new String[] {"Wallet", "Security", "Coming next"}) {
-            TextView tab = VaultTheme.pixelButton(this, item, item.equals(selected));
-            tab.setTextSize(13);
-            tab.setPadding(dp(8), dp(10), dp(8), dp(10));
-            hardenTouch(tab);
-            tab.setOnClickListener(v -> {
-                if (!unlocked || sensitive.active() || approvalDecision != null) return;
-                if ("Wallet".equals(item)) showHome();
-                else if ("Security".equals(item)) showSecurity();
-                else showFeatures();
-            });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(56), 1);
-            lp.setMargins(dp(2), 0, dp(2), 0);
-            row.addView(tab, lp);
-        }
-        parent.addView(row, matchWrap(dp(22)));
+    /** The menu is available on the ordinary unlocked screens: never over a PIN gate, a sensitive
+     *  flow, an approval, or before a wallet exists. */
+    private boolean menuAvailable() {
+        return unlocked && operational && walletLoaded && !sensitive.active() && approvalDecision == null
+                && !replacementActive() && !restoreReplacing;
+    }
+
+    /** Former tab row. Navigation moved into the ☰ header menu; kept so screens stay one-line simple. */
+    private void nav(LinearLayout parent, String selected) { }
+
+    private void showMenu() {
+        LinearLayout root = page("MENU", "Where to?", null);
+        String current = screenName;
+        action(root, "Wallet", "wallet".equals(current), () -> { if (menuAvailable()) showHome(); });
+        action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
+        action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
+        action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
+        action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
+        action(root, "Lock now", false, this::lock);
+        present(root, "menu");
     }
 
     private void buildUi() {
@@ -655,7 +678,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Back up your wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
                         : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
-        nav(root, "Wallet");
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
             box.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -679,6 +701,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
             action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
         }
+        if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
         statusView = VaultTheme.bodyText(this, statusMessage, bodySize(), VaultTheme.DIM);
         statusView.setPadding(dp(2), dp(20), 0, dp(4));
         root.addView(statusView);
@@ -690,19 +713,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void showSecurity() {
         LinearLayout root = page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
-        nav(root, "Security");
-        card(root, "Recovery backup", backupVerified
-                ? "Backup spot-checked for Account 1. Keep your written 24-word backup safe."
-                : "Not checked. Receiving and signing remain paused.");
-        action(root, "Check my backup", true, () -> startBackupAccess(true));
+        card(root, "Backup", backupVerified
+                ? "Spot-checked for Account 1. Keep the written 24 words somewhere safe and private."
+                : "Not checked yet. Receiving and signing stay paused until it is.");
+        action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
         action(root, "Show recovery phrase", false, this::confirmRevealBackup);
-        action(root, "Lock now", false, this::lock);
-        action(root, "Display & auto-lock", false, this::showPreferences);
-        action(root, "Device information", false, this::showIntegrity);
-        action(root, "Change PIN · planned", false, () -> showPlanned("Change PIN",
-                "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect."));
-        action(root, "Replace wallet", false, this::confirmReplace);
+        card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
+        action(root, "Replace with a new wallet", false, this::confirmReplace);
         action(root, "Restore a different wallet", false, this::confirmRestoreOver);
+        action(root, "Lock now", false, this::lock);
         present(root, "security");
     }
 
@@ -1131,10 +1150,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showFeatures() {
-        LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "Explore the plan. These features cannot be enabled in this build.");
-        nav(root, "Coming next");
+        LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
         String[][] items = {
-            {"Restore over an existing wallet", "Restore is available when setting up a fresh phone (on-device word entry, checksum, address confirmation). Replacing an existing wallet by restore, with the same fresh-PIN guard as Replace, is next."},
+            {"Change PIN", "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect until then."},
             {"Multiple accounts", "Account discovery, explicit derivation paths, and watch-only export."},
             {"Passphrase wallets", "A separate wallet for each exact passphrase. A typo creates a different wallet; recovery must be tested before release."},
             {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
@@ -1153,13 +1171,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showPlanned(String title, String description) {
         LinearLayout root = page("PLANNED · NOT AVAILABLE", title, description);
         card(root, "Availability", "No wallet setting was changed. This screen describes upcoming work.");
-        action(root, "Back to roadmap", true, this::showFeatures);
-        action(root, "Back to Security", false, this::showSecurity);
+        action(root, "Back to Coming next", true, this::showFeatures);
+        action(root, "Wallet", false, this::showHome);
         present(root, "planned");
     }
 
     private void showInfo(String title, String description, Runnable back) {
-        LinearLayout root = page("PHONE VAULT", title, description);
+        LinearLayout root = page("NOTICE", title, description);
         action(root, "Continue", true, back);
         present(root, "information");
     }
@@ -1605,6 +1623,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (source != transport) return;
         runOnUiThread(() -> {
             if (source != transport || !unlocked) return;
+            usbReplugHint = false;
             setStatusActive(true);
         });
     }
