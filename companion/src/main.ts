@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 
 type Presence = "none" | "android" | "accessory";
 interface Status { phone: Presence; paired: string | null; paired_checksum: string | null; pairing_path: string }
@@ -23,11 +24,29 @@ let signed: SignedTx | null = null;
 let chainId = 1;
 
 const rpcInput = $<HTMLInputElement>("rpc-url");
+const netSelect = $<HTMLSelectElement>("net-select");
 const rpc = () => rpcInput.value.trim();
 
-function explorer(hash: string): string {
-  const base: Record<number, string> = { 1: "https://etherscan.io", 11155111: "https://sepolia.etherscan.io", 8453: "https://basescan.org", 10: "https://optimistic.etherscan.io", 42161: "https://arbiscan.io", 137: "https://polygonscan.com" };
-  return `${base[chainId] ?? "https://etherscan.io"}/tx/${hash}`;
+// Public nodes per network. The node is untrusted input; anything it supplies is shown here and on the phone.
+const NETWORKS: Record<number, { name: string; rpc: string; explorer: string; symbol: string; l2: boolean }> = {
+  1: { name: "Ethereum Mainnet", rpc: "https://ethereum-rpc.publicnode.com", explorer: "https://etherscan.io", symbol: "ETH", l2: false },
+  8453: { name: "Base", rpc: "https://base-rpc.publicnode.com", explorer: "https://basescan.org", symbol: "ETH", l2: true },
+  10: { name: "Optimism", rpc: "https://optimism-rpc.publicnode.com", explorer: "https://optimistic.etherscan.io", symbol: "ETH", l2: true },
+  42161: { name: "Arbitrum One", rpc: "https://arbitrum-one-rpc.publicnode.com", explorer: "https://arbiscan.io", symbol: "ETH", l2: true },
+  137: { name: "Polygon", rpc: "https://polygon-bor-rpc.publicnode.com", explorer: "https://polygonscan.com", symbol: "POL", l2: false },
+  11155111: { name: "Sepolia", rpc: "https://ethereum-sepolia-rpc.publicnode.com", explorer: "https://sepolia.etherscan.io", symbol: "ETH", l2: false },
+};
+const net = () => NETWORKS[chainId] ?? NETWORKS[1];
+function explorer(hash: string): string { return `${net().explorer}/tx/${hash}`; }
+
+// Balance watcher → macOS notification when funds arrive.
+let lastBalanceWei: bigint | null = null;
+async function notify(body: string) {
+  try {
+    let ok = await isPermissionGranted();
+    if (!ok) ok = (await requestPermission()) === "granted";
+    if (ok) sendNotification({ title: "Phone Vault", body });
+  } catch { /* notifications are a convenience only */ }
 }
 
 async function refreshStatus() {
@@ -52,11 +71,20 @@ async function refreshStatus() {
 async function refreshWallet() {
   try {
     const w = await invoke<Wallet>("wallet", { rpcUrl: rpc() });
+    const switched = w.chain_id !== chainId;
     chainId = w.chain_id;
+    if (switched) lastBalanceWei = null; // a different network has a different balance history
     $("wallet-address").textContent = w.address;
-    $("wallet-balance").textContent = `${w.balance_eth} ETH`;
-    $("wallet-network").textContent = ({ 1: "Ethereum Mainnet", 11155111: "Sepolia", 8453: "Base", 10: "Optimism", 42161: "Arbitrum One", 137: "Polygon" } as Record<number, string>)[w.chain_id] ?? `chain ${w.chain_id}`;
+    $("wallet-balance").textContent = `${w.balance_eth} ${net().symbol}`;
+    $("wallet-network").textContent = net().name;
     $("wallet-block").textContent = String(w.block);
+    const now = BigInt(w.balance_wei);
+    if (lastBalanceWei !== null && now > lastBalanceWei) {
+      const delta = now - lastBalanceWei;
+      const whole = delta / 1000000000000000000n; const frac = (delta % 1000000000000000000n).toString().padStart(18, "0").replace(/0+$/, "");
+      await notify(`Received ${whole}${frac ? "." + frac.slice(0, 8) : ""} ${net().symbol} on ${net().name}. Balance ${w.balance_eth} ${net().symbol}.`);
+    }
+    lastBalanceWei = now;
     clearError();
   } catch (e) { fail(e); }
 }
@@ -82,12 +110,13 @@ $("btn-quote").addEventListener("click", async () => {
   clearError();
   try {
     quote = await invoke<Quote>("quote", { rpcUrl: rpc(), to: $<HTMLInputElement>("send-to").value, amountEth: $<HTMLInputElement>("send-amount").value });
-    $("q-amount").textContent = `${quote.amount_eth} ETH`;
+    $("q-amount").textContent = `${quote.amount_eth} ${net().symbol}`;
     $("q-to").textContent = quote.to;
     $("q-network").textContent = quote.network;
-    $("q-fee").textContent = `up to ${quote.max_fee_eth} ETH`;
-    $("q-total").textContent = `${quote.total_eth} ETH (balance ${quote.balance_eth} ETH)`;
+    $("q-fee").textContent = `up to ${quote.max_fee_eth} ${net().symbol}`;
+    $("q-total").textContent = `${quote.total_eth} ${net().symbol} (balance ${quote.balance_eth} ${net().symbol})`;
     $("q-nonce").textContent = String(parseInt(quote.nonce, 16));
+    show("q-l2note", net().l2);
     show("quote-box"); show("signed-box", false); show("result-box", false);
   } catch (e) { fail(e); }
 });
@@ -129,6 +158,9 @@ $("btn-again").addEventListener("click", () => { signed = null; quote = null; sh
 (async () => {
   rpcInput.value = await invoke<string>("default_rpc");
   rpcInput.addEventListener("change", refreshWallet);
+  netSelect.addEventListener("change", async () => { const n = NETWORKS[Number(netSelect.value)]; if (n) { rpcInput.value = n.rpc; await refreshWallet(); } });
   await refreshStatus();
+  // watch the balance every 15 s while paired
+  setInterval(async () => { if (status?.paired) { try { await refreshWallet(); } catch { /* shown by refreshWallet */ } } }, 15000);
   setInterval(async () => { try { const s = await invoke<Status>("device_status"); const pill = $("phone-pill"); pill.textContent = s.phone === "accessory" ? "phone connected (accessory mode)" : s.phone === "android" ? "phone on USB" : "no phone on USB"; pill.className = `pill ${s.phone}`; } catch { /* ignore */ } }, 4000);
 })();

@@ -44,6 +44,17 @@
           <div><span class="muted">Network</span><strong id="wallet-network">—</strong></div>
           <div><span class="muted">Block</span><strong id="wallet-block">—</strong></div>
         </div>
+        <label>Network
+          <select id="net-select">
+            <option value="1">Ethereum Mainnet</option>
+            <option value="8453">Base</option>
+            <option value="10">Optimism</option>
+            <option value="42161">Arbitrum One</option>
+            <option value="137">Polygon</option>
+            <option value="11155111">Sepolia (testnet)</option>
+          </select>
+        </label>
+        <p class="muted small">Same address on every network. Send on the network you picked here; the phone shows the network name before you approve.</p>
         <details class="rpc">
           <summary>Node</summary>
           <label>JSON-RPC URL (https only) <input id="rpc-url" type="url" spellcheck="false" /></label>
@@ -68,6 +79,7 @@
             <tr><td>Total at most</td><td id="q-total" class="mono"></td></tr>
             <tr><td>Nonce</td><td id="q-nonce" class="mono"></td></tr>
           </table>
+          <p class="muted small" id="q-l2note" hidden>On this network the operator also charges an L1 data fee that neither this Mac nor the phone can bound in advance; it is usually a fraction of a cent but the total can exceed the figure above.</p>
           <p class="muted small">Next: the phone shows exactly these fields. Approve <strong>on the phone</strong>. Nothing is broadcast until you press Broadcast here afterwards.</p>
           <div class="row">
             <button id="btn-sign" class="primary">Send to phone for approval</button>

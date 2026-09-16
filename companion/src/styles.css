@@ -29,7 +29,8 @@ button.ghost:hover { border-color: var(--mint); }
 button:disabled { opacity: 0.5; cursor: default; }
 label { display: grid; gap: 6px; margin-top: 12px; color: var(--steel); font-size: 13px; }
 input { min-height: 44px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ink); color: var(--paper); font: inherit; font-family: ui-monospace, monospace; }
-input:focus { outline: 2px solid var(--mint); outline-offset: 1px; }
+input:focus, select:focus { outline: 2px solid var(--mint); outline-offset: 1px; }
+select { min-height: 44px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); background: var(--ink); color: var(--paper); font: inherit; }
 .addr { display: block; overflow-wrap: anywhere; padding: 10px 12px; background: var(--ink); border: 1px solid var(--line); border-radius: 10px; font-size: 14px; }
 .compare { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 14px 0 6px; }

@@ -166,6 +166,7 @@ fn default_rpc() -> String { eth::DEFAULT_RPC.to_string() }
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
