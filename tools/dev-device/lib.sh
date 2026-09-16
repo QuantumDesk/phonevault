@@ -94,14 +94,18 @@ unwake() { "$A" shell svc power stayon false; }
 relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 3; expect_screen LOCKED; }
 unlock() { expect_screen LOCKED; tap_digits "$PV_TEST_PIN"; sleep 6; expect_screen "PHONE VAULT"; expect_not LOCKED; }
 unlock_if_locked() { if has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi; }
-# Back to the Wallet tab from Security/preferences; leaves other screens alone (callers assert).
-go_home() {
-  local b
-  if has_text "Your offline wallet" || has_text "Protect your recovery"; then return 0; fi
-  b="$(bounds_of "Back to Security")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.2; }
-  b="$(bounds_of "Wallet")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.5; }
-  return 0
+# Navigation is a ☰ header menu (0.3.x): open it, then pick a section. Screens without the menu
+# (PIN gate, sensitive flows, approvals) are left alone; callers assert what they expect.
+open_menu() { local b; b="$(bounds_of "☰")"; [[ -n "$b" ]] || return 1; tap_bounds "$b"; sleep 1.2; has_text "Where to?"; }
+go_section() { # go_section "Wallet" | "Security" | "Display &amp; auto-lock" | "Device information" | "Coming next"
+  local b; b="$(bounds_of "Back to Security")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.2; }
+  open_menu || return 1; tap_text "$1"; sleep 1.5
 }
+go_home() {
+  if has_text "Your offline wallet" || has_text "Back up your wallet"; then return 0; fi
+  go_section "Wallet" || true; return 0
+}
+go_security() { has_text "DEVICE &amp; WALLET" && return 0; go_section "Security"; }
 
 # Answer the 3-word spot check ("Find word N") from WORDS, then confirm the account.
 spot_check() {

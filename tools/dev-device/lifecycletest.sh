@@ -26,7 +26,7 @@ else
 fi
 
 unlock; pass "normal unlock"
-tap_text "Security"; sleep 1.5
+go_security
 tap_text "Show recovery phrase"; sleep 2; expect_screen "VERIFY PIN"
 tap_digits "$PV_TEST_PIN"; sleep 5; expect_screen "RECOVERY PHRASE"
 tap_text "Hide phrase"; sleep 3; expect_not "RECOVERY PHRASE"

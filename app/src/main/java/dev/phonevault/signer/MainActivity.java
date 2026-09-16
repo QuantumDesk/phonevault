@@ -580,7 +580,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             hardenTouch(menu);
             menu.setOnClickListener(v -> { if (menuAvailable()) showMenu(); });
             LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(56), dp(48));
-            mlp.setMargins(dp(8), -dp(12), 0, 0);
+            mlp.setMargins(dp(8), -dp(6), 0, 0);
             header.addView(menu, mlp);
             root.addView(header);
         } else {

@@ -7,7 +7,7 @@ require_dev_appliance
 require_pin
 OUTDIR="${OUT:-/root/backup-pages}"; umask 077; mkdir -p "$OUTDIR"
 wake; unlock_if_locked; go_home
-tap_text "Security"; sleep 1.5
+go_security
 tap_text "Show recovery phrase"; sleep 2; expect_screen "VERIFY PIN"
 tap_digits "$PV_TEST_PIN"; sleep 5; expect_screen "RECOVERY PHRASE"
 for page in 1 2 3 4 5 6; do

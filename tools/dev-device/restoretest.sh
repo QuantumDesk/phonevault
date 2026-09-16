@@ -20,7 +20,7 @@ case "$MODE" in
     # a previous interrupted run may have left the entry screen up: cancel keeps the current wallet
     if has_text "REPLACE BY RESTORE"; then tap_text "Cancel · keep current wallet"; sleep 2; fi
     go_home; BEFORE="$(addr)"
-    tap_text "Security"; sleep 1.5
+    go_security
     tap_text "Restore a different wallet"; sleep 1.5
     expect_screen "Restore a different wallet?"
     tap_text "Continue · verify PIN"; sleep 1.5

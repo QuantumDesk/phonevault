@@ -8,7 +8,7 @@ require_pin
 require_words
 wake; unlock_if_locked; go_home
 if has_text "I have my backup"; then tap_text "I have my backup · check words"
-else tap_text "Security"; sleep 1.5; tap_text "Check my backup"; fi
+else go_security; tap_text "Check my backup"; fi
 sleep 2; expect_screen "VERIFY PIN"
 tap_digits "$PV_TEST_PIN"; sleep 5
 spot_check
