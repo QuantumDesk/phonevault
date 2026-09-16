@@ -112,6 +112,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** True between onStart and onStop. Nothing unlocks or publishes while the activity is hidden. */
     private volatile boolean foreground;
     private Intent pendingUsb;
+    /**
+     * A request that arrived while the vault was LOCKED. The gate reads and decodes it for display
+     * only — the phone answers nothing until the PIN is entered — and hands it to the normal request
+     * path right after unlock. Cleared by lock().
+     */
+    private JSONObject heldRequest;
+    private String heldSummary;
     private String gateNotice;
     private int shiftPhase;
 
@@ -227,6 +234,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (creating) onCreatePinEntry(entered, firstEntry, s);
             else onUnlockEntry(entered, s);
         });
+        // A request that arrived while locked (or a connected host) is shown on the gate too.
+        synchronized (stateLock) { if (heldSummary != null) pinScreen.setPending("INCOMING REQUEST", heldSummary); }
+        if (transport != null && !creating && !sealed) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
         updatePinPolicy(pinScreen);
         screenName = "pin";
         setContentView(pinScreen.view());
@@ -363,6 +373,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // can never send after this point (send + close are linearized with signing).
             staleTransport = transport;
             transport = null;
+            heldRequest = null;
+            heldSummary = null;
             if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
         }
         clearSensitiveUi();
@@ -413,6 +425,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         clearSensitiveUi();
         if (unlocked) showHome();
         drainPendingUsb();
+    }
+
+    /** After unlock: the request that waited behind the gate goes through the ordinary path. */
+    private void dispatchHeldRequest() {
+        final JSONObject held; final AccessoryTransport source;
+        synchronized (stateLock) { held = heldRequest; heldRequest = null; heldSummary = null; source = transport; }
+        if (held == null || source == null) return;
+        cryptoExecutor.execute(() -> onRequest(source, held));
+    }
+
+    private static String shortAddress(String address) {
+        return address != null && address.length() == 42 ? address.substring(0, 8) + "…" + address.substring(36) : String.valueOf(address);
     }
 
     private void drainPendingUsb() {
@@ -1557,6 +1581,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     showHome();
                     drainPendingUsb();
+                    if (transport != null) setStatusActive(true); // a session opened behind the gate
+                    dispatchHeldRequest();
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -1582,9 +1608,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!operational || intent == null) return;
         if (!UsbManager.ACTION_USB_ACCESSORY_ATTACHED.equals(intent.getAction())) return;
         if (!unlocked) {
-            // USB data-lock (app layer): the host gets no responder until the PIN is entered.
-            pendingUsb = intent;
-            if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
+            // USB data-lock (app layer): while locked the phone READS the host's request so the
+            // gate can show what is waiting, but it never answers — no bytes leave until the PIN
+            // is entered and the request has gone through the ordinary review path.
+            UsbAccessory gated = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
+            if (gated == null) return;
+            if (transport != null) { AccessoryTransport previous = transport; transport = null; previous.close(); }
+            try {
+                AccessoryTransport opened = AccessoryTransport.open((UsbManager) getSystemService(USB_SERVICE), gated, this);
+                transport = opened;
+                opened.start();
+                pendingUsb = null;
+                if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
+            } catch (Exception exception) {
+                transport = null;
+                pendingUsb = intent; // fall back to the old replay-after-unlock behaviour
+                if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
+            }
             return;
         }
         if (replacementActive() || sensitive.active() || !walletLoaded || !backupVerified) {
@@ -1631,6 +1671,29 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     @Override public void onRequest(AccessoryTransport source, JSONObject json) {
         if (source != transport) return;
+        if (!unlocked) {
+            // Gate mode: decode for the lock screen, hold, answer nothing.
+            final String label, body;
+            String l = "INCOMING REQUEST", b;
+            try {
+                if ("getAddress".equals(json.optString("method"))) {
+                    Eip1559Request.requireExactFields(json, "id", "method");
+                    b = "The connected host asks for your receiving address. Unlock to continue.";
+                } else {
+                    Eip1559Request request = Eip1559Request.parse(json);
+                    b = request.transactionTypeLabel() + " · " + request.displayedAmountLabel() + " to "
+                            + shortAddress(request.displayedRecipientLabel()) + " · " + request.networkLabel()
+                            + ". Unlock to review every field before anything is signed.";
+                }
+                synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
+            } catch (Exception e) {
+                b = "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
+                synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
+            }
+            label = l; body = b;
+            runOnUiThread(() -> { if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body); });
+            return;
+        }
         String id = json.optString("id", "unknown");
         final int s = session.get();
         synchronized (stateLock) {

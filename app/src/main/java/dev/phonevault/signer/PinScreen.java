@@ -22,6 +22,10 @@ final class PinScreen {
     private final LinearLayout root;
     private final TextView title;
     private final TextView subtitle;
+    /** Summary of a USB request that arrived while locked (display only; nothing is answered). */
+    private final LinearLayout pending;
+    private final TextView pendingLabel;
+    private final TextView pendingBody;
     private final TextView dots;
     private final TextView error;
     private final TextView policy;
@@ -55,6 +59,15 @@ final class PinScreen {
         subtitle = VaultTheme.bodyText(c, subtitleText, 16, VaultTheme.DIM);
         subtitle.setPadding(0, VaultTheme.dp(c, 14), 0, 0);
         root.addView(subtitle);
+
+        pending = VaultTheme.box(c);
+        pendingLabel = VaultTheme.bodyText(c, "", 13, VaultTheme.FAINT);
+        pendingBody = VaultTheme.bodyText(c, "", 17, VaultTheme.INK);
+        pendingBody.setPadding(0, VaultTheme.dp(c, 6), 0, 0);
+        pending.addView(pendingLabel);
+        pending.addView(pendingBody);
+        pending.setVisibility(View.GONE);
+        root.addView(pending, matchWrap(VaultTheme.dp(c, 18)));
 
         // top spacer
         root.addView(new View(c), new LinearLayout.LayoutParams(
@@ -121,6 +134,14 @@ final class PinScreen {
     void setTitle(String t) { title.setText(t); }
 
     void setSubtitle(String s) { subtitle.setText(s); }
+
+    /** Show (or with null hide) the summary of a request waiting behind the gate. */
+    void setPending(String label, String body) {
+        if (body == null) { pending.setVisibility(View.GONE); return; }
+        pendingLabel.setText(label);
+        pendingBody.setText(body);
+        pending.setVisibility(View.VISIBLE);
+    }
 
     void showError(String message) {
         error.setText(message == null ? "" : message);
