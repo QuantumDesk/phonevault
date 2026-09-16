@@ -376,6 +376,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             heldRequest = null;
             heldSummary = null;
             if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
         clearSensitiveUi();
         clearPinEntry();
@@ -678,6 +679,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void buildUi() {
+        // A host attach while the display is off starts this activity: light the screen so the
+        // incoming request is visible at once (kiosk: there is no keyguard to bypass).
+        setShowWhenLocked(true);
+        setTurnScreenOn(true);
         getWindow().setStatusBarColor(VaultTheme.BG);
         getWindow().setNavigationBarColor(VaultTheme.BG);
         largeText = getPreferences(MODE_PRIVATE).getBoolean("large_text", false);
@@ -1619,6 +1624,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 transport = opened;
                 opened.start();
                 pendingUsb = null;
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
@@ -1734,6 +1740,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void finishApproval(ApprovalDecision owner) {
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         synchronized (stateLock) {
             if (approvalDecision != owner) return;
             approvalDecision = null;
@@ -1760,6 +1767,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         Eip1559Request request = approval.request;
         String intent = request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Review permission"
                 : request.kind == Eip1559Request.Kind.TOKEN_TRANSFER ? "Review contract transfer" : "Review transfer";
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : "TRANSACTION REVIEW",
                 intent, "Compare these details with your intended action. This phone is the approval screen.");
         root.addView(detail("Action", request.transactionTypeLabel()));

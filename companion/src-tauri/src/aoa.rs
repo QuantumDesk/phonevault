@@ -144,10 +144,18 @@ impl Session {
         let id = request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
         let mut payload = serde_json::to_vec(request).map_err(|e| proto(e.to_string()))?;
         payload.push(b'\n');
-        self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)).map_err(|e| match e {
-            rusb::Error::Timeout => proto("the phone is not reading USB (its session ended — unplug and reconnect the cable, unlock, and retry)"),
-            other => AoaError::Usb(other),
-        })?;
+        // The phone only reads once its app has opened the session (it wakes the screen and does
+        // so on attach, but a sleeping phone needs a moment). Keep offering the request for a while
+        // instead of failing on the first 5-second write timeout.
+        let write_deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            match self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)) {
+                Ok(_) => break,
+                Err(rusb::Error::Timeout) if Instant::now() < write_deadline => continue,
+                Err(rusb::Error::Timeout) => return Err(proto("the phone is not reading USB — wake it, unlock it, and retry; if it still fails unplug and reconnect the cable")),
+                Err(other) => return Err(AoaError::Usb(other)),
+            }
+        }
         let deadline = Instant::now() + timeout;
         let mut received: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; 16_384];

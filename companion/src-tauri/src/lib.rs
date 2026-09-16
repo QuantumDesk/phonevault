@@ -132,7 +132,7 @@ async fn sign(q: Quote) -> CmdResult<SignedTx> {
             "chainId": q.chain_id, "nonce": q.nonce, "maxPriorityFeePerGas": q.max_priority_fee_per_gas,
             "maxFeePerGas": q.max_fee_per_gas, "gasLimit": q.gas_limit, "to": q.to, "value": q.value, "data": q.data,
         });
-        let response = ask_phone(request.clone(), Duration::from_secs(180))?;
+        let response = ask_phone(request.clone(), Duration::from_secs(300))?;
         let v = verify::validate_signature(&request, &response, &pinned).map_err(|e| e.0)?;
         Ok(SignedTx { raw: v.raw_hex, hash: v.tx_hash, signer: verify::checksum(&v.signer) })
     }).await
