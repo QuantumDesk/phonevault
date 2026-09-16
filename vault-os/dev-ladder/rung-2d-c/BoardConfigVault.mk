@@ -1,4 +1,4 @@
-# RUNG 2d-c1 (2d-b + slice C1 of the kernel fragment: camera / media / video / compute DSP): the release BoardConfigVault.mk with the
+# RUNG 2d-c (2d-b + slice C of the kernel fragment: camera / media / sensors / DSP, with kernel patch 0002): the release BoardConfigVault.mk with the
 # kernel fragment reintroduced in slices, each its own boot test (the full fragment was the
 # August boot-blocker):
 #   2b  remove `--flags 3` (verity + hashtree enforcement ON)
@@ -22,4 +22,4 @@ DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := vendor/phonevault/vintf/device_fra
 # 2d-a: connectivity drivers only (BT/NFC/WLAN/CNSS/IPA/RMNET). Later slices: 2d-b modem/GLINK,
 # 2d-c camera/media/sensors/DSP, 2d-d USB gadget functions. The fragment file is installed into
 # kernel/google/msm-4.9/arch/arm64/configs/ by dev-ladder-sync.sh.
-TARGET_KERNEL_CONFIG += phonevault-a.config phonevault-b.config phonevault-c1.config
+TARGET_KERNEL_CONFIG += phonevault-a.config phonevault-b.config phonevault-c.config

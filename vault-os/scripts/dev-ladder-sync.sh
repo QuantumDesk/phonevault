@@ -43,6 +43,18 @@ for frag in "${RUNG_DIR}"/*.config; do
   echo "   kernel fragment: $(basename "${frag}") → arch/arm64/configs/  (kernel fragments are per-rung slices)"
 done
 
+KERNEL="${TREE}/kernel/google/msm-4.9"
+for kp in "${RUNG_DIR}"/kernel-*.patch; do
+  [[ -f "${kp}" ]] || continue
+  if git -C "${KERNEL}" apply --reverse --check "${kp}" >/dev/null 2>&1; then
+    echo "   kernel patch already applied: $(basename "${kp}")"
+  elif git -C "${KERNEL}" apply --check "${kp}" >/dev/null 2>&1; then
+    git -C "${KERNEL}" apply "${kp}"; echo "   kernel patch applied: $(basename "${kp}")"
+  else
+    echo "kernel patch neither applies nor reverses cleanly: ${kp}" >&2; exit 1
+  fi
+done
+
 DEVICE="${TREE}/device/google/crosshatch"
 DIFF="${RUNG_DIR}/device-google-crosshatch.diff"
 if [[ -s "${DIFF}" ]]; then
