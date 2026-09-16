@@ -7,7 +7,8 @@
 html, body { margin: 0; background: var(--ink); color: var(--paper); font: 15px/1.55 -apple-system, "SF Pro Text", system-ui, sans-serif; }
 .mono, code, .addr { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
 .top { display: flex; align-items: center; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--ink); }
-.brand { color: var(--mint); font: 11px/1 "Vault Pixel", ui-monospace, monospace; letter-spacing: 0.04em; }
+.brand { display: inline-flex; align-items: center; gap: 10px; color: var(--mint); font: 11px/1 "Vault Pixel", ui-monospace, monospace; letter-spacing: 0.04em; }
+.brand .lock { display: block; }
 .sub { color: var(--steel); font-size: 13px; }
 .pill { margin-left: auto; font-size: 12px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line); color: var(--steel); }
 .pill.accessory { border-color: var(--mint); color: var(--mint); }
