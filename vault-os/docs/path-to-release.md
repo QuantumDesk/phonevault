@@ -14,9 +14,10 @@ this file is the queue.
       source alongside kernel + jitter; shown on Device information. (entropy-design.md R2)
       *Built 2026-09-23, 93 tests green; needs an on-phone check (StrongBox key generation works,
       health tests pass, Device information lists `titan-m-strongbox ✓`) before it is checked.*
-- [ ] **PIN-derived key wrapping + Change PIN.** Seal the seed with a key derived from the PIN *and*
-      the StrongBox key, so code execution on the phone without the PIN yields nothing. Change PIN
-      re-wraps atomically.
+- [ ] **PIN bound to the Android lock credential + Change PIN** (option A, chosen 2026-09-23;
+      design in `pin-credential-design.md`). The vault PIN becomes the system PIN, the Titan M
+      throttles guesses, the seed key only works after the system verifies it, 10 failures wipe by
+      device policy. Stage 1 = reversible spike on phone 2.
 - [ ] **Finish the hardening ladder.** 2d-c (camera/media/sensors/DSP) → 2d-d (USB functions) →
       rung 3 (charge-only USB at the OS level) → rung 4 (strip unneeded apps/services in slices) →
       rung 5 (user build: no adb, no dump hook, no screenshots).
