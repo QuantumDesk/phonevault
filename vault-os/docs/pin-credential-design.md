@@ -49,6 +49,27 @@ Code running on the phone without the PIN must not be able to use the seed key, 
 The spike is reversible: `adb shell locksettings set-pin 123456` then
 `adb shell locksettings clear --old 123456`. The wipe policy is NOT part of the spike.
 
+## Spike results (phone 2, rung 2d-b, 2026-09-23)
+
+`locksettings set-pin 123456` succeeded ("lockscreen disabled" flipped to false). Then:
+
+- **No keyguard ever appeared** — not after screen off/on, not after swipe/HOME/recents. The
+  device-owner `setKeyguardDisabled(true)` applied at provisioning keeps suppressing the keyguard
+  even after a credential is added later (the docs only say it cannot be *set* while a credential
+  exists). Focus stayed on Phone Vault, lock task stayed LOCKED, nothing escaped the kiosk.
+- `locksettings clear --old 123456` restored the exact baseline (lock screen disabled, kiosk
+  LOCKED, no password quality).
+
+What this means for the design: the kiosk and a system credential coexist, and we can keep our
+own full-screen UI because the keyguard stays suppressed. The credential is then checked through
+`KeyguardManager.createConfirmDeviceCredentialIntent` (or BiometricPrompt with DEVICE_CREDENTIAL)
+when the app needs the auth-bound key, not through a lock screen.
+
+Still unknown (next spike step, needs its own approval because recovery could need a wipe):
+**reboot with the credential set.** File-based encryption ties the app's storage to the credential,
+so after a reboot Android must ask for the PIN before our app can start at all. Does it show its
+PIN bouncer despite the disabled keyguard, and does unlock then land in the kiosk?
+
 ## Stages
 
 1. Spike on phone 2 (needs owner approval: modifies the phone's lock settings).
