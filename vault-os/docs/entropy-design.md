@@ -144,7 +144,7 @@ conservatively so the claim never exceeds the code:
 | Requirement | Status |
 |---|---|
 | R1 domain-separated SHA-512 hash-combine of every healthy source + user entropy | ✅ implemented, unit-tested |
-| R2 ≥2 independent *hardware* sources | ❌ **not met.** Sources are kernel `getrandom` (required) + an ad-hoc SHA-256-conditioned CPU-jitter collector (optional). Titan M is unimplemented. The jitter collector is home-grown, not a vetted jitterentropy port. |
+| R2 ≥2 independent *hardware* sources | ⏳ **in progress (2026-09-23):** `titan-m-strongbox` source added (StrongBox-generated AES key + chip-chosen IV encrypting zeros; keystream depends only on Titan M randomness), awaiting on-device verification. Previously ❌ **not met.** Sources are kernel `getrandom` (required) + an ad-hoc SHA-256-conditioned CPU-jitter collector (optional). Titan M is unimplemented. The jitter collector is home-grown, not a vetted jitterentropy port. |
 | R3 liveness (two successive draws differ) | ✅ per source |
 | R4 startup health tests | ⚠️ **partial.** RCT, APT and a distribution check now run over a 1024-byte per-source sample (before 2026-09-04 only 64 bytes were checked, so the APT *never executed*). They run on *conditioned* output, so they are a stuck/collapsed-source backstop, not an SP 800-90B raw-noise assessment. |
 | R4 fail-loud policy (≥2 healthy proceed / 1 needs user entropy / 0 refuse) | ✅ implemented, unit-tested |

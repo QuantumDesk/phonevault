@@ -833,7 +833,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked || !operational || walletLoaded) return;
                 }
                 Credentials fresh;
-                try { fresh = vault.generateAndStore(userEntropy); }
+                try { fresh = vault.generateAndStore(userEntropy); recordEntropyReport(userEntropy.length > 0); }
                 finally { java.util.Arrays.fill(userEntropy, (byte) 0); }
                 String address = fresh.getAddress();
                 android.graphics.Bitmap qr = qrFor(address);
@@ -1167,7 +1167,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
         card(root, "Account path", "m/44'/60'/0'/0/0 · no passphrase");
         card(root, "PIN protection", "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
-        card(root, "Entropy", "Kernel CSPRNG + software jitter. Independent Titan M input and diagnostics are planned.");
+        String entropy = getPreferences(MODE_PRIVATE).getString("entropy_report", null);
+        card(root, "Entropy at wallet creation", entropy != null ? entropy
+                : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
         android.content.Intent battery = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery != null) {
             int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
@@ -1176,6 +1178,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         action(root, "Back to Security", false, this::showSecurity);
         present(root, "integrity");
+    }
+
+    /** Persist WHICH sources fed the last generated seed and whether each passed its health tests
+     *  (names and pass/fail only; no entropy bytes). Shown on Device information (R7). */
+    private void recordEntropyReport(boolean dice) {
+        java.util.List<SeedVault.SourceReport> reports = vault.lastGenerationReports();
+        if (reports == null) return;
+        StringBuilder b = new StringBuilder();
+        for (SeedVault.SourceReport r : reports) {
+            if (b.length() > 0) b.append('\n');
+            b.append(r.healthy ? "✓ " : "✗ ").append(r.name).append(r.healthy ? " · passed health tests" : " · not used: " + r.detail);
+        }
+        if (dice) b.append("\n✓ your dice rolls");
+        getPreferences(MODE_PRIVATE).edit().putString("entropy_report", b.toString()).apply();
     }
 
     private void showFeatures() {
@@ -1486,6 +1502,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     try {
                         if (!sensitiveValid(token, s)) return;
                         SeedVault.Generation candidate = vault.prepareReplacement(new byte[0]);
+                        recordEntropyReport(false);
                         runOnUiThread(() -> {
                             if (!sensitiveValid(token, s) || !markPrepared(op)) return;
                             replacementCandidate = candidate;
