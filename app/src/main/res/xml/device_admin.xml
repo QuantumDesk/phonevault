@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <device-admin xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-policies />
+    <!-- Credential mode (pin-credential-design.md): hide lock-screen notifications/camera/widgets
+         and wipe the phone after 10 wrong device PINs. -->
+    <uses-policies>
+        <disable-keyguard-features />
+        <watch-login />
+        <wipe-data />
+    </uses-policies>
 </device-admin>

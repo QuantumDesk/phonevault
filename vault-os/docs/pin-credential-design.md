@@ -90,6 +90,33 @@ What this means:
   (b) for the seed key only — unlock stays ours, and the system screen appears only when the seed
   is actually needed (unlock load, phrase reveal, signing session start).
 
+## Stage 2–3 on phone 2 (2026-09-24): working
+
+Build `006e6a7` + fixes (USE_BIOMETRIC permission, admin uses-policies, crash-safe prompt).
+Phone 2's existing wallet upgraded on the first keypad unlock: the PIN became the device PIN, the
+system prompt confirmed it, the record was re-sealed under the credential-bound v2 key, same
+address `0xE0966BCe…5D49`.
+
+- Screen off → our "locked" screen + system PIN prompt → Home: 2/2. Wrong PIN then right: OK.
+- Phrase reveal inside the 30 s window: no second prompt; after the window: prompt, then phrase.
+- USB pair + sign + host verification: pass (`usbsigntest.sh`, harness now keys the system PIN).
+- Reboot: Android's lock screen (storage locked) → PIN → storage unlocked → vault asks for the PIN
+  again for the seed key → Home, kiosk LOCKED. 0 crashes throughout.
+
+Open items:
+
+- **Boot asks twice.** The boot-screen unlock already satisfies the key's 30 s window; the vault
+  should try the key first and only prompt if the keystore refuses.
+- **Admin policies need re-provisioning.** Android caches the device-admin policy list from
+  activation, so phone 2 (provisioned before this build) refuses `disable-keyguard-features` and
+  the 10-failure wipe: its boot lock screen still shows notifications ("Discover Trust", "USB
+  debugging") and the generic "belongs to your organization" line, and wrong PINs only throttle.
+  A phone provisioned with this build gets both. Proving the policy wipe needs a fresh
+  provisioning and its own approval.
+- `lifecycletest.sh` still expects the app's "WRONG PIN · 9 ATTEMPTS LEFT" text; in credential
+  mode the count lives in the system prompt.
+- Auditor review: unlock/session boundary changed (system prompt, v2 key, migration, one permission).
+
 ## Stages
 
 1. Spike on phone 2 (needs owner approval: modifies the phone's lock settings).

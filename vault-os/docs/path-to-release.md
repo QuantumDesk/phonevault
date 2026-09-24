@@ -19,6 +19,9 @@ this file is the queue.
       throttles guesses, the seed key only works after the system verifies it, 10 failures wipe by
       device policy. Stage 1 spike DONE on phone 2 (2026-09-23): kiosk + system PIN coexist; after a
       reboot Android's own PIN screen unlocks the encrypted storage once, then our UI takes over.
+      Stages 2–3 WORKING on phone 2 (2026-09-24): device PIN installed, wallet migrated to the
+      credential-bound key, unlock/reveal/sign/reboot pass. Open: boot asks twice, admin policies
+      need a fresh provisioning (lock-screen cleanup + wipe-after-10), harness text, audit.
 - [ ] **Finish the hardening ladder.** 2d-c (camera/media/sensors/DSP) → 2d-d (USB functions) →
       rung 3 (charge-only USB at the OS level) → rung 4 (strip unneeded apps/services in slices) →
       rung 5 (user build: no adb, no dump hook, no screenshots).

@@ -101,6 +101,15 @@ final class SystemCredential {
      */
     static void confirm(Activity activity, String title, String subtitle, Result result) {
         if (!supported()) { result.done(false, "This Android version cannot verify the device PIN."); return; }
+        try {
+            show(activity, title, subtitle, result);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "credential prompt failed: " + e);
+            result.done(false, "The PIN prompt could not be shown.");
+        }
+    }
+
+    private static void show(Activity activity, String title, String subtitle, Result result) {
         BiometricPrompt prompt = new BiometricPrompt.Builder(activity)
                 .setTitle(title)
                 .setSubtitle(subtitle)

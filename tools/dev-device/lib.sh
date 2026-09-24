@@ -92,8 +92,29 @@ wake()   { "$A" shell svc power stayon usb; "$A" shell input keyevent KEYCODE_WA
 unwake() { "$A" shell svc power stayon false; }
 # Screen off → onStop locks the vault.
 relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 3; expect_screen LOCKED; }
-unlock() { expect_screen LOCKED; tap_digits "$PV_TEST_PIN"; sleep 6; expect_screen "PHONE VAULT"; expect_not LOCKED; }
-unlock_if_locked() { if has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi; }
+# Credential mode: the vault PIN is the device PIN and the system shows its own PIN prompt
+# (window "BiometricPrompt", secure: uiautomator cannot read it, so we key the PIN in blind).
+focus_window() { "$A" shell dumpsys window | grep -oE "mCurrentFocus=Window\{[^}]*\}" | head -1 | sed 's/.* u0 //; s/}//' || true; }
+system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]]; }
+enter_system_pin() {
+  local i; for i in $(seq 1 12); do system_prompt_up && break; sleep 1; done
+  system_prompt_up || return 1
+  "$A" shell input text "$PV_TEST_PIN" </dev/null; "$A" shell input keyevent KEYCODE_ENTER </dev/null; sleep 7
+}
+locked_now() { system_prompt_up || has_text LOCKED || has_text "Phone Vault is locked"; }
+unlock() {
+  locked_now || die "expected a locked vault, saw: $(texts)"
+  if system_prompt_up || has_text "Phone Vault is locked"; then
+    system_prompt_up || tap_text "Unlock"; enter_system_pin || die "system PIN prompt did not appear"
+  else
+    tap_digits "$PV_TEST_PIN"; sleep 6
+  fi
+  expect_screen "PHONE VAULT"; expect_not LOCKED
+}
+unlock_if_locked() {
+  if system_prompt_up || has_text "Phone Vault is locked"; then system_prompt_up || tap_text "Unlock"; enter_system_pin || die "system PIN prompt did not appear"
+  elif has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi
+}
 # Navigation is a ☰ header menu (0.3.x): open it, then pick a section. Screens without the menu
 # (PIN gate, sensitive flows, approvals) are left alone; callers assert what they expect.
 open_menu() { local b; b="$(bounds_of "☰")"; [[ -n "$b" ]] || return 1; tap_bounds "$b"; sleep 1.2; has_text "Where to?"; }
