@@ -44,6 +44,14 @@ for frag in "${RUNG_DIR}"/*.config; do
 done
 
 KERNEL="${TREE}/kernel/google/msm-4.9"
+# Each rung carries exactly its own kernel patches: drop any a previous rung left applied (a stale
+# patch can add Kconfig symbols the current rung's config does not answer, and the kernel build
+# then waits forever on an interactive prompt — seen 2026-09-24 going 2d-c → 2d-b).
+if ! git -C "${KERNEL}" diff --quiet; then
+  echo "   kernel tree had tracked changes from another rung: reset"
+  git -C "${KERNEL}" diff --stat | tail -1
+  git -C "${KERNEL}" checkout -- .
+fi
 for kp in "${RUNG_DIR}"/kernel-*.patch; do
   [[ -f "${kp}" ]] || continue
   if git -C "${KERNEL}" apply --reverse --check "${kp}" >/dev/null 2>&1; then
