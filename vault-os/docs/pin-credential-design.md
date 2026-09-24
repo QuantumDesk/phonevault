@@ -65,10 +65,30 @@ own full-screen UI because the keyguard stays suppressed. The credential is then
 `KeyguardManager.createConfirmDeviceCredentialIntent` (or BiometricPrompt with DEVICE_CREDENTIAL)
 when the app needs the auth-bound key, not through a lock screen.
 
-Still unknown (next spike step, needs its own approval because recovery could need a wipe):
-**reboot with the credential set.** File-based encryption ties the app's storage to the credential,
-so after a reboot Android must ask for the PIN before our app can start at all. Does it show its
-PIN bouncer despite the disabled keyguard, and does unlock then land in the kiosk?
+### Reboot with the credential set (approved, 2026-09-23)
+
+- After reboot Android logged `Not unlocking CE storage for user 0 yet because user is secured`
+  and **showed its stock lock screen despite the disabled keyguard** ("Unlock for all features
+  and data", our starfield wallpaper, clock, plus two notifications: "Discover Trust" and "USB
+  debugging connected"). Phone Vault could not start: its storage was still encrypted.
+- Typing the PIN with `input text` without first opening the PIN pad did nothing (screen then
+  slept). `locksettings verify --old 123456` over adb unlocked CE storage; the app then came up in
+  the kiosk, lock task LOCKED. `clear` restored the baseline. No wipe needed.
+
+What this means:
+
+- **The Titan M-checked PIN protects the wallet at rest after every reboot**, through file-based
+  encryption, before any of our code runs. That is the strongest part of option A, and it works.
+- The cost is **one stock Android PIN entry per boot**. Everything after that stays in our UI.
+  To make that screen presentable: device-owner `setKeyguardDisabledFeatures` to hide lock-screen
+  notifications, keep our wallpaper, and set a lock-screen message ("Phone Vault — enter your
+  PIN"). Stripping the notification sources belongs to the ladder anyway.
+- **Open decision for in-session locking** (screen-off / idle while booted): (a) keep our keypad
+  for in-session unlock and let FBE carry the at-rest protection, or (b) require the Titan M check
+  on every unlock through the system confirm-credential screen, with the seed key auth-bound for
+  30 s. (b) is stronger against code running on a booted phone; (a) keeps the look. Recommendation:
+  (b) for the seed key only — unlock stays ours, and the system screen appears only when the seed
+  is actually needed (unlock load, phrase reveal, signing session start).
 
 ## Stages
 

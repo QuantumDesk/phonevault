@@ -17,7 +17,8 @@ this file is the queue.
 - [ ] **PIN bound to the Android lock credential + Change PIN** (option A, chosen 2026-09-23;
       design in `pin-credential-design.md`). The vault PIN becomes the system PIN, the Titan M
       throttles guesses, the seed key only works after the system verifies it, 10 failures wipe by
-      device policy. Stage 1 = reversible spike on phone 2.
+      device policy. Stage 1 spike DONE on phone 2 (2026-09-23): kiosk + system PIN coexist; after a
+      reboot Android's own PIN screen unlocks the encrypted storage once, then our UI takes over.
 - [ ] **Finish the hardening ladder.** 2d-c (camera/media/sensors/DSP) → 2d-d (USB functions) →
       rung 3 (charge-only USB at the OS level) → rung 4 (strip unneeded apps/services in slices) →
       rung 5 (user build: no adb, no dump hook, no screenshots).
