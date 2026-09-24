@@ -7,6 +7,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.UserHandle;
 import android.util.Log;
 
 public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
@@ -30,6 +31,21 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
      * written, so provisioning is retried briefly until {@code isDeviceOwnerApp} is true.
      */
     @Override public void onEnabled(Context context, Intent intent) {
+        provision(context, "admin enable");
+    }
+
+    /**
+     * Every boot, as device owner. On a factory boot this is the fallback that matters: patch
+     * 0003 activates the admin while the freshly wiped package is still in Android's "stopped"
+     * state, so DEVICE_ADMIN_ENABLED can be dropped (seen 2026-09-24 after a wipe-after-10);
+     * USER_STARTED arrives once the package is unstopped. {@link ApplianceProvisioning#apply} is
+     * idempotent, so running it on every boot costs nothing.
+     */
+    @Override public void onUserStarted(Context context, Intent intent, UserHandle user) {
+        provision(context, "user start");
+    }
+
+    private void provision(Context context, final String why) {
         final PendingResult pending = goAsync();
         final Context app = context.getApplicationContext();
         final DevicePolicyManager policy =
@@ -46,7 +62,8 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
                     done = false;
                 }
                 if (done) {
-                    Log.w(TAG, "appliance provisioned on admin enable (attempt " + (attempts + 1) + ")");
+                    Log.w(TAG, "appliance provisioned on " + why + " (attempt " + (attempts + 1) + ")");
+                    showVault(app);
                     pending.finish();
                 } else if (++attempts < MAX_RETRIES) {
                     if (attempts % 15 == 0) Log.w(TAG, "waiting to become device owner (" + attempts + " attempts)");
@@ -57,5 +74,19 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
                 }
             }
         });
+    }
+
+    /**
+     * Bring the vault to the front. HOME now resolves to it, but a launcher (or the HOME chooser)
+     * may already be showing if provisioning ran late; a device owner may start activities from
+     * the background, and the activity itself enters lock task.
+     */
+    private static void showVault(Context app) {
+        try {
+            app.startActivity(new Intent(app, MainActivity.class)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_REORDER_TO_FRONT));
+        } catch (RuntimeException e) {
+            Log.w(TAG, "could not bring the vault to the front: " + e.getMessage());
+        }
     }
 }

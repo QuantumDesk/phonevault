@@ -111,12 +111,21 @@ Open items:
   including reboot. One unexplained observation from an earlier failed run (Home shown after a
   relock without a PIN entry) could not be reproduced in 3 targeted checks + 2 full runs; its log
   had rolled over. Flagged for the audit.
-- **Admin policies need re-provisioning.** Android caches the device-admin policy list from
-  activation, so phone 2 (provisioned before this build) refuses `disable-keyguard-features` and
-  the 10-failure wipe: its boot lock screen still shows notifications ("Discover Trust", "USB
-  debugging") and the generic "belongs to your organization" line, and wrong PINs only throttle.
-  A phone provisioned with this build gets both. Proving the policy wipe needs a fresh
-  provisioning and its own approval.
+- ~~Admin policies need re-provisioning.~~ Done 2026-09-24: phone 2 wiped and reprovisioned on
+  rung 2d-b; `disable-keyguard-features`, `watch-login`, `wipe-data` active; features=31,
+  maximumFailedPasswordsForWipe=10. Boot lock screen now shows no notifications. It still shows
+  Android's "This device belongs to your organization" rather than our
+  `setDeviceOwnerLockScreenInfo` text (open: SystemUI may not render owner info on this build).
+- **Wipe after 10 proved** (approved, 2026-09-24): wrong PINs on Android's boot lock screen; the
+  system warned at 7 ("after 3 more … this phone will be reset"), and at 10 showed "Factory data
+  reset · Restarting…". The phone came back with no credential, no wallet, Phone Vault device
+  owner again. The warning dialog swallows input until OK is tapped.
+- **First-boot provisioning regression, root-caused.** After a wipe, patch 0003's `setActiveAdmin`
+  (16:09:30) sent DEVICE_ADMIN_ENABLED while the freshly wiped package was still in Android's
+  "stopped" state (PACKAGE_UNSTOPPED at 16:09:33), so it was never delivered; only USER_STARTED /
+  USER_SWITCHED reached the receiver. Result: launcher/HOME chooser instead of the kiosk until
+  the activity was started by hand. Fix: the receiver also provisions on `onUserStarted` (every
+  boot, idempotent) and then brings the vault to the front. Needs a rung rebuild + wipe to prove.
 - `lifecycletest.sh` still expects the app's "WRONG PIN · 9 ATTEMPTS LEFT" text; in credential
   mode the count lives in the system prompt.
 - Auditor review: unlock/session boundary changed (system prompt, v2 key, migration, one permission).
