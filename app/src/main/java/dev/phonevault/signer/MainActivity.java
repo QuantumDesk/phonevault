@@ -89,6 +89,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** True from the moment a PIN is SET in this unlocked session until it is used once or the
      *  vault locks: the first-run wizard does not ask for the PIN again seconds after setting it. */
     private boolean firstRunPinFresh;
+    /** elapsedRealtime of the last successful device-PIN check (credential mode). */
+    private long lastCredentialConfirm;
+    /** True while a system PIN prompt is on screen, so a re-created gate does not stack another. */
+    private boolean credentialPromptOpen;
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -215,6 +219,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         final boolean creating = !pin.isSet();
         final boolean sealed = pin.eraseOutstanding();
         clearPinEntry();
+        if (!creating && !sealed && credentialMode()) {
+            if (gateNotice != null) { statusMessage = gateNotice; gateNotice = null; }
+            showCredentialGate(session.get());
+            return;
+        }
         final char[][] firstEntry = {null};
         pinSetupEntries = firstEntry;
         String title = creating ? "SET PIN" : sealed ? "SEALED" : "LOCKED";
@@ -241,6 +250,76 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         screenName = "pin";
         setContentView(pinScreen.view());
         devDumpUi();
+    }
+
+    // ------------------------------------------------------------------ device-PIN (credential) mode
+
+    /** The vault PIN is the Android lock credential; the seed key needs a fresh system check. */
+    private boolean credentialMode() { return SystemCredential.isSet(this); }
+
+    /**
+     * Run {@code op} with the seed key usable: in credential mode ask the system to verify the PIN
+     * unless that happened moments ago (inside the key's window, with margin). Old mode: run now.
+     */
+    private void withSeedKey(String why, Runnable op) {
+        if (!credentialMode()) { op.run(); return; }
+        long age = android.os.SystemClock.elapsedRealtime() - lastCredentialConfirm;
+        if (lastCredentialConfirm > 0 && age < (SystemCredential.AUTH_WINDOW_SECONDS - 8) * 1000L) { op.run(); return; }
+        confirmDevicePin(why, op, null);
+    }
+
+    private void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) {
+        if (credentialPromptOpen) return;
+        credentialPromptOpen = true;
+        final int s = session.get();
+        SystemCredential.confirm(this, "Phone Vault", why, (ok, message) -> {
+            credentialPromptOpen = false;
+            if (s != session.get() && unlocked) return;
+            if (ok) {
+                lastCredentialConfirm = android.os.SystemClock.elapsedRealtime();
+                onOk.run();
+            } else if (onCancel != null) {
+                onCancel.run();
+            }
+        });
+    }
+
+    /** Keystore refused because the PIN window lapsed (the op took longer than the window). */
+    private static boolean authLapsed(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof android.security.keystore.UserNotAuthenticatedException) return true;
+        }
+        return false;
+    }
+
+    /** Locked gate in credential mode: our screen, the system verifies the PIN. */
+    private void showCredentialGate(int s) {
+        LinearLayout root = page("LOCKED", "Phone Vault is locked",
+                "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
+        synchronized (stateLock) { if (heldSummary != null) card(root, "Incoming request", heldSummary); }
+        if (transport != null) card(root, "USB", "A host is connected. Its request stays unanswered until you unlock and review it.");
+        TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
+        hardenTouch(unlockButton);
+        unlockButton.setOnClickListener(v -> promptUnlock(s));
+        root.addView(unlockButton, matchWrap(dp(22)));
+        TextView policy = VaultTheme.bodyText(this, SystemCredential.MAX_FAILED_FOR_WIPE
+                + " wrong PINs in a row erase this phone completely.", 14, VaultTheme.FAINT);
+        policy.setPadding(0, dp(18), 0, 0);
+        root.addView(policy);
+        screenName = "pin";
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(VaultTheme.BG);
+        scroll.addView(root);
+        setContentView(scroll);
+        devDumpUi();
+        ui.post(() -> { if (!unlocked && s == session.get() && foreground) promptUnlock(s); });
+    }
+
+    private void promptUnlock(int s) {
+        confirmDevicePin("Enter your PIN to unlock", () -> {
+            if (s == session.get() && !unlocked) unlock(s);
+        }, null);
     }
 
     private void clearPinEntry() {
@@ -272,12 +351,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         final char[] chosen = firstEntry[0];
         firstEntry[0] = null;
+        final char[] forSystem = chosen.clone();
         pinScreen.setSubtitle("Saving…");
         cryptoExecutor.execute(() -> {
             try {
                 pin.set(chosen); // zeroes the array
-                runOnUiThread(() -> { firstRunPinFresh = true; unlock(s); });
+                boolean bound = SystemCredential.install(this, forSystem); // zeroes forSystem
+                runOnUiThread(() -> {
+                    if (!bound) { firstRunPinFresh = true; unlock(s); return; }
+                    // The chip now holds the PIN; the next step (creating the wallet) needs it once.
+                    unlock(s);
+                });
             } catch (Exception e) {
+                java.util.Arrays.fill(forSystem, '0');
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) return;
                     pinScreen.setTitle("SET PIN");
@@ -290,9 +376,25 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void onUnlockEntry(char[] entered, int s) {
         if (s != session.get()) { java.util.Arrays.fill(entered, '0'); return; }
         pinScreen.setSubtitle("Checking…");
+        final char[] forSystem = SystemCredential.supported() ? entered.clone() : new char[0];
         cryptoExecutor.execute(() -> {
             try {
                 VaultPin.Result result = pin.verify(entered, this::wipeWalletForFailedPin);
+                if (result.outcome == VaultPin.Outcome.OK && forSystem.length > 0 && !credentialMode()) {
+                    // One-time upgrade: the verified PIN becomes the device credential.
+                    boolean bound = SystemCredential.install(this, forSystem);
+                    if (bound) {
+                        runOnUiThread(() -> {
+                            if (s != session.get() || pinScreen == null) return;
+                            pinScreen.setSubtitle("Your PIN is now held by the security chip. Confirm it once more on the next screen.");
+                            confirmDevicePin("Confirm your PIN to finish securing the vault", () -> {
+                                if (s == session.get() && !unlocked) unlock(s);
+                            }, () -> { if (s == session.get()) showPinGate(null); });
+                        });
+                        return;
+                    }
+                }
+                java.util.Arrays.fill(forSystem, '0');
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) {
                         // Stopped/locked while checking: the gate was re-created with a new token.
@@ -762,7 +864,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("SET UP · STEP 1 OF 4", "Set up your wallet",
                 "Create a brand-new wallet on this phone, or restore one from a 24-word recovery phrase you already have. Nothing leaves this device either way.");
         card(root, "Create new", "Generates a fresh recovery phrase here, offline. You'll write it down and we'll spot-check a few words.");
-        action(root, "Create new wallet", true, this::createFirstWallet);
+        action(root, "Create new wallet", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
         card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
         action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
         action(root, "Advanced · add your own dice rolls", false, this::showDiceEntry);
@@ -809,7 +911,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         root.addView(row);
         if (rolls > 0) {
-            action(root, "Create wallet with these rolls", true, this::createFirstWallet);
+            action(root, "Create wallet with these rolls", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
             action(root, "Undo last roll", false, () -> {
                 diceRolls.setCharAt(rolls - 1, '0');
                 diceRolls.setLength(rolls - 1);
@@ -1080,7 +1182,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (replacing && walletAddress != null) card(root, "Replaces current", org.web3j.crypto.Keys.toChecksumAddress(walletAddress));
                     card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
                     action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
-                            () -> { if (restoreReplacing) commitRestoreOver(mnemonic); else commitRestore(mnemonic, s); });
+                            () -> withSeedKey("Confirm your PIN to save the restored wallet",
+                                    () -> { if (restoreReplacing) commitRestoreOver(mnemonic); else commitRestore(mnemonic, s); }));
                     action(root, "Back · fix words", false, this::showRestoreEntry);
                     if (replacing) action(root, "Cancel · keep current wallet", false, this::hideBackup);
                     else action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
@@ -1250,6 +1353,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             activeSensitive = token;
         }
         final int s = session.get();
+        if (credentialMode()) {
+            withSeedKey("Enter your PIN to " + purpose, () -> { if (sensitiveValid(token, s)) afterPin.run(); });
+            return;
+        }
         if (firstRunPinFresh) {
             // The PIN was set moments ago in this same unlocked session (no lock since): asking for
             // it again reads as a bug. One use only; any lock resets it.
@@ -1453,7 +1560,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 org.web3j.crypto.Keys.toChecksumAddress(address));
         card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
         action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
-                replacementCandidate == null ? this::saveBackupCheck : this::activateReplacement);
+                replacementCandidate == null ? this::saveBackupCheck
+                        : () -> withSeedKey("Confirm your PIN to activate the new wallet", this::activateReplacement));
         action(root, "Cancel", false, this::hideBackup);
         present(root, "backup-confirm");
     }
@@ -1588,6 +1696,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     runOnUiThread(() -> { if (s == session.get() && unlocked) showFirstRunChoice(); });
                     return;
                 }
+                if (credentialMode() && !store.credentialBound()) store.migrateToCredentialKey();
                 Credentials loaded = store.loadOrCreate();
                 String address = loaded.getAddress();
                 android.graphics.Bitmap qr = qrFor(address);
@@ -1611,6 +1720,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     credentials = null;
                     clearReceivingIdentity();
+                    if (authLapsed(e)) { gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again."; lock(); return; }
                     LinearLayout root = page("WALLET UNAVAILABLE", "Your address is hidden", "The stored identity could not be verified. Do not replace or reset the wallet to fix this error.");
                     card(root, "Next step", "Lock and retry. If the problem continues, preserve this device and use your written backup with a compatible recovery tool.");
                     action(root, "Lock & retry", true, this::lock);

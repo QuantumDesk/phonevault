@@ -43,14 +43,22 @@ import javax.crypto.spec.GCMParameterSpec;
 final class VaultKeyStore {
     private static final String ANDROID_KEYSTORE = "AndroidKeyStore";
     private static final String KEY_ALIAS = "phone-vault-wrapping-key-v1";
+    /**
+     * Credential-bound seed key (pin-credential-design.md): usable only within
+     * {@link SystemCredential#AUTH_WINDOW_SECONDS} of a successful device-PIN check, and only on an
+     * unlocked device. Created once a device credential exists; v1 records migrate to it.
+     */
+    private static final String KEY_ALIAS_V2 = "phone-vault-seed-key-v2";
     private static final String PREFS = "vault";
     private static final String RECORD_FILE = "wallet.pvw3";
     private static final int ACCOUNT_INDEX = 0;
 
     private final WalletPersistence persistence;
+    private final Context context;
     private volatile List<SeedVault.SourceReport> lastReports;
 
     VaultKeyStore(Context context) {
+        this.context = context.getApplicationContext();
         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         File recordFile = new File(context.getFilesDir(), RECORD_FILE);
         persistence = new WalletPersistence(new AndroidWalletStorage(recordFile, preferences));
@@ -154,8 +162,9 @@ final class VaultKeyStore {
         KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
         keyStore.load(null);
         if (keyStore.containsAlias(KEY_ALIAS)) keyStore.deleteEntry(KEY_ALIAS);
+        if (keyStore.containsAlias(KEY_ALIAS_V2)) keyStore.deleteEntry(KEY_ALIAS_V2);
         keyStore.load(null);
-        if (keyStore.containsAlias(KEY_ALIAS)) {
+        if (keyStore.containsAlias(KEY_ALIAS) || keyStore.containsAlias(KEY_ALIAS_V2)) {
             throw new IllegalStateException("Secure erase could not be verified: wrapping alias still present");
         }
     }
@@ -227,6 +236,10 @@ final class VaultKeyStore {
     private void ensureWrappingKey() throws Exception {
         KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
         keyStore.load(null);
+        if (SystemCredential.isSet(context)) {
+            if (!keyStore.containsAlias(KEY_ALIAS_V2)) generateCredentialBoundKey();
+            return;
+        }
         if (keyStore.containsAlias(KEY_ALIAS)) return;
 
         KeyGenParameterSpec.Builder specification = new KeyGenParameterSpec.Builder(
@@ -255,6 +268,65 @@ final class VaultKeyStore {
         }
     }
 
+    private void generateCredentialBoundKey() throws Exception {
+        KeyGenParameterSpec.Builder specification = new KeyGenParameterSpec.Builder(
+                KEY_ALIAS_V2,
+                KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
+                .setKeySize(256)
+                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .setUnlockedDeviceRequired(true)
+                .setUserAuthenticationRequired(true)
+                .setUserAuthenticationParameters(SystemCredential.AUTH_WINDOW_SECONDS,
+                        KeyProperties.AUTH_DEVICE_CREDENTIAL)
+                .setIsStrongBoxBacked(true);
+        try {
+            generateWrappingKey(specification.build());
+        } catch (StrongBoxUnavailableException unavailable) {
+            if (BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE) {
+                throw new IllegalStateException("Secure hardware key storage is required", unavailable);
+            }
+            generateWrappingKey(specification.setIsStrongBoxBacked(false).build());
+        }
+    }
+
+    /** True once the credential-bound key protects the record (v1 gone). */
+    synchronized boolean credentialBound() throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
+        keyStore.load(null);
+        return keyStore.containsAlias(KEY_ALIAS_V2) && !keyStore.containsAlias(KEY_ALIAS);
+    }
+
+    /**
+     * Move the record from the v1 key to the credential-bound v2 key. The caller has just confirmed
+     * the device PIN. One journaled store under v2, read back and compared, THEN v1 is deleted; any
+     * failure before that leaves v1 usable (decrypt falls back) and the next unlock retries.
+     */
+    synchronized void migrateToCredentialKey() throws Exception {
+        if (!SystemCredential.isSet(context)) throw new IllegalStateException("No device credential yet");
+        ensureWrappingKey();
+        KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
+        keyStore.load(null);
+        if (!keyStore.containsAlias(KEY_ALIAS)) return; // already migrated (or never had v1)
+        WalletRecord record = persistence.load();
+        if (record != null) {
+            String plaintext = decrypt(record);
+            boolean alreadyV2;
+            try { decryptWith(KEY_ALIAS_V2, record); alreadyV2 = true; } catch (javax.crypto.AEADBadTagException notYet) { alreadyV2 = false; }
+            if (!alreadyV2) {
+                persistence.store(encryptWith(KEY_ALIAS_V2, plaintext));
+                WalletRecord back = persistence.load();
+                if (back == null || !plaintext.equals(decryptWith(KEY_ALIAS_V2, back))) {
+                    throw new WalletPersistence.PersistenceException("migrated record did not verify under the credential-bound key");
+                }
+            }
+        }
+        keyStore.deleteEntry(KEY_ALIAS);
+        keyStore.load(null);
+        if (keyStore.containsAlias(KEY_ALIAS)) throw new IllegalStateException("old wrapping key could not be removed");
+    }
+
     private void generateWrappingKey(KeyGenParameterSpec specification) throws Exception {
         KeyGenerator generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE);
         generator.init(specification);
@@ -280,15 +352,28 @@ final class VaultKeyStore {
         }
     }
 
-    private SecretKey wrappingKey() throws Exception {
+    /** The key new records are sealed with: v2 once it exists, else v1. */
+    private String activeAlias() throws Exception {
         KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
         keyStore.load(null);
-        return ((KeyStore.SecretKeyEntry) keyStore.getEntry(KEY_ALIAS, null)).getSecretKey();
+        return keyStore.containsAlias(KEY_ALIAS_V2) ? KEY_ALIAS_V2 : KEY_ALIAS;
     }
 
-    private WalletRecord encrypt(String plaintext) throws Exception {
+    private SecretKey key(String alias) throws Exception {
+        KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
+        keyStore.load(null);
+        KeyStore.Entry entry = keyStore.getEntry(alias, null);
+        if (!(entry instanceof KeyStore.SecretKeyEntry)) throw new IllegalStateException("wrapping key " + alias + " missing");
+        return ((KeyStore.SecretKeyEntry) entry).getSecretKey();
+    }
+
+    private SecretKey wrappingKey() throws Exception { return key(activeAlias()); }
+
+    private WalletRecord encrypt(String plaintext) throws Exception { return encryptWith(activeAlias(), plaintext); }
+
+    private WalletRecord encryptWith(String alias, String plaintext) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.ENCRYPT_MODE, wrappingKey());
+        cipher.init(Cipher.ENCRYPT_MODE, key(alias));
         byte[] plaintextBytes = plaintext.getBytes(StandardCharsets.UTF_8);
         byte[] encrypted;
         try {
@@ -299,9 +384,23 @@ final class VaultKeyStore {
         return new WalletRecord(cipher.getIV(), encrypted);
     }
 
+    /** Decrypt with the active key; during a v1→v2 migration the record may still be under v1. */
     private String decrypt(WalletRecord record) throws Exception {
+        String alias = activeAlias();
+        try {
+            return decryptWith(alias, record);
+        } catch (javax.crypto.AEADBadTagException stillOld) {
+            if (!KEY_ALIAS_V2.equals(alias)) throw stillOld;
+            KeyStore keyStore = KeyStore.getInstance(ANDROID_KEYSTORE);
+            keyStore.load(null);
+            if (!keyStore.containsAlias(KEY_ALIAS)) throw stillOld;
+            return decryptWith(KEY_ALIAS, record);
+        }
+    }
+
+    private String decryptWith(String alias, WalletRecord record) throws Exception {
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
-        cipher.init(Cipher.DECRYPT_MODE, wrappingKey(), new GCMParameterSpec(128, record.iv));
+        cipher.init(Cipher.DECRYPT_MODE, key(alias), new GCMParameterSpec(128, record.iv));
         byte[] plaintext = cipher.doFinal(record.ciphertext);
         try {
             return new String(plaintext, StandardCharsets.UTF_8);

@@ -43,8 +43,11 @@ final class ApplianceProvisioning {
         // No lock screen: the in-app PIN is the gate. Returns false only if a credential exists,
         // which an appliance never has.
         if (!policy.setKeyguardDisabled(admin, true)) {
-            Log.w(TAG, "keyguard could not be disabled (credential present?)");
+            // Expected once the vault PIN is the device credential: the keyguard stays suppressed
+            // from provisioning time; Android's PIN screen appears only at boot (encrypted storage).
+            Log.i(TAG, "keyguard disable not re-applied (device credential present)");
         }
+        if (SystemCredential.isSet(context)) SystemCredential.applyLockPolicy(context);
 
         // Hide any setup wizard the image still carries (rung ladder strips them from the
         // image; this keeps a factory boot deterministic either way).
