@@ -105,8 +105,12 @@ address `0xE0966BCe…5D49`.
 
 Open items:
 
-- **Boot asks twice.** The boot-screen unlock already satisfies the key's 30 s window; the vault
-  should try the key first and only prompt if the keystore refuses.
+- ~~Boot asks twice.~~ Fixed 2026-09-24: the first gate after boot waits (≤4 s) for the boot lock
+  screen to finish dismissing, tries the key, and prompts only if the keystore refuses
+  (`UserNotAuthenticatedException`). Later locks always prompt. `credentialtest.sh` passes 2/2
+  including reboot. One unexplained observation from an earlier failed run (Home shown after a
+  relock without a PIN entry) could not be reproduced in 3 targeted checks + 2 full runs; its log
+  had rolled over. Flagged for the audit.
 - **Admin policies need re-provisioning.** Android caches the device-admin policy list from
   activation, so phone 2 (provisioned before this build) refuses `disable-keyguard-features` and
   the 10-failure wipe: its boot lock screen still shows notifications ("Discover Trust", "USB

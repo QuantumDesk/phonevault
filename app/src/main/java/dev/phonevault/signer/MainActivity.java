@@ -93,6 +93,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private long lastCredentialConfirm;
     /** True while a system PIN prompt is on screen, so a re-created gate does not stack another. */
     private boolean credentialPromptOpen;
+    /**
+     * Right after a boot the user has just entered the PIN on Android's lock screen (to unlock
+     * encrypted storage), which also opens the seed key's window. The FIRST gate of this process,
+     * shortly after boot, therefore tries the key before prompting. Any later lock always prompts.
+     */
+    private boolean bootUnlockEligible = true;
+    private boolean silentUnlockAttempt;
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -288,12 +295,49 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private static boolean authLapsed(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof android.security.keystore.UserNotAuthenticatedException) return true;
+            // Keystore2 may report the same refusal as a KeyStoreException instead.
+            if (c instanceof android.security.KeyStoreException
+                    && ((android.security.KeyStoreException) c).getNumericErrorCode()
+                            == android.security.KeyStoreException.ERROR_USER_AUTHENTICATION_REQUIRED) return true;
+            String m = c.getMessage();
+            if (m != null && (m.contains("not authenticated") || m.contains("KEY_USER_NOT_AUTHENTICATED"))) return true;
         }
         return false;
     }
 
+    /** Class names and messages of an exception chain for the log (no key material is ever in them). */
+    private static String chain(Throwable t) {
+        StringBuilder b = new StringBuilder();
+        for (Throwable c = t; c != null; c = c.getCause()) b.append(c.getClass().getName()).append(": ").append(c.getMessage()).append(" <- ");
+        return b.toString();
+    }
+
     /** Locked gate in credential mode: our screen, the system verifies the PIN. */
     private void showCredentialGate(int s) {
+        boolean freshBoot = android.os.SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
+        if (bootUnlockEligible && freshBoot) {
+            // The boot lock screen may still be animating away: give it up to 4 s to report the
+            // device unlocked, then try the key; if the keystore refuses we come back and prompt.
+            bootUnlockEligible = false;
+            android.app.KeyguardManager keyguard = getSystemService(android.app.KeyguardManager.class);
+            final long deadline = android.os.SystemClock.elapsedRealtime() + 4000;
+            Runnable attempt = new Runnable() {
+                @Override public void run() {
+                    if (s != session.get() || unlocked) return;
+                    if (keyguard != null && keyguard.isDeviceLocked() && android.os.SystemClock.elapsedRealtime() < deadline) {
+                        ui.postDelayed(this, 250);
+                        return;
+                    }
+                    silentUnlockAttempt = true;
+                    unlock(s);
+                    if (!unlocked) { silentUnlockAttempt = false; showCredentialGate(session.get()); }
+                }
+            };
+            showLoading("Opening your wallet", "Using the PIN you just entered…");
+            ui.post(attempt);
+            return;
+        }
+        bootUnlockEligible = false;
         LinearLayout root = page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
         synchronized (stateLock) { if (heldSummary != null) card(root, "Incoming request", heldSummary); }
@@ -1710,6 +1754,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
+                    silentUnlockAttempt = false;
                     showHome();
                     drainPendingUsb();
                     if (transport != null) setStatusActive(true); // a session opened behind the gate
@@ -1720,7 +1765,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     credentials = null;
                     clearReceivingIdentity();
-                    if (authLapsed(e)) { gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again."; lock(); return; }
+                    android.util.Log.w("Vault", "wallet load failed: " + chain(e));
+                    if (authLapsed(e)) {
+                        if (!silentUnlockAttempt) gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again.";
+                        silentUnlockAttempt = false;
+                        lock();
+                        return;
+                    }
                     LinearLayout root = page("WALLET UNAVAILABLE", "Your address is hidden", "The stored identity could not be verified. Do not replace or reset the wallet to fix this error.");
                     card(root, "Next step", "Lock and retry. If the problem continues, preserve this device and use your written backup with a compatible recovery tool.");
                     action(root, "Lock & retry", true, this::lock);
