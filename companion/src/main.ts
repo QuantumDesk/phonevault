@@ -7,6 +7,7 @@ import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate } from
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
+import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
@@ -190,6 +191,7 @@ function homeView() {
         h("button", { class: "big", onclick: () => go("receive") }, icon("down", 20), "Receive"),
       ),
     ),
+    wcHomeSlot(),
     h("section", { class: "section" },
       h("h3", { class: "section-title" }, "Balances"),
       h("ul", { class: "list nets" }, NETWORKS.map((x) => {
@@ -324,6 +326,7 @@ const phonePresent = (): boolean => (status?.phone ?? "none") !== "none";
 async function identifyPhone() {
   if (identifying || pair.s === "reading" || !status || status.phone === "none") return;
   if (view === "send" && flow.s !== "form") { setTimeout(identifyPhone, 5000); return; } // never talk over a send
+  if (wcPhoneBusy()) { setTimeout(identifyPhone, 5000); return; } // nor over a WalletConnect request
   identifying = true;
   // A locked phone holds the request on its lock screen and answers after unlock; keep the
   // "Unlock your phone" label steady while asking again rather than flickering to "Checking".
@@ -887,6 +890,7 @@ function renderDrawer() {
       h("h4", null, "APPEARANCE"),
       h("div", { class: "segmented" }, seg("dark", "Dark"), seg("light", "Light"), seg("system", "System")),
     ),
+    wcSettingsSection(),
     signingLoader ? h("section", { class: "set" },
       h("h4", null, "TOOLS"),
       h("button", { class: "radio", onclick: () => { closeDrawer(); go("tool"); } }, icon("pen", 16), h("span", { class: "grow" }, "Sign a message"), icon("back", 14)),
@@ -907,6 +911,16 @@ if (!isTauri) document.body.append(h("span", { class: "preview-badge", title: "R
 renderHeader();
 render();
 appVersion().then((v) => { version = v; if (drawerOpen) renderDrawer(); }).catch(() => {});
+mountWalletConnect({
+  paired: () => status?.paired_checksum ?? null,
+  rpcFor,
+  phoneBlocked: () => identity.s === "different" ? "The phone on USB holds a different wallet. Pair it first (Settings → Phone)."
+    : identifying ? "Checking which wallet the phone holds. Try again in a moment."
+    : view === "send" && ["connecting", "on_phone", "verifying"].includes(flow.s) ? "The phone is busy with your Send. Finish it first." : null,
+  changed: () => { if (view === "home") renderSoon(); if (drawerOpen && !drawer.contains(document.activeElement)) renderDrawer(); },
+  sent: (chainId) => { refreshHistory(); refreshBalance(byId(chainId)); },
+  openSettings: () => openDrawer(),
+});
 (async () => {
   await refreshStatus();
   render();

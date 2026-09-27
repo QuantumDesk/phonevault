@@ -10,6 +10,8 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // WalletConnect Pay is not used: WalletKit gets a stub that reports it unavailable (no wasm, no API).
+  resolve: { alias: { "@walletconnect/pay": decodeURIComponent(new URL("./src/wc-pay-stub.ts", import.meta.url).pathname) } },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
