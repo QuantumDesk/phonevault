@@ -291,3 +291,10 @@ input:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
 }
+
+/* phone identity notice */
+.modal-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 30; display: grid; place-items: center; padding: 16px; }
+.modal { width: min(400px, 100%); display: grid; gap: 12px; }
+.modal .actions { display: grid; gap: 8px; }
+.chip.danger { color: var(--danger, #ff6b6b); border-color: currentColor; }
+button.chip { cursor: pointer; font: inherit; }

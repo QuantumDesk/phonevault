@@ -45,7 +45,10 @@ async function refreshStatus() {
     const s = await api.status();
     const pairedChanged = s.paired !== status?.paired;
     const phoneChanged = s.phone !== status?.phone;
+    const appeared = (status?.phone ?? "none") === "none" && s.phone !== "none";
     status = s; statusError = null;
+    if (s.phone === "none") identity = { s: "unknown" };
+    else if (appeared) identifyPhone();
     renderHeader();
     if (pairedChanged) { balances.clear(); balErrors.clear(); if (s.paired) { refreshAllBalances(); } render(); }
     else if (phoneChanged && (view === "pair" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
@@ -117,11 +120,21 @@ function go(v: View) { view = v; main.scrollTop = 0; window.scrollTo(0, 0); rend
 
 function renderHeader() {
   const phone = status?.phone ?? "none";
-  const label = statusError ? "USB unavailable" : phone === "accessory" ? "Phone connected" : phone === "android" ? "Phone on USB" : "No phone";
-  const title = statusError ?? (phone === "android" ? "The phone is on USB. It switches to vault mode when a request is sent." : phone === "none" ? "Plug the vault into this Mac with a USB cable." : "The vault is connected in accessory mode.");
+  let label = statusError ? "USB unavailable" : phone === "accessory" ? "Phone connected" : phone === "android" ? "Phone on USB" : "No phone";
+  let title = statusError ?? (phone === "android" ? "The phone is on USB. It switches to vault mode when a request is sent." : phone === "none" ? "Plug the vault into this Mac with a USB cable." : "The vault is connected in accessory mode.");
+  let cls: string = statusError ? "none" : phone;
+  if (!statusError && phone !== "none") {
+    if (identity.s === "checking") { label = "Checking phone…"; title = "Asking the phone which wallet it holds."; }
+    else if (identity.s === "match") { label = "Your phone"; title = "The phone on USB holds the wallet this Mac is paired with."; cls = "accessory"; }
+    else if (identity.s === "different") { label = "Different wallet"; title = "The phone on USB holds a different wallet. Click to review."; cls = "danger"; }
+    else if (identity.s === "unreadable") { label = "Unlock your phone"; title = "Could not ask the phone which wallet it holds. Unlock it, then click to try again."; }
+  }
+  const retry = identity.s === "unreadable" ? () => identifyPhone()
+    : identity.s === "different" ? () => { if (identity.s === "different") identity.dismissed = false; renderPhoneNotice(); } : undefined;
   header.replaceChildren(...[
     h("button", { class: "brand", onclick: () => go("home"), title: "Home" }, padlock(2), h("span", null, "PHONE VAULT")),
-    h("span", { class: `chip ${statusError ? "none" : phone}`, title }, h("i", { class: "dot" }), label),
+    retry ? h("button", { class: `chip ${cls}`, title, onclick: retry }, h("i", { class: "dot" }), label)
+      : h("span", { class: `chip ${cls}`, title }, h("i", { class: "dot" }), label),
     h("button", { class: "icon-btn", onclick: () => openDrawer(), "aria-label": "Settings", title: "Settings" }, icon("gear", 20)),
   ].filter((x): x is HTMLElement => !!x));
 }
@@ -264,7 +277,7 @@ function pairView() {
       h("p", { class: "addr-compare mono" }, grouped(address)),
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
-          try { await api.confirmPairing(address); pair = { s: "idle" }; await refreshStatus(); go("home"); } catch (e) { pair = { s: "idle", error: errText(e) }; render(); }
+          try { await api.confirmPairing(address); pair = { s: "idle" }; identity = { s: "match" }; await refreshStatus(); renderPhoneNotice(); go("home"); } catch (e) { pair = { s: "idle", error: errText(e) }; render(); }
         } }, icon("check", 18), "It matches"),
         h("button", { class: "big", onclick: () => { pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),
@@ -295,6 +308,48 @@ function pairView() {
     );
   }
   return h("div", { class: "stack fade" }, paired ? topbar("Pairing", back) : null, body);
+}
+
+// ------------------------------------------------------------------ phone identity
+// When a phone appears, ask it which wallet it holds and compare with the pairing, so a reset,
+// restored or swapped phone is noticed at once instead of at signing time. Pairing itself still
+// ends with the person comparing the address against the phone's own screen.
+type Identity = { s: "unknown" } | { s: "checking" } | { s: "match" }
+  | { s: "different"; address: string; dismissed: boolean } | { s: "unreadable"; error: string };
+let identity: Identity = { s: "unknown" };
+
+async function identifyPhone() {
+  if (identity.s === "checking" || pair.s === "reading") return;
+  if (view === "send" && flow.s !== "form") return; // never talk over a send in progress
+  identity = { s: "checking" }; renderHeader();
+  try {
+    const address = await api.readAddress();
+    if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
+    else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
+    else identity = { s: "different", address, dismissed: false };
+  } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
+  renderHeader(); renderPhoneNotice();
+}
+
+let noticeEl: HTMLElement | null = null;
+function renderPhoneNotice() {
+  noticeEl?.remove(); noticeEl = null;
+  if (identity.s !== "different" || identity.dismissed || view === "pair") return;
+  const found = identity.address;
+  const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
+  noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
+    h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
+      h("p", { class: "kicker" }, "NEW WALLET ON USB"),
+      h("h3", null, "This phone holds a different wallet"),
+      h("p", { class: "muted" }, "That happens after the phone was reset or restored, or when it is a different phone. Sending stays blocked until you pair it."),
+      h("div", { class: "set-row" }, h("span", { class: "muted" }, "Paired with"), h("span", { class: "mono" }, short(status?.paired_checksum ?? ""))),
+      h("div", { class: "set-row" }, h("span", { class: "muted" }, "Phone on USB"), h("span", { class: "mono" }, short(found))),
+      h("div", { class: "actions" },
+        h("button", { class: "big primary", onclick: () => { noticeEl?.remove(); noticeEl = null; identity = { s: "unknown" }; pair = { s: "compare", address: found }; go("pair"); } }, icon("phone", 18), "Pair this phone"),
+        h("button", { class: "big", onclick: close }, "Not now"),
+      ),
+    ));
+  document.body.append(noticeEl);
 }
 
 async function readAddress() {
@@ -350,6 +405,7 @@ function setFlow(f: Flow) {
 }
 
 function startSend() {
+  if (identity.s === "different") { identity.dismissed = false; renderPhoneNotice(); return; }
   flow = { s: "form" }; formError = null; activeTicket = null; flowNet = net(); fee = null;
   go("send");
   loadFee();
