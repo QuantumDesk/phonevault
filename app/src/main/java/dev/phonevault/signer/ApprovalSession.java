@@ -4,19 +4,29 @@ import org.json.JSONObject;
 import org.web3j.crypto.Credentials;
 import org.web3j.crypto.Keys;
 
-/** Binds one reviewed transaction to the exact signing identity shown on screen. */
+/**
+ * Binds one reviewed transaction to the exact signing identity shown on screen. The review is
+ * built here, once, from the same {@link Eip1559Request} object that {@link #signIfIdentityUnchanged}
+ * signs, so what the user approves and what is signed cannot diverge.
+ */
 final class ApprovalSession {
     final Eip1559Request request;
+    final TransactionReview review;
     private final Credentials reviewedCredentials;
     private final String reviewedAddress;
 
     ApprovalSession(Eip1559Request request, Credentials credentials) {
+        this(request, credentials, TokenList.empty());
+    }
+
+    ApprovalSession(Eip1559Request request, Credentials credentials, TokenList tokens) {
         if (request == null || credentials == null) {
             throw new IllegalArgumentException("Approval requires a request and signing identity");
         }
         this.request = request;
         this.reviewedCredentials = credentials;
         this.reviewedAddress = credentials.getAddress().toLowerCase(java.util.Locale.ROOT);
+        this.review = TransactionReview.build(request, reviewedAddress, tokens);
     }
 
     String signerAddressLabel() {

@@ -55,6 +55,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private android.widget.ImageView qrView;
     private TextView statusView;
     private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
+    private TokenList tokenList;
     private volatile ApprovalDecision approvalDecision;
     private volatile boolean walletLoaded, backupVerified;
     private volatile String walletAddress;
@@ -593,10 +594,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         synchronized (stateLock) { held = heldRequest; heldRequest = null; heldSummary = null; source = transport; }
         if (held == null || source == null) return;
         cryptoExecutor.execute(() -> onRequest(source, held));
-    }
-
-    private static String shortAddress(String address) {
-        return address != null && address.length() == 42 ? address.substring(0, 8) + "…" + address.substring(36) : String.valueOf(address);
     }
 
     private void drainPendingUsb() {
@@ -1885,10 +1882,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 } else if (MessageRequest.handles(json.optString("method"))) {
                     b = MessageReview.lockedSummary(MessageRequest.parse(json));
                 } else {
-                    Eip1559Request request = Eip1559Request.parse(json);
-                    b = request.transactionTypeLabel() + " · " + request.displayedAmountLabel() + " to "
-                            + shortAddress(request.displayedRecipientLabel()) + " · " + request.networkLabel()
-                            + ". Unlock to review every field before anything is signed.";
+                    b = TransactionReview.build(Eip1559Request.parse(json), null, tokens()).lockedSummary;
                 }
                 synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
             } catch (Exception e) {
@@ -1936,7 +1930,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 return;
             }
             Eip1559Request request = Eip1559Request.parse(json);
-            ApprovalSession approval = new ApprovalSession(request, credentials);
+            ApprovalSession approval = new ApprovalSession(request, credentials, tokens());
             runOnUiThread(() -> showApproval(source, approval, decision, s));
         } catch (Exception e) {
             finishApproval(decision);
@@ -1969,31 +1963,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             finishApproval(decision);
             return;
         }
-        Eip1559Request request = approval.request;
-        String intent = request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Review permission"
-                : request.kind == Eip1559Request.Kind.TOKEN_TRANSFER ? "Review contract transfer" : "Review transfer";
+        // Rendered from the review built with this exact request in ApprovalSession (same object that is signed).
+        TransactionReview review = approval.review;
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : "TRANSACTION REVIEW",
-                intent, "Compare these details with your intended action. This phone is the approval screen.");
-        root.addView(detail("Action", request.transactionTypeLabel()));
-        root.addView(detail(request.displayedAmountTitle(), request.displayedAmountLabel()));
-        root.addView(detail(request.displayedPartyTitle(), request.displayedRecipientLabel()));
-        root.addView(detail("Network", request.networkLabel()));
-        root.addView(detail("From · Account 1", approval.signerAddressLabel()));
-        if (request.kind != Eip1559Request.Kind.NATIVE_TRANSFER) {
-            root.addView(detail("Target contract", request.contractLabel()));
-            root.addView(detail(request.contractWarningTitle(), request.contractWarningLabel()));
-        }
-        root.addView(detail("Maximum fee", request.maximumFeeEth()));
+        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
+                review.title, review.subtitle);
+        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
         LinearLayout raw = new LinearLayout(this);
         raw.setOrientation(LinearLayout.VERTICAL);
-        raw.addView(detail("Maximum fee in wei", request.maximumFeeWeiLabel()));
-        raw.addView(detail("What the fee covers", request.feeCoverageLabel()));
-        raw.addView(detail("Gas limit", request.gasLimitLabel()));
-        raw.addView(detail("Maximum fee per gas", request.maxFeePerGasLabel()));
-        raw.addView(detail("Priority fee per gas", request.maxPriorityFeePerGasLabel()));
-        raw.addView(detail("Nonce", request.nonce.toString()));
-        raw.addView(detail("Contract data", request.contractDataLabel()));
+        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
         raw.setVisibility(View.GONE);
         TextView details = VaultTheme.pixelButton(this, "Show technical details", false);
         hardenTouch(details);
@@ -2004,12 +1982,32 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         root.addView(details, matchWrap(dp(8)));
         root.addView(raw);
-        addDecisionControls(root, source, decision, s, request.id, request.reviewPrompt(),
-                request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Approve permission & sign" : "Approve & sign",
+        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
                 approval::signIfIdentityUnchanged,
                 "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
                 "Transaction hash", "transactionHash", true);
         present(root, "approval");
+    }
+
+    /**
+     * The token list built into the APK, checked against its pinned SHA-256 on first use. A list
+     * that fails the check is not used: every contract is then reviewed as unknown, and the review
+     * says the list was refused.
+     */
+    private synchronized TokenList tokens() {
+        if (tokenList != null) return tokenList;
+        try (java.io.InputStream in = getResources().openRawResource(R.raw.tokens)) {
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[8192];
+            for (int n; (n = in.read(buffer)) > 0; ) {
+                bytes.write(buffer, 0, n);
+                if (bytes.size() > 64 * 1024) break; // loadPinned refuses oversize input
+            }
+            tokenList = TokenList.loadPinned(bytes.toByteArray());
+        } catch (Exception e) {
+            tokenList = TokenList.unavailable(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        }
+        return tokenList;
     }
 
     /** Produces the response for one reviewed request; runs on the crypto thread under stateLock. */

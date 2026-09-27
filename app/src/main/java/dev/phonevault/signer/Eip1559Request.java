@@ -15,15 +15,12 @@ import java.util.Set;
 final class Eip1559Request {
     private static final int MAX_ID_LENGTH = 128;
     private static final int MAX_QUANTITY_BITS = 256;
-    private static final int TOKEN_CALL_DATA_BYTES = 68;
-    private static final String TOKEN_TRANSFER_SELECTOR = "a9059cbb";
-    private static final String TOKEN_APPROVE_SELECTOR = "095ea7b3";
     private static final BigInteger UINT256_MAX = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);
     private static final Set<String> REQUEST_FIELDS = new HashSet<>(Arrays.asList(
             "id", "method", "chainId", "nonce", "maxPriorityFeePerGas",
             "maxFeePerGas", "gasLimit", "to", "value", "data"));
 
-    enum Kind { NATIVE_TRANSFER, TOKEN_TRANSFER, TOKEN_APPROVAL }
+    enum Kind { NATIVE_TRANSFER, TOKEN_TRANSFER, TOKEN_APPROVAL, TOKEN_TRANSFER_FROM, TOKEN_INCREASE_ALLOWANCE }
 
     final String id;
     final long chainId;
@@ -37,11 +34,13 @@ final class Eip1559Request {
     final Kind kind;
     final String displayedRecipient;
     final BigInteger displayedAmount;
+    /** The decoded ERC-20 call for token kinds; null for a native transfer. */
+    final Erc20Call tokenCall;
 
     private Eip1559Request(String id, long chainId, BigInteger nonce,
                            BigInteger maxPriorityFeePerGas, BigInteger maxFeePerGas,
                            BigInteger gasLimit, String to, BigInteger value, String data,
-                           Kind kind, String displayedRecipient, BigInteger displayedAmount) {
+                           Kind kind, String displayedRecipient, BigInteger displayedAmount, Erc20Call tokenCall) {
         this.id = id;
         this.chainId = chainId;
         this.nonce = nonce;
@@ -54,6 +53,7 @@ final class Eip1559Request {
         this.kind = kind;
         this.displayedRecipient = displayedRecipient;
         this.displayedAmount = displayedAmount;
+        this.tokenCall = tokenCall;
     }
 
     static Eip1559Request parse(JSONObject json) throws JSONException {
@@ -96,18 +96,19 @@ final class Eip1559Request {
         Kind kind;
         String recipient;
         BigInteger displayedAmount;
+        Erc20Call call = null;
         if ("0x".equals(data)) {
             kind = Kind.NATIVE_TRANSFER;
             recipient = normalizedTo;
             displayedAmount = value;
         } else {
-            TokenCall call = parseTokenCall(data, value);
-            kind = call.kind;
+            call = parseTokenCall(data, value);
+            kind = kindOf(call.function);
             recipient = call.party;
             displayedAmount = call.amount;
         }
         return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
-                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount);
+                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call);
     }
 
     static String validatedId(String id) throws JSONException {
@@ -137,52 +138,31 @@ final class Eip1559Request {
         }
     }
 
-    private static TokenCall parseTokenCall(String data, BigInteger value) throws JSONException {
-        String clean = Numeric.cleanHexPrefix(data);
-        if (clean.length() != TOKEN_CALL_DATA_BYTES * 2) {
-            throw new JSONException("Only canonical transfer(address,uint256) and approve(address,uint256) calldata is supported");
+    private static Erc20Call parseTokenCall(String data, BigInteger value) throws JSONException {
+        Erc20Call call = Erc20Call.decode(data);
+        // Unchanged rule: a token call carries no native value, so the review never has to explain one.
+        if (value.signum() != 0) throw new JSONException(call.function.signature + " must not include native value");
+        return call;
+    }
+
+    private static Kind kindOf(Erc20Call.Function function) {
+        switch (function) {
+            case TRANSFER: return Kind.TOKEN_TRANSFER;
+            case APPROVE: return Kind.TOKEN_APPROVAL;
+            case TRANSFER_FROM: return Kind.TOKEN_TRANSFER_FROM;
+            default: return Kind.TOKEN_INCREASE_ALLOWANCE;
         }
-        String selector = clean.substring(0, 8).toLowerCase(java.util.Locale.ROOT);
-        Kind kind;
-        String partyName;
-        String callName;
-        if (TOKEN_TRANSFER_SELECTOR.equals(selector)) {
-            kind = Kind.TOKEN_TRANSFER;
-            partyName = "recipient";
-            callName = "transfer(address,uint256)";
-        } else if (TOKEN_APPROVE_SELECTOR.equals(selector)) {
-            kind = Kind.TOKEN_APPROVAL;
-            partyName = "approved address";
-            callName = "token approval";
-        } else {
-            throw new JSONException("Only canonical transfer(address,uint256) and approve(address,uint256) calldata is supported");
-        }
-        if (value.signum() != 0) throw new JSONException(callName + " must not include native value");
-        String addressWord = clean.substring(8, 72);
-        if (!addressWord.substring(0, 24).matches("0{24}")) {
-            throw new JSONException(partyName + " has non-zero ABI padding");
-        }
-        String party = normalizeAddress("0x" + addressWord.substring(24));
-        BigInteger amount = new BigInteger(clean.substring(72, 136), 16);
-        return new TokenCall(kind, party, amount);
+    }
+
+    /** approve or increaseAllowance: grants a spender permission. */
+    boolean grantsAllowance() {
+        return kind == Kind.TOKEN_APPROVAL || kind == Kind.TOKEN_INCREASE_ALLOWANCE;
     }
 
     private static String normalizeAddress(String address) throws JSONException {
         String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase(java.util.Locale.ROOT);
         if (normalized.matches("0x0{40}")) throw new JSONException("Zero destination address is not allowed");
         return normalized;
-    }
-
-    private static final class TokenCall {
-        final Kind kind;
-        final String party;
-        final BigInteger amount;
-
-        TokenCall(Kind kind, String party, BigInteger amount) {
-            this.kind = kind;
-            this.party = party;
-            this.amount = amount;
-        }
     }
 
     static BigInteger quantity(String value) throws JSONException {
@@ -247,23 +227,25 @@ final class Eip1559Request {
     String transactionTypeLabel() {
         if (kind == Kind.NATIVE_TRANSFER) return "Native token transfer";
         if (kind == Kind.TOKEN_TRANSFER) return "Token transfer (interface unverified)";
+        if (kind == Kind.TOKEN_TRANSFER_FROM) return "Token transferFrom (interface unverified)";
+        if (kind == Kind.TOKEN_INCREASE_ALLOWANCE) return "Token allowance increase (interface unverified)";
         return "Token approval (interface unverified)";
     }
 
     String displayedAmountLabel() {
         if (kind == Kind.NATIVE_TRANSFER) return valueEth();
-        if (kind == Kind.TOKEN_APPROVAL && UINT256_MAX.equals(displayedAmount)) {
+        if (grantsAllowance() && UINT256_MAX.equals(displayedAmount)) {
             return "MAXIMUM uint256 (commonly unlimited ERC-20 allowance)";
         }
         return displayedAmount.toString() + " raw uint256 argument (token decimals unverified)";
     }
 
     String displayedAmountTitle() {
-        return kind == Kind.TOKEN_APPROVAL ? "Allowance / token ID" : "Send";
+        return grantsAllowance() ? "Allowance / token ID" : "Send";
     }
 
     String displayedPartyTitle() {
-        return kind == Kind.TOKEN_APPROVAL ? "Spender / approved address" : "Recipient";
+        return grantsAllowance() ? "Spender / approved address" : "Recipient";
     }
 
     String contractDataLabel() {
@@ -271,26 +253,36 @@ final class Eip1559Request {
         if (kind == Kind.TOKEN_TRANSFER) {
             return "Selector 0xa9059cbb: transfer(address,uint256); contract interface and semantics unverified";
         }
-        return "Selector 0x095ea7b3: approve(address,uint256); contract interface and semantics unverified";
+        if (kind == Kind.TOKEN_APPROVAL) {
+            return "Selector 0x095ea7b3: approve(address,uint256); contract interface and semantics unverified";
+        }
+        return "Selector 0x" + tokenCall.function.selector + ": " + tokenCall.function.signature
+                + "; contract interface and semantics unverified";
     }
 
     String reviewPrompt() {
-        if (kind == Kind.TOKEN_APPROVAL) {
+        if (grantsAllowance()) {
             return "I verified the signing address, network, target contract, decoded approved-address and allowance/token-ID arguments, and maximum fee shown above.";
         }
-        if (kind == Kind.TOKEN_TRANSFER) {
+        if (kind == Kind.TOKEN_TRANSFER || kind == Kind.TOKEN_TRANSFER_FROM) {
             return "I verified the signing address, network, target contract, decoded recipient and amount arguments, and maximum fee shown above.";
         }
         return "I verified the signing address, network, recipient, amount, and maximum fee shown above.";
     }
 
     String contractWarningTitle() {
-        return kind == Kind.TOKEN_APPROVAL ? "DANGER" : "Warning";
+        return grantsAllowance() ? "DANGER" : "Warning";
     }
 
     String contractWarningLabel() {
         if (kind == Kind.TOKEN_TRANSFER) {
             return "The 0xa9059cbb selector resembles transfer(address,uint256), but the offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
+        }
+        if (kind == Kind.TOKEN_TRANSFER_FROM) {
+            return "transferFrom(address,address,uint256) moves tokens out of the decoded source address using an allowance. The offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
+        }
+        if (kind == Kind.TOKEN_INCREASE_ALLOWANCE) {
+            return "increaseAllowance(address,uint256) adds to an existing allowance. The offline signer cannot verify the contract interface, execution semantics, token identity, decimals, or the current allowance.";
         }
         if (kind == Kind.TOKEN_APPROVAL) {
             return "approve(address,uint256) may grant a fungible-token allowance or approve an NFT. The offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
