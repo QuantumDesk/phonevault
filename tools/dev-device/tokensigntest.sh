@@ -90,7 +90,7 @@ usb_reset; unlock_if_locked; go_home
 "$A" kill-server; sleep 1
 rc=0
 ( "$PY" "$CLIENT" --pairing-file "$PAIRING" sign-test --chain-id 0x1 --gas-limit 0x186a0 --to "$USDC_ETH" \
-    --data "0xa9059cbb${PAD}${TO}${AMT_50}00" > "$OUT.trailing" 2>&1; echo $? > "$OUT.trailing.rc" ) &
+    --data "0xa9059cbb${PAD}${TO}${AMT_50}00" > "$OUT.trailing" 2>&1 && echo 0 > "$OUT.trailing.rc" || echo $? > "$OUT.trailing.rc" ) &
 sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked; wait
 rc="$(cat "$OUT.trailing.rc")"
 [[ "$rc" == 2 ]] && grep -q '"status": "error"' "$OUT.trailing" && grep -q 'trailing bytes' "$OUT.trailing" \
