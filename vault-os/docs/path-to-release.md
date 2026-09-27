@@ -9,19 +9,20 @@ this file is the queue.
 - [x] **Honest entropy claims.** Website said the seed uses the security chip's randomness; it did
       not (kernel RNG + home-grown CPU jitter). Site corrected 2026-09-23, and the verified-boot
       line now says "warns, not refuses, until the relock".
-- [ ] **Titan M entropy source.** A StrongBox-generated AES key encrypts zeros; the keystream and
+- [x] **Titan M entropy source.** A StrongBox-generated AES key encrypts zeros; the keystream and
       chip-generated IV depend only on randomness produced inside the Titan M. Mixed as a third
       source alongside kernel + jitter; shown on Device information. (entropy-design.md R2)
-      *Built 2026-09-23, 93 tests green; needs an on-phone check (StrongBox key generation works,
-      health tests pass, Device information lists `titan-m-strongbox ✓`) before it is checked.*
+      *Verified on phone 2 2026-09-27: a fresh wallet lists kernel-getrandom, titan-m-strongbox and
+      cpu-jitter, all passing health tests.*
 - [ ] **PIN bound to the Android lock credential + Change PIN** (option A, chosen 2026-09-23;
       design in `pin-credential-design.md`). The vault PIN becomes the system PIN, the Titan M
       throttles guesses, the seed key only works after the system verifies it, 10 failures wipe by
       device policy. Stage 1 spike DONE on phone 2 (2026-09-23): kiosk + system PIN coexist; after a
       reboot Android's own PIN screen unlocks the encrypted storage once, then our UI takes over.
       Stages 2–3 WORKING on phone 2 (2026-09-24): device PIN installed, wallet migrated to the
-      credential-bound key, unlock/reveal/sign/reboot pass. Open: boot asks twice, admin policies
-      need a fresh provisioning (lock-screen cleanup + wipe-after-10), harness text, audit.
+      credential-bound key, unlock/reveal/sign/reboot pass. Boot double-PIN fixed; wipe-after-10 proved
+      2026-09-24; factory first boot lands in the kiosk (USER_STARTED fallback) 2026-09-27; app updates
+      re-provision HOME (MY_PACKAGE_REPLACED). Open: owner text on Android's lock screen, audit.
 - [ ] **Finish the hardening ladder.** 2d-c (camera/media/sensors/DSP) → 2d-d (USB functions) →
       rung 3 (charge-only USB at the OS level) → rung 4 (strip unneeded apps/services in slices) →
       rung 5 (user build: no adb, no dump hook, no screenshots).

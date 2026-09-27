@@ -236,8 +236,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         String title = creating ? "SET PIN" : sealed ? "SEALED" : "LOCKED";
         String subtitle;
         if (creating) {
-            subtitle = "Choose a " + VaultPin.PIN_LENGTH + "-digit PIN. It unlocks this vault. "
-                    + VaultPin.MAX_ATTEMPTS + " wrong attempts erase the wallet.";
+            subtitle = SystemCredential.willBind(this)
+                    ? "Choose a " + VaultPin.PIN_LENGTH + "-digit PIN. The phone's security chip checks it. "
+                            + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong tries reset the whole phone."
+                    : "Choose a " + VaultPin.PIN_LENGTH + "-digit PIN. It unlocks this vault. "
+                            + VaultPin.MAX_ATTEMPTS + " wrong attempts erase the wallet.";
         } else if (sealed) {
             subtitle = "Attempt limit reached but the wallet could not be verifiably erased. "
                     + "The vault stays sealed. Enter any PIN to retry the erase.";
@@ -272,7 +275,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!credentialMode()) { op.run(); return; }
         long age = android.os.SystemClock.elapsedRealtime() - lastCredentialConfirm;
         if (lastCredentialConfirm > 0 && age < (SystemCredential.AUTH_WINDOW_SECONDS - 8) * 1000L) { op.run(); return; }
-        confirmDevicePin(why, op, null);
+        // Ask the chip before asking the person: right after a PIN was set or entered on Android's
+        // own screen the key may already be usable, and a second prompt would be pure friction.
+        final int s = session.get();
+        cryptoExecutor.execute(() -> {
+            boolean ready = vault.seedKeyUsableNow();
+            runOnUiThread(() -> {
+                if (s != session.get()) return;
+                if (ready) { op.run(); return; }
+                confirmDevicePin(why, op, null);
+            });
+        });
     }
 
     private void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) {
@@ -1313,7 +1326,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 : "Development build permits software wrapping. EVM signing runs in Android memory.");
         card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
         card(root, "Account path", "m/44'/60'/0'/0/0 · no passphrase");
-        card(root, "PIN protection", "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
+        card(root, "PIN protection", credentialMode()
+                ? "Checked by the security chip (Titan M), which slows repeated guesses · "
+                        + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs reset the phone · the seed key works only for "
+                        + SystemCredential.AUTH_WINDOW_SECONDS + " s after a correct PIN"
+                : "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
         String entropy = getPreferences(MODE_PRIVATE).getString("entropy_report", null);
         card(root, "Entropy at wallet creation", entropy != null ? entropy
                 : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
@@ -1458,7 +1475,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         gate.setLargeText(largeText);
         int remaining = pin.attemptsRemaining();
         gate.setPolicy((DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
-                + remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet.");
+                + (SystemCredential.willBind(this) && !pin.isSet()
+                        ? "Your PIN will be held by the security chip."
+                        : remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet."));
         gate.setSubmitRequired(remaining == 1 && !pin.eraseOutstanding());
     }
 

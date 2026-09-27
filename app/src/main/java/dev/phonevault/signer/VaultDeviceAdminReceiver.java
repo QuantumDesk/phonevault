@@ -46,7 +46,11 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
     }
 
     private void provision(Context context, final String why) {
-        final PendingResult pending = goAsync();
+        provision(context, why, goAsync());
+    }
+
+    /** Shared with {@link PackageReplacedReceiver}. */
+    static void provision(Context context, final String why, final android.content.BroadcastReceiver.PendingResult pending) {
         final Context app = context.getApplicationContext();
         final DevicePolicyManager policy =
                 (DevicePolicyManager) app.getSystemService(Context.DEVICE_POLICY_SERVICE);

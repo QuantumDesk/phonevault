@@ -125,7 +125,14 @@ Open items:
   "stopped" state (PACKAGE_UNSTOPPED at 16:09:33), so it was never delivered; only USER_STARTED /
   USER_SWITCHED reached the receiver. Result: launcher/HOME chooser instead of the kiosk until
   the activity was started by hand. Fix: the receiver also provisions on `onUserStarted` (every
-  boot, idempotent) and then brings the vault to the front. Needs a rung rebuild + wipe to prove.
+  boot, idempotent) and then brings the vault to the front. Proved 2026-09-27: rebuilt 2d-b, wiped, factory boot went straight to the
+  locked kiosk at SET PIN with no chooser and no manual start.
+- **App update showed the HOME chooser** (2026-09-27, dev `adb install -r`): the persistent HOME
+  preference was dropped. `PackageReplacedReceiver` (MY_PACKAGE_REPLACED, not exported, no
+  permission) re-provisions and brings the vault back; proved by the next reinstall.
+- **Fewer prompts.** Before showing the system PIN prompt, `withSeedKey` asks the keystore whether
+  the seed key is usable now (cipher init only; the keystore still enforces the window on the real
+  operation). Not yet observed removing the prompt right after SET PIN (needs a factory boot).
 - `lifecycletest.sh` still expects the app's "WRONG PIN · 9 ATTEMPTS LEFT" text; in credential
   mode the count lives in the system prompt.
 - Auditor review: unlock/session boundary changed (system prompt, v2 key, migration, one permission).

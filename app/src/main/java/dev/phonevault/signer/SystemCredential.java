@@ -41,6 +41,13 @@ final class SystemCredential {
         return supported() && keyguard != null && keyguard.isDeviceSecure();
     }
 
+    /** True when a PIN set now becomes the device credential (device owner, API 30+). */
+    static boolean willBind(Context context) {
+        if (!supported()) return false;
+        DevicePolicyManager policy = context.getSystemService(DevicePolicyManager.class);
+        return policy != null && policy.isDeviceOwnerApp(context.getPackageName());
+    }
+
     /**
      * Install {@code pin} as the device PIN. Device owner only, and only while NO credential exists
      * (the reset token activates immediately then). The token is cleared afterwards, so nothing on

@@ -15,9 +15,14 @@ tap_digits "$PV_TEST_PIN"; sleep 6
 expect_screen "Set up your wallet"
 pass "PIN set → Create-or-Restore (no wallet minted silently)"
 
-tap_text "Create new wallet"; sleep 6
+tap_text "Create new wallet"; sleep 3
+# Credential mode: the chip decides whether the fresh PIN still counts; a system prompt here is
+# allowed (reported), never a second in-app keypad.
+if system_prompt_up; then echo "note: chip asked for the PIN to seal the wallet"; enter_system_pin; fi
+sleep 3
 expect_screen "Write down your recovery phrase"
 tap_text "Continue"; sleep 4
+system_prompt_up && { echo "note: chip asked for the PIN to show the phrase"; enter_system_pin; }
 # The PIN was set seconds ago in this session: the wizard must NOT ask for it again.
 expect_not "VERIFY PIN"
 expect_screen "RECOVERY PHRASE"
