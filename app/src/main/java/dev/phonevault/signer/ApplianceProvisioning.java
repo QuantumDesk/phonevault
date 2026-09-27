@@ -32,6 +32,9 @@ final class ApplianceProvisioning {
         ComponentName home = new ComponentName(context, MainActivity.class);
 
         policy.setLockTaskPackages(admin, new String[] {context.getPackageName()});
+        // Android's lock screen names the device owner's organization in its disclosure line
+        // ("This device belongs to …"); without a name it says "your organization".
+        policy.setOrganizationName(admin, "Phone Vault");
 
         // We are HOME. A persistent preferred activity beats intent-filter priority, so even an
         // image that still ships a setup wizard resolves HOME to the vault.

@@ -113,9 +113,10 @@ Open items:
   had rolled over. Flagged for the audit.
 - ~~Admin policies need re-provisioning.~~ Done 2026-09-24: phone 2 wiped and reprovisioned on
   rung 2d-b; `disable-keyguard-features`, `watch-login`, `wipe-data` active; features=31,
-  maximumFailedPasswordsForWipe=10. Boot lock screen now shows no notifications. It still shows
-  Android's "This device belongs to your organization" rather than our
-  `setDeviceOwnerLockScreenInfo` text (open: SystemUI may not render owner info on this build).
+  maximumFailedPasswordsForWipe=10. Boot lock screen now shows no notifications. It showed Android's
+  generic "This device belongs to your organization"; Android 15 renders the device owner's
+  organization name there, so provisioning now sets it: "This device belongs to Phone Vault"
+  (seen 2026-09-27). The wallpaper padlock sat under the big clock; moved and shrunk (next image).
 - **Wipe after 10 proved** (approved, 2026-09-24): wrong PINs on Android's boot lock screen; the
   system warned at 7 ("after 3 more … this phone will be reset"), and at 10 showed "Factory data
   reset · Restarting…". The phone came back with no credential, no wallet, Phone Vault device
