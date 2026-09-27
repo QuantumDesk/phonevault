@@ -224,5 +224,44 @@ class SignedTransactionValidationTest(unittest.TestCase):
         )
 
 
+
+class MessageSignatureValidationTest(unittest.TestCase):
+    """Vectors shared with the phone's JVM tests and the companion's Rust tests."""
+    VECTORS = json.loads((Path(__file__).resolve().parent.parent / "app" / "src" / "test" / "resources"
+                          / "message-signing-vectors.json").read_text(encoding="utf-8"))
+
+    def vector(self, name):
+        return next(v for v in self.VECTORS["vectors"] if v["name"] == name)
+
+    def approved(self, vector):
+        return {"id": "m-1", "status": "approved", "address": self.VECTORS["signer"],
+                "signature": vector["signature"], "digest": vector["digest"]}
+
+    def test_personal_sign_digest_and_signature_match_the_vector(self):
+        v = self.vector("personal-hello")
+        message = bytes.fromhex(v["message"][2:])
+        digest = aoa_client.personal_message_digest(message)
+        self.assertEqual("0x" + digest.hex(), v["digest"])
+        request = {"id": "m-1", "method": "personal_sign", "chainId": "0x1", "message": v["message"]}
+        aoa_client.validate_message_response(request, self.approved(v), digest, self.VECTORS["signer"])
+
+    def test_typed_data_signature_must_cover_the_expected_digest(self):
+        v = self.vector("eip712-mail")
+        request = {"id": "m-1", "method": "eth_signTypedData_v4", "chainId": "0x1", "typedData": v["typedData"]}
+        digest = bytes.fromhex(v["digest"][2:])
+        aoa_client.validate_message_response(request, self.approved(v), digest, self.VECTORS["signer"])
+        other = bytes.fromhex(self.vector("permit2-single")["digest"][2:])
+        with self.assertRaisesRegex(ValueError, "phone signed digest"):
+            aoa_client.validate_message_response(request, self.approved(v), other, self.VECTORS["signer"])
+        with self.assertRaisesRegex(ValueError, "expected signer"):
+            aoa_client.validate_message_response(
+                request, self.approved(v), digest, "0x1111111111111111111111111111111111111111")
+        forged = dict(self.approved(v), signature=self.vector("permit2-single")["signature"])
+        with self.assertRaises(ValueError):
+            aoa_client.validate_message_response(request, forged, digest, self.VECTORS["signer"])
+        with self.assertRaisesRegex(ValueError, "malformed"):
+            aoa_client.validate_message_response(
+                request, dict(self.approved(v), extra="x"), digest, self.VECTORS["signer"])
+
 if __name__ == "__main__":
     unittest.main()

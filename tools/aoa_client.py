@@ -395,6 +395,63 @@ def validate_response(request, response, expected_signer=None):
         )
 
 
+MESSAGE_METHODS = ("personal_sign", "eth_signTypedData_v4")
+
+
+def personal_message_digest(message):
+    """EIP-191 version 0x45: keccak256("\\x19Ethereum Signed Message:\\n" + len + message)."""
+    return evm_verify.keccak256(
+        b"\x19Ethereum Signed Message:\n" + str(len(message)).encode("ascii") + message)
+
+
+def validate_message_response(request, response, expected_digest, expected_signer):
+    """Validate a personal_sign / eth_signTypedData_v4 response.
+
+    `expected_digest` (32 bytes) must be derived by the HOST: for personal_sign from the request's
+    bytes (see personal_message_digest); for typed data this client has no EIP-712 encoder, so the
+    caller supplies a known digest (e.g. a test vector). The phone's claimed digest must equal it,
+    and the signature must recover to the pinned signer over that digest. The Mac companion
+    recomputes EIP-712 digests itself (companion/src-tauri/src/message.rs)."""
+    if not isinstance(response, dict) or response.get("id") != request.get("id"):
+        raise ValueError("Phone response does not correlate to the request")
+    if request.get("method") not in MESSAGE_METHODS:
+        raise ValueError("Not a message-signing request")
+    status = response.get("status")
+    if status == "error":
+        if set(response) != {"id", "status", "error"} or not isinstance(response["error"], str):
+            raise ValueError("Phone returned a malformed error response")
+        return
+    if status == "rejected":
+        if set(response) != {"id", "status"}:
+            raise ValueError("Rejected response contains unexpected fields")
+        return
+    if status != "approved" or set(response) != {"id", "status", "address", "signature", "digest"}:
+        raise ValueError("Phone returned a malformed approved response")
+    if not isinstance(expected_digest, (bytes, bytearray)) or len(expected_digest) != 32:
+        raise ValueError("an independently derived 32-byte digest is required")
+    if response["digest"].lower() != "0x" + expected_digest.hex():
+        raise ValueError(
+            f"phone signed digest {response['digest']}, expected 0x{expected_digest.hex()}")
+    signature = response["signature"]
+    if not isinstance(signature, str) or not re.fullmatch(r"0x[0-9a-fA-F]{130}", signature):
+        raise ValueError("signature must be 65 bytes of hex")
+    raw = bytes.fromhex(signature[2:])
+    r, s, v = int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:64], "big"), raw[64]
+    if v not in (27, 28):
+        raise ValueError("signature v must be 27 or 28")
+    if s > evm_verify._N // 2:
+        raise ValueError("signature s is not low-s (EIP-2)")
+    recovered = evm_verify.recover_address(bytes(expected_digest), r, s, v - 27)
+    if not isinstance(response["address"], str) or recovered != response["address"].lower():
+        raise ValueError(f"signature was not produced by the claimed address: recovered {recovered}")
+    if not isinstance(expected_signer, str) or not re.fullmatch(ADDRESS_PATTERN, expected_signer):
+        raise ValueError("no pinned signer: run `pair` first")
+    if recovered != expected_signer.lower():
+        raise ValueError(
+            f"signature was not produced by the expected signer: recovered {recovered}, "
+            f"expected {expected_signer}")
+
+
 def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
     request_id = request.get("id")
     if not isinstance(request_id, str) or not request_id:
@@ -427,6 +484,15 @@ def request_for(args):
     request_id = str(uuid.uuid4())
     if args.command in ("address", "pair"):
         return {"id": request_id, "method": "getAddress"}
+    if args.command == "sign-message":
+        if args.typed_file:
+            with open(args.typed_file, encoding="utf-8") as handle:
+                typed = handle.read().strip()
+            return {"id": request_id, "method": "eth_signTypedData_v4",
+                    "chainId": args.chain_id, "typedData": typed}
+        message = bytes.fromhex(args.hex[2:]) if args.hex else args.text.encode("utf-8")
+        return {"id": request_id, "method": "personal_sign",
+                "chainId": args.chain_id, "message": "0x" + message.hex()}
     return {
         "id": request_id,
         "method": "signEip1559",
@@ -466,10 +532,31 @@ def main():
         "--expect-address", default=None,
         help="Override the pinned signer for this call (the recovered signer must match it)",
     )
+    message = subparsers.add_parser(
+        "sign-message", help="Request a personal_sign or eth_signTypedData_v4 signature")
+    source = message.add_mutually_exclusive_group(required=True)
+    source.add_argument("--text", help="UTF-8 text to sign (personal_sign)")
+    source.add_argument("--hex", help="0x-prefixed bytes to sign (personal_sign)")
+    source.add_argument("--typed-file", help="File holding eth_signTypedData_v4 JSON")
+    message.add_argument("--chain-id", default="0x1", help="The host's network (default: %(default)s)")
+    message.add_argument(
+        "--expect-digest", default=None,
+        help="0x digest the signature must cover (required for --typed-file: this client has no "
+             "EIP-712 encoder; personal_sign digests are computed here)")
+    message.add_argument("--expect-address", default=None)
     args = parser.parse_args()
 
     try:
         expected_signer = None
+        expected_digest = None
+        if args.command == "sign-message":
+            expected_signer = args.expect_address or load_paired_signer(args.pairing_file)
+            if expected_signer is None:
+                raise ValueError(f"no paired signer in {args.pairing_file}: run `pair` first")
+            if args.typed_file and not args.expect_digest:
+                raise ValueError("--typed-file needs --expect-digest (the digest you computed independently)")
+            if args.hex and not re.fullmatch(r"0x(?:[0-9a-fA-F]{2})+", args.hex):
+                raise ValueError("--hex must be 0x-prefixed, even-length hex")
         if args.command == "sign-test":
             expected_signer = args.expect_address or load_paired_signer(args.pairing_file)
             if expected_signer is None:
@@ -481,7 +568,16 @@ def main():
         endpoint_in, endpoint_out = open_endpoints(device)
         request = request_for(args)
         response = exchange(endpoint_in, endpoint_out, request)
-        validate_response(request, response, expected_signer=expected_signer)
+        if args.command == "sign-message":
+            if request["method"] == "personal_sign":
+                expected_digest = personal_message_digest(bytes.fromhex(request["message"][2:]))
+                if args.expect_digest and args.expect_digest.lower() != "0x" + expected_digest.hex():
+                    raise ValueError("--expect-digest differs from the personal_sign digest computed here")
+            else:
+                expected_digest = bytes.fromhex(args.expect_digest[2:])
+            validate_message_response(request, response, expected_digest, expected_signer)
+        else:
+            validate_response(request, response, expected_signer=expected_signer)
         print(json.dumps(response, indent=2))
         if response.get("status") in {"rejected", "error"}:
             return 2
