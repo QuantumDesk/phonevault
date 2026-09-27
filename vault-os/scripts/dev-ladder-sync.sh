@@ -63,22 +63,29 @@ for kp in "${RUNG_DIR}"/kernel-*.patch; do
   fi
 done
 
-DEVICE="${TREE}/device/google/crosshatch"
-DIFF="${RUNG_DIR}/device-google-crosshatch.diff"
-if [[ -s "${DIFF}" ]]; then
-  if git -C "${DEVICE}" apply --reverse --check "${DIFF}" >/dev/null 2>&1; then
-    echo "   device diff already applied"
-  elif git -C "${DEVICE}" apply --check "${DIFF}" >/dev/null 2>&1; then
-    git -C "${DEVICE}" apply "${DIFF}"; echo "   device diff applied"
-  else
-    echo "device diff neither applies nor reverses cleanly: ${DIFF}" >&2; exit 1
+# Upstream device / proprietary-vendor trees: like the kernel, each rung carries exactly its own
+# edits. Restore the ladder-managed paths to upstream, then apply the rung's diff (if any). A
+# "reverse-applies → already applied" test is not enough: going 2d-c2 → 2d-c, 2d-c's diff
+# reverse-applies while 2d-c2's extra hunks would silently stay in the tree.
+#   sync_tree_diff NAME DIR DIFF PATHSPEC...
+sync_tree_diff() {
+  local name="$1" dir="$2" diff="$3"; shift 3
+  if ! git -C "${dir}" diff --quiet -- "$@"; then
+    git -C "${dir}" checkout -- "$@"
+    echo "   ${name} tree restored to upstream before applying this rung"
   fi
-else
-  if ! git -C "${DEVICE}" diff --quiet; then
-    echo "   rung carries no device diff but the tree has local device changes:" >&2
-    git -C "${DEVICE}" diff --stat >&2; exit 1
+  if [[ -s "${diff}" ]]; then
+    git -C "${dir}" apply --check "${diff}" || { echo "${name} diff does not apply: ${diff}" >&2; exit 1; }
+    git -C "${dir}" apply "${diff}"; echo "   ${name} diff applied"
   fi
-fi
+}
+# BoardConfigLineage.mk only carries the BoardConfigVault include appended below.
+sync_tree_diff device "${TREE}/device/google/crosshatch" "${RUNG_DIR}/device-google-crosshatch.diff" \
+  . ':(exclude)crosshatch/BoardConfigLineage.mk'
+# Proprietary blobs: only the extract-utils makefiles are ladder-managed (the tree's radio/ images
+# are deliberately locally modified and never touched here).
+sync_tree_diff vendor "${TREE}/vendor/google/crosshatch" "${RUNG_DIR}/vendor-google-crosshatch.diff" \
+  crosshatch-vendor.mk Android.bp Android.mk BoardConfigVendor.mk
 
 BOARD="${TREE}/device/google/crosshatch/crosshatch/BoardConfigLineage.mk"
 INCLUDE='include vendor/phonevault/config/BoardConfigVault.mk'
