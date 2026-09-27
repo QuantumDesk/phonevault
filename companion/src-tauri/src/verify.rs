@@ -211,6 +211,72 @@ pub fn validate_signature(request: &Value, response: &Value, pinned_signer: &str
     Ok(Verified { raw_hex: format!("0x{}", hex::encode(&signed.raw)), tx_hash: recomputed, signer })
 }
 
+// ---------------------------------------------------------------- personal_sign / EIP-712
+
+/// The digest the phone must have signed, recomputed here from the ORIGINAL request only.
+pub fn expected_message_digest(request: &Value) -> Result<[u8; 32], VerifyError> {
+    let field = |k: &str| request.get(k).and_then(Value::as_str).ok_or_else(|| err(format!("request lacks {k}")));
+    match field("method")? {
+        "personal_sign" => {
+            let hex_msg = field("message")?;
+            let body = hex_msg.strip_prefix("0x").ok_or_else(|| err("message without 0x"))?;
+            let bytes = hex::decode(body).map_err(|_| err("message is not even-length hex"))?;
+            if bytes.is_empty() || bytes.len() > crate::message::MAX_MESSAGE_BYTES { return Err(err("message length out of range")); }
+            Ok(crate::message::personal_digest(&bytes))
+        }
+        "eth_signTypedData_v4" => Ok(crate::message::typed_data_digest(field("typedData")?).map_err(|e| err(e.0))?.digest),
+        other => Err(err(format!("not a message-signing method: {other}"))),
+    }
+}
+
+/// Recover the signer of a 32-byte digest from a 65-byte r ‖ s ‖ v signature (v = 27 or 28, low s).
+pub fn recover_digest_signer(digest: &[u8; 32], signature_hex: &str) -> Result<String, VerifyError> {
+    let body = signature_hex.strip_prefix("0x").ok_or_else(|| err("signature without 0x"))?;
+    if body.len() != 130 { return Err(err("signature must be 65 bytes")); }
+    let sig = hex::decode(body).map_err(|_| err("signature is not hex"))?;
+    let v = sig[64];
+    if v != 27 && v != 28 { return Err(err("signature v must be 27 or 28")); }
+    let mut r = [0u8; 32]; let mut s = [0u8; 32];
+    r.copy_from_slice(&sig[..32]); s.copy_from_slice(&sig[32..64]);
+    let sig = Signature::from_scalars(r, s).map_err(|_| err("signature scalars out of range"))?;
+    if sig.normalize_s().is_some() { return Err(err("signature s is not low-s (EIP-2)")); }
+    let rid = RecoveryId::try_from(v - 27).map_err(|_| err("bad recovery id"))?;
+    let key = VerifyingKey::recover_from_prehash(digest, &sig, rid).map_err(|_| err("signature does not recover to a key"))?;
+    let point = key.to_encoded_point(false);
+    let addr = keccak256(&point.as_bytes()[1..]);
+    Ok(format!("0x{}", hex::encode(&addr[12..])))
+}
+
+#[derive(Debug)]
+pub struct VerifiedMessage { pub signature: String, pub digest: String, pub signer: String }
+
+/// Validate a `personal_sign` / `eth_signTypedData_v4` response. The digest is recomputed from the
+/// request (never taken from the phone), the phone's claimed digest must equal it, and the signature
+/// must recover to the pinned signer over OUR digest. Anything else: refuse, return nothing.
+pub fn validate_message_signature(request: &Value, response: &Value, pinned_signer: &str) -> Result<VerifiedMessage, VerifyError> {
+    let expected = expected_message_digest(request)?;
+    let obj = response.as_object().ok_or_else(|| err("response is not an object"))?;
+    if obj.get("id") != request.get("id") { return Err(err("phone response does not correlate to the request")); }
+    match obj.get("status").and_then(Value::as_str) {
+        Some("rejected") => return Err(err("rejected on the phone")),
+        Some("error") => return Err(err(format!("phone error: {}", obj.get("error").and_then(Value::as_str).unwrap_or("unknown")))),
+        Some("approved") => {}
+        _ => return Err(err("malformed response status")),
+    }
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect(); keys.sort();
+    if keys != ["address", "digest", "id", "signature", "status"] { return Err(err("approved response has unexpected fields")); }
+    let expected_hex = format!("0x{}", hex::encode(expected));
+    let claimed = obj["digest"].as_str().ok_or_else(|| err("digest missing"))?;
+    if claimed.to_ascii_lowercase() != expected_hex {
+        return Err(err(format!("the phone signed digest {claimed}, but this request hashes to {expected_hex}; refusing the signature")));
+    }
+    let signature = obj["signature"].as_str().ok_or_else(|| err("signature missing"))?.to_ascii_lowercase();
+    let signer = recover_digest_signer(&expected, &signature)?;
+    if signer != pinned_signer.to_ascii_lowercase() { return Err(err(format!("recovered signer {} is not the paired phone {}", checksum(&signer), checksum(pinned_signer)))); }
+    if obj["address"].as_str().map(str::to_ascii_lowercase) != Some(signer.clone()) { return Err(err("phone's claimed address differs from the recovered signer")); }
+    Ok(VerifiedMessage { signature, digest: expected_hex, signer })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,5 +333,112 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
         // rejected → error surfaced, never a signature
         let rej = serde_json::json!({"id": "request-1", "status": "rejected"});
         assert!(validate_signature(&fixture_request(), &rej, SIGNER).unwrap_err().0.contains("rejected"));
+    }
+
+    // ------------------------------------------------ shared vectors with the phone's JVM tests
+    const VECTORS: &str = include_str!("../../../app/src/test/resources/message-signing-vectors.json");
+    fn vectors() -> Value { serde_json::from_str(VECTORS).unwrap() }
+    fn vector(name: &str) -> Value {
+        vectors()["vectors"].as_array().unwrap().iter().find(|v| v["name"] == name).cloned().unwrap()
+    }
+    fn message_request(v: &Value) -> Value {
+        if v["kind"] == "typed" {
+            serde_json::json!({"id": "m-1", "method": "eth_signTypedData_v4", "chainId": "0x1", "typedData": v["typedData"]})
+        } else {
+            serde_json::json!({"id": "m-1", "method": "personal_sign", "chainId": "0x1", "message": v["message"]})
+        }
+    }
+    fn approved(v: &Value, signer: &str) -> Value {
+        serde_json::json!({"id": "m-1", "status": "approved", "address": signer, "signature": v["signature"], "digest": v["digest"]})
+    }
+
+    #[test]
+    fn every_shared_vector_matches_byte_for_byte() {
+        let all = vectors();
+        let signer = all["signer"].as_str().unwrap();
+        let list = all["vectors"].as_array().unwrap();
+        assert!(list.len() >= 11);
+        for v in list {
+            let name = v["name"].as_str().unwrap();
+            if v["kind"] == "typed" {
+                let t = crate::message::typed_data_digest(v["typedData"].as_str().unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert_eq!(format!("0x{}", hex::encode(t.domain_separator)), v["domainSeparator"], "{name} domain separator");
+                assert_eq!(format!("0x{}", hex::encode(t.message_hash)), v["messageHash"], "{name} message hash");
+            }
+            let req = message_request(v);
+            let digest = expected_message_digest(&req).unwrap();
+            assert_eq!(format!("0x{}", hex::encode(digest)), v["digest"], "{name} digest");
+            assert_eq!(recover_digest_signer(&digest, v["signature"].as_str().unwrap()).unwrap(), signer, "{name} signer");
+            let ok = validate_message_signature(&req, &approved(v, signer), signer).unwrap();
+            assert_eq!(ok.digest, v["digest"].as_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn every_shared_rejection_is_refused() {
+        let all = vectors();
+        let list = all["rejections"].as_array().unwrap();
+        assert!(list.len() >= 50);
+        for r in list {
+            assert!(crate::message::typed_data_digest(r["typedData"].as_str().unwrap()).is_err(), "accepted {}", r["name"]);
+        }
+    }
+
+    #[test]
+    fn mail_matches_the_eip_published_values() {
+        let v = vector("eip712-mail");
+        let text = v["typedData"].as_str().unwrap();
+        assert_eq!(crate::message::encode_type(text, "Mail"), "Mail(Person from,Person to,string contents)Person(string name,address wallet)");
+        let t = crate::message::typed_data_digest(text).unwrap();
+        assert_eq!(hex::encode(t.domain_separator), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
+        assert_eq!(hex::encode(t.message_hash), "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e");
+        assert_eq!(hex::encode(t.digest), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
+        let nested = vector("sig-util-v4-nested-arrays");
+        assert_eq!(crate::message::encode_type(nested["typedData"].as_str().unwrap(), "Mail"),
+            "Mail(Person from,Person[] to,string contents)Person(string name,address[] wallets)");
+    }
+
+    #[test]
+    fn message_responses_are_refused_unless_everything_matches() {
+        let all = vectors();
+        let signer = all["signer"].as_str().unwrap();
+        let v = vector("permit2-single");
+        let req = message_request(&v);
+        assert!(validate_message_signature(&req, &approved(&v, signer), signer).is_ok());
+        // wrong pinned signer
+        assert!(validate_message_signature(&req, &approved(&v, signer), "0x1111111111111111111111111111111111111111").is_err());
+        // the phone claims a different digest (it displayed/signed something else): refused
+        let mut other = approved(&v, signer);
+        other["digest"] = vector("permit2-batch")["digest"].clone();
+        assert!(validate_message_signature(&req, &other, signer).unwrap_err().0.contains("refusing"));
+        // a signature over another message with the right claimed digest: does not recover to the pinned key
+        let mut swapped = approved(&v, signer);
+        swapped["signature"] = vector("permit2-batch")["signature"].clone();
+        assert!(validate_message_signature(&req, &swapped, signer).is_err());
+        // the request was altered (one character of the typed data): refused
+        let mut altered = req.clone();
+        altered["typedData"] = Value::from(v["typedData"].as_str().unwrap().replace("1767225600", "1767225601"));
+        assert!(validate_message_signature(&altered, &approved(&v, signer), signer).is_err());
+        // the high-s twin of a valid signature is refused (EIP-2)
+        let sig = hex::decode(&v["signature"].as_str().unwrap()[2..]).unwrap();
+        let n = hex::decode("fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141").unwrap();
+        let mut high = vec![0u8; 32]; let mut borrow = 0i16;
+        for i in (0..32).rev() { let d = n[i] as i16 - sig[32 + i] as i16 - borrow; high[i] = d.rem_euclid(256) as u8; borrow = (d < 0) as i16; }
+        let mut twin = sig.clone(); twin[32..64].copy_from_slice(&high); twin[64] = if sig[64] == 27 { 28 } else { 27 };
+        let mut resp = approved(&v, signer); resp["signature"] = Value::from(format!("0x{}", hex::encode(twin)));
+        assert!(validate_message_signature(&req, &resp, signer).unwrap_err().0.contains("low-s"));
+        // extra response field, rejection and error are never a signature
+        let mut extra = approved(&v, signer); extra["note"] = Value::from("x");
+        assert!(validate_message_signature(&req, &extra, signer).is_err());
+        assert!(validate_message_signature(&req, &serde_json::json!({"id": "m-1", "status": "rejected"}), signer).unwrap_err().0.contains("rejected"));
+        // claimed address differs from the recovered signer
+        let mut liar = approved(&v, signer); liar["address"] = Value::from("0x1111111111111111111111111111111111111111");
+        assert!(validate_message_signature(&req, &liar, signer).is_err());
+    }
+
+    #[test]
+    fn personal_digest_matches_eip191() {
+        // keccak256("\x19Ethereum Signed Message:\n5hello")
+        assert_eq!(hex::encode(crate::message::personal_digest(b"hello")), "50b2c43fd39106bafbba0da34fc430e1f91e3c96ea2acee2bc34119f92b37750");
     }
 }

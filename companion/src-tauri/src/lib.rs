@@ -4,7 +4,9 @@
 
 mod aoa;
 mod eth;
+mod message;
 mod pairing;
+mod signing;
 mod verify;
 
 use serde::{Deserialize, Serialize};
@@ -167,7 +169,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc])
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc, signing::sign_message, signing::sign_typed_data])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }
