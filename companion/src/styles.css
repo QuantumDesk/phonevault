@@ -298,3 +298,11 @@ input:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0
 .modal .actions { display: grid; gap: 8px; }
 .chip.danger { color: var(--danger, #ff6b6b); border-color: currentColor; }
 button.chip { cursor: pointer; font: inherit; }
+
+/* ---------------------------------------------------------------- tokens (built-in list) */
+.asset-chip { height: 42px; padding: 0 14px; font-size: 14px; justify-self: start; }
+.token-row { cursor: default; display: flex; align-items: center; }
+.token-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.token-row:hover { background: none; }
+.token-sym { min-width: 52px; font-weight: 640; }
+.token-row .tag { margin-left: 6px; }

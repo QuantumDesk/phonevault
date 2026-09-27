@@ -7,6 +7,7 @@ import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate } from
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
+import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
@@ -68,6 +69,13 @@ async function refreshBalance(n: Network) {
   } catch (e) { balErrors.set(n.id, errText(e)); }
   if (view === "home") renderSoon();
   if (view === "send" && flow.s === "form") updateFormBalance();
+  // ERC-20 balances for the network in view (display only)
+  if (n.id === prefs.chainId || (view === "send" && n.id === flowNet.id)) {
+    void refreshTokenBalances(n.id, rpcFor(n.id)).then(() => {
+      if (view === "home") renderSoon();
+      if (view === "send" && flow.s === "form") updateFormBalance();
+    });
+  }
 }
 const refreshAllBalances = () => Promise.allSettled(NETWORKS.map(refreshBalance));
 
@@ -203,6 +211,7 @@ function homeView() {
         ));
       })),
     ),
+    tokenSection(n.id, n.name),
     h("section", { class: "section" },
       h("h3", { class: "section-title" }, "Activity"),
       history.length ? h("ul", { class: "list activity" }, history.slice(0, 30).map(activityRow))
@@ -221,7 +230,7 @@ function activityRow(e: HistoryEntry) {
   return h("li", null, h("button", { class: "act-row", onclick: () => openExternal(url), title: e.hash ? `${e.hash}\nOpen in explorer` : "Open the address in the explorer" },
     h("span", { class: `act-ic ${out ? "out" : "in"}` }, icon(out ? "up" : "down", 16)),
     h("span", { class: "grow" },
-      h("span", { class: "act-title" }, `${out ? "Sent" : "Received"} ${fmtAmount(e.amount_eth)} ${n.symbol}`),
+      h("span", { class: "act-title" }, `${out ? "Sent" : "Received"} ${e.token_symbol ? `${fmtExact(e.token_amount ?? "?")} ${e.token_symbol}` : `${fmtAmount(e.amount_eth)} ${n.symbol}`}`),
       h("span", { class: "act-sub" }, [out && e.counterparty ? `to ${short(e.counterparty)}` : null, n.name, ago(e.time)].filter(Boolean).join(" · ")),
     ),
     badge,
@@ -400,7 +409,9 @@ let flow: Flow = { s: "form" };
 let flowNet: Network = net();
 let activeTicket: string | null = null;
 let formError: string | null = null;
-const draft = { to: "", amount: "" };
+/** asset: "" for the native coin, else a token contract from the built-in list on flowNet */
+const draft = { to: "", amount: "", asset: "" };
+const draftToken = () => (draft.asset ? tokenAt(flowNet.id, draft.asset) : undefined);
 let fee: FeeEstimate | null = null;
 let tick = 0;
 const REVIEW_LIMIT_MS = 300_000;
@@ -415,6 +426,7 @@ function setFlow(f: Flow) {
 function startSend() {
   if (identity.s === "different") { identity.dismissed = false; renderPhoneNotice(); return; }
   flow = { s: "form" }; formError = null; activeTicket = null; flowNet = net(); fee = null;
+  if (draft.asset && !tokenAt(flowNet.id, draft.asset)) { draft.asset = ""; draft.amount = ""; }
   go("send");
   loadFee();
 }
@@ -477,17 +489,32 @@ function flowBody(): Node {
       formRefs = refs;
       toInput.addEventListener("input", () => { draft.to = toInput.value; checkAddr(); });
       amtInput.addEventListener("input", () => { draft.amount = amtInput.value.replace(",", "."); updateFormExtras(); });
+      const tok = draftToken();
       const max = h("button", { class: "chip-btn", type: "button", disabled: quoting, onclick: async () => {
         max.disabled = true;
-        try { const m = await api.maxSendable(rpcFor(n.id), addrOk ? draft.to.trim() : null); draft.amount = m.amount_eth; amtInput.value = m.amount_eth; formError = null; }
+        try {
+          if (tok) {
+            const b = tokenBalanceOf(n.id, tok.address);
+            if (!b?.amount) throw `${tok.symbol} balance not loaded yet`;
+            draft.amount = b.amount; amtInput.value = b.amount; formError = null;
+          } else { const m = await api.maxSendable(rpcFor(n.id), addrOk ? draft.to.trim() : null); draft.amount = m.amount_eth; amtInput.value = m.amount_eth; formError = null; }
+        }
         catch (e) { formError = errText(e); }
         max.disabled = false; updateFormExtras();
       } }, "Max");
+      // asset: the native coin or a token from the built-in list (the same list the phone uses)
+      const assetSel = h("select", { class: "net-select", "aria-label": "Asset", disabled: quoting },
+        h("option", { value: "", selected: !tok }, `${n.symbol} (native)`),
+        tokensOn(n.id).map((t) => h("option", { value: t.address, selected: tok?.address === t.address }, `${t.symbol} · ${t.name}`)));
+      assetSel.addEventListener("change", () => { draft.asset = assetSel.value; draft.amount = ""; formError = null; setFlow({ s: "form" }); });
+      const assetField = tokensOn(n.id).length ? h("label", { class: "field" }, h("span", { class: "field-label" }, "Asset"),
+        h("span", { class: "net-chip asset-chip" }, h("span", null, tok ? `${tok.symbol} · ${tok.name}` : `${n.symbol} (native)`), icon("chevron", 14), assetSel)) : null;
       const form = h("form", { class: "card form", novalidate: true },
         h("div", { class: "from-line" }, h("span", { class: "muted small" }, "From Account 1 · ", h("span", { class: "mono" }, short(status!.paired_checksum!))), refs.avail),
+        assetField,
         h("label", { class: "field" }, h("span", { class: "field-label" }, "To"), toInput, refs.toMsg),
         h("label", { class: "field" }, h("span", { class: "field-label" }, "Amount"),
-          h("div", { class: "input-wrap" }, amtInput, h("span", { class: "suffix" }, n.symbol), max), refs.amtFiat),
+          h("div", { class: "input-wrap" }, amtInput, h("span", { class: "suffix" }, tok ? tok.symbol : n.symbol), max), refs.amtFiat),
         refs.feeLine,
         refs.err,
         refs.go,
@@ -500,15 +527,20 @@ function flowBody(): Node {
       const quote = flow.quote;
       return h("section", { class: "card" },
         h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
-        h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtAmount(quote.amount_eth, 8), h("span", { class: "unit" }, n.symbol)), usd(quote.amount_eth) ? h("span", { class: "fiat" }, usd(quote.amount_eth)) : null),
+        quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
+          : h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtAmount(quote.amount_eth, 8), h("span", { class: "unit" }, n.symbol)), usd(quote.amount_eth) ? h("span", { class: "fiat" }, usd(quote.amount_eth)) : null),
         h("dl", { class: "facts" },
-          fact("To", h("span", { class: "mono break" }, grouped(checksumOf(quote.to)))),
+          quote.token ? fact("Token", h("span", null, `${quote.token.name} (${quote.token.symbol}) · `,
+            h("span", { class: "mono", title: quote.token.contract }, short(tokenAt(n.id, quote.token.contract)?.address ?? quote.token.contract)))) : null,
+          fact("To", h("span", { class: "mono break" }, grouped(checksumOf(quote.token ? quote.token.recipient : quote.to)))),
           fact("Network", quote.network),
           fact("Network fee", h("span", null, `at most ${fmtAmount(quote.max_fee_eth, 8)} ${n.symbol}`, usd(quote.max_fee_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.max_fee_eth)}`) : null)),
-          fact("Total at most", h("span", null, `${fmtAmount(quote.total_eth, 8)} ${n.symbol}`, usd(quote.total_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.total_eth)}`) : null)),
+          quote.token ? fact("Total at most", `${fmtExact(quote.token.amount)} ${quote.token.symbol} + ${fmtAmount(quote.max_fee_eth, 8)} ${n.symbol} fee`)
+            : fact("Total at most", h("span", null, `${fmtAmount(quote.total_eth, 8)} ${n.symbol}`, usd(quote.total_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.total_eth)}`) : null)),
           fact("Nonce", h("span", { class: "mono" }, String(parseInt(quote.nonce, 16)))),
         ),
         n.l2 ? h("p", { class: "note" }, `${n.name} also charges a small L1 data fee that neither this Mac nor the phone can bound in advance. It is usually a fraction of a cent.`) : null,
+        quote.token ? h("p", { class: "note" }, `Your phone names the token from its own built-in list: it should read "Send ${fmtExact(quote.token.amount)} ${quote.token.symbol} to" this recipient. If it says "Unknown token contract", reject it there.`) : null,
         h("p", { class: "note" }, "Your phone shows these same details. Approve there only if they match. Nothing reaches the network until you press Broadcast afterwards."),
         h("div", { class: "actions" },
           h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("phone", 18), "Send to phone"),
@@ -525,8 +557,9 @@ function flowBody(): Node {
         h("h3", null, "Review on your phone"),
         h("p", { class: "muted" }, "The request is on your phone. Unlock it if needed, check the details, and tap Approve & sign."),
         h("ul", { class: "checklist" },
-          h("li", null, h("span", { class: "muted" }, "Amount"), h("strong", null, `${fmtAmount(q!.amount_eth, 8)} ${n.symbol}`)),
-          h("li", null, h("span", { class: "muted" }, "To"), h("strong", { class: "mono" }, short(checksumOf(q!.to)))),
+          h("li", null, h("span", { class: "muted" }, "Amount"), h("strong", null, quoteAmount(q!, `${fmtAmount(q!.amount_eth, 8)} ${n.symbol}`))),
+          h("li", null, h("span", { class: "muted" }, "To"), h("strong", { class: "mono" }, short(checksumOf(q!.token ? q!.token.recipient : q!.to)))),
+          q!.token ? h("li", null, h("span", { class: "muted" }, "Token contract"), h("strong", { class: "mono" }, short(tokenAt(n.id, q!.token.contract)?.address ?? q!.token.contract))) : null,
           h("li", null, h("span", { class: "muted" }, "Network"), h("strong", null, q!.network)),
         ),
         clockLine(flow.t0, REVIEW_LIMIT_MS),
@@ -556,13 +589,13 @@ function flowBody(): Node {
         h("div", { class: "result-ic ok" }, icon("check", 28)),
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
-          h("li", null, icon("check", 14), "Amount, recipient, fee and nonce match what you entered"),
+          h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
           h("li", null, icon("check", 14), "Transaction hash recomputed on this Mac"),
           h("li", null, icon("check", 14), "Signed by your paired phone ", h("span", { class: "mono" }, short(signed.signer))),
         ),
         h("dl", { class: "facts" },
-          fact("Send", `${fmtAmount(quote.amount_eth, 8)} ${n.symbol}${usd(quote.amount_eth) ? ` · ${usd(quote.amount_eth)}` : ""}`),
-          fact("To", h("span", { class: "mono" }, short(checksumOf(quote.to)))),
+          fact("Send", quoteAmount(quote, `${fmtAmount(quote.amount_eth, 8)} ${n.symbol}${usd(quote.amount_eth) ? ` · ${usd(quote.amount_eth)}` : ""}`)),
+          fact("To", h("span", { class: "mono" }, short(checksumOf(quote.token ? quote.token.recipient : quote.to)))),
           fact("Hash", h("button", { class: "link mono", onclick: () => copy(signed.hash, "Hash") }, shortHash(signed.hash))),
         ),
         flow.s === "broadcast_failed" ? h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "The node didn't accept it. "), explainBroadcast(flow.message), h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, flow.message)))) : null,
@@ -589,7 +622,7 @@ function flowBody(): Node {
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
-        h("p", { class: "muted" }, flow.ok ? `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol} sent on ${n.name}, in block ${flow.block.toLocaleString("en-US")}.` : `The network ran it in block ${flow.block.toLocaleString("en-US")} and it reverted. The amount was not sent, but the fee was paid.`),
+        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${flow.block.toLocaleString("en-US")}.` : `The network ran it in block ${flow.block.toLocaleString("en-US")} and it reverted. The amount was not sent, but the fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" },
           h("button", { class: "big primary", onclick: () => go("home") }, "Done"),
@@ -649,6 +682,8 @@ async function checkAddr() {
 
 function updateFormBalance() {
   const r = formRefs; if (!r) return;
+  const tok = draftToken();
+  if (tok) { const tb = tokenBalanceOf(flowNet.id, tok.address); r.avail.textContent = tb?.amount ? `Available ${fmtExact(tb.amount)} ${tok.symbol}` : ""; return; }
   const b = balances.get(flowNet.id);
   r.avail.textContent = b ? `Available ${fmtAmount(b.eth, 8)} ${flowNet.symbol}` : "";
 }
@@ -657,15 +692,19 @@ function updateFormExtras() {
   const r = formRefs; if (!r || flow.s !== "form") return;
   const n = flowNet;
   const amt = draft.amount.trim();
-  const amtValid = /^\d*\.?\d{0,18}$/.test(amt) && Number(amt) > 0;
-  r.amtFiat.textContent = amtValid ? (fmtUsd(amt, price(n)) ? `≈ ${fmtUsd(amt, price(n))}` : "") : amt && !/^\d*\.?\d*$/.test(amt) ? "Use digits and one dot, like 0.05" : amt && /\.\d{19,}/.test(amt) ? "At most 18 decimals" : "";
-  r.amtFiat.className = amt && !amtValid && Number(amt) !== 0 ? "field-msg bad" : "field-msg";
+  const tok = draftToken();
+  const tv = tok ? validTokenAmount(amt, tok.decimals) : null;
+  const amtValid = tv ? tv.ok : /^\d*\.?\d{0,18}$/.test(amt) && Number(amt) > 0;
+  if (tv) r.amtFiat.textContent = tv.msg;
+  else r.amtFiat.textContent = amtValid ? (fmtUsd(amt, price(n)) ? `≈ ${fmtUsd(amt, price(n))}` : "") : amt && !/^\d*\.?\d*$/.test(amt) ? "Use digits and one dot, like 0.05" : amt && /\.\d{19,}/.test(amt) ? "At most 18 decimals" : "";
+  r.amtFiat.className = amt && !amtValid && (tv ? !!tv.msg : Number(amt) !== 0) ? "field-msg bad" : "field-msg";
   if (fee) {
     const tu = fmtUsd(fee.typical_fee_eth, price(n)); const mu = fmtUsd(fee.max_fee_eth, price(n));
     r.feeLine.replaceChildren(
       h("span", { class: "muted" }, "Network fee"),
-      h("span", null, `≈ ${fmtAmount(fee.typical_fee_eth, 8)} ${n.symbol}`, tu ? h("span", { class: "muted" }, ` · ${tu}`) : null),
-      h("span", { class: "muted small full" }, `At most ${fmtAmount(fee.max_fee_eth, 8)} ${n.symbol}${mu ? ` (${mu})` : ""} for a plain transfer${n.l2 ? ", plus a small L1 data fee" : ""}.`),
+      tok ? h("span", { class: "muted" }, "quoted on the next step") : h("span", null, `≈ ${fmtAmount(fee.typical_fee_eth, 8)} ${n.symbol}`, tu ? h("span", { class: "muted" }, ` · ${tu}`) : null),
+      h("span", { class: "muted small full" }, tok ? `Paid in ${n.symbol}. A token transfer uses more gas than a plain transfer; the exact ceiling is quoted on the next step${n.l2 ? ", plus a small L1 data fee" : ""}.`
+        : `At most ${fmtAmount(fee.max_fee_eth, 8)} ${n.symbol}${mu ? ` (${mu})` : ""} for a plain transfer${n.l2 ? ", plus a small L1 data fee" : ""}.`),
     );
   } else r.feeLine.replaceChildren(h("span", { class: "muted" }, "Network fee"), h("span", { class: "muted" }, "estimating…"));
   r.err.replaceChildren(formError ? h("p", { class: "inline-error" }, icon("alert", 15), formError) : "");
@@ -678,7 +717,10 @@ async function getQuote() {
   formError = null;
   setFlow({ s: "quoting" });
   try {
-    const quote = await api.quote(rpcFor(n.id), draft.to.trim(), draft.amount.trim());
+    const tok = draftToken();
+    const quote = tok ? await api.tokenQuote(rpcFor(n.id), tok.address, draft.to.trim(), draft.amount.trim())
+      : await api.quote(rpcFor(n.id), draft.to.trim(), draft.amount.trim());
+    if (tok && (!quote.token || quote.token.contract.toLowerCase() !== tok.address.toLowerCase())) throw "the quote is not for the selected token";
     if (flow.s !== "quoting") return;
     if (parseInt(quote.chain_id, 16) !== n.id) throw `the node answered for chain ${parseInt(quote.chain_id, 16)}, not ${n.name}`;
     setFlow({ s: "review", quote });

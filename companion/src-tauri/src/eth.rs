@@ -58,6 +58,19 @@ impl Rpc {
         Self::hex_u128(&v, "gas")
     }
 
+    /// Gas for a call with calldata (token transfers). An error usually means it would revert.
+    pub fn estimate_gas_data(&self, from: &str, to: &str, value_wei: u128, data: &str) -> Result<u128, EthError> {
+        let v = self.call("eth_estimateGas", json!([{"from": from, "to": to, "value": crate::verify::to_quantity(value_wei), "data": data}]))?;
+        Self::hex_u128(&v, "gas")
+    }
+
+    /// Read-only `eth_call` at the latest block; returns the raw return bytes.
+    pub fn eth_call(&self, to: &str, data: &str) -> Result<Vec<u8>, EthError> {
+        let v = self.call("eth_call", json!([{"to": to, "data": data}, "latest"]))?;
+        let s = v.as_str().ok_or_else(|| err("eth_call: expected hex string"))?;
+        hex::decode(s.strip_prefix("0x").unwrap_or(s)).map_err(|_| err("eth_call: bad hex"))
+    }
+
     pub fn send_raw(&self, raw_hex: &str) -> Result<String, EthError> {
         let v = self.call("eth_sendRawTransaction", json!([raw_hex]))?;
         v.as_str().map(str::to_string).ok_or_else(|| err("broadcast returned no hash"))

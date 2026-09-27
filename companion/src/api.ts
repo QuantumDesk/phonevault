@@ -10,7 +10,14 @@ export interface Wallet { address: string; balance_wei: string; balance_eth: str
 export interface Quote {
   chain_id: string; nonce: string; max_priority_fee_per_gas: string; max_fee_per_gas: string; gas_limit: string;
   to: string; value: string; data: string; amount_eth: string; max_fee_eth: string; total_eth: string; balance_eth: string; network: string;
+  /** ERC-20 transfer (from token_quote); the Rust side re-checks it against the built-in list. */
+  token?: TokenIntent | null;
 }
+/** One entry of the built-in token list (app/src/main/res/raw/tokens.json, shared with the phone). */
+export interface TokenInfo { chainId: number; address: string; symbol: string; name: string; decimals: number }
+export interface TokenIntent { contract: string; symbol: string; name: string; decimals: number; recipient: string; amount_raw: string; amount: string }
+export interface TokenBalance { address: string; symbol: string; name: string; decimals: number; raw: string | null; amount: string | null; error: string | null }
+export interface TokenBalances { chain_id: number; balances: TokenBalance[] }
 export interface Signed { hash: string; signer: string }
 export interface Receipt { mined: boolean; success: boolean; block: number }
 export interface FeeEstimate { chain_id: number; gas: number; typical_fee_wei: string; typical_fee_eth: string; max_fee_wei: string; max_fee_eth: string }
@@ -19,6 +26,7 @@ export interface AddressCheck { ok: boolean; checksum: string | null; error: str
 export interface HistoryEntry {
   kind: "out" | "in"; hash: string | null; chain_id: number; counterparty: string | null; amount_eth: string;
   fee_max_eth: string | null; nonce: number | null; time: number; status: "pending" | "confirmed" | "failed" | "received"; block: number | null;
+  token_symbol?: string | null; token_amount?: string | null; token_contract?: string | null;
 }
 /** Typed failure from sign_start. */
 export interface SendError { kind: string; message: string; delivered: boolean }
@@ -53,6 +61,9 @@ export const api = {
   historyMark: (hash: string, status: string, block: number | null) => call<HistoryEntry[]>("history_mark", { hash, status, block }),
   historyAddIncoming: (chainId: number, amountWei: string) => call<HistoryEntry[]>("history_add_incoming", { chainId, amountWei }),
   spotUsd: (symbol: string) => call<number>("spot_usd", { symbol }),
+  tokenList: () => call<TokenInfo[]>("token_list"),
+  tokenBalances: (rpcUrl: string) => call<TokenBalances>("token_balances", { rpcUrl }),
+  tokenQuote: (rpcUrl: string, token: string, to: string, amount: string) => call<Quote>("token_quote", { rpcUrl, token, to, amount }),
 };
 
 /** Subscribe to send-progress events. Returns an unsubscribe function. */

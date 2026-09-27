@@ -12,6 +12,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// ERC-20: the phone's built-in token list, balances, token sends
+mod tokens;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -86,6 +88,9 @@ struct Quote {
     to: String, value: String, data: String,
     // display
     amount_eth: String, max_fee_eth: String, total_eth: String, balance_eth: String, network: String,
+    /// Set for an ERC-20 transfer (tokens::token_quote); re-checked against the list before signing.
+    #[serde(default)]
+    token: Option<tokens::TokenIntent>,
 }
 
 fn network_name(chain: u128) -> String {
@@ -120,7 +125,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
             max_fee_per_gas: verify::to_quantity(max_fee), gas_limit: verify::to_quantity(gas), to: to_l.to_ascii_lowercase(),
             value: verify::to_quantity(value), data: "0x".into(),
             amount_eth: eth::format_eth(value), max_fee_eth: eth::format_eth(max_cost), total_eth: eth::format_eth(total),
-            balance_eth: eth::format_eth(balance), network: network_name(chain),
+            balance_eth: eth::format_eth(balance), network: network_name(chain), token: None,
         })
     }).await
 }
@@ -177,7 +182,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
-            signing::sign_message, signing::sign_typed_data])
+            signing::sign_message, signing::sign_typed_data,
+            tokens::token_list, tokens::token_balances, tokens::token_quote])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }

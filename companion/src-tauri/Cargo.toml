@@ -24,6 +24,7 @@ rusb = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 # independent verification of what the phone signed
 sha3 = "0.10"
+sha2 = "0.10"  # token list pin (same SHA-256 as the phone)
 k256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 hex = "0.4"
 uuid = { version = "1", features = ["v4"] }

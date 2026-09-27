@@ -24,6 +24,14 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    transaction stays in the Rust process; Broadcast (a separate click) sends it by hash, so the
    UI can never broadcast bytes that were not verified. Then the receipt is polled until it is
    confirmed or reverted. Every failure has a plain explanation and a retry.
+   **Tokens.** Send can also move an ERC-20 from the token list built into the phone app
+   (`app/src/main/res/raw/tokens.json`, compiled in here byte for byte and SHA-256 pinned on
+   both sides; see `src-tauri/src/tokens.rs`). Balances for the listed tokens on the selected
+   network (`balanceOf`) appear under Balances. A token send is `transfer(recipient, amount)` to
+   the listed contract with no ETH; before it goes to the phone it is re-derived from the list,
+   and after signing the calldata decoded from the signed bytes must match the recipient and
+   amount you entered. The fee is still paid in ETH. The phone names the token from its own copy
+   of the list; anything else it shows as "Unknown token contract".
 4. **Activity and notifications.** Transactions broadcast from here, and balance increases seen
    while the app is open, are kept in `~/Library/Application Support/PhoneVault/history.json`
    (0600; public-chain facts only). A notification is shown when funds arrive (toggle in Settings).

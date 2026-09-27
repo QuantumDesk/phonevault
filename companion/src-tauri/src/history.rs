@@ -29,6 +29,13 @@ pub struct Entry {
     /// "pending" | "confirmed" | "failed" | "received"
     pub status: String,
     pub block: Option<u128>,
+    /// ERC-20 sends: symbol, exact amount and contract from the built-in list (absent for ETH).
+    #[serde(default)]
+    pub token_symbol: Option<String>,
+    #[serde(default)]
+    pub token_amount: Option<String>,
+    #[serde(default)]
+    pub token_contract: Option<String>,
 }
 
 fn path() -> Result<PathBuf, String> {
@@ -72,7 +79,20 @@ pub fn record_sent(hash: &str, chain_id: u128, to: &str, value_wei: u128, max_fe
         e.push(Entry {
             kind: "out".into(), hash: Some(hash.to_string()), chain_id, counterparty: Some(to.to_string()),
             amount_eth: eth::format_eth(value_wei), fee_max_eth: Some(eth::format_eth(max_fee_wei)), nonce: Some(nonce),
+            time: now(), status: "pending".into(), block: None, token_symbol: None, token_amount: None, token_contract: None,
+        });
+    }).map(|_| ())
+}
+
+/// A token send: the counterparty is the token recipient (not the contract), no ETH moved.
+pub fn record_sent_token(hash: &str, chain_id: u128, t: &crate::tokens::TokenIntent, max_fee_wei: u128, nonce: u128) -> Result<(), String> {
+    update(|e| {
+        if e.iter().any(|x| x.hash.as_deref().map(str::to_ascii_lowercase) == Some(hash.to_ascii_lowercase())) { return; }
+        e.push(Entry {
+            kind: "out".into(), hash: Some(hash.to_string()), chain_id, counterparty: Some(crate::verify::checksum(&t.recipient)),
+            amount_eth: "0".into(), fee_max_eth: Some(eth::format_eth(max_fee_wei)), nonce: Some(nonce),
             time: now(), status: "pending".into(), block: None,
+            token_symbol: Some(t.symbol.clone()), token_amount: Some(t.amount.clone()), token_contract: Some(crate::verify::checksum(&t.contract)),
         });
     }).map(|_| ())
 }
@@ -101,5 +121,6 @@ pub(crate) async fn history_add_incoming(chain_id: u128, amount_wei: String) -> 
     blocking(move || update(|e| e.push(Entry {
         kind: "in".into(), hash: None, chain_id, counterparty: None, amount_eth: eth::format_eth(wei),
         fee_max_eth: None, nonce: None, time: now(), status: "received".into(), block: None,
+        token_symbol: None, token_amount: None, token_contract: None,
     }))).await
 }

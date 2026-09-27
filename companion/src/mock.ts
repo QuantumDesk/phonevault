@@ -15,6 +15,12 @@ const RPC_CHAIN: Record<string, number> = {
 };
 const toWei = (eth: string) => { const [w, f = ""] = eth.split("."); return (BigInt(w || "0") * 10n ** 18n + BigInt((f + "0".repeat(18)).slice(0, 18))).toString(); };
 
+const MOCK_TOKENS = [
+  { chainId: 8453, address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", symbol: "USDC", name: "USD Coin", decimals: 6 },
+  { chainId: 8453, address: "0x4200000000000000000000000000000000000006", symbol: "WETH", name: "Wrapped Ether", decimals: 18 },
+  { chainId: 1, address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", name: "USD Coin", decimals: 6 },
+];
+
 export interface Mock {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
   onProgress(cb: (ticket: string, stage: Stage) => void): () => void;
@@ -96,6 +102,23 @@ export function createMock(): Mock {
       case "history_mark": history = history.map((h) => h.hash === a.hash ? { ...h, status: a.status as HistoryEntry["status"], block: a.block as number } : h); return history as T;
       case "history_add_incoming": return history as T;
       case "spot_usd": await sleep(200); return (a.symbol === "POL" ? 0.21 : 2451.37) as T;
+      // ERC-20 (preview): a few entries shaped like the built-in list
+      case "token_list": return MOCK_TOKENS as T;
+      case "token_balances": {
+        await sleep(300); const c = chainOf(a.rpcUrl);
+        return { chain_id: c, balances: MOCK_TOKENS.filter((t) => t.chainId === c).map((t) => ({ address: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals,
+          raw: t.symbol === "USDC" ? "125500000" : "0", amount: t.symbol === "USDC" ? "125.5" : "0", error: null })) } as T;
+      }
+      case "token_quote": {
+        await sleep(700); const c = chainOf(a.rpcUrl);
+        const t = MOCK_TOKENS.find((x) => x.chainId === c && x.address.toLowerCase() === String(a.token).toLowerCase());
+        if (!t) throw "that token is not in the built-in list for this network";
+        const [w, f = ""] = String(a.amount).split(".");
+        const raw = (BigInt(w || "0") * 10n ** BigInt(t.decimals) + BigInt((f + "0".repeat(t.decimals)).slice(0, t.decimals) || "0")).toString();
+        return { chain_id: "0x" + c.toString(16), nonce: "0x4", max_priority_fee_per_gas: "0xf4240", max_fee_per_gas: "0xc3500", gas_limit: "0xfde8", to: t.address.toLowerCase(), value: "0x0",
+          data: "0xa9059cbb", amount_eth: "0", max_fee_eth: "0.0000130", total_eth: "0.0000130", balance_eth: BAL[c] ?? "0", network: c === 8453 ? "Base" : "Ethereum Mainnet",
+          token: { contract: t.address.toLowerCase(), symbol: t.symbol, name: t.name, decimals: t.decimals, recipient: String(a.to).toLowerCase(), amount_raw: raw, amount: String(a.amount).includes(".") ? String(a.amount).replace(/\.?0+$/, "") : String(a.amount) } } as T;
+      }
     }
     throw `preview: no mock for ${cmd}`;
   }

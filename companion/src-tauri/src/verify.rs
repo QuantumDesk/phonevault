@@ -135,7 +135,9 @@ fn rlp_encode(item: &Rlp) -> Vec<u8> {
         if len < 56 { return vec![short + len as u8]; }
         let mut be = len.to_be_bytes().to_vec();
         while be.first() == Some(&0) { be.remove(0); }
-        let mut out = vec![long + be.len() as u8 - 1];
+        // long form: 0xB7 / 0xF7 + length-of-length (was off by one, which broke signer
+        // recovery for any transaction whose payload or calldata is 56 bytes or longer)
+        let mut out = vec![long + be.len() as u8];
         out.extend(be);
         out
     }
@@ -172,8 +174,11 @@ pub fn checksum(address: &str) -> String {
     out
 }
 
+/// A signature that passed `validate_signature`, with the destination, value and calldata as
+/// DECODED FROM THE SIGNED BYTES (not copied from the request), for intent checks such as
+/// `check_erc20_transfer`.
 #[derive(Debug)]
-pub struct Verified { pub raw_hex: String, pub tx_hash: String, pub signer: String }
+pub struct Verified { pub raw_hex: String, pub tx_hash: String, pub signer: String, pub to: String, pub value: u128, pub data: String }
 
 /// Validate a `signEip1559` response against the request and the pinned signer.
 pub fn validate_signature(request: &Value, response: &Value, pinned_signer: &str) -> Result<Verified, VerifyError> {
@@ -208,7 +213,35 @@ pub fn validate_signature(request: &Value, response: &Value, pinned_signer: &str
     let signer = recover_signer(&signed)?;
     if signer != pinned_signer.to_ascii_lowercase() { return Err(err(format!("recovered signer {} is not the paired phone {}", checksum(&signer), checksum(pinned_signer)))); }
     if obj["address"].as_str().map(str::to_ascii_lowercase) != Some(signer.clone()) { return Err(err("phone's claimed address differs from the recovered signer")); }
-    Ok(Verified { raw_hex: format!("0x{}", hex::encode(&signed.raw)), tx_hash: recomputed, signer })
+    Ok(Verified { raw_hex: format!("0x{}", hex::encode(&signed.raw)), tx_hash: recomputed, signer, to: signed.to, value: signed.value, data: signed.data })
+}
+
+// ---------------------------------------------------------------- ERC-20 intent
+
+/// Strictly decode `transfer(address,uint256)` calldata: exactly 68 bytes, selector a9059cbb,
+/// zero-padded non-zero address, amount that fits u128. Returns (recipient lower-case, amount).
+pub fn decode_erc20_transfer(data: &str) -> Result<(String, u128), VerifyError> {
+    let body = data.strip_prefix("0x").ok_or_else(|| err("calldata without 0x"))?.to_ascii_lowercase();
+    if body.len() != 136 || !body.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(err("calldata is not exactly transfer(address,uint256): wrong length")); }
+    if &body[..8] != "a9059cbb" { return Err(err("calldata is not transfer(address,uint256)")); }
+    if !body[8..32].bytes().all(|b| b == b'0') { return Err(err("transfer recipient has non-zero ABI padding")); }
+    let recipient = format!("0x{}", &body[32..72]);
+    if body[32..72].bytes().all(|b| b == b'0') { return Err(err("transfer to the zero address")); }
+    if !body[72..104].bytes().all(|b| b == b'0') { return Err(err("transfer amount does not fit this app's range")); }
+    let amount = u128::from_str_radix(&body[104..136], 16).map_err(|_| err("bad transfer amount"))?;
+    Ok((recipient, amount))
+}
+
+/// The UI's token-send intent against what the phone SIGNED (decoded from the signed bytes):
+/// the transaction goes to the token contract, carries no ETH, and its calldata decodes to
+/// exactly transfer(recipient, amount). Runs after `validate_signature`, never instead of it.
+pub fn check_erc20_transfer(v: &Verified, contract: &str, recipient: &str, amount: u128) -> Result<(), VerifyError> {
+    if v.to != contract.to_ascii_lowercase() { return Err(err("signed transaction is not addressed to the token contract — refusing to broadcast")); }
+    if v.value != 0 { return Err(err("signed token transfer also sends ETH — refusing to broadcast")); }
+    let (to, amt) = decode_erc20_transfer(&v.data)?;
+    if to != recipient.to_ascii_lowercase() { return Err(err("signed token recipient differs from what you entered — refusing to broadcast")); }
+    if amt != amount { return Err(err("signed token amount differs from what you entered — refusing to broadcast")); }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- personal_sign / EIP-712
@@ -434,6 +467,117 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
         // claimed address differs from the recovered signer
         let mut liar = approved(&v, signer); liar["address"] = Value::from("0x1111111111111111111111111111111111111111");
         assert!(validate_message_signature(&req, &liar, signer).is_err());
+    }
+
+    // ------------------------------------------------ ERC-20 transfers: sign here, verify like the phone's answers
+
+    /// Throwaway test key (the well-known web3 docs example key, also used by the JVM tests).
+    const TEST_KEY: &str = "04c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f";
+    fn int_bytes(v: u128) -> Rlp { let b = v.to_be_bytes(); let i = b.iter().position(|&x| x != 0).unwrap_or(16); Rlp::Bytes(b[i..].to_vec()) }
+    fn hex_bytes(h: &str) -> Vec<u8> { hex::decode(h.trim_start_matches("0x")).unwrap() }
+    /// Sign a request the way the phone does (EIP-1559, empty access list) and answer in its format.
+    fn sign_like_the_phone(req: &Value) -> Value {
+        use k256::ecdsa::SigningKey;
+        let q = |k: &str| quantity(req[k].as_str().unwrap()).unwrap();
+        let fields = vec![int_bytes(q("chainId")), int_bytes(q("nonce")), int_bytes(q("maxPriorityFeePerGas")), int_bytes(q("maxFeePerGas")),
+            int_bytes(q("gasLimit")), Rlp::Bytes(hex_bytes(req["to"].as_str().unwrap())), int_bytes(q("value")),
+            Rlp::Bytes(hex_bytes(req["data"].as_str().unwrap())), Rlp::List(vec![])];
+        let mut payload = vec![0x02]; payload.extend(rlp_encode(&Rlp::List(fields.clone())));
+        let key = SigningKey::from_slice(&hex::decode(TEST_KEY).unwrap()).unwrap();
+        let (sig, rid) = key.sign_prehash_recoverable(&keccak256(&payload)).unwrap();
+        let (sig, rid) = match sig.normalize_s() { Some(n) => (n, RecoveryId::from_byte(rid.to_byte() ^ 1).unwrap()), None => (sig, rid) };
+        let bytes = sig.to_bytes();
+        let strip = |b: &[u8]| { let i = b.iter().position(|&x| x != 0).unwrap_or(b.len() - 1); Rlp::Bytes(b[i..].to_vec()) };
+        let mut all = fields; all.push(int_bytes(rid.to_byte() as u128)); all.push(strip(&bytes[..32])); all.push(strip(&bytes[32..]));
+        let mut raw = vec![0x02]; raw.extend(rlp_encode(&Rlp::List(all)));
+        let point = key.verifying_key().to_encoded_point(false);
+        let addr = format!("0x{}", hex::encode(&keccak256(&point.as_bytes()[1..])[12..]));
+        serde_json::json!({"id": req["id"], "status": "approved", "address": addr, "signedTransaction": format!("0x{}", hex::encode(&raw)),
+            "transactionHash": format!("0x{}", hex::encode(keccak256(&raw)))})
+    }
+    const USDC: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+    const RECIPIENT: &str = "0x7f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b93";
+    fn token_request(data: &str) -> Value {
+        serde_json::json!({"id": "tok-1", "method": "signEip1559", "chainId": "0x1", "nonce": "0x5",
+            "maxPriorityFeePerGas": "0x3b9aca00", "maxFeePerGas": "0x77359400", "gasLimit": "0xfde8",
+            "to": USDC, "value": "0x0", "data": data})
+    }
+
+    #[test]
+    fn a_signed_token_transfer_is_re_decoded_and_matched_to_the_intent() {
+        let data = crate::tokens::transfer_calldata(RECIPIENT, 50_000_000).unwrap();
+        let req = token_request(&data);
+        let resp = sign_like_the_phone(&req);
+        let signer = resp["address"].as_str().unwrap().to_string();
+        let v = validate_signature(&req, &resp, &signer).unwrap();
+        assert_eq!((v.to.as_str(), v.value, v.data.as_str()), (USDC, 0, data.as_str()));
+        check_erc20_transfer(&v, USDC, RECIPIENT, 50_000_000).unwrap();
+        // the intent the UI showed must be exactly what was signed
+        assert!(check_erc20_transfer(&v, USDC, RECIPIENT, 50_000_001).unwrap_err().0.contains("amount"));
+        assert!(check_erc20_transfer(&v, USDC, "0x1111111111111111111111111111111111111111", 50_000_000).unwrap_err().0.contains("recipient"));
+        assert!(check_erc20_transfer(&v, "0xdac17f958d2ee523a2206206994597c13d831ec7", RECIPIENT, 50_000_000).unwrap_err().0.contains("token contract"));
+    }
+
+    #[test]
+    fn a_phone_that_signs_different_calldata_is_refused() {
+        let asked = token_request(&crate::tokens::transfer_calldata(RECIPIENT, 50_000_000).unwrap());
+        // the phone (or the cable) swaps the amount: the response is internally consistent but differs from the request
+        let mut other = asked.clone(); other["data"] = Value::from(crate::tokens::transfer_calldata(RECIPIENT, 5_000_000_000).unwrap());
+        let resp = sign_like_the_phone(&other);
+        let signer = resp["address"].as_str().unwrap().to_string();
+        assert!(validate_signature(&asked, &resp, &signer).unwrap_err().0.contains("data"));
+        // the swapped recipient likewise
+        let mut other = asked.clone(); other["data"] = Value::from(crate::tokens::transfer_calldata("0x1111111111111111111111111111111111111111", 50_000_000).unwrap());
+        assert!(validate_signature(&asked, &sign_like_the_phone(&other), &signer).is_err());
+        // native value added to a token call
+        let mut other = asked.clone(); other["value"] = Value::from("0x1");
+        assert!(validate_signature(&asked, &sign_like_the_phone(&other), &signer).unwrap_err().0.contains("value"));
+    }
+
+    /// An independently produced token transfer (Foundry `cast mktx`, same throwaway key, RFC 6979):
+    /// transfer 50 USDC to 0x7F3A…4B93, mainnet, nonce 5, gas 65000, 1 / 2 gwei.
+    const CAST_USDC_TRANSFER: &str = "0x02f8af0105843b9aca00847735940082fde894a0b86991c6218b36c1d19d4a2e9eb0ce3606eb4880b844a9059cbb\
+0000000000000000000000007f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b930000000000000000000000000000000000000000000000000000000002faf080\
+c001a01236613fa9151ad57d53751c56c08bcd7a5cfca21f201befba28f93b34f1b635a03daf980137a81f40dd69d93df5d7170757c8128f7982a02d83e7adda7b00541f";
+
+    #[test]
+    fn an_independently_signed_token_transfer_verifies_and_matches_our_encoder() {
+        let data = crate::tokens::transfer_calldata(RECIPIENT, 50_000_000).unwrap();
+        let req = token_request(&data);
+        let resp = serde_json::json!({"id": "tok-1", "status": "approved", "address": SIGNER, "signedTransaction": CAST_USDC_TRANSFER,
+            "transactionHash": format!("0x{}", hex::encode(keccak256(&hex::decode(&CAST_USDC_TRANSFER[2..]).unwrap())))});
+        let v = validate_signature(&req, &resp, SIGNER).unwrap();
+        check_erc20_transfer(&v, USDC, RECIPIENT, 50_000_000).unwrap();
+        // our test signer (and so our RLP encoder) produces the very same bytes
+        assert_eq!(sign_like_the_phone(&req)["signedTransaction"], CAST_USDC_TRANSFER);
+    }
+
+    #[test]
+    fn rlp_long_forms_round_trip() {
+        // 56+ byte strings and lists use the long form (0xB8.. / 0xF8..); token calldata is 68 bytes.
+        for len in [55usize, 56, 68, 255, 256, 1024] {
+            let item = Rlp::Bytes(vec![0xab; len]);
+            let enc = rlp_encode(&item);
+            if len >= 56 { assert_eq!(enc[0], 0xB7 + if len < 256 { 1 } else { 2 }); }
+            assert_eq!(rlp_decode(&enc, 0).unwrap(), (item.clone(), enc.len()));
+            let list = Rlp::List(vec![item.clone(), Rlp::Bytes(vec![1])]);
+            let enc = rlp_encode(&list);
+            assert_eq!(rlp_decode(&enc, 0).unwrap(), (list, enc.len()));
+        }
+    }
+
+    #[test]
+    fn erc20_decoding_is_strict() {
+        let good = crate::tokens::transfer_calldata(RECIPIENT, 7).unwrap();
+        assert_eq!(decode_erc20_transfer(&good).unwrap(), (RECIPIENT.to_string(), 7));
+        assert!(decode_erc20_transfer(&format!("{good}00")).is_err(), "trailing byte");
+        assert!(decode_erc20_transfer(&good[..good.len() - 2]).is_err(), "truncated");
+        assert!(decode_erc20_transfer(&good.replacen("a9059cbb", "095ea7b3", 1)).is_err(), "approve is not a transfer");
+        assert!(decode_erc20_transfer(&good.replacen("0xa9059cbb00", "0xa9059cbb01", 1)).is_err(), "dirty padding");
+        assert!(decode_erc20_transfer(&crate::tokens::transfer_calldata("0x0000000000000000000000000000000000000000", 1).unwrap()).is_err());
+        let huge = format!("0xa9059cbb{:0>64}{}", &RECIPIENT[2..], "f".repeat(64));
+        assert!(decode_erc20_transfer(&huge).is_err(), "amount beyond u128");
+        assert!(decode_erc20_transfer("0x").is_err());
     }
 
     #[test]
