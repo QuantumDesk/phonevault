@@ -184,3 +184,58 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) { let _ = self.handle.release_interface(self.iface); }
 }
+
+// ---------------------------------------------------------------- observed exchange (UI progress)
+//
+// Same framing, caps and id check as `exchange`, plus two hooks the send flow needs so the UI can
+// tell the truth: `on_delivered` fires once the request is actually in the phone's hands (the bulk
+// write completed), and `cancelled` is polled about once a second so the user can stop waiting.
+// Kept as a separate block so `exchange` stays exactly the audited path.
+pub const CANCELLED: &str = "cancelled on this Mac";
+impl Session {
+    pub fn exchange_observed(
+        &mut self,
+        request: &Value,
+        timeout: Duration,
+        on_delivered: impl FnOnce(),
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Value, AoaError> {
+        let id = request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
+        let mut payload = serde_json::to_vec(request).map_err(|e| proto(e.to_string()))?;
+        payload.push(b'\n');
+        let write_deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if cancelled() { return Err(proto(CANCELLED)); }
+            match self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)) {
+                Ok(_) => break,
+                Err(rusb::Error::Timeout) if Instant::now() < write_deadline => continue,
+                Err(rusb::Error::Timeout) => return Err(proto("the phone is not reading USB — wake it, unlock it, and retry; if it still fails unplug and reconnect the cable")),
+                Err(other) => return Err(AoaError::Usb(other)),
+            }
+        }
+        on_delivered();
+        let deadline = Instant::now() + timeout;
+        let mut received: Vec<u8> = Vec::new();
+        let mut chunk = vec![0u8; 16_384];
+        while Instant::now() < deadline {
+            if cancelled() { return Err(proto(CANCELLED)); }
+            match self.handle.read_bulk(self.ep_in, &mut chunk, Duration::from_secs(1)) {
+                Ok(n) => received.extend_from_slice(&chunk[..n]),
+                Err(rusb::Error::Timeout) => continue,
+                Err(e) => return Err(AoaError::Usb(e)),
+            }
+            if received.len() > MAX_RESPONSE_BYTES { return Err(proto("phone response exceeds 64 KiB")); }
+            if let Some(pos) = received.iter().position(|&b| b == b'\n') {
+                if received.len() > pos + 1 { return Err(proto("phone returned more than one framed response")); }
+                let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
+                let response: Value = serde_json::from_str(line).map_err(|_| proto("phone response is not JSON"))?;
+                if !response.is_object() { return Err(proto("phone response must be a JSON object")); }
+                if response.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+                    return Err(proto("phone response id does not match the request"));
+                }
+                return Ok(response);
+            }
+        }
+        Err(AoaError::Timeout(timeout.as_secs()))
+    }
+}
