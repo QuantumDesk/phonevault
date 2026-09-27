@@ -127,7 +127,7 @@ function renderHeader() {
     if (identity.s === "checking") { label = "Checking phone…"; title = "Asking the phone which wallet it holds."; }
     else if (identity.s === "match") { label = "Your phone"; title = "The phone on USB holds the wallet this Mac is paired with."; cls = "accessory"; }
     else if (identity.s === "different") { label = "Different wallet"; title = "The phone on USB holds a different wallet. Click to review."; cls = "danger"; }
-    else if (identity.s === "unreadable") { label = "Unlock your phone"; title = "Could not ask the phone which wallet it holds. Unlock it, then click to try again."; }
+    else if (identity.s === "unreadable") { label = "Unlock your phone"; title = "The phone is asking to be unlocked. This updates by itself once you unlock it."; }
   }
   const retry = identity.s === "unreadable" ? () => identifyPhone()
     : identity.s === "different" ? () => { if (identity.s === "different") identity.dismissed = false; renderPhoneNotice(); } : undefined;
@@ -318,17 +318,23 @@ type Identity = { s: "unknown" } | { s: "checking" } | { s: "match" }
   | { s: "different"; address: string; dismissed: boolean } | { s: "unreadable"; error: string };
 let identity: Identity = { s: "unknown" };
 
+let identifying = false;
 async function identifyPhone() {
-  if (identity.s === "checking" || pair.s === "reading") return;
-  if (view === "send" && flow.s !== "form") return; // never talk over a send in progress
-  identity = { s: "checking" }; renderHeader();
+  if (identifying || pair.s === "reading" || !status || status.phone === "none") return;
+  if (view === "send" && flow.s !== "form") { setTimeout(identifyPhone, 5000); return; } // never talk over a send
+  identifying = true;
+  // A locked phone holds the request on its lock screen and answers after unlock; keep the
+  // "Unlock your phone" label steady while asking again rather than flickering to "Checking".
+  if (identity.s !== "unreadable") { identity = { s: "checking" }; renderHeader(); }
   try {
     const address = await api.readAddress();
     if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
     else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
     else identity = { s: "different", address, dismissed: false };
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
+  finally { identifying = false; }
   renderHeader(); renderPhoneNotice();
+  if (identity.s === "unreadable" && status?.phone !== "none") setTimeout(identifyPhone, 2000);
 }
 
 let noticeEl: HTMLElement | null = null;
