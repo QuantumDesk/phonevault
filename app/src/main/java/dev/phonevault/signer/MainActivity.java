@@ -536,7 +536,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             heldRequest = null;
             heldSummary = null;
             if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
-            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            keepScreenOn(false);
         }
         clearSensitiveUi();
         clearPinEntry();
@@ -1818,7 +1818,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 transport = opened;
                 opened.start();
                 pendingUsb = null;
-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                keepScreenOn(true);
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
@@ -1938,8 +1938,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
     }
 
+    /**
+     * Window flags belong to the UI thread. A change from any other thread (the USB reader, the
+     * crypto executor) makes ViewRootImpl throw CalledFromWrongThreadException half-way through
+     * a relayout: the decor view is left "layout requested" with no traversal scheduled, so the
+     * window never draws again, and the exception ends the USB session before the host gets its
+     * answer. Every keep-screen-on change goes through here (MainActivityThreadingTest).
+     */
+    private void keepScreenOn(boolean on) {
+        runOnUiThread(() -> {
+            if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        });
+    }
+
+    /** Releases the approval slot; callable from any thread (the refusal path runs on the USB reader). */
     private void finishApproval(ApprovalDecision owner) {
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        keepScreenOn(false);
         synchronized (stateLock) {
             if (approvalDecision != owner) return;
             approvalDecision = null;
@@ -1965,7 +1980,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         // Rendered from the review built with this exact request in ApprovalSession (same object that is signed).
         TransactionReview review = approval.review;
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
         for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
@@ -2097,7 +2112,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             return;
         }
         MessageReview review = approval.review;
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
         for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
