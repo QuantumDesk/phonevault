@@ -12,6 +12,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// WalletConnect: request policy only; signing goes through send/signing above
+mod wc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -177,7 +179,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
-            signing::sign_message, signing::sign_typed_data])
+            signing::sign_message, signing::sign_typed_data,
+            wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }
