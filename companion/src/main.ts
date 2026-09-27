@@ -319,6 +319,8 @@ type Identity = { s: "unknown" } | { s: "checking" } | { s: "match" }
 let identity: Identity = { s: "unknown" };
 
 let identifying = false;
+/** Read fresh each time: status changes while a request is in flight. */
+const phonePresent = (): boolean => (status?.phone ?? "none") !== "none";
 async function identifyPhone() {
   if (identifying || pair.s === "reading" || !status || status.phone === "none") return;
   if (view === "send" && flow.s !== "form") { setTimeout(identifyPhone, 5000); return; } // never talk over a send
@@ -334,7 +336,7 @@ async function identifyPhone() {
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
   finally { identifying = false; }
   renderHeader(); renderPhoneNotice();
-  if (identity.s === "unreadable" && status?.phone !== "none") setTimeout(identifyPhone, 2000);
+  if (identity.s === "unreadable" && phonePresent()) setTimeout(identifyPhone, 2000);
 }
 
 let noticeEl: HTMLElement | null = null;
