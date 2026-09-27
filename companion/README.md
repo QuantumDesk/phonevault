@@ -9,14 +9,28 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
 1. **Pair.** Reads the phone's address over USB and shows it. You compare it with the address on the
    phone's own Wallet screen, character by character, then pin it. The pin lives in
    `~/Library/Application Support/PhoneVault/paired-signer.json` (mode 0600; anything looser is refused).
-2. **Wallet.** Address, balance, network and block from an https JSON-RPC node (default:
-   `https://ethereum-rpc.publicnode.com`, editable). The node is untrusted input: everything it
-   supplies is shown here and on the phone before anything is signed.
-3. **Send.** Enter recipient and amount, get a quote (nonce, max fee, total). "Send to phone for
-   approval" hands exactly those fields to the phone. **You approve on the phone.** The returned
-   signature is decoded field by field and compared with the quote, the hash is recomputed, and
-   the signer is recovered and compared with the pinned pairing. Only then does Broadcast become
-   available, as a separate click.
+2. **Wallet.** One main view: address (click to copy), balance on the selected network with a
+   USD figure, a compact list of balances on every network, Send, Receive (QR code), and recent
+   activity. Default network Base (`https://mainnet.base.org`); nodes are editable per network in
+   Settings. The node is untrusted input: everything it supplies is shown here and on the phone
+   before anything is signed. USD prices come from Coinbase's public spot endpoint (cached 60 s,
+   display only; hidden when unavailable).
+3. **Send.** A stepper: Details → Phone → Broadcast → Confirmed. Enter recipient (EIP-55 checked
+   as you type) and amount (Max available), see the fee in ETH and USD, review the quote, then
+   "Send to phone". The screen says "Review on your phone" only after the USB write to the phone
+   completed (a `send-progress` event from Rust), with a Cancel. **You approve on the phone.**
+   The returned signature is decoded field by field and compared with the quote, the hash is
+   recomputed, and the signer is recovered and compared with the pinned pairing. The verified
+   transaction stays in the Rust process; Broadcast (a separate click) sends it by hash, so the
+   UI can never broadcast bytes that were not verified. Then the receipt is polled until it is
+   confirmed or reverted. Every failure has a plain explanation and a retry.
+4. **Activity and notifications.** Transactions broadcast from here, and balance increases seen
+   while the app is open, are kept in `~/Library/Application Support/PhoneVault/history.json`
+   (0600; public-chain facts only). A notification is shown when funds arrive (toggle in Settings).
+
+Preview the UI without Tauri or a phone: `npm run dev` and open http://localhost:1420. With no
+Tauri runtime the app uses fake data (marked PREVIEW DATA); `?paired=0`, `?phone=none` and
+`?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states.
 
 ## Running it
 

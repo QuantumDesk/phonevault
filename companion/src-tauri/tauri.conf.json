@@ -14,10 +14,10 @@
     "windows": [
       {
         "title": "Phone Vault Companion",
-        "width": 960,
-        "height": 760,
-        "minWidth": 720,
-        "minHeight": 600
+        "width": 560,
+        "height": 820,
+        "minWidth": 420,
+        "minHeight": 560
       }
     ],
     "security": {

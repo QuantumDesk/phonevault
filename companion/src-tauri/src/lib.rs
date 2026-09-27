@@ -8,6 +8,10 @@ mod message;
 mod pairing;
 mod signing;
 mod verify;
+// redesigned UI: honest send flow, local history, fiat display
+mod history;
+mod price;
+mod send;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -169,7 +173,11 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc, signing::sign_message, signing::sign_typed_data])
+        .manage(send::SendState::default())
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
+            send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
+            history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
+            signing::sign_message, signing::sign_typed_data])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }
