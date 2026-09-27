@@ -114,7 +114,9 @@ unlock() {
 unlock_if_locked() {
   # The locked page opens the system PIN prompt a moment after it appears; let it settle so a
   # lock that is still being drawn is not mistaken for "unlocked".
-  local i; for i in 1 2 3 4; do system_prompt_up || has_text "Phone Vault is locked" || has_text LOCKED && break; sleep 1; done
+  # One dump per probe: uiautomator dumps take seconds here, and this wait touches nothing, so it
+  # spends the vault's idle-lock budget (see go_home).
+  local i; for i in 1 2 3 4; do system_prompt_up && break; uidump | grep -q -e 'text="Phone Vault is locked' -e 'text="LOCKED' && break; sleep 1; done
   if system_prompt_up || has_text "Phone Vault is locked"; then system_prompt_up || tap_text "Unlock"; enter_system_pin || die "system PIN prompt did not appear"
   elif has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi
 }
@@ -125,8 +127,10 @@ go_section() { # go_section "Wallet" | "Security" | "Display &amp; auto-lock" | 
   local b; b="$(bounds_of "Back to Security")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.2; }
   open_menu || return 1; tap_text "$1"; sleep 1.5
 }
+# Always ends with a touch: the vault's idle lock (2 min) counts only user interaction, and the
+# USB steps after go_home (gadget reset, AOA switch, adb restart, lock-settle probes) touch nothing.
 go_home() {
-  if has_text "Your offline wallet" || has_text "Back up your wallet"; then return 0; fi
+  if has_text "Your offline wallet" || has_text "Back up your wallet"; then scroll_top; return 0; fi
   go_section "Wallet" || true; return 0
 }
 go_security() { has_text "DEVICE &amp; WALLET" && return 0; go_section "Security"; }
