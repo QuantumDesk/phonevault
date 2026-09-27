@@ -39,7 +39,14 @@ this file is the queue.
       Permit2 UNLIMITED flagged + verified, wrong-chain Permit2 flagged + rejected. Format and
       limits in `message-signing.md`. Companion card is basic until the UI rework lands.*
 - [ ] **WalletConnect in the companion** — dApps connect to the companion, the phone signs.
-- [ ] **Token awareness** — signed token list on the phone; "50 USDC", not raw uint256.
+- [ ] **Token awareness** — "50 USDC", not raw uint256. BUILT (2026-09-27, not yet run on a phone):
+      30 tokens (USDC, USDT/USDT0, DAI, WETH, WBTC, cbBTC on the six allow-listed chains) in
+      `res/raw/tokens.json`, SHA-256 pinned in the app and the companion, sources per entry in
+      `app/token-list/SOURCES.md`; phone review for transfer / approve (UNLIMITED ≥ 2^255) /
+      transferFrom / increaseAllowance, unknown contracts in raw base units; companion token
+      balances, token Send, re-decoded verification, history. Open: phone run of
+      `tools/dev-device/tokensigntest.sh`; a *signed, updatable* list (today it changes only
+      with an app release); token metadata for EIP-2612 / Permit2 message reviews.
 - [ ] **Watch-only export** for Rabby/MetaMask balance views; **multiple accounts**.
 
 ## 3. Companion as the product surface

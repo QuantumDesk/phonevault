@@ -35,12 +35,21 @@ Android does not remove those supply-chain or end-of-life risks.
    signing disabled until the user selects the review acknowledgement below the
    decoded fields.
 3. Only native EIP-1559 transfers and canonical ABI-shaped
-   `transfer(address,uint256)` or `approve(address,uint256)` calls are accepted
-   during the prototype phase. A four-byte selector and well-formed arguments
-   do not authenticate the target contract's interface or execution semantics;
-   the screen must display the exact selector and label those semantics as
-   unverified. Token identity and decimals are not trusted unless future signed
-   metadata is introduced. Besides transactions, only `personal_sign` (EIP-191
+   `transfer(address,uint256)`, `approve(address,uint256)`,
+   `transferFrom(address,address,uint256)` or `increaseAllowance(address,uint256)`
+   calls (exact length: missing or trailing bytes, dirty address padding, zero
+   addresses and native value on a token call are refused) are accepted during
+   the prototype phase. A four-byte selector and well-formed arguments do not
+   authenticate the target contract's interface or execution semantics; the
+   technical details show the exact selector and calldata. Token symbol and
+   decimals come only from the token list built into the APK
+   (`res/raw/tokens.json`, SHA-256 pinned in `TokenList`, sources in
+   `app/token-list/SOURCES.md`), matched by chain and contract address; a
+   contract not in that list is shown as "Unknown token contract" with the raw
+   amount in base units and never a guessed symbol, and a list that fails its
+   pin is refused whole. The list is trusted only as far as the APK signature
+   and its cited sources; it is not updatable at runtime (signed updatable
+   lists are future work). Approvals at or above 2^255 are shown as UNLIMITED. Besides transactions, only `personal_sign` (EIP-191
    0x45) and strictly parsed `eth_signTypedData_v4` (EIP-712) messages are
    accepted; raw `eth_sign` is refused. Their review and the signed digest come
    from one parsed object, and the host recomputes the digest independently
@@ -135,10 +144,13 @@ Android does not remove those supply-chain or end-of-life risks.
   forensic erasure of old process memory or flash history; "lock" drops
   references to key material, it does not prove memory erasure.
 - The signer cannot determine offline whether a native recipient is a contract,
-  authenticate token name/symbol/decimals, or prove that selector-shaped
-  calldata actually executes ERC-20/ERC-721 semantics without trusted contract
-  code and state. The prototype therefore displays decoded arguments without
-  claiming that they describe the contract's real behavior.
+  or prove that selector-shaped calldata actually executes ERC-20/ERC-721
+  semantics without trusted contract code and state. Token name/symbol/decimals
+  are shown only for contracts in the APK's built-in list (a curated snapshot,
+  not an on-chain proof: a listed contract that is later upgraded or paused is
+  not noticed); every other contract is shown as unknown with raw base units.
+  The phone cannot see balances or existing allowances, so increaseAllowance
+  totals are unknown to it.
 - Physical side channels, malicious replacement displays/touch controllers,
   fault injection, compromised silicon, and vendor firmware implants are not
   solved by a custom Android image.

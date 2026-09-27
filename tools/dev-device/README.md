@@ -19,6 +19,7 @@ once when a button is below the fold.
 | `restoretest.sh firstrun\|replace ADDR` | types the 24 words on the phone's own keyboard; requires the derived address shown **before** saving to equal `ADDR`; confirms; checks Home. `replace` goes through Security → Restore a different wallet (fresh PIN, replacement state machine) |
 | `usbsigntest.sh` | AOA pair (USB address == screen), mainnet-shaped 0.5 ETH example transfer reviewed and approved on the phone, host recomputes hash + recovers signer against the pinned pairing |
 | `msgsigntest.sh` | Message signing (needs the pairing from `usbsigntest.sh`): personal_sign text approved, sign-in for another account and unreadable bytes rejected, EIP-712 Mail and Permit2 (UNLIMITED) approved, Permit2 on the wrong host chain rejected; host checks each digest and recovers the signer |
+| `tokensigntest.sh` | ERC-20 review (needs the pairing from `usbsigntest.sh`; not yet run on a phone): USDC transfer shown as "Send 50 USDC" and approved, UNLIMITED approval and unknown-contract transfer rejected, Base USDC increaseAllowance approved, calldata with a trailing byte refused before review; host checks to/value/data, hash and signer |
 | `lifecycletest.sh` | stop-during-PIN-verify race, unlock, reveal/hide behind a fresh PIN, sleep-lock, wrong PIN counted, unlock, reboot persistence |
 | `capture_backup.sh` | screencaps the six phrase pages for UI review (**dev wallets only**) |
 
@@ -33,7 +34,7 @@ Environment:
   burned; the real PIN is chosen on-device at the final wipe.
 * `PV_WORDS_FILE` — a 0600 file with the throwaway 24-word phrase. `firstrun.sh` writes it;
   nothing prints it. Delete it when the throwaway wallet is retired.
-* `PV_HOST_PY`, `PV_HOST_CLIENT`, `PV_PAIRING_FILE` — host client for `usbsigntest.sh` and `msgsigntest.sh` (`PV_VECTORS` overrides the vector fixture path).
+* `PV_HOST_PY`, `PV_HOST_CLIENT`, `PV_PAIRING_FILE` — host client for `usbsigntest.sh`, `msgsigntest.sh` and `tokensigntest.sh` (`PV_VECTORS` overrides the vector fixture path).
 * `ANDROID_SERIAL` — pick the phone when more than one is attached (adb honours it; keep `ADB` a bare binary).
 
 Conventions that bit us (see `NOTES.md` for the history):
