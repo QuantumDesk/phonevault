@@ -33,7 +33,11 @@ this file is the queue.
 
 ## 2. Work with the apps people already use
 
-- [ ] **Message + EIP-712 signing** with plain-language review (logins, Permit2, orders).
+- [x] **Message + EIP-712 signing** with plain-language review (logins, Permit2, orders).
+      *Phone 2, 2026-09-27: `msgsigntest.sh` 6/6 — text sign + host verify, SIWE for another
+      address flagged and rejected, unreadable bytes rejected, EIP-712 Mail signed + verified,
+      Permit2 UNLIMITED flagged + verified, wrong-chain Permit2 flagged + rejected. Format and
+      limits in `message-signing.md`. Companion card is basic until the UI rework lands.*
 - [ ] **WalletConnect in the companion** — dApps connect to the companion, the phone signs.
 - [ ] **Token awareness** — signed token list on the phone; "50 USDC", not raw uint256.
 - [ ] **Watch-only export** for Rabby/MetaMask balance views; **multiple accounts**.

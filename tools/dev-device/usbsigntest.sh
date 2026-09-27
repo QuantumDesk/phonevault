@@ -16,7 +16,7 @@ OUT="${PV_SIGN_OUT:-/tmp/usbsign.out}"
 TO=0x7F3A9C04e2b16d58a41C0f9E6b2D7a8c5e1f4B93   # example recipient (checksummed, not a real wallet)
 
 usb_reset; wake; unlock_if_locked; go_home
-expect_screen "Your offline wallet"
+scroll_top; expect_screen "Your offline wallet"
 SCREEN_ADDR="$(addr)"; [[ -n "$SCREEN_ADDR" ]] || die "no address on screen"
 
 echo "== pair (fresh accessory attach while unlocked; adb server down during the switch)"
