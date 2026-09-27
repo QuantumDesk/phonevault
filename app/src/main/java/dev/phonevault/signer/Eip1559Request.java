@@ -197,6 +197,11 @@ final class Eip1559Request {
     }
 
     String networkLabel() {
+        return networkLabel(chainId);
+    }
+
+    /** Also used by message review, so both screens name networks identically. */
+    static String networkLabel(long chainId) {
         if (chainId == 1) return "Ethereum Mainnet (chain ID 1)";
         if (chainId == 8453) return "Base (chain ID 8453)";
         if (chainId == 42161) return "Arbitrum One (chain ID 42161)";
@@ -206,7 +211,7 @@ final class Eip1559Request {
         return "Unknown network (chain ID " + chainId + ")";
     }
 
-    private static boolean supportedChain(long id) {
+    static boolean supportedChain(long id) {
         return id == 1 || id == 11155111 || id == 8453 || id == 10 || id == 42161 || id == 137;
     }
 

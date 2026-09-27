@@ -1882,6 +1882,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if ("getAddress".equals(json.optString("method"))) {
                     Eip1559Request.requireExactFields(json, "id", "method");
                     b = "The connected host asks for your receiving address. Unlock to continue.";
+                } else if (MessageRequest.handles(json.optString("method"))) {
+                    b = MessageReview.lockedSummary(MessageRequest.parse(json));
                 } else {
                     Eip1559Request request = Eip1559Request.parse(json);
                     b = request.transactionTypeLabel() + " · " + request.displayedAmountLabel() + " to "
@@ -1927,6 +1929,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             approvalDecision = decision;
         }
         try {
+            if (MessageRequest.handles(json.optString("method"))) {
+                // Parsed once: the review and the digest both come from this object.
+                MessageApprovalSession approval = new MessageApprovalSession(MessageRequest.parse(json), credentials);
+                runOnUiThread(() -> showMessageApproval(source, approval, decision, s));
+                return;
+            }
             Eip1559Request request = Eip1559Request.parse(json);
             ApprovalSession approval = new ApprovalSession(request, credentials);
             runOnUiThread(() -> showApproval(source, approval, decision, s));
@@ -1996,16 +2004,33 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         root.addView(details, matchWrap(dp(8)));
         root.addView(raw);
+        addDecisionControls(root, source, decision, s, request.id, request.reviewPrompt(),
+                request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Approve permission & sign" : "Approve & sign",
+                approval::signIfIdentityUnchanged,
+                "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
+                "Transaction hash", "transactionHash", true);
+        present(root, "approval");
+    }
+
+    /** Produces the response for one reviewed request; runs on the crypto thread under stateLock. */
+    private interface ReviewedSigner { JSONObject sign(Credentials current) throws Exception; }
+
+    /**
+     * The acknowledgement checkbox, Sign and Reject for one request, shared by the transaction and
+     * message reviews: one decision, check → sign → send as one step under stateLock.
+     */
+    private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
+                                     String requestId, String prompt, String signText, ReviewedSigner signer,
+                                     String doneMessage, String receiptLabel, String receiptField, boolean transaction) {
         CheckBox reviewed = new CheckBox(this);
-        reviewed.setText(request.reviewPrompt());
+        reviewed.setText(prompt);
         reviewed.setTextSize(bodySize());
         reviewed.setTextColor(VaultTheme.INK);
         reviewed.setMinHeight(dp(56));
         reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
         hardenTouch(reviewed);
         root.addView(reviewed, matchWrap(dp(12)));
-        TextView sign = VaultTheme.pixelButton(this,
-                request.kind == Eip1559Request.Kind.TOKEN_APPROVAL ? "Approve permission & sign" : "Approve & sign", true);
+        TextView sign = VaultTheme.pixelButton(this, signText, true);
         TextView reject = VaultTheme.pixelButton(this, "Reject request", false);
         hardenTouch(sign);
         hardenTouch(reject);
@@ -2013,10 +2038,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         reviewed.setOnCheckedChangeListener((v, checked) -> sign.setEnabled(checked && decision.state() == ApprovalDecision.State.REVIEW));
         reject.setOnClickListener(v -> {
             if (!decision.reject()) return;
-            source.send(json("id", request.id, "status", "rejected"));
+            source.send(json("id", requestId, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Request rejected · no signature created";
-            showReceipt("Request rejected", "No signature was created for this request.", null);
+            showReceipt("Request rejected", "No signature was created for this request.", null, null, transaction);
         });
         sign.setOnClickListener(v -> {
             synchronized (stateLock) {
@@ -2037,7 +2062,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                 || !backupVerified || source != transport || source.isClosed()
                                 || approvalDecision != decision || !decision.maySign())
                             throw new IllegalStateException("Session ended before signing");
-                        response = approval.signIfIdentityUnchanged(credentials);
+                        response = signer.sign(credentials);
                         if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
                         decision.finish();
                     }
@@ -2045,28 +2070,68 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
                         statusMessage = "Signature created · delivery not confirmed";
-                        showReceipt("Signature created", "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
-                                response.optString("transactionHash"));
+                        showReceipt("Signature created", doneMessage, receiptLabel, response.optString(receiptField), transaction);
                     });
                 } catch (Exception e) {
-                    sendError(source, request.id, e.getMessage());
+                    sendError(source, requestId, e.getMessage());
                     runOnUiThread(() -> {
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
-                        showReceipt("Check the host", "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction.", null);
+                        showReceipt("Check the host", transaction
+                                ? "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction."
+                                : "Signing or delivery did not complete normally. A signature may have reached the host. Check before signing again.",
+                                null, null, transaction);
                     });
                 }
             });
         });
         root.addView(sign, matchWrap(dp(8)));
         root.addView(reject, matchWrap(dp(10)));
-        present(root, "approval");
+    }
+
+    /** Review for personal_sign / eth_signTypedData_v4, rendered from the parsed request only. */
+    private void showMessageApproval(AccessoryTransport source, MessageApprovalSession approval,
+                                     ApprovalDecision decision, int s) {
+        if (source != transport || s != session.get() || !unlocked || sensitive.active()
+                || approvalDecision != decision || !walletLoaded || !backupVerified) {
+            decision.cancel();
+            finishApproval(decision);
+            return;
+        }
+        MessageReview review = approval.review;
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
+                review.title, review.subtitle);
+        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
+        LinearLayout raw = new LinearLayout(this);
+        raw.setOrientation(LinearLayout.VERTICAL);
+        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
+        raw.setVisibility(View.GONE);
+        TextView details = VaultTheme.pixelButton(this, "Show details", false);
+        hardenTouch(details);
+        details.setOnClickListener(v -> {
+            boolean visible = raw.getVisibility() == View.VISIBLE;
+            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
+            details.setText(visible ? "Show details" : "Hide details");
+        });
+        root.addView(details, matchWrap(dp(8)));
+        root.addView(raw);
+        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
+                approval::signIfIdentityUnchanged,
+                "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
+                "Signed digest", "digest", false);
+        present(root, "message-approval");
     }
 
     private void showReceipt(String title, String message, String hash) {
+        showReceipt(title, message, "Transaction hash", hash, true);
+    }
+
+    private void showReceipt(String title, String message, String label, String value, boolean transaction) {
         LinearLayout root = page("REQUEST OUTCOME", title, message);
-        if (hash != null && !hash.isEmpty()) card(root, "Transaction hash", hash);
-        card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
+        if (value != null && !value.isEmpty()) card(root, label, value);
+        if (transaction) card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
+        else card(root, "Where it goes", "This offline phone cannot see how the host or website uses the signature.");
         action(root, "Back to Wallet", true, this::showHome);
         action(root, "Lock now", false, this::lock);
         present(root, "receipt");

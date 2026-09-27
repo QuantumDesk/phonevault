@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
+import { mountSigning } from "./signing";
 
 type Presence = "none" | "android" | "accessory";
 interface Status { phone: Presence; paired: string | null; paired_checksum: string | null; pairing_path: string }
@@ -164,3 +165,4 @@ $("btn-again").addEventListener("click", () => { signed = null; quote = null; sh
   setInterval(async () => { if (status?.paired) { try { await refreshWallet(); } catch { /* shown by refreshWallet */ } } }, 15000);
   setInterval(async () => { try { const s = await invoke<Status>("device_status"); const pill = $("phone-pill"); pill.textContent = s.phone === "accessory" ? "phone connected (accessory mode)" : s.phone === "android" ? "phone on USB" : "no phone on USB"; pill.className = `pill ${s.phone}`; } catch { /* ignore */ } }, 4000);
 })();
+mountSigning(); // message / typed-data signing card (src/signing.ts)

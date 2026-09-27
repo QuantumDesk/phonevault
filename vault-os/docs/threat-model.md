@@ -40,7 +40,11 @@ Android does not remove those supply-chain or end-of-life risks.
    do not authenticate the target contract's interface or execution semantics;
    the screen must display the exact selector and label those semantics as
    unverified. Token identity and decimals are not trusted unless future signed
-   metadata is introduced.
+   metadata is introduced. Besides transactions, only `personal_sign` (EIP-191
+   0x45) and strictly parsed `eth_signTypedData_v4` (EIP-712) messages are
+   accepted; raw `eth_sign` is refused. Their review and the signed digest come
+   from one parsed object, and the host recomputes the digest independently
+   before using a signature (see `message-signing.md`).
 4. The appliance app does not become operational until it is device owner and
    kiosk/device policy has been enforced. Ordinary Android installations remain
    usable for development without pretending to be an appliance. Device-owner
