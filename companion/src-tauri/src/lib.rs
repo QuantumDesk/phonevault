@@ -14,6 +14,8 @@ mod price;
 mod send;
 // ERC-20: the phone's built-in token list, balances, token sends
 mod tokens;
+// WalletConnect: request policy only; signing goes through send/signing above
+mod wc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -183,7 +185,8 @@ pub fn run() {
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
             signing::sign_message, signing::sign_typed_data,
-            tokens::token_list, tokens::token_balances, tokens::token_quote])
+            tokens::token_list, tokens::token_balances, tokens::token_quote,
+            wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }

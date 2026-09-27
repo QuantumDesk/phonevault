@@ -11,6 +11,7 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
+wake   # stay awake on USB: a screen-off relock would drop the USB session mid-case
 PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
 CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
 PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"

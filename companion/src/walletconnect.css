@@ -1,0 +1,76 @@
+/* WalletConnect: connection/request modals, main-view indicator, settings list.
+   Uses the tokens and building blocks in styles.css (card, modal, facts, actions, chip). */
+
+.wc-layer { z-index: 32; align-items: start; overflow-y: auto; padding-top: 48px; }
+.wc-modal { width: min(480px, 100%); gap: 12px; margin-bottom: 32px; }
+.wc-modal .actions { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); margin-top: 6px; }
+.wc-modal input[type="text"] { font-size: 13px; }
+
+.wc-dapp { display: flex; align-items: center; gap: 12px; }
+.wc-dapp-name { font-weight: 640; font-size: 16px; overflow-wrap: anywhere; }
+.wc-dapp-name.small { font-size: 13.5px; font-weight: 600; }
+.wc-icon { display: inline-grid; place-items: center; flex: none; border-radius: 10px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); }
+.wc-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.wc-desc { margin-top: -4px; }
+
+.wc-verified { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--accent); border: 1px solid var(--accent-line); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.wc-verify { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border-radius: 12px; font-size: 13px; line-height: 1.45; }
+.wc-verify .ic { margin-top: 2px; }
+.wc-verify strong { letter-spacing: 0.02em; }
+.wc-verify.unverified { color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); }
+.wc-verify.unverified span { color: var(--ink); }
+.wc-verify.unverified strong { color: var(--warn); }
+.wc-verify.mismatch, .wc-verify.threat { color: #fff; background: var(--danger); border: 1px solid var(--danger); }
+.wc-verify.threat { box-shadow: 0 0 0 4px var(--danger-soft); }
+
+.wc-sub { font: 7.5px/1.6 var(--pixel); letter-spacing: 0.08em; color: var(--muted); text-transform: uppercase; margin-top: 4px; }
+.wc-chains { display: grid; gap: 2px; padding: 4px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.wc-chain { display: flex; align-items: center; gap: 10px; min-height: 36px; padding: 4px 10px; border-radius: 9px; font-size: 13.5px; cursor: pointer; }
+.wc-chain:hover { background: var(--surface); }
+.wc-chain.off { color: var(--faint); cursor: default; }
+.wc-chain input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+.wc-methods { display: flex; flex-wrap: wrap; gap: 6px; }
+.wc-method { font: 11.5px/1 var(--mono); padding: 5px 8px; border-radius: 7px; background: var(--surface-2); border: 1px solid var(--line); }
+.wc-method.refused { text-decoration: line-through; color: var(--faint); }
+.wc-facts { margin-top: 4px; }
+
+.wc-item { display: grid; gap: 12px; }
+.wc-center { justify-items: center; text-align: center; }
+.wc-center > .wc-dapp, .wc-center > .wc-verify, .wc-center > .actions, .wc-center > .detail, .wc-center > .kicker { width: 100%; text-align: left; justify-self: stretch; }
+.wc-what { font-size: 22px; font-weight: 640; letter-spacing: -0.02em; }
+.wc-item .hero-amount { margin: 0; }
+.wc-notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.wc-notes li { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; padding: 9px 11px; border-radius: 10px; background: var(--surface-2); }
+.wc-notes li .ic { margin-top: 2px; }
+.wc-notes li.info .ic { color: var(--accent); }
+.wc-notes li.warn { background: color-mix(in srgb, var(--warn) 10%, transparent); }
+.wc-notes li.warn .ic { color: var(--warn); }
+.wc-notes li.danger { background: var(--danger-soft); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
+.wc-notes li.danger .ic { color: var(--danger); }
+.wc-danger-text { color: var(--danger); font-weight: 640; }
+.wc-msg { margin: 0; max-height: 220px; overflow: auto; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); font: 12.5px/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.wc-msg.hex { color: var(--muted); }
+.wc-status { display: flex; gap: 14px; align-items: center; padding: 14px; border-radius: 12px; background: var(--surface-2); }
+.wc-status .spinner { flex: none; }
+.wc-danger .result-ic.bad { animation: none; }
+
+.wc-queue ul { list-style: none; margin: 6px 0 0; padding: 4px; display: grid; gap: 2px; border: 1px solid var(--line); border-radius: 12px; }
+.wc-queue li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; font-size: 13px; }
+.wc-queue { border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* main view indicator */
+.wc-slot { display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 14px; border-radius: 13px; border: 1px solid var(--line); background: var(--surface); min-height: 44px; }
+.wc-slot.quiet { background: none; border-style: dashed; justify-content: space-between; }
+.wc-slot .row { gap: 8px; }
+.wc-slot.busy { border-color: var(--accent-line); background: var(--accent-soft); }
+.wc-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); flex: none; }
+.wc-slot.busy .wc-dot { animation: wc-pulse 1.4s ease-in-out infinite; }
+@keyframes wc-pulse { 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
+.chip-btn.primary { background: var(--primary-bg); color: var(--primary-ink); border-color: var(--primary-bg); }
+
+/* settings */
+.wc-sessions { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.wc-sessions li { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 12px; border: 1px solid var(--line); background: var(--surface-2); }
+.wc-sessions .chip-btn { flex: none; }
+.wc-log { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; }
+.wc-later { justify-self: center; font-size: 13px; color: var(--muted); }

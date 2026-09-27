@@ -36,9 +36,26 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    while the app is open, are kept in `~/Library/Application Support/PhoneVault/history.json`
    (0600; public-chain facts only). A notification is shown when funds arrive (toggle in Settings).
 
+5. **WalletConnect (dApps).** Settings → WalletConnect → Project ID (free, from
+   [cloud.reown.com](https://cloud.reown.com); stored only in this Mac's webview storage). Then
+   "Connect a dApp" on the main view and paste the dApp's `wc:` link. The connection card shows
+   the dApp, its URL and the WalletConnect Verify result (UNVERIFIED / DOMAIN MISMATCH / THREAT
+   are shown prominently), the networks it asks for (only the phone's reviewed chains can be
+   picked) and the methods. The account offered is always the paired address, read by Rust from
+   the pairing file. Each request gets a card here first (reject it there and nothing reaches the
+   phone), then goes through the existing verified commands: `eth_sendTransaction` → the Send
+   flow's `sign_start` → `broadcast_verified` → the hash goes back to the dApp; `personal_sign` /
+   `eth_signTypedData_v4` → `sign_message` / `sign_typed_data`. `eth_sign`, `eth_signTransaction`
+   and anything unknown are refused with a JSON-RPC error. One request goes to the phone at a
+   time; the rest wait in a visible queue. Request policy and parameter checks: `src-tauri/src/wc.rs`.
+   The phone currently signs only plain transfers and ERC-20 transfer/approve calls, so other
+   contract calls (e.g. a swap router) are shown with a warning and the phone refuses them.
+
 Preview the UI without Tauri or a phone: `npm run dev` and open http://localhost:1420. With no
 Tauri runtime the app uses fake data (marked PREVIEW DATA); `?paired=0`, `?phone=none` and
-`?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states.
+`?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states. A pretend dApp
+drives WalletConnect: `?wc=proposal|session|requests|noid`, `?wcverify=VALID|UNKNOWN|INVALID|SCAM`,
+`?wctx=native|approve|swap` (see `src/wc-mock.ts`).
 
 ## Running it
 

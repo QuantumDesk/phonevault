@@ -112,6 +112,9 @@ unlock() {
   expect_screen "PHONE VAULT"; expect_not LOCKED
 }
 unlock_if_locked() {
+  # The locked page opens the system PIN prompt a moment after it appears; let it settle so a
+  # lock that is still being drawn is not mistaken for "unlocked".
+  local i; for i in 1 2 3 4; do system_prompt_up || has_text "Phone Vault is locked" || has_text LOCKED && break; sleep 1; done
   if system_prompt_up || has_text "Phone Vault is locked"; then system_prompt_up || tap_text "Unlock"; enter_system_pin || die "system PIN prompt did not appear"
   elif has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi
 }
