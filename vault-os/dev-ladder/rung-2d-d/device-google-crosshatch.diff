@@ -1,0 +1,153 @@
+diff --git a/compatibility_matrix.xml b/compatibility_matrix.xml
+index 8b06eef..5d3d60b 100644
+--- a/compatibility_matrix.xml
++++ b/compatibility_matrix.xml
+@@ -47,7 +47,7 @@
+             <instance>default</instance>
+         </interface>
+     </hal>
+-    <hal format="hidl" optional="false">
++    <hal format="hidl" optional="true">
+         <name>android.system.wifi.keystore</name>
+         <version>1.0</version>
+         <interface>
+diff --git a/crosshatch/BoardConfig.mk b/crosshatch/BoardConfig.mk
+index 1de0642..bae058c 100644
+--- a/crosshatch/BoardConfig.mk
++++ b/crosshatch/BoardConfig.mk
+@@ -25,3 +25,6 @@ else
+ endif
+ 
+ include device/google/crosshatch/crosshatch/BoardConfigLineage.mk
++
++# Phone Vault branding: prebuilt mono pixel-art boot animation (DEBUG48)
++TARGET_BOOTANIMATION := vendor/phonevault/branding/bootanimation.zip
+diff --git a/device-lineage.mk b/device-lineage.mk
+index 3a88bcc..9e7196a 100644
+--- a/device-lineage.mk
++++ b/device-lineage.mk
+@@ -55,8 +55,9 @@ PRODUCT_PACKAGES += \
+ # Build necessary packages for vendor
+ 
+ # CHRE
+-PRODUCT_PACKAGES += \
+-    chre_daemon_msm
++# Phone Vault (rung 2d-c3): chre_daemon_msm (vendor.chre) is not installed. CHRE runs on the
++# sensor DSP (SLPI), whose drivers and FastRPC are gone since kernel slice C; the daemon
++# crash-looped on 2d-c2. The context hub HAL stays and reports no hubs.
+ 
+ # Configstore
+ PRODUCT_PACKAGES += \
+diff --git a/device.mk b/device.mk
+index 651cd6c..3f4513d 100644
+--- a/device.mk
++++ b/device.mk
+@@ -368,9 +368,11 @@ PRODUCT_PACKAGES += \
+     android.hardware.drm-service.clearkey
+ 
+ # NFC and Secure Element packages
++# Phone Vault (rung 2d-c3): the NFC HAL service (vendor.nfc_hal_service) is not installed. The
++# NFC controller driver is gone since kernel slice A and the appliance VINTF manifest never
++# declared INfc, so the service could only fail and be restarted (~80 restarts / 90 s on 2d-c2).
+ PRODUCT_PACKAGES += \
+     Tag \
+-    android.hardware.nfc@1.2-service \
+     android.hardware.secure_element@1.1-service-disabled
+ 
+ PRODUCT_PRODUCT_PROPERTIES += \
+@@ -408,9 +410,12 @@ PRODUCT_PROPERTY_OVERRIDES += \
+     debug.media.transcoding.codec_max_operating_rate_1080P=240 \
+     debug.media.transcoding.codec_max_operating_rate_4k=120 \
+ 
++# Phone Vault (rung 2d-c3): the camera provider service (vendor.camera-provider-2-4) is not
++# installed. The camera drivers are gone since kernel slice C and the appliance VINTF manifest
++# never declared ICameraProvider, so the service crash-looped on 2d-c2. The passthrough impl
++# libraries stay (nothing loads them without the service; removal is a later slice).
+ PRODUCT_PACKAGES += \
+     android.hardware.camera.provider@2.4-impl \
+-    android.hardware.camera.provider@2.4-service_64 \
+     camera.device@3.2-impl
+ 
+ PRODUCT_COPY_FILES += \
+@@ -440,12 +445,13 @@ PRODUCT_PACKAGES += \
+     android.hardware.vibrator-service.crosshatch
+ 
+ #GNSS HAL
++# Phone Vault (rung 2d-c2): the GNSS HAL service + impl are not installed. The GNSS engine
++# lives in the modem (gone since kernel slice B) and the appliance VINTF manifest never
++# declared IGnss, so gnss_service could only fail to register and be restarted.
+ PRODUCT_PACKAGES += \
+     libgps.utils \
+     libgnss \
+-    liblocation_api \
+-    android.hardware.gnss@1.1-impl-qti \
+-    android.hardware.gnss@1.1-service-qti
++    liblocation_api
+ 
+ ENABLE_VENDOR_RIL_SERVICE := true
+ 
+diff --git a/init.hardware.rc b/init.hardware.rc
+index ed0e59f..6a147af 100644
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -623,15 +623,9 @@ on property:persist.vendor.sys.ssr.enable_ramdumps=1
+ on property:persist.vendor.sys.ssr.enable_ramdumps=0
+     write /sys/module/subsystem_restart/parameters/enable_ramdumps 0
+ 
+-service adsprpcd /vendor/bin/adsprpcd
+-   class main
+-   user media
+-   group media
+-
+-service cdsprpcd /vendor/bin/cdsprpcd
+-   class main
+-   user system
+-   group system
++# Phone Vault (rung 2d-c2): adsprpcd and cdsprpcd removed. CONFIG_MSM_ADSPRPC is off
++# (kernel slice C), so /dev/adsprpc-smd and /dev/cdsprpc-smd never exist and both daemons
++# could only exit and be restarted by init.
+ 
+ service irsc_util /vendor/bin/irsc_util "/vendor/etc/sec_config"
+     class core
+@@ -655,10 +649,8 @@ service modem_svc /vendor/bin/modem_svc -q
+    group system
+    capabilities NET_BIND_SERVICE
+ 
+-service cnss-daemon /vendor/bin/cnss-daemon -n -l
+-   class late_start
+-   user system
+-   group system inet wifi
++# Phone Vault (rung 2d-c2): cnss-daemon removed; the WLAN/CNSS drivers are gone since
++# kernel slice A (rung 2d-a).
+ 
+ service loc_launcher /vendor/bin/loc_launcher
+     class late_start
+@@ -705,12 +697,9 @@ service msm_irqbalance /vendor/bin/msm_irqbalance -f /vendor/etc/msm_irqbalance.
+     group root
+     task_profiles ServiceCapacityLow
+ 
+-service ppd /vendor/bin/mm-pp-dpps
+-    class late_start
+-    user graphics
+-    group graphics
+-    socket pps stream 0660 system system
+-    disabled
++# Phone Vault (rung 2d-c2): ppd (mm-pp-dpps, display post-processing driven by the
++# ambient-light sensor) removed with the sensor stack. It crash-looped on 2d-c while the
++# panel worked, so hwcomposer does not depend on it.
+ 
+ service wait_for_strongbox /vendor/bin/hw/wait_for_strongbox
+     user root
+@@ -718,12 +707,6 @@ service wait_for_strongbox /vendor/bin/hw/wait_for_strongbox
+     priority -20
+     ioprio rt 0
+ 
+-on property:init.svc.vendor.hwcomposer-2-3=stopped
+-    stop ppd
+-
+-on property:init.svc.vendor.hwcomposer-2-3=running
+-    start ppd
+-
+ on property:ro.boot.mode=sota
+     setprop ro.boot.sota enabled
+ 
