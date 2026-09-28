@@ -87,6 +87,26 @@ sync_tree_diff device "${TREE}/device/google/crosshatch" "${RUNG_DIR}/device-goo
 sync_tree_diff vendor "${TREE}/vendor/google/crosshatch" "${RUNG_DIR}/vendor-google-crosshatch.diff" \
   crosshatch-vendor.mk Android.bp Android.mk BoardConfigVendor.mk
 
+# Release frameworks/base patches (vault-os/patches/frameworks-base) are release intent, not rung
+# deviations: every rung gets all of them. 0001-0004 were applied to this tree as commits long
+# ago (they reverse-apply → "present"); later ones are applied to the working tree here.
+# packages/SystemUI is first restored to HEAD so a revised SystemUI patch replaces its earlier
+# revision instead of failing to apply (the tree carries no other SystemUI edits).
+FWB="${TREE}/frameworks/base"
+if ! git -C "${FWB}" diff --quiet -- packages/SystemUI; then
+  git -C "${FWB}" checkout -- packages/SystemUI
+  echo "   frameworks/base packages/SystemUI restored to HEAD before applying release patches"
+fi
+for fp in "${OVERLAY}"/patches/frameworks-base/*.patch; do
+  if git -C "${FWB}" apply --reverse --check "${fp}" >/dev/null 2>&1; then
+    echo "   frameworks/base patch present: $(basename "${fp}")"
+  elif git -C "${FWB}" apply --check "${fp}" >/dev/null 2>&1; then
+    git -C "${FWB}" apply "${fp}"; echo "   frameworks/base patch applied: $(basename "${fp}")"
+  else
+    echo "frameworks/base patch neither applies nor reverses cleanly: ${fp}" >&2; exit 1
+  fi
+done
+
 BOARD="${TREE}/device/google/crosshatch/crosshatch/BoardConfigLineage.mk"
 INCLUDE='include vendor/phonevault/config/BoardConfigVault.mk'
 if ! grep -Fqx "${INCLUDE}" "${BOARD}"; then

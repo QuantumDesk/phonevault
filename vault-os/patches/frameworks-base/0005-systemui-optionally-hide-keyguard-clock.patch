@@ -1,0 +1,106 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Mon, 28 Sep 2026 10:30:00 -0400
+Subject: [PATCH] SystemUI: optionally hide the keyguard clock, smartspace and
+ date
+
+A fixed-function appliance shows the keyguard only to unlock credential-
+encrypted storage once per boot; the time and date there are noise. Add
+config_phonevaultHideKeyguardClock (default false, upstream behavior). When a
+product overlays it to true, the default keyguard blueprint leaves out the
+clock and smartspace sections, so no clock view is added to the keyguard root
+view (shared by the lockscreen and AOD), and the legacy date slice is detached
+instead of being moved into the root view. The lock icon, bouncer and
+indication area (device-owner disclosure, charging) are unchanged.
+
+Only the blueprint path is covered: com.android.systemui.migrate_clocks_to_blueprint
+is ENABLED/READ_ONLY in the bp1a release config, so the legacy
+KeyguardClockSwitch path is compiled out.
+---
+ packages/SystemUI/res/values/config.xml                       |  5 +++++
+ .../ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt     | 11 +++++++++--
+ .../ui/view/layout/sections/KeyguardSliceViewSection.kt       |  5 ++++-
+ 3 files changed, 18 insertions(+), 3 deletions(-)
+
+diff --git a/packages/SystemUI/res/values/config.xml b/packages/SystemUI/res/values/config.xml
+index 79dd6fcc9..29bc03bec 100644
+--- a/packages/SystemUI/res/values/config.xml
++++ b/packages/SystemUI/res/values/config.xml
+@@ -1103,4 +1103,9 @@
+     Whether the user switching can only happen by logging out and going through the system user (login screen).
+     -->
+     <bool name="config_userSwitchingMustGoThroughLoginScreen">false</bool>
++
++    <!-- Fixed-function appliances: when true the lockscreen shows no clock (large or small), no
++         smartspace and no date slice, on the keyguard and on AOD. The lock icon, bouncer and
++         indication area (owner disclosure, charging) are unchanged. -->
++    <bool name="config_phonevaultHideKeyguardClock">false</bool>
+ </resources>
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
+index d5a965569..6c7944def 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
+@@ -17,6 +17,7 @@
+ 
+ package com.android.systemui.keyguard.ui.view.layout.blueprints
+ 
++import android.content.Context
+ import com.android.systemui.communal.ui.view.layout.sections.CommunalTutorialIndicatorSection
+ import com.android.systemui.dagger.SysUISingleton
+ import com.android.systemui.keyguard.shared.model.KeyguardBlueprint
+@@ -36,6 +37,7 @@ import com.android.systemui.keyguard.ui.view.layout.sections.DefaultUdfpsAccessi
+ import com.android.systemui.keyguard.ui.view.layout.sections.KeyguardSectionsModule.Companion.KEYGUARD_AMBIENT_INDICATION_AREA_SECTION
+ import com.android.systemui.keyguard.ui.view.layout.sections.KeyguardSliceViewSection
+ import com.android.systemui.keyguard.ui.view.layout.sections.SmartspaceSection
++import com.android.systemui.res.R
+ import java.util.Optional
+ import javax.inject.Inject
+ import javax.inject.Named
+@@ -53,6 +55,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
+ class DefaultKeyguardBlueprint
+ @Inject
+ constructor(
++    context: Context,
+     accessibilityActionsSection: AccessibilityActionsSection,
+     defaultIndicationAreaSection: DefaultIndicationAreaSection,
+     defaultDeviceEntrySection: DefaultDeviceEntrySection,
+@@ -73,6 +76,10 @@ constructor(
+ ) : KeyguardBlueprint {
+     override val id: String = DEFAULT
+ 
++    // config_phonevaultHideKeyguardClock: the clock and smartspace sections are left out, so no
++    // clock view is ever added to the keyguard root view (keyguard and AOD share it).
++    private val hideClock = context.resources.getBoolean(R.bool.config_phonevaultHideKeyguardClock)
++
+     override val sections =
+         listOfNotNull(
+             accessibilityActionsSection,
+@@ -84,10 +91,10 @@ constructor(
+             defaultStatusBarSection,
+             defaultNotificationStackScrollLayoutSection,
+             aodNotificationIconsSection,
+-            smartspaceSection,
++            smartspaceSection.takeUnless { hideClock },
+             aodBurnInSection,
+             communalTutorialIndicatorSection,
+-            clockSection,
++            clockSection.takeUnless { hideClock },
+             keyguardSliceViewSection,
+             defaultDeviceEntrySection,
+             udfpsAccessibilityOverlaySection, // Add LAST: Intentionally has z-order above others
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
+index 3a056a357..e3c4a3c32 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
+@@ -42,7 +42,10 @@ constructor(
+ 
+         constraintLayout.findViewById<View?>(R.id.keyguard_slice_view)?.let {
+             (it.parent as ViewGroup).removeView(it)
+-            constraintLayout.addView(it)
++            // config_phonevaultHideKeyguardClock: the date slice is detached and never re-added.
++            if (!context.resources.getBoolean(R.bool.config_phonevaultHideKeyguardClock)) {
++                constraintLayout.addView(it)
++            }
+         }
+     }
+ 

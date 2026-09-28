@@ -14,6 +14,7 @@ make_fixture() {
     "${fixture}/vault-os/vendor/phonevault/overlay/frameworks/base/core/res/res/values" \
     "${fixture}/vault-os/vendor/phonevault/prebuilt" \
     "${fixture}/vault-os/vendor/phonevault/config" \
+    "${fixture}/vault-os/device/phonevault/crosshatch" \
     "${fixture}/vault-os/patches/frameworks-base"
   cp "${ROOT}/app/build.gradle" "${fixture}/app/build.gradle"
   cp "${ROOT}/app/src/main/AndroidManifest.xml" \
@@ -26,6 +27,8 @@ make_fixture() {
     "${fixture}/vault-os/vendor/phonevault/prebuilt/Android.bp"
   cp "${ROOT}/vault-os/vendor/phonevault/config/common.mk" \
     "${fixture}/vault-os/vendor/phonevault/config/common.mk"
+  cp "${ROOT}/vault-os/device/phonevault/crosshatch/vault_crosshatch.mk" \
+    "${fixture}/vault-os/device/phonevault/crosshatch/vault_crosshatch.mk"
   cp "${ROOT}/vault-os/patches/frameworks-base/0003-provision-configured-appliance-owner.patch" \
     "${fixture}/vault-os/patches/frameworks-base/0003-provision-configured-appliance-owner.patch"
   cp "${ROOT}/vault-os/patches/frameworks-base/0004-export-fixed-function-owner-resource.patch" \
@@ -87,5 +90,23 @@ make_fixture "${missing_home}"
 sed -i.bak '/android.intent.category.HOME/d' \
   "${missing_home}/app/src/main/AndroidManifest.xml"
 expect_failure "${missing_home}" 'MainActivity is not an exact MAIN/HOME/DEFAULT target'
+
+late_overlay="${work_dir}/late-overlay"
+make_fixture "${late_overlay}"
+printf '\nPRODUCT_PACKAGE_OVERLAYS += \\\n    vendor/phonevault/overlay\n' \
+  >> "${late_overlay}/vault-os/vendor/phonevault/config/common.mk"
+expect_failure "${late_overlay}" 'common.mk must not add the resource overlay'
+
+overlay_after_inherit="${work_dir}/overlay-after-inherit"
+make_fixture "${overlay_after_inherit}"
+python3 - "${overlay_after_inherit}/vault-os/device/phonevault/crosshatch/vault_crosshatch.mk" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+block = "PRODUCT_PACKAGE_OVERLAYS += \\\n    vendor/phonevault/overlay\n"
+assert block in text
+path.write_text(text.replace(block, "") + "\n" + block)
+PY
+expect_failure "${overlay_after_inherit}" 'must be added before the first inherit-product'
 
 echo "Owner provisioning policy negative fixtures passed."

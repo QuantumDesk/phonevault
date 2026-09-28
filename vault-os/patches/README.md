@@ -32,6 +32,15 @@ package is installed as a non-privileged system app. The Vault overlay selects
 `dev.phonevault.signer/.VaultDeviceAdminReceiver`; ordinary products retain
 upstream behavior.
 
+`0005-systemui-optionally-hide-keyguard-clock.patch` adds the SystemUI resource
+`config_phonevaultHideKeyguardClock` (default false). When the product overlays it
+to true, the default keyguard blueprint omits the clock and smartspace sections and
+the legacy date slice is detached, so the once-per-boot credential keyguard shows
+no time or date (keyguard and AOD share that view tree); lock icon, bouncer and the
+indication area are unchanged. It covers the blueprint path only, which is the
+compiled path while `com.android.systemui.migrate_clocks_to_blueprint` is
+ENABLED/READ_ONLY (bp1a).
+
 The patches under `patches/appliance/`, `patches/device-crosshatch/`, and
 `patches/kernel-crosshatch/` are also Phone Vault changes. They remove
 appliance-inapplicable SystemServer startup paths, hardware declarations,

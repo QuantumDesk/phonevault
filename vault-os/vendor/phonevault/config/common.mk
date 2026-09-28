@@ -8,8 +8,9 @@ PRODUCT_PACKAGES += \
 
 PHONEVAULT_VERSION ?= 0.1.0-dev
 
-PRODUCT_PACKAGE_OVERLAYS += \
-    vendor/phonevault/overlay
+# The resource overlay (vendor/phonevault/overlay) is added by the product makefile
+# (device/phonevault/crosshatch/vault_crosshatch.mk) ahead of its inherits so it outranks
+# Lineage's overlays; adding it here too would list the directory twice.
 
 PRODUCT_NO_CAMERA := true
 PRODUCT_NO_DYNAMIC_SYSTEM_UPDATE := true

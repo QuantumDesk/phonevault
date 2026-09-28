@@ -1,3 +1,11 @@
+# Phone Vault resources take precedence over every inherited overlay. The earliest entry in
+# PRODUCT_PACKAGE_OVERLAYS wins, and a product's own value set before its first
+# inherit-product lands ahead of all inherited ones. Set in common.mk (evaluated last), the
+# overlay lost to vendor/lineage/overlay/common: the default wallpaper change never reached
+# the image (rung 2d-c/2d-c2 still shipped the old padlock).
+PRODUCT_PACKAGE_OVERLAYS += \
+    vendor/phonevault/overlay
+
 $(call inherit-product, device/google/crosshatch/lineage_crosshatch.mk)
 
 PRODUCT_BRAND := PhoneVault
