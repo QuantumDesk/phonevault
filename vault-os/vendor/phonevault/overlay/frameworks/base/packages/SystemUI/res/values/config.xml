@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- frameworks-base patch 0005: the keyguard (seen once per boot, to unlock credential-
+         encrypted storage) shows no clock, smartspace or date; lock icon, bouncer, owner
+         disclosure and charging indication stay. -->
+    <bool name="config_phonevaultHideKeyguardClock">true</bool>
+</resources>

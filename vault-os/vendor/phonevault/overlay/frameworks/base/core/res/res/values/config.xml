@@ -4,4 +4,17 @@
          fresh /data (frameworks-base patch 0003). The app then installs its own HOME
          preference, keyguard, kiosk and user-restriction policy — no adb step exists. -->
     <string name="config_fixedFunctionDeviceOwner" translatable="false">dev.phonevault.signer/.VaultDeviceAdminReceiver</string>
+
+    <!-- No ambient display: the crosshatch device overlay enables the doze service and makes
+         always-on display available. An appliance has nothing to show with the screen off
+         (and no clock, see config_phonevaultHideKeyguardClock), so restore the AOSP defaults:
+         no doze component (no AOD, no pulsing), AOD unavailable, no pickup pulse. -->
+    <string name="config_dozeComponent" translatable="false"></string>
+    <bool name="config_dozeAlwaysOnDisplayAvailable">false</bool>
+    <bool name="config_dozeAlwaysOnEnabled">false</bool>
+    <bool name="config_dozePulsePickup">false</bool>
+
+    <!-- Default for Settings.Secure.LOCKSCREEN_USE_DOUBLE_LINE_CLOCK: moot while the clock is
+         hidden, single-line if it is ever shown. -->
+    <integer name="config_doublelineClockDefault">0</integer>
 </resources>

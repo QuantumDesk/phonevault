@@ -164,11 +164,21 @@ for field, value in (
 product = read("vault-os/vendor/phonevault/config/common.mk")
 if not re.search(r"(?ms)^PRODUCT_PACKAGES\s*\+=.*?^\s*PhoneVault\s*$", product):
     fail("PhoneVault is not installed by the product")
-if not re.search(
-    r"(?ms)^PRODUCT_PACKAGE_OVERLAYS\s*\+=.*?^\s*vendor/phonevault/overlay\s*$",
-    product,
-):
+# The overlay must outrank every inherited overlay (Lineage's overlay/common also defines
+# resources such as default_wallpaper): the earliest PRODUCT_PACKAGE_OVERLAYS entry wins, so the
+# product makefile adds it before its first inherit-product, and nowhere else.
+overlay_line = re.compile(
+    r"(?ms)^PRODUCT_PACKAGE_OVERLAYS\s*[:+]?=[^\n]*(?:\\\n[^\n]*)*?\bvendor/phonevault/overlay\b"
+)
+if overlay_line.search(product):
+    fail("common.mk must not add the resource overlay (the product makefile adds it first)")
+device_product = read("vault-os/device/phonevault/crosshatch/vault_crosshatch.mk")
+overlay_match = overlay_line.search(device_product)
+if overlay_match is None:
     fail("PhoneVault resource overlay is not installed by the product")
+first_inherit = device_product.find("$(call inherit-product")
+if first_inherit < 0 or overlay_match.start() > first_inherit:
+    fail("PhoneVault resource overlay must be added before the first inherit-product")
 
 policy_patch = read(
     "vault-os/patches/frameworks-base/0003-provision-configured-appliance-owner.patch"
