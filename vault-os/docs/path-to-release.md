@@ -4,6 +4,62 @@ Working list from the 2026-09-23 product audit. Ordered: trust first, then reach
 checked only when it is built, on a real phone, and tested there. `roadmap.md` keeps the history;
 this file is the queue.
 
+## Goals to distribution (2026-10-10)
+
+Milestones in order. Each has an exit test; a milestone is done only when every exit test passes
+on a real phone. The detailed checklists below (sections 1–5) feed these milestones.
+
+**G1 · Locked-down appliance** — the OS is a single-purpose signer.
+- Finish the ladder: 2d-d (USB functions, retry keeps DWC3 dual-role) → rung 3 (USB HAL refuses
+  host role, no functions but AOA (+adb until rung 5)) → rung 4 (strip launcher, Elmyra and every
+  app/service the vault doesn't use) → rung 5 (user build: no adb, no dump hook, FLAG_SECURE).
+- Fix the release defconfig (patch 0001 turns DWC3 dual-role off, which kills USB enumeration).
+- First boot after an OS update asks for the PIN once (today: twice when the app starts late).
+- Exit: user build on a phone; only AOA enumerates; full signing/credential suites pass; no
+  crash-looping services; `adb` unreachable.
+
+**G2 · Verifiable trust chain** — a buyer can prove the phone is genuine and unmodified.
+- Release keys generated offline (documented key ceremony); signed OTAs; our AVB key; relocked
+  bootloader; demonstrated refuse-to-boot on a tampered image.
+- Device attestation (Titan M key attestation, in progress): companion shows Genuine / Development /
+  Not genuine and blocks pairing on Not genuine; pins our AVB key and app signer.
+- Reproducible builds (pinned container, byte-identical app + OS) and a public log of release hashes.
+- Supply-chain stance: users flash their own phone (never buy pre-flashed from a reseller), and
+  attestation re-checks on every connection.
+- Exit: a relocked phone shows "Genuine"; a reflashed/tampered phone shows "Not genuine" and won't
+  pair; two independent builds produce the same hashes.
+
+**G3 · A phone people can buy** — supported, still-patched hardware.
+- Port to a current Pixel with Titan M2 (Pixel 8/8a/9 class: years of updates); Pixel 3 XL stays a
+  dev target only (no security patches since 2022).
+- Exit: G1 + G2 exit tests pass on the new model.
+
+**G4 · Wallet that works with real apps**
+- WalletConnect proven against real dApps; swaps: plain-language review of router calls
+  (Uniswap Universal Router first), with simulation on the companion; refuse what can't be explained.
+- Multiple accounts; optional BIP-39 passphrase; address book; watch-only export (Rabby/MetaMask).
+- Signed, updatable token list; token metadata in Permit/Permit2 reviews.
+- Recovery works in other wallets (BIP-39/44 test against MetaMask/Rabby imports).
+- Exit: end-to-end on mainnet with small amounts: connect, sign-in, approve, swap, send, revoke.
+
+**G5 · Companion people can install**
+- Notarized macOS build, signed auto-update; Windows and Linux builds.
+- Onboarding wizard (pair → attest → receive → first send), plain errors, no dead ends.
+- Exit: a new user goes from download to first confirmed send without help.
+
+**G6 · Install, onboarding and support**
+- One-click flasher (WebUSB, like GrapheneOS's): unlock → flash → relock → attest. No build machine.
+- Setup guide, printable backup card, recovery/"lost phone" docs, FAQ; website rewritten to match
+  reality; support channel.
+- Licensing (GPL kernel sources, LineageOS/AOSP notices), disclaimers, privacy policy.
+- Exit: three outside testers install from scratch using only the guide.
+
+**G7 · Assurance and launch**
+- Independent audit (app, companion, OS changes) and fixes; public threat model; open repository;
+  bug bounty; incident-response plan; security contact.
+- Closed beta with capped amounts → public release.
+- Exit: audit report published with no open high-severity findings.
+
 ## 1. Trust people can check (blocks any real-funds claim)
 
 - [x] **Honest entropy claims.** Website said the seed uses the security chip's randomness; it did
