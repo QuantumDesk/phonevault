@@ -20,5 +20,11 @@ Licensing boundaries (open-core, as recorded in vault-os/docs/roadmap.md §5):
   (SIL OFL 1.1), and the Pixel 3 XL vendor blobs (proprietary; never
   redistributed by this repository).
 
+* companion/src-tauri/src/attest/testdata/ holds key attestation sample
+  certificate chains and their expected parses from
+  https://github.com/android/keyattestation (testdata/, commit 3f550f94),
+  Copyright Google LLC, Apache-2.0; and Google's published attestation root
+  certificates (https://android.googleapis.com/attestation/root).
+
 * Companion software and services outside the trust boundary may be
   licensed separately.
