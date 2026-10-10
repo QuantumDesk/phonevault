@@ -57,6 +57,15 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
         let _guard = guard;
         let emit = |stage: &'static str| { let _ = app.emit("send-progress", Progress { ticket: ticket.clone(), stage }); };
         let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", "not paired yet", false))?;
+        // The phone must have passed the device check in this connection (runs it if not yet).
+        crate::attest::require_ok(&pinned).map_err(|m| {
+            if m.starts_with("attestation:") { fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false) }
+            else if m.contains("no Android device") { fail("no_phone", m, false) }
+            else if m.contains("held by another program") { fail("usb_busy", m, false) }
+            else if m.contains("already running") { fail("busy", m, false) }
+            else { fail("connect", m, false) }
+        })?;
+        if cancel.load(Ordering::SeqCst) { return Err(fail("cancelled", aoa::CANCELLED, false)); }
         // A token send is re-derived from the built-in list before anything reaches the phone.
         let token_check = match &quote.token {
             Some(t) => Some(tokens::check_quote(&quote, t).map_err(|m| fail("internal", format!("token quote rejected: {m}"), false))?),
