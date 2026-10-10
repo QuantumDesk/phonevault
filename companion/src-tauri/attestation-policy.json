@@ -3,13 +3,13 @@
     "Device attestation policy, compiled into the companion (src/attest/policy.rs, include_str!).",
     "See vault-os/docs/device-attestation.md. Hex SHA-256 values, lowercase, no separators.",
     "releaseSignerSha256: SHA-256 of the Phone Vault RELEASE APK signing certificate (DER). Empty until the release key exists: no phone can be GENUINE before then.",
-    "developmentSignerSha256: SHA-256 of the development (appliance) signing certificate. Accepted ONLY when the user turns on Developer mode, and then never better than DEVELOPMENT.",
+    "developmentSignerSha256: SHA-256 of the development (appliance) signing certificate: the build host's Android Debug key (CN=Android Debug), d8eab12d… as printed by apksigner --print-certs. Accepted ONLY when the user turns on Developer mode, and then never better than DEVELOPMENT.",
     "avbKeySha256: SHA-256 of the AVB public key flashed with `fastboot flash avb_custom_key` (avbtool extract_public_key output), as reported in rootOfTrust.verifiedBootKey. Empty until the release AVB key exists.",
     "minOsPatchLevel: oldest accepted osPatchLevel (YYYYMM) for a locked, otherwise genuine device."
   ],
   "package": "dev.phonevault.signer",
   "releaseSignerSha256": [],
-  "developmentSignerSha256": [],
+  "developmentSignerSha256": ["d8eab12db9f77634d1663d66df9928c184a2c91df03e3ea78abcddd64f114b53"],
   "avbKeySha256": [],
   "minOsPatchLevel": 202501
 }

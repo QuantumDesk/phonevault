@@ -350,6 +350,8 @@ fn builtin_policy_parses_and_refuses_bad_files() {
     assert_eq!(p.package, "dev.phonevault.signer");
     assert!(p.release_signers.is_empty(), "no release key exists yet; pin it at release (path-to-release.md)");
     assert!(p.avb_keys.is_empty(), "no release AVB key exists yet");
+    assert_eq!(p.development_signers, vec![hex::decode("d8eab12db9f77634d1663d66df9928c184a2c91df03e3ea78abcddd64f114b53").unwrap()],
+        "the build host's Android Debug certificate that signs the dev appliance APK");
     assert!(Policy::parse(r#"{"_comment":[],"package":"x","releaseSignerSha256":["AB"],"developmentSignerSha256":[],"avbKeySha256":[],"minOsPatchLevel":202501}"#).is_err());
     assert!(Policy::parse(r#"{"_comment":[],"package":"x","releaseSignerSha256":[],"developmentSignerSha256":[],"avbKeySha256":[],"minOsPatchLevel":202501,"extra":1}"#).is_err());
     let same = "11".repeat(32);
