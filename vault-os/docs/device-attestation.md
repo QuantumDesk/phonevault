@@ -248,3 +248,16 @@ certificate (`d8eab12d…4b53`) that signs the dev appliance APK.
 4. Consider removing the development signer from release companion builds altogether, and
    raising `minOsPatchLevel` with each release.
 5. Re-check Google's root list and revocation format at each release.
+
+
+## First phone result (phone 2, Pixel 3 XL, rung 2d-d, 2026-10-10)
+
+Phone side over AOA on the build host (`aoa_client.py attest`), verified on the Mac with
+`attest_verify` (the build host has no Rust toolchain). StrongBox chain of 4 to the Google RSA root
+(pinned by key; that root certificate expired 2026-05-24), factory provisioning, attestation v4 /
+KeyMint 41, package `dev.phonevault.signer` with the development signer, address binding to the
+paired `0x0c16…CdEd`, not revoked (Google status list of 2026-10-10). Boot state: unlocked, orange,
+boot key all zeros. Verdict: **fail** with Developer mode off (development signer), **development**
+with it on — as designed. Also visible: vendor/boot patch level 2021-10-05 (the Pixel 3's last
+firmware). Still to run: repeated-challenge refusal and the locked-phone hold (`attesttest.sh`
+cases 2–3, which need the verifier on the build host or a Mac-side runner).
