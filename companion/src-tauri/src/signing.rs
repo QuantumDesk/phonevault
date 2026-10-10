@@ -20,6 +20,7 @@ fn chain_quantity(chain_id: u64) -> CmdResult<String> {
 
 fn request_signature(request: Value) -> CmdResult<SignedMessage> {
     let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    crate::attest::require_ok(&pinned)?;
     // Refuse locally what the phone would refuse, before bothering the user on the phone.
     verify::expected_message_digest(&request).map_err(|e| e.0)?;
     let response = ask_phone(request.clone(), Duration::from_secs(300))?;

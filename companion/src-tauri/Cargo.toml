@@ -31,6 +31,15 @@ uuid = { version = "1", features = ["v4"] }
 dirs = "5"
 thiserror = "1"
 tauri-plugin-notification = "2"
+# Device attestation (src/attest): X.509 parsing, and signature checks restricted to the
+# algorithms Android attestation chains use (ring is already in the tree via rustls).
+x509-parser = "=0.18.1"
+ring = "=0.17.14"
+base64 = "=0.22.1"
+
+[dev-dependencies]
+# Test-only certificate chains under a throwaway test root (generated in memory per test run).
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
 
 [profile.release]
 codegen-units = 1

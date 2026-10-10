@@ -3,6 +3,8 @@
 //! verifies what comes back independently, and broadcasts only what the user approved on the phone.
 
 mod aoa;
+// device attestation: is the phone genuine Phone Vault hardware + firmware + app?
+pub mod attest;
 mod eth;
 mod message;
 mod pairing;
@@ -34,6 +36,7 @@ struct Status { phone: aoa::Presence, paired: Option<String>, paired_checksum: O
 async fn device_status() -> CmdResult<Status> {
     blocking(|| {
         let phone = aoa::presence().map_err(|e| e.to_string())?;
+        attest::note_presence(phone);
         let paired = pairing::load().map_err(|e| e.0)?;
         Ok(Status { paired_checksum: paired.as_deref().map(verify::checksum), paired, phone, pairing_path: pairing::path().map(|p| p.display().to_string()).unwrap_or_default() })
     }).await
@@ -64,7 +67,8 @@ async fn read_address() -> CmdResult<String> {
 
 #[tauri::command]
 async fn confirm_pairing(address: String) -> CmdResult<String> {
-    blocking(move || pairing::save(&address).map(|p| p.display().to_string()).map_err(|e| e.0)).await
+    // Only an address that a phone which passed the device check attested to in this connection.
+    blocking(move || attest::require_pairable(&address).and_then(|_| pairing::save(&address).map_err(|e| e.0)).map(|p| p.display().to_string())).await
 }
 
 #[tauri::command]
@@ -140,6 +144,7 @@ struct SignedTx { raw: String, hash: String, signer: String }
 async fn sign(q: Quote) -> CmdResult<SignedTx> {
     blocking(move || {
         let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        attest::require_ok(&pinned)?;
         let request = json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
             "chainId": q.chain_id, "nonce": q.nonce, "maxPriorityFeePerGas": q.max_priority_fee_per_gas,
@@ -185,6 +190,7 @@ pub fn run() {
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
             signing::sign_message, signing::sign_typed_data,
+            attest::attest_phone, attest::attestation_cached,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare])
         .run(tauri::generate_context!())

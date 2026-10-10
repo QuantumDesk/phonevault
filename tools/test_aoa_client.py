@@ -263,5 +263,30 @@ class MessageSignatureValidationTest(unittest.TestCase):
             aoa_client.validate_message_response(
                 request, dict(self.approved(v), extra="x"), digest, self.VECTORS["signer"])
 
+class AttestResponseValidationTest(unittest.TestCase):
+    REQUEST = {"id": "a1", "method": "attest", "challenge": "ab" * 32}
+
+    def ok(self, **changes):
+        response = {"id": "a1", "status": "ok", "version": "1",
+                    "address": "0x52908400098527886e0f7030069857d2e4169ee7", "securityLevel": "StrongBox",
+                    "certificates": "MAA=,MAA=", "signature": "0x" + "30" * 70}
+        response.update(changes)
+        return response
+
+    def test_accepts_the_protocol_shape(self):
+        aoa_client.validate_attest_response(self.REQUEST, self.ok())
+        aoa_client.validate_attest_response(self.REQUEST, self.ok(), "0x52908400098527886E0F7030069857D2E4169EE7")
+        aoa_client.validate_attest_response(self.REQUEST, {"id": "a1", "status": "error", "error": "x"})
+
+    def test_refuses_drift(self):
+        for bad in (self.ok(extra="x"), self.ok(version="2"), self.ok(securityLevel="Software"),
+                    self.ok(certificates="MAA="), self.ok(signature="3006"), self.ok(id="a2"),
+                    self.ok(address="0x52908400098527886E0F7030069857D2E4169EE7")):
+            with self.assertRaises(ValueError):
+                aoa_client.validate_attest_response(self.REQUEST, bad)
+        with self.assertRaises(ValueError):
+            aoa_client.validate_attest_response(self.REQUEST, self.ok(), "0x1111111111111111111111111111111111111111")
+
+
 if __name__ == "__main__":
     unittest.main()

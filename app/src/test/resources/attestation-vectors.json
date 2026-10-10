@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "Device attestation binding message (vault-os/docs/device-attestation.md).",
+    "message = \"PhoneVault-attest-v1\" || 0x00 || len(challenge) || challenge || address (20 bytes); the attested key signs it (ECDSA P-256, SHA-256).",
+    "Checked by the phone (AttestationProtocolTest) and the companion (attest::tests) so both sides build the same bytes."
+  ],
+  "domain": "PhoneVault-attest-v1",
+  "vectors": [
+    {
+      "name": "challenge-32",
+      "challenge": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "address": "0x52908400098527886e0f7030069857d2e4169ee7",
+      "message": "50686f6e655661756c742d6174746573742d76310020000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f52908400098527886e0f7030069857d2e4169ee7"
+    },
+    {
+      "name": "challenge-16",
+      "challenge": "a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5",
+      "address": "0xde709f2102306220921060314715629080e2fb77",
+      "message": "50686f6e655661756c742d6174746573742d76310010a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5de709f2102306220921060314715629080e2fb77"
+    },
+    {
+      "name": "challenge-64",
+      "challenge": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "address": "0x0000000000000000000000000000000000000001",
+      "message": "50686f6e655661756c742d6174746573742d76310040c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff0000000000000000000000000000000000000001"
+    }
+  ]
+}

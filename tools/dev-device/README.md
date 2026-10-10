@@ -20,6 +20,7 @@ once when a button is below the fold.
 | `usbsigntest.sh` | AOA pair (USB address == screen), mainnet-shaped 0.5 ETH example transfer reviewed and approved on the phone, host recomputes hash + recovers signer against the pinned pairing |
 | `msgsigntest.sh` | Message signing (needs the pairing from `usbsigntest.sh`): personal_sign text approved, sign-in for another account and unreadable bytes rejected, EIP-712 Mail and Permit2 (UNLIMITED) approved, Permit2 on the wrong host chain rejected; host checks each digest and recovers the signer |
 | `tokensigntest.sh` | ERC-20 review (needs the pairing from `usbsigntest.sh`; not yet run on a phone): USDC transfer shown as "Send 50 USDC" and approved, UNLIMITED approval and unknown-contract transfer rejected, Base USDC increaseAllowance approved, calldata with a trailing byte refused before review; host checks to/value/data, hash and signer |
+| `attesttest.sh` | Device attestation (needs the pairing from `usbsigntest.sh` and `PV_ATTEST_VERIFIER`, the companion's `attest_verify` example; not yet run on a phone): StrongBox attestation of a fresh challenge verified by the companion's code (DEVELOPMENT with Developer mode, FAIL without), a repeated challenge refused, a locked phone holds the request until the PIN; no review screen, no crash |
 | `lifecycletest.sh` | stop-during-PIN-verify race, unlock, reveal/hide behind a fresh PIN, sleep-lock, wrong PIN counted, unlock, reboot persistence |
 | `capture_backup.sh` | screencaps the six phrase pages for UI review (**dev wallets only**) |
 

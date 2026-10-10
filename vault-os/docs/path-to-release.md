@@ -84,6 +84,13 @@ on a real phone. The detailed checklists below (sections 1–5) feed these miles
       rung 5 (user build: no adb, no dump hook, no screenshots).
 - [ ] **Signed releases + relocked bootloader.** Release-key OTA, recovery that trusts only it,
       relock, and a demonstrated refuse-to-boot on a tampered image.
+- [ ] **Device attestation: a buyer can check the phone is genuine** (`device-attestation.md`).
+      BUILT (2026-10-10, not yet run on a phone): USB `attest` (StrongBox key attests the Mac's
+      challenge and signs its wallet address; wallet key never used), companion verifies the chain
+      to Google's pinned roots, the KeyDescription, revocation, and shows Genuine / Development /
+      Not genuine; FAIL blocks pairing and sending. Open: phone run of
+      `tools/dev-device/attesttest.sh`; pin the release APK signer and the release AVB key in
+      `companion/src-tauri/attestation-policy.json` and see a relocked phone report GENUINE.
 - [ ] **Reproducible builds.** Pinned container, byte-identical app and OS images from source.
 - [ ] **Independent audit** of the app, the companion and the OS changes.
 

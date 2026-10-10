@@ -40,6 +40,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final ExecutorService cryptoExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     /**
+     * Device attestation (USB "attest", AttestationKey) runs on its own thread so a StrongBox key
+     * generation (seconds on the Titan M) never delays signing work on cryptoExecutor; one at a time.
+     */
+    private final ExecutorService attestExecutor = Executors.newSingleThreadExecutor();
+    private final AtomicBoolean attesting = new AtomicBoolean(false);
+    private final AttestationProtocol.ChallengeLog attestChallenges = new AttestationProtocol.ChallengeLog();
+    /**
      * Guards the session-token check + credential publish (and the wallet commit, and signing +
      * send) as one step, so {@link #lock()} on the UI thread can never interleave with a
      * background task between "is my session still current?" and "publish".
@@ -1879,6 +1886,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if ("getAddress".equals(json.optString("method"))) {
                     Eip1559Request.requireExactFields(json, "id", "method");
                     b = "The connected host asks for your receiving address. Unlock to continue.";
+                } else if (AttestationProtocol.handles(json.optString("method"))) {
+                    // Held like getAddress: the answer names the wallet address, and nothing
+                    // leaves a locked phone (device-attestation.md, "Locked phone").
+                    AttestationProtocol.parseChallenge(json);
+                    b = "The connected host asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.";
                 } else if (MessageRequest.handles(json.optString("method"))) {
                     b = MessageReview.lockedSummary(MessageRequest.parse(json));
                 } else {
@@ -1913,6 +1925,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) { sendError(source, id, e.getMessage()); }
             return;
         }
+        if (AttestationProtocol.handles(json.optString("method"))) {
+            answerAttestation(source, json, id, s);
+            return;
+        }
         final ApprovalDecision decision;
         synchronized (stateLock) {
             if (!requestPending.compareAndSet(false, true)) {
@@ -1935,6 +1951,50 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         } catch (Exception e) {
             finishApproval(decision);
             sendError(source, id, e.getMessage());
+        }
+    }
+
+    /**
+     * USB "attest": a fresh StrongBox key attests the host's challenge and signs the binding of
+     * that challenge to this wallet's address (AttestationProtocol). No review screen: it signs
+     * nothing with the wallet key and reveals nothing beyond the address getAddress already gives
+     * an unlocked phone. Runs off the signing thread; one at a time; a challenge is answered once.
+     */
+    private void answerAttestation(AccessoryTransport source, JSONObject json, String fallbackId, int s) {
+        final String id;
+        final byte[] challenge;
+        try {
+            challenge = AttestationProtocol.parseChallenge(json);
+            id = json.getString("id");
+        } catch (Exception e) { sendError(source, fallbackId, e.getMessage()); return; }
+        if (!attestChallenges.firstUse(challenge)) { sendError(source, id, "This challenge was already answered"); return; }
+        if (!attesting.compareAndSet(false, true)) { sendError(source, id, "Another attestation is in progress"); return; }
+        final String address;
+        synchronized (stateLock) {
+            if (s != session.get() || source != transport || !unlocked || !walletLoaded || credentials == null) {
+                attesting.set(false);
+                sendError(source, id, "Wallet is not ready: unlock and complete the backup check first");
+                return;
+            }
+            address = credentials.getAddress();
+        }
+        try {
+            attestExecutor.execute(() -> {
+                try {
+                    AttestationKey.Result r = AttestationKey.attest(challenge, address);
+                    JSONObject reply = AttestationProtocol.response(id, address, r.securityLevel, r.chain, r.signature);
+                    synchronized (stateLock) {
+                        if (s != session.get() || source != transport || !unlocked) return;
+                        source.send(reply);
+                    }
+                } catch (Exception e) {
+                    sendError(source, id, "Attestation failed: " + e.getClass().getSimpleName());
+                } finally {
+                    attesting.set(false);
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException closing) {
+            attesting.set(false);
         }
     }
 
@@ -2203,6 +2263,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         clearSensitiveUi();
         clearPinEntry();
         cryptoExecutor.shutdownNow();
+        attestExecutor.shutdownNow();
         super.onDestroy();
     }
 

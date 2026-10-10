@@ -165,6 +165,17 @@ Android does not remove those supply-chain or end-of-life risks.
 New features must preserve these invariants or update this document with the
 new trusted components and corresponding negative tests.
 
+## Device attestation (2026-10-10)
+
+The companion asks the phone to attest a fresh challenge on every connection and before every
+signature (`device-attestation.md`). A StrongBox key generated for that challenge signs the wallet
+address; the wallet key is not used and no review screen is involved, so invariant 1 is unchanged.
+New trusted inputs: Google's attestation root keys (pinned in the companion), Google's revocation
+list (best effort), and the Titan M's root-of-trust report. It proves locked Phone Vault firmware
+and the release-signed app on certified hardware; it does not prove a genuine image is
+uncompromised at runtime, resist physical attacks, or survive a Google root or batch-key
+compromise. No phone can be GENUINE until the release APK signer and AVB key are pinned.
+
 ## 0.3.0 app interaction boundary (2026-09-05)
 
 The updated app presents full-screen native pages for review and sensitive work. A request owns

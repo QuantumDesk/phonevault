@@ -452,6 +452,37 @@ def validate_message_response(request, response, expected_digest, expected_signe
             f"expected {expected_signer}")
 
 
+ATTEST_FIELDS = {"id", "status", "version", "address", "securityLevel", "certificates", "signature"}
+
+
+def validate_attest_response(request, response, expected_signer=None):
+    """Schema checks for the USB "attest" answer (vault-os/docs/device-attestation.md).
+
+    This client does NOT verify the certificate chain, the KeyDescription or the binding
+    signature: that is the companion's verifier (`cargo run --example attest_verify`), which
+    attesttest.sh runs on the saved request/response pair.
+    """
+    if response.get("id") != request["id"]:
+        raise ValueError("attestation answer is for a different request")
+    if response.get("status") == "error":
+        if set(response) != {"id", "status", "error"}:
+            raise ValueError("malformed error answer")
+        return
+    if set(response) != ATTEST_FIELDS or response.get("status") != "ok" or response.get("version") != "1":
+        raise ValueError("attestation answer does not match the protocol")
+    if not re.fullmatch(r"0x[0-9a-f]{40}", response["address"]):
+        raise ValueError("attested address is not 0x + 40 lowercase hex")
+    if response["securityLevel"] not in ("StrongBox", "TrustedEnvironment"):
+        raise ValueError("unknown securityLevel")
+    certificates = response["certificates"].split(",")
+    if not 2 <= len(certificates) <= 8 or not all(re.fullmatch(r"[A-Za-z0-9+/]+=*", c) for c in certificates):
+        raise ValueError("certificates must be 2..8 comma-separated base64 DER certificates")
+    if not re.fullmatch(r"0x(?:[0-9a-f]{2}){8,80}", response["signature"]):
+        raise ValueError("signature must be 0x + lowercase DER hex")
+    if expected_signer and response["address"] != expected_signer.lower():
+        raise ValueError(f"attested address {response['address']} is not the pinned signer {expected_signer}")
+
+
 def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
     request_id = request.get("id")
     if not isinstance(request_id, str) or not request_id:
@@ -484,6 +515,9 @@ def request_for(args):
     request_id = str(uuid.uuid4())
     if args.command in ("address", "pair"):
         return {"id": request_id, "method": "getAddress"}
+    if args.command == "attest":
+        challenge = bytes.fromhex(args.challenge) if args.challenge else os.urandom(32)
+        return {"id": request_id, "method": "attest", "challenge": challenge.hex()}
     if args.command == "sign-message":
         if args.typed_file:
             with open(args.typed_file, encoding="utf-8") as handle:
@@ -544,6 +578,11 @@ def main():
         help="0x digest the signature must cover (required for --typed-file: this client has no "
              "EIP-712 encoder; personal_sign digests are computed here)")
     message.add_argument("--expect-address", default=None)
+    attest = subparsers.add_parser(
+        "attest", help="Ask the phone to attest a fresh challenge (device check); saves the exchange")
+    attest.add_argument("--challenge", default=None, help="lowercase hex, 16..64 bytes (default: 32 random bytes)")
+    attest.add_argument("--save", default=None, help="Directory to write request.json and response.json into")
+    attest.add_argument("--expect-address", default=None)
     args = parser.parse_args()
 
     try:
@@ -564,6 +603,8 @@ def main():
                     f"no paired signer in {args.pairing_file}: run `pair` first "
                     "(or pass --expect-address)"
                 )
+        if args.command == "attest" and args.challenge and not re.fullmatch(r"(?:[0-9a-f]{2}){16,64}", args.challenge):
+            raise ValueError("--challenge must be 16..64 bytes of lowercase hex")
         device = switch_to_accessory(find_android_device())
         endpoint_in, endpoint_out = open_endpoints(device)
         request = request_for(args)
@@ -576,6 +617,13 @@ def main():
             else:
                 expected_digest = bytes.fromhex(args.expect_digest[2:])
             validate_message_response(request, response, expected_digest, expected_signer)
+        elif args.command == "attest":
+            validate_attest_response(request, response, args.expect_address or load_paired_signer(args.pairing_file))
+            if args.save:
+                os.makedirs(args.save, mode=0o700, exist_ok=True)
+                for name, body in (("request.json", request), ("response.json", response)):
+                    with open(os.path.join(args.save, name), "w", encoding="utf-8") as handle:
+                        json.dump(body, handle, indent=2)
         else:
             validate_response(request, response, expected_signer=expected_signer)
         print(json.dumps(response, indent=2))

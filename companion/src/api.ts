@@ -28,6 +28,20 @@ export interface HistoryEntry {
   fee_max_eth: string | null; nonce: number | null; time: number; status: "pending" | "confirmed" | "failed" | "received"; block: number | null;
   token_symbol?: string | null; token_amount?: string | null; token_contract?: string | null;
 }
+/** Device attestation report (src-tauri/src/attest, vault-os/docs/device-attestation.md). */
+export type Verdict = "genuine" | "development" | "fail";
+export interface AttestationDetails {
+  phone_security_level: string; attestation_security_level: string; keymint_security_level: string;
+  attestation_version: number; keymint_version: number;
+  device_locked: boolean | null; verified_boot_state: string | null; verified_boot_key: string | null; verified_boot_key_known: boolean;
+  verified_boot_hash: string | null; os_version: string | null; os_patch_level: string | null; vendor_patch_level: string | null; boot_patch_level: string | null;
+  app_package: string | null; app_version: number | null; app_signer: string | null; app_signer_kind: "release" | "development" | "unknown";
+  root: string; provisioning: string; chain_length: number; revocation: string;
+}
+export interface Attestation {
+  verdict: Verdict; headline: string; problems: string[]; cautions: string[]; notes: string[];
+  details: AttestationDetails | null; address: string | null; checked_at: number; dev_mode: boolean;
+}
 /** Typed failure from sign_start. */
 export interface SendError { kind: string; message: string; delivered: boolean }
 export type Stage = "connecting" | "delivered" | "verifying";
@@ -64,6 +78,9 @@ export const api = {
   tokenList: () => call<TokenInfo[]>("token_list"),
   tokenBalances: (rpcUrl: string) => call<TokenBalances>("token_balances", { rpcUrl }),
   tokenQuote: (rpcUrl: string, token: string, to: string, amount: string) => call<Quote>("token_quote", { rpcUrl, token, to, amount }),
+  /** Fresh device check over USB (the phone attests a new challenge). */
+  attest: (allowDev: boolean) => call<Attestation>("attest_phone", { allowDev }),
+  attestationCached: () => call<Attestation | null>("attestation_cached"),
 };
 
 /** Subscribe to send-progress events. Returns an unsubscribe function. */
