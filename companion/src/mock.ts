@@ -2,8 +2,9 @@
 // can be designed and screenshotted without a phone. Nothing here is ever used by the app.
 //
 // URL knobs: ?paired=0  ?phone=none|android|accessory  ?outcome=approve|reject|timeout|verify|nophone|broadcastfail
+//            ?attest=development|genuine|fail|oldapp   (device check; "development" = today's dev phones: FAIL until Developer mode is on)
 
-import type { HistoryEntry, Stage } from "./api";
+import type { Attestation, AttestationDetails, HistoryEntry, Stage } from "./api";
 
 const params = new URLSearchParams(location.search);
 const ADDRESS = "0x7A3b9C1d2E4f5061728394A5b6C7d8E9f0A1B2c3";
@@ -20,6 +21,37 @@ const MOCK_TOKENS = [
   { chainId: 8453, address: "0x4200000000000000000000000000000000000006", symbol: "WETH", name: "Wrapped Ether", decimals: 18 },
   { chainId: 1, address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", name: "USD Coin", decimals: 6 },
 ];
+
+/** Device-check reports shaped like the Rust side's, for each verdict. */
+function mockAttestation(kind: string, allowDev: boolean): Attestation {
+  const base: AttestationDetails = {
+    phone_security_level: "StrongBox", attestation_security_level: "StrongBox", keymint_security_level: "StrongBox",
+    attestation_version: 3, keymint_version: 4, device_locked: false, verified_boot_state: "Unverified (orange: bootloader unlocked)",
+    verified_boot_key: "0000000000000000000000000000000000000000000000000000000000000000", verified_boot_key_known: false,
+    verified_boot_hash: "6e9d0c5bea2cda99f3e5c76fb2740cdf8793d1d363422cd065d22bf0a2bb5bad", os_version: "15.0.0", os_patch_level: "2026-09",
+    vendor_patch_level: "2022-01-05", boot_patch_level: "2026-09-05", app_package: "dev.phonevault.signer", app_version: 3,
+    app_signer: "d8eab12db9f77634d1663d66df9928c184a2c91df03e3ea78abcddd64f114b53", app_signer_kind: "development",
+    root: "Google Hardware Attestation Root (RSA)", provisioning: "factory", chain_length: 4, revocation: "Not revoked (Google status list of 2026-10-10)",
+  };
+  const now = Math.floor(Date.now() / 1000);
+  const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: ADDRESS, checked_at: now, dev_mode: allowDev, ...a });
+  switch (kind) {
+    case "genuine": return r({ verdict: "genuine", headline: "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M",
+      details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4e", verified_boot_key_known: true,
+        app_signer: "7a1e3c5b9d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a", app_signer_kind: "release" } });
+    case "fail": return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check",
+      problems: ["The phone boots firmware signed by a key that is not Phone Vault's (verified boot key 9c2e41d07a3b55e8…)."],
+      details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "9c2e41d07a3b55e8f1d2c3b4a5968778695a4b3c2d1e0f1a2b3c4d5e6f708192", app_signer_kind: "development" } });
+    case "oldapp": return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check", address: null, details: null,
+      problems: ["The phone did not attest (Request fields do not match schema; missing=[nonce, …]). A Phone Vault app without device attestation cannot prove it is genuine; update the app."] });
+    default:
+      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check",
+        problems: ["The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone."],
+        cautions: ["Development firmware: bootloader unlocked — not safe for real funds"] });
+      return r({ verdict: "development", headline: "Development firmware: bootloader unlocked — not safe for real funds",
+        cautions: ["Development firmware: bootloader unlocked — not safe for real funds", "The Phone Vault app is signed with the development key (Developer mode is on on this Mac)."] });
+  }
+}
 
 export interface Mock {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
@@ -40,12 +72,18 @@ export function createMock(): Mock {
     { kind: "out", hash: "0x9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", chain_id: 1, counterparty: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount_eth: "0.01", fee_max_eth: "0.00042", nonce: 11, time: now - 86400 * 9, status: "failed", block: 20111000 },
   ];
   let pending: { hash: string; to: string; amount: string; chain: number; polls: number } | null = null;
+  let lastAttestation: Attestation | null = null;
 
   async function invoke<T>(cmd: string, a: Record<string, unknown> = {}): Promise<T> {
     const chainOf = (url: unknown) => RPC_CHAIN[String(url)] ?? 8453;
     switch (cmd) {
       case "device_status": return { phone, paired, paired_checksum: paired ? ADDRESS : null, pairing_path: "~/Library/Application Support/PhoneVault/paired-signer.json" } as T;
       case "read_address": await sleep(1200); if (phone === "none") throw "no Android device on USB"; return ADDRESS as T;
+      case "attest_phone": {
+        await sleep(1500); if (phone === "none") throw "no Android device on USB";
+        lastAttestation = mockAttestation(params.get("attest") ?? "development", Boolean(a.allowDev)); return lastAttestation as T;
+      }
+      case "attestation_cached": return lastAttestation as T;
       case "confirm_pairing": paired = ADDRESS.toLowerCase(); return "" as T;
       case "forget_pairing": paired = null; return undefined as T;
       case "wallet": {

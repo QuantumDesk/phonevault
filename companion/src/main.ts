@@ -3,7 +3,8 @@
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
 import { api, onProgress, openExternal, appVersion, notify, errText, isTauri } from "./api";
-import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate } from "./api";
+import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation } from "./api";
+import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
@@ -13,13 +14,13 @@ import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
 type Theme = "dark" | "light" | "system";
-interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme }
+interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean }
 const PREFS_KEY = "phonevault.prefs.v1";
 function loadPrefs(): Prefs {
-  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark" };
+  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme };
+    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true };
   } catch { return d; }
 }
 const prefs = loadPrefs();
@@ -49,7 +50,7 @@ async function refreshStatus() {
     const phoneChanged = s.phone !== status?.phone;
     const appeared = (status?.phone ?? "none") === "none" && s.phone !== "none";
     status = s; statusError = null;
-    if (s.phone === "none") identity = { s: "unknown" };
+    if (s.phone === "none") { identity = { s: "unknown" }; if (device.report || device.error) { device = { report: null, checking: false, error: null }; failDismissed = false; renderPhoneNotice(); } }
     else if (appeared) identifyPhone();
     renderHeader();
     if (pairedChanged) { balances.clear(); balErrors.clear(); if (s.paired) { refreshAllBalances(); } render(); }
@@ -144,6 +145,7 @@ function renderHeader() {
     h("button", { class: "brand", onclick: () => go("home"), title: "Home" }, padlock(2), h("span", null, "PHONE VAULT")),
     retry ? h("button", { class: `chip ${cls}`, title, onclick: retry }, h("i", { class: "dot" }), label)
       : h("span", { class: `chip ${cls}`, title }, h("i", { class: "dot" }), label),
+    phone !== "none" ? attBadge(device, openDeviceSettings) : null,
     h("button", { class: "icon-btn", onclick: () => openDrawer(), "aria-label": "Settings", title: "Settings" }, icon("gear", 20)),
   ].filter((x): x is HTMLElement => !!x));
 }
@@ -183,6 +185,8 @@ function homeView() {
   const addr = status!.paired_checksum!;
   const usd = b ? fmtUsd(b.eth, price(n)) : null;
   return h("div", { class: "stack fade" },
+    device.report && device.report.verdict !== "genuine" ? h("button", { class: `att-banner ${device.report.verdict === "fail" ? "att-fail" : "att-dev"}`, onclick: openDeviceSettings },
+      icon(device.report.verdict === "fail" ? "alert" : "shield", 16), h("span", { class: "grow" }, device.report.verdict === "fail" ? "This phone failed the device check. Sending is blocked." : device.report.headline), h("span", { class: "small" }, "Details")) : null,
     h("section", { class: "card account" },
       h("div", { class: "row between" },
         h("p", { class: "kicker" }, "ACCOUNT 1"),
@@ -281,7 +285,9 @@ function pairView() {
   let body: Node;
   if (pair.s === "compare") {
     const address = pair.address;
-    body = h("section", { class: "card" },
+    const att = device.report;
+    const attOk = !!att && att.verdict !== "fail" && att.address?.toLowerCase() === address.toLowerCase();
+    body = h("div", { class: "stack" }, h("section", { class: "card" },
       h("p", { class: "kicker" }, "COMPARE"),
       h("h3", null, "Does this match your phone?"),
       h("p", { class: "muted" }, "On the phone, open Wallet. Compare every group of four characters below with the address it shows."),
@@ -289,10 +295,10 @@ function pairView() {
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
           try { await api.confirmPairing(address); pair = { s: "idle" }; identity = { s: "match" }; await refreshStatus(); renderPhoneNotice(); go("home"); } catch (e) { pair = { s: "idle", error: errText(e) }; render(); }
-        } }, icon("check", 18), "It matches"),
+        }, disabled: !attOk, title: attOk ? "" : device.checking ? "Waiting for the device check" : "The device check must pass first" }, icon("check", 18), device.checking ? "Checking phone…" : "It matches"),
         h("button", { class: "big", onclick: () => { pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),
-    );
+    ), verdictCard(device, () => identifyPhone()));
   } else if (pair.s === "mismatch") {
     body = h("section", { class: "card danger-card" },
       h("p", { class: "kicker danger" }, "NOT PAIRED"),
@@ -312,6 +318,7 @@ function pairView() {
         h("li", null, "Compare it with the phone's screen, then pair."),
       ),
       pair.s === "idle" && pair.error ? h("p", { class: "inline-error" }, icon("alert", 15), explainPlain(pair.error)) : null,
+      device.report?.verdict === "fail" ? verdictCard(device, () => identifyPhone()) : null,
       h("div", { class: "actions" },
         h("button", { class: "big primary", disabled: reading, onclick: readAddress }, reading ? h("i", { class: "mini-spin" }) : icon("phone", 18), reading ? "Asking the phone…" : "Read address from phone"),
       ),
@@ -341,8 +348,10 @@ async function identifyPhone() {
   // "Unlock your phone" label steady while asking again rather than flickering to "Checking".
   if (identity.s !== "unreadable") { identity = { s: "checking" }; renderHeader(); }
   try {
-    const address = await api.readAddress();
-    if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
+    const report = await checkDevice();
+    const address = report.address;
+    if (!address) { identity = { s: "unknown" }; } // refused without naming a wallet (e.g. an app too old to attest); the badge says why
+    else if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
     else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
     else identity = { s: "different", address, dismissed: false };
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
@@ -354,6 +363,19 @@ async function identifyPhone() {
 let noticeEl: HTMLElement | null = null;
 function renderPhoneNotice() {
   noticeEl?.remove(); noticeEl = null;
+  if (device.report?.verdict === "fail" && !failDismissed && view !== "pair") {
+    const close = () => { failDismissed = true; renderPhoneNotice(); };
+    noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
+      h("div", { class: "modal", role: "dialog", "aria-modal": "true" },
+        verdictCard(device, () => identifyPhone()),
+        h("div", { class: "actions" },
+          h("button", { class: "big", onclick: () => { close(); openDeviceSettings(); } }, icon("shield", 18), "Details"),
+          h("button", { class: "big", onclick: close }, "Close"),
+        ),
+      ));
+    document.body.append(noticeEl);
+    return;
+  }
   if (identity.s !== "different" || identity.dismissed || view === "pair") return;
   const found = identity.address;
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
@@ -374,9 +396,43 @@ function renderPhoneNotice() {
 
 async function readAddress() {
   pair = { s: "reading" }; render();
-  try { const address = await api.readAddress(); pair = { s: "compare", address }; }
-  catch (e) { pair = { s: "idle", error: errText(e) }; }
+  try {
+    const r = await checkDevice();
+    pair = r.address ? { s: "compare", address: r.address } : { s: "idle", error: r.problems[0] ?? "The phone did not say which wallet it holds." };
+  } catch (e) { pair = { s: "idle", error: errText(e) }; }
   if (view === "pair") render();
+}
+
+// ------------------------------------------------------------------ device check (attestation)
+// Run on every identify/pair and (in Rust) before every send; cached per USB connection there.
+let device: DeviceCheck = { report: null, checking: false, error: null };
+let failDismissed = false;
+
+async function checkDevice(): Promise<Attestation> {
+  device = { ...device, checking: true, error: null };
+  renderHeader(); if (drawerOpen) renderDrawer();
+  try {
+    const r = await api.attest(prefs.devMode);
+    device = { report: r, checking: false, error: null };
+    if (r.verdict !== "fail") failDismissed = false;
+    return r;
+  } catch (e) {
+    device = { ...device, checking: false, error: explainPlain(errText(e)) };
+    throw e;
+  } finally {
+    renderHeader(); if (drawerOpen) renderDrawer(); if (view === "pair") render(); else if (view === "home") renderSoon();
+    renderPhoneNotice();
+  }
+}
+
+/** After a blocked send the Rust side holds the newest verdict; show it. */
+async function refreshCachedDevice() {
+  try { const r = await api.attestationCached(); if (r) { device = { report: r, checking: false, error: null }; renderHeader(); renderPhoneNotice(); } } catch { /* the badge keeps the last one */ }
+}
+
+function openDeviceSettings() {
+  openDrawer();
+  requestAnimationFrame(() => document.getElementById("device-section")?.scrollIntoView({ block: "start", behavior: "smooth" }));
 }
 
 /** Plain wording for common transport errors (pairing and elsewhere). */
@@ -428,6 +484,7 @@ function setFlow(f: Flow) {
 
 function startSend() {
   if (identity.s === "different") { identity.dismissed = false; renderPhoneNotice(); return; }
+  if (device.report?.verdict === "fail") { failDismissed = false; renderPhoneNotice(); return; }
   flow = { s: "form" }; formError = null; activeTicket = null; flowNet = net(); fee = null;
   if (draft.asset && !tokenAt(flowNet.id, draft.asset)) { draft.asset = ""; draft.amount = ""; }
   go("send");
@@ -752,7 +809,9 @@ async function sendToPhone(quote: Quote) {
     if (activeTicket === ticket) setFlow({ s: "signed", quote, signed });
   } catch (e) {
     if (activeTicket !== ticket || flow.s === "signed") return;
-    setFlow({ s: "failed", quote, err: asSendError(e) });
+    const err = asSendError(e);
+    if (err.kind === "attestation") refreshCachedDevice();
+    setFlow({ s: "failed", quote, err });
   } finally { clearTimeout(watchdog); }
 }
 
@@ -797,6 +856,7 @@ function explain(err: SendError): Explained {
     case "verify": return { title: "Signature failed verification", danger: true, body: "What came back does not match what you entered, or was not signed by your paired phone. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
     case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast. Reconnect the cable and try again." };
     case "not_paired": return { title: "Not paired", body: "Pair this Mac with your phone first (Settings → Phone)." };
+    case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware holding your paired wallet, so nothing was sent to it. Open Settings → Device for the details." };
     default: return { title: "Something went wrong", body: "The request didn't complete. Nothing was broadcast. Try again." };
   }
 }
@@ -908,6 +968,7 @@ function renderDrawer() {
       ),
       status?.pairing_path ? h("p", { class: "muted small" }, "Stored in ", h("span", { class: "mono" }, status.pairing_path)) : null,
     ),
+    deviceSection(device, prefs.devMode, phone !== "none", () => identifyPhone(), (on) => { prefs.devMode = on; savePrefs(); renderDrawer(); identifyPhone(); }),
     h("section", { class: "set" },
       h("h4", null, "NETWORK"),
       h("div", { class: "radio-list" }, NETWORKS.map((x) => h("button", { class: `radio${x.id === prefs.chainId ? " on" : ""}`, onclick: () => { prefs.chainId = x.id; savePrefs(); refreshBalance(x); renderDrawer(); if (view === "home" || view === "receive") render(); } },
@@ -956,7 +1017,8 @@ appVersion().then((v) => { version = v; if (drawerOpen) renderDrawer(); }).catch
 mountWalletConnect({
   paired: () => status?.paired_checksum ?? null,
   rpcFor,
-  phoneBlocked: () => identity.s === "different" ? "The phone on USB holds a different wallet. Pair it first (Settings → Phone)."
+  phoneBlocked: () => device.report?.verdict === "fail" ? "This phone failed the device check (Settings → Device). Signing is blocked."
+    : identity.s === "different" ? "The phone on USB holds a different wallet. Pair it first (Settings → Phone)."
     : identifying ? "Checking which wallet the phone holds. Try again in a moment."
     : view === "send" && ["connecting", "on_phone", "verifying"].includes(flow.s) ? "The phone is busy with your Send. Finish it first." : null,
   changed: () => { if (view === "home") renderSoon(); if (drawerOpen && !drawer.contains(document.activeElement)) renderDrawer(); },
