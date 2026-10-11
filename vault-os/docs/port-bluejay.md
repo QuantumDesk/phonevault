@@ -1,7 +1,7 @@
 # Port to the Pixel 6a (bluejay, Google Tensor gs101, Titan M2)
 
-Status 2026-10-10: research done, sources syncing on the build host, nothing built, nothing
-flashed. This is the plan for milestone **G3** (`path-to-release.md`: "Port to a current Pixel
+Status 2026-10-10: sources synced (moved to `/build`, its own SSD), kernel and rung **b0**
+built (see `dev-ladder-bluejay/README.md`), nothing flashed. Build findings are in §10. This is the plan for milestone **G3** (`path-to-release.md`: "Port to a current Pixel
 with Titan M2"). The Pixel 3 XL (crosshatch, Lineage 22.2) stays the dev target for the
 ladder already in `dev-ladder/`; this document is the ladder for the 6a.
 
@@ -237,7 +237,7 @@ am_crash` + `init: Service … exited` repeats) has to be 0, before the next run
 
 | Rung | Change | Boot test (in addition to the checklist) |
 |---|---|---|
-| **b0** | Lineage 24.0 bluejay + `vault_bluejay` product: app prebuilt, frameworks/base 0001–0005 rebased, overlays, HOME preferred-apps, setup wizard stripped, userdebug with the pre-authorised dev adb key (like crosshatch rung 0/1b). AVB still Lineage default. | Genuine first boot on wiped data lands on SET PIN, owner = `fixed-function-system-image`, `mLockTaskModeState=LOCKED`. Record the **inventory** for later rungs: `lsmod`, `lshal`, `service list`, `getprop`, `ls /vendor/etc/init`, `cat /proc/cmdline`, `/sys/class/typec`, `ls /config/usb_gadget/g1/functions`. **Run `attesttest.sh`** and record whether the StrongBox chain is factory or RKP (section 6). |
+| **b0** | Lineage 24.0 bluejay + `vault_bluejay` product: app prebuilt, frameworks/base 0003+0004 rebased (as built: 0001/0002/0005 deferred to a later rung so b0 only has to prove boot + owner provisioning), overlays, HOME preferred-apps, setup wizard stripped, userdebug with the pre-authorised dev adb key (like crosshatch rung 0/1b). AVB still Lineage default. | Genuine first boot on wiped data lands on SET PIN, owner = `fixed-function-system-image`, `mLockTaskModeState=LOCKED`. Record the **inventory** for later rungs: `lsmod`, `lshal`, `service list`, `getprop`, `ls /vendor/etc/init`, `cat /proc/cmdline`, `/sys/class/typec`, `ls /config/usb_gadget/g1/functions`. **Run `attesttest.sh`** and record whether the StrongBox chain is factory or RKP (section 6). |
 | b1 | Our AVB key on vbmeta + all chained partitions, `--flags 3` removed, rollback indexes ≥ stock, `board-info-bluejay.txt` with bootloader/baseband pins | `ro.boot.veritymode=enforcing`, `ro.boot.vbmeta.digest` non-empty, `avbtool info_image` of each image shows our key. |
 | b2 | Appliance VINTF manifest for gs101 | No VINTF/`isBuildConsistent` popup, no HAL registration refusals. |
 | b3 | Wi-Fi, Bluetooth, NFC + secure element, GNSS: modules out of load lists + blocklist, their HALs/daemons/rc/VINTF out | No `wlan0`, no `/sys/class/bluetooth`, no NFC HAL, `dumpsys location` shows no GNSS HAL; no crash loops. |
@@ -334,9 +334,13 @@ zip -d vault_bluejay-img-<rung>.zip abl.img bl1.img bl2.img bl31.img gsa.img ldf
 unzip -l vault_bluejay-img-<rung>.zip
 ```
 
-The listing must show exactly `android-info.txt`, optionally `fastboot-info.txt`, and
+The listing must show exactly `android-info.txt` and
 `boot dtbo pvmfw vendor_boot vbmeta vbmeta_system vbmeta_vendor system system_ext product
 vendor vendor_dlkm` (`.img`), plus `super_empty.img` if present. Nothing else.
+(`dev-ladder-bluejay/build-rung.sh` does all of this and fails otherwise. As built, b0's raw
+`img_from_target_files` output also held `system_other.img` — `fastboot update` writes that to
+the *other* slot, our stock fallback — `userdata.img`, `unsparse_super_empty.img` and a
+`fastboot-info.txt` listing them; all four are dropped.)
 `android-info.txt` = our `board-info-bluejay.txt`
 (`require board=bluejay`, `require version-bootloader=bluejay-17.0-15199431`,
 `require version-baseband=g5123b-145971-260414-b-15201439`), so fastboot refuses a
@@ -452,4 +456,48 @@ and radio, then `fastboot -w update image-bluejay-cp2a.260705.006.zip`. Afterwar
 5. Exact gs101 module and service names (Wi-Fi/BT/NFC/modem/LWIS/edgetpu/AoC): take them
    from the b0 inventory, not from this document.
 6. Rebasing frameworks/base 0001–0005 and appliance 0001–0022 to Android 17 is the bulk of
-   the work. Do 0003/0004 first (b0 depends on them).
+   the work. Do 0003/0004 first (b0 depends on them). 0003/0004 are done:
+   `patches/frameworks-base-a17/`.
+
+## 10. Findings from the first build (b0, 2026-10-10/11)
+
+- **Paths.** The tree is at `/build/lineage-24` (own SSD, ~290 GB free before the build;
+  `/root/lineage-24` is a symlink, build from the real path) and the kernel workspace at
+  `/build/gs-6.1-kernel`, both owned by aipg. That settles open item 1.
+- **Kernel (open item 4).** `./build_bluejay.sh` takes about 6 min: the manifest pins GKI
+  `android14-6.1-2025-12_r30` as a downloaded prebuilt and only the Pixel vendor modules are
+  compiled. Dist path: `out/bluejay/dist` (boot.img, dtbo.img, dtb.img, 318 `.ko`, the four
+  module lists, which match the tracked copies in `bluejay-kernels/6.1`).
+- **The Kleaf `boot.img` is kernel-only (ramdisk size 0).** gs101 uses it as
+  `BOARD_PREBUILT_BOOTIMAGE`, but the 6a has no `init_boot`, so the generic ramdisk with
+  first-stage init must be in `boot`. As-is, the image would have panicked with no `/init`. b0's
+  `BoardConfigVault.mk` builds `boot.img` instead, from `Image.lz4` (byte-identical to the
+  prebuilt's kernel) and the generic ramdisk, and `build-rung.sh` refuses a `boot.img` whose
+  ramdisk lacks `init`.
+- **git-lfs.** `repo init --git-lfs` fetched the LFS objects but left pointer files: all of
+  `vendor/google/bluejay` (blobs, APEXes, radio images, whose SHA1 check then fails kati) and
+  the webview APKs. `git lfs install --local && git lfs pull` per project fixed it, and
+  `sync-bluejay.sh` now does that.
+- **Host tool.** Android 17's `main.mk` shells out to `zip`; it was missing on the build box
+  and has been installed (`pacman -S zip`).
+- **Artifact path requirement.** gs101 enforces `generic_system.mk`'s artifact path
+  requirement, so a device product may install nothing into `/system`. That covers the
+  signer app, `PRODUCT_SYSTEM_PROPERTIES` and `etc/preferred-apps`. b0 puts the app on
+  `/product` (`product_specific: true`; still `FLAG_SYSTEM`, not privileged), and puts the
+  `ro.phonevault.*` props and the HOME preference on `/product`. Android 17's PackageManager
+  reads `etc/preferred-apps` from every partition. The release `vendor/phonevault` files still
+  target `/system` (crosshatch) and need the same split for bluejay.
+- **Overlays** become the auto-generated RRO
+  `product/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk`, which carries
+  `config_fixedFunctionDeviceOwner`. Base `framework-res` keeps the empty default.
+- **Lineage adb.** Without `WITH_ADB_INSECURE`, Lineage's `common.mk` sets `ro.adb.secure=1`
+  **and** `PRODUCT_NOT_DEBUGGABLE_IN_USERDEBUG` (`ro.debuggable=0`) on userdebug.
+  `build-rung.sh` exports it, and b0 has `ro.debuggable=1`, `ro.adb.secure=0`.
+- **`img_from_target_files` output** also holds `system_other.img`, `userdata.img`,
+  `unsparse_super_empty.img` and a `fastboot-info.txt`. `build-rung.sh` drops them (§8).
+- **AVB as built (b0).** vbmeta is signed with the public AOSP `testkey_rsa4096` (sha1
+  `2597c218…`) and has flags 3. boot (location 2), vbmeta_system (1) and vbmeta_vendor (3) are
+  signed with the public `testkey_rsa2048` (sha1 `cdbb7717…`). All rollback indexes are
+  1790812800 (2026-10-01, the tree's security patch level), which is ≥ the stock CP2A values.
+- **Build time.** First full build: 6 h 58 min on 24 cores (233k ninja steps). An incremental
+  rebuild after a board-config change takes about 15 min.

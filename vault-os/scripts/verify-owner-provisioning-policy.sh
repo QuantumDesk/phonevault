@@ -172,31 +172,36 @@ overlay_line = re.compile(
 )
 if overlay_line.search(product):
     fail("common.mk must not add the resource overlay (the product makefile adds it first)")
-device_product = read("vault-os/device/phonevault/crosshatch/vault_crosshatch.mk")
-overlay_match = overlay_line.search(device_product)
-if overlay_match is None:
-    fail("PhoneVault resource overlay is not installed by the product")
-first_inherit = device_product.find("$(call inherit-product")
-if first_inherit < 0 or overlay_match.start() > first_inherit:
-    fail("PhoneVault resource overlay must be added before the first inherit-product")
+for device_makefile in (
+    "vault-os/device/phonevault/crosshatch/vault_crosshatch.mk",
+    "vault-os/device/phonevault/bluejay/vault_bluejay.mk",
+):
+    device_product = read(device_makefile)
+    overlay_match = overlay_line.search(device_product)
+    if overlay_match is None:
+        fail(f"PhoneVault resource overlay is not installed by {device_makefile}")
+    first_inherit = device_product.find("$(call inherit-product")
+    if first_inherit < 0 or overlay_match.start() > first_inherit:
+        fail(
+            "PhoneVault resource overlay must be added before the first inherit-product "
+            f"in {device_makefile}"
+        )
 
-policy_patch = read(
-    "vault-os/patches/frameworks-base/0003-provision-configured-appliance-owner.patch"
-)
-added = "\n".join(
-    line[1:]
-    for line in policy_patch.splitlines()
-    if line.startswith("+") and not line.startswith("+++")
-)
-required_fragments = (
+
+def added_lines(patch: str) -> str:
+    return "\n".join(
+        line[1:]
+        for line in patch.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+
+
+common_fragments = (
     "provisionConfiguredFixedFunctionOwner();",
     "config_fixedFunctionDeviceOwner",
     "ComponentName.unflattenFromString(configuredComponent)",
     "ownerInfo == null || !ownerInfo.isSystemApp()",
     "ownerInfo.isPrivilegedApp()",
-    "mOwners.hasDeviceOwner()",
-    "admin.equals(mOwners.getDeviceOwnerComponent())",
-    "mOwners.hasProfileOwner(UserHandle.USER_SYSTEM)",
     "hasUserSetupCompleted(UserHandle.USER_SYSTEM)",
     "setActiveAdmin(admin, /* refreshing= */ false, UserHandle.USER_SYSTEM",
     "setDeviceOwner(admin, UserHandle.USER_SYSTEM",
@@ -204,28 +209,46 @@ required_fragments = (
     "settingsGlobalPutInt(Settings.Global.DEVICE_PROVISIONED, 1)",
     "catch (RuntimeException e)",
 )
-for fragment in required_fragments:
-    if fragment not in added:
-        fail(f"framework patch lacks fail-closed invariant: {fragment}")
-if added.index("setActiveAdmin(admin") > added.index("setDeviceOwner(admin"):
-    fail("framework patch sets device owner before activating the admin")
-if added.index("setDeviceOwner(admin") > added.index("settingsSecurePutIntForUser("):
-    fail("framework patch completes setup before creating the device owner")
-if added.index("hasUserSetupCompleted(UserHandle.USER_SYSTEM)") > added.index(
-    "setActiveAdmin(admin"
-):
-    fail("framework patch checks setup completion after activating the admin")
+# Each Android baseline has its own rebase of 0003/0004; the owner-state accessors differ
+# (Android 15: mOwners; Android 17: Owners moved behind mDeviceAdmins), the invariants do not.
+patch_series = (
+    (
+        "vault-os/patches/frameworks-base",
+        (
+            "mOwners.hasDeviceOwner()",
+            "admin.equals(mOwners.getDeviceOwnerComponent())",
+            "mOwners.hasProfileOwner(UserHandle.USER_SYSTEM)",
+        ),
+    ),
+    (
+        "vault-os/patches/frameworks-base-a17",
+        (
+            "mDeviceAdmins.hasDeviceOwner()",
+            "existingOwner = mDeviceAdmins.getDeviceOwnerComponent()",
+            "!admin.equals(existingOwner)",
+            "mDeviceAdmins.hasProfileOwner(UserHandle.USER_SYSTEM)",
+        ),
+    ),
+)
+for series, owner_fragments in patch_series:
+    added = added_lines(read(f"{series}/0003-provision-configured-appliance-owner.patch"))
+    for fragment in common_fragments + owner_fragments:
+        if fragment not in added:
+            fail(f"framework patch ({series}) lacks fail-closed invariant: {fragment}")
+    if added.index("setActiveAdmin(admin") > added.index("setDeviceOwner(admin"):
+        fail(f"framework patch ({series}) sets device owner before activating the admin")
+    if added.index("setDeviceOwner(admin") > added.index("settingsSecurePutIntForUser("):
+        fail(f"framework patch ({series}) completes setup before creating the device owner")
+    if added.index("hasUserSetupCompleted(UserHandle.USER_SYSTEM)") > added.index(
+        "setActiveAdmin(admin"
+    ):
+        fail(f"framework patch ({series}) checks setup completion after activating the admin")
 
-symbol_patch = read(
-    "vault-os/patches/frameworks-base/0004-export-fixed-function-owner-resource.patch"
-)
-symbol_added = "\n".join(
-    line[1:]
-    for line in symbol_patch.splitlines()
-    if line.startswith("+") and not line.startswith("+++")
-)
-if '<java-symbol type="string" name="config_fixedFunctionDeviceOwner" />' not in symbol_added:
-    fail("framework resource export is missing")
+    symbol_added = added_lines(
+        read(f"{series}/0004-export-fixed-function-owner-resource.patch")
+    )
+    if '<java-symbol type="string" name="config_fixedFunctionDeviceOwner" />' not in symbol_added:
+        fail(f"framework resource export is missing ({series})")
 
 print(
     "Owner provisioning policy passed: ordinary system app, exact admin/HOME "

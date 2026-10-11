@@ -1,5 +1,8 @@
 # Re-hardening ladder (chunk 4)
 
+(Crosshatch / Lineage 22.2 only. The Pixel 6a ladder — rungs b0… on Lineage 24.0 — lives in
+`dev-ladder-bluejay/`.)
+
 `vault-os/vendor/phonevault/`, `device/phonevault/` and `patches/` describe the **release
 intent**. The development phone, however, boots an image whose tree deliberately deviates from
 that intent: the multi-week boot failures were debugged by peeling hardening off until the

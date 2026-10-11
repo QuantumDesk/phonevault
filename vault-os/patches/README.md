@@ -32,6 +32,15 @@ package is installed as a non-privileged system app. The Vault overlay selects
 `dev.phonevault.signer/.VaultDeviceAdminReceiver`; ordinary products retain
 upstream behavior.
 
+`patches/frameworks-base-a17/` holds the Android 17 (LineageOS 24.0, Pixel 6a / bluejay)
+rebases of 0003 and 0004. Same call site (`PHASE_ACTIVITY_MANAGER_READY`, after the
+policy-engine migration), same checks in the same order; Android 17 moved `Owners` behind
+`DeviceAdmins`, so the owner queries read `mDeviceAdmins.hasDeviceOwner()`,
+`getDeviceOwnerComponent()` and `hasProfileOwner()`, and the `Slogf.wtf` calls use its
+format-string overloads. `verify-owner-provisioning-policy.sh` checks both series for the same
+fail-closed invariants. 0001, 0002 and 0005 are not rebased yet (bluejay rung b0 does not carry
+them).
+
 `0005-systemui-optionally-hide-keyguard-clock.patch` adds the SystemUI resource
 `config_phonevaultHideKeyguardClock` (default false). When the product overlays it
 to true, the default keyguard blueprint omits the clock and smartspace sections and

@@ -1,0 +1,25 @@
+android_app_import {
+    name: "PhoneVault",
+    apk: "PhoneVault.apk",
+    presigned: true,
+    // Keep APK Signature Scheme v2 intact; Soong must not realign or rewrite
+    // this already-verified signer artifact.
+    preprocessed: true,
+    // Device-owner authority is granted by DevicePolicyManager, not by
+    // priv-app placement. Keep the signer in the ordinary system-app domain
+    // (frameworks/base 0003 refuses a privileged owner).
+    privileged: false,
+    // gs101 enforces build/make/target/product/generic_system.mk's artifact path requirement:
+    // a device product may not install into /system. Apps on /product are still system apps
+    // (ApplicationInfo.FLAG_SYSTEM) and, outside priv-app, not privileged, which is exactly
+    // what frameworks/base 0003 requires of the owner.
+    product_specific: true,
+    // Rung b0 (bluejay, = crosshatch rung 1b): the appliance has no setup wizard. The rest of
+    // the release overrides list comes back in later bluejay rungs, each boot-tested.
+    overrides: [
+        "LineageSetupWizard",
+    ],
+    dex_preopt: {
+        enabled: true,
+    },
+}

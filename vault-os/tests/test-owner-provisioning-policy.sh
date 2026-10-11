@@ -15,7 +15,9 @@ make_fixture() {
     "${fixture}/vault-os/vendor/phonevault/prebuilt" \
     "${fixture}/vault-os/vendor/phonevault/config" \
     "${fixture}/vault-os/device/phonevault/crosshatch" \
-    "${fixture}/vault-os/patches/frameworks-base"
+    "${fixture}/vault-os/device/phonevault/bluejay" \
+    "${fixture}/vault-os/patches/frameworks-base" \
+    "${fixture}/vault-os/patches/frameworks-base-a17"
   cp "${ROOT}/app/build.gradle" "${fixture}/app/build.gradle"
   cp "${ROOT}/app/src/main/AndroidManifest.xml" \
     "${fixture}/app/src/main/AndroidManifest.xml"
@@ -33,6 +35,12 @@ make_fixture() {
     "${fixture}/vault-os/patches/frameworks-base/0003-provision-configured-appliance-owner.patch"
   cp "${ROOT}/vault-os/patches/frameworks-base/0004-export-fixed-function-owner-resource.patch" \
     "${fixture}/vault-os/patches/frameworks-base/0004-export-fixed-function-owner-resource.patch"
+  cp "${ROOT}/vault-os/device/phonevault/bluejay/vault_bluejay.mk" \
+    "${fixture}/vault-os/device/phonevault/bluejay/vault_bluejay.mk"
+  cp "${ROOT}/vault-os/patches/frameworks-base-a17/0003-provision-configured-appliance-owner.patch" \
+    "${fixture}/vault-os/patches/frameworks-base-a17/0003-provision-configured-appliance-owner.patch"
+  cp "${ROOT}/vault-os/patches/frameworks-base-a17/0004-export-fixed-function-owner-resource.patch" \
+    "${fixture}/vault-os/patches/frameworks-base-a17/0004-export-fixed-function-owner-resource.patch"
 }
 
 expect_failure() {
@@ -108,5 +116,35 @@ assert block in text
 path.write_text(text.replace(block, "") + "\n" + block)
 PY
 expect_failure "${overlay_after_inherit}" 'must be added before the first inherit-product'
+
+a17_late_owner="${work_dir}/a17-late-owner"
+make_fixture "${a17_late_owner}"
+sed -i.bak '/^+                    || hasUserSetupCompleted(UserHandle.USER_SYSTEM))/d' \
+  "${a17_late_owner}/vault-os/patches/frameworks-base-a17/0003-provision-configured-appliance-owner.patch"
+expect_failure "${a17_late_owner}" 'frameworks-base-a17) lacks fail-closed invariant: hasUserSetupCompleted'
+
+a17_privileged="${work_dir}/a17-privileged"
+make_fixture "${a17_privileged}"
+sed -i.bak 's/|| ownerInfo.isPrivilegedApp()) {/) {/' \
+  "${a17_privileged}/vault-os/patches/frameworks-base-a17/0003-provision-configured-appliance-owner.patch"
+expect_failure "${a17_privileged}" 'frameworks-base-a17) lacks fail-closed invariant: ownerInfo.isPrivilegedApp()'
+
+a17_mismatched="${work_dir}/a17-mismatched-existing"
+make_fixture "${a17_mismatched}"
+sed -i.bak '/^+                if (!admin.equals(existingOwner)) {/d' \
+  "${a17_mismatched}/vault-os/patches/frameworks-base-a17/0003-provision-configured-appliance-owner.patch"
+expect_failure "${a17_mismatched}" '!admin.equals(existingOwner)'
+
+bluejay_overlay_late="${work_dir}/bluejay-overlay-after-inherit"
+make_fixture "${bluejay_overlay_late}"
+python3 - "${bluejay_overlay_late}/vault-os/device/phonevault/bluejay/vault_bluejay.mk" <<'PY'
+import pathlib, sys
+path = pathlib.Path(sys.argv[1])
+text = path.read_text()
+block = "PRODUCT_PACKAGE_OVERLAYS += \\\n    vendor/phonevault/overlay\n"
+assert block in text
+path.write_text(text.replace(block, "") + "\n" + block)
+PY
+expect_failure "${bluejay_overlay_late}" 'before the first inherit-product in vault-os/device/phonevault/bluejay'
 
 echo "Owner provisioning policy negative fixtures passed."
