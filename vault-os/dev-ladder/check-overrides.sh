@@ -50,7 +50,9 @@ for n in names:
         return False
     hit = [e for e in entries if is_hit(e)]
     if hit:
-        survivors.append((n, hit[0]))
+        apk = [e for e in hit if e.endswith('.apk')]
+        # no APK = only dangling JNI-lib symlinks left in the staging dir (see build-rung.sh scrub)
+        survivors.append((n, apk[0] if apk else f'{hit[-1]}  (no APK: stale staging leftover)'))
 apps = sorted({'/'.join(e.split('/')[:3]) for e in entries
                if re.match(r'(SYSTEM|SYSTEM_EXT|PRODUCT|VENDOR)/(app|priv-app)/[^/]+/[^/]+\.apk$', e)})
 print(f'{len(names)} active overrides; {len(apps)} APKs remain in the image:')

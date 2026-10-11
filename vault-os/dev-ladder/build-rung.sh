@@ -17,6 +17,28 @@ source build/envsetup.sh
 lunch vault_crosshatch-bp1a-userdebug
 [[ -n "${TARGET_PRODUCT:-}" ]] || { echo "LUNCH FAILED"; exit 8; }
 echo "=== RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} variant=${TARGET_BUILD_VARIANT}"
+# Scrub stale app dirs from the staging tree before building. An app with embedded JNI libs gets
+# lib/<abi>/*.so symlinks to absolute *device* paths (/product/lib64/...). When the app stops being
+# installed, soong_ui's stale-install cleaner (cleanOldFiles in build/soong/ui/build/cleanbuild.go)
+# os.Stat()s each old path, which follows the symlink, finds nothing on the host and skips it: the
+# APK and odex go, the dangling symlinks stay, and target-files / the partition images copy the
+# staging dir wholesale. That is what check-overrides.sh flagged as Gallery2 and DeviceAsWebcam in
+# 4a (PrintSpooler would follow in 4b). Removed here: every app dir without an APK (a leftover
+# from an earlier build), and every app dir named in the rung's active `overrides` (removed this
+# rung; the APK is still there until soong_ui's cleaner runs). If an overridden module really is
+# still installed, ninja simply re-creates it and check-overrides.sh fails as it should.
+PV_PRODUCT_OUT="out/target/product/crosshatch"
+mapfile -t PV_OVERRIDES < <(awk '/^[[:space:]]*\/\//{next} /overrides:[[:space:]]*\[/{f=1;next}
+  f && /^[[:space:]]*\]/{f=0} f' vendor/phonevault/prebuilt/Android.bp | grep -o '"[^"]*"' | tr -d '"')
+for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-app}/*/; do
+  [[ -d "${d}" ]] || continue
+  name="$(basename "${d}")"
+  if ! compgen -G "${d}*.apk" >/dev/null; then
+    echo "   scrub stale app dir (no APK): ${d}"; rm -rf "${d}"
+  elif printf '%s\n' "${PV_OVERRIDES[@]}" | grep -Fqx "${name}"; then
+    echo "   scrub overridden app dir: ${d}"; rm -rf "${d}"
+  fi
+done
 export DISABLE_DEXPREOPT_CHECK=true
 [[ "${INSECURE}" == "1" ]] && export WITH_ADB_INSECURE=true
 m target-files-package -j24
