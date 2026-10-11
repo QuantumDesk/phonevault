@@ -80,7 +80,7 @@ on a real phone. The detailed checklists below (sections 1–5) feed these miles
       2026-09-24; factory first boot lands in the kiosk (USER_STARTED fallback) 2026-09-27; app updates
       re-provision HOME (MY_PACKAGE_REPLACED). Open: owner text on Android's lock screen, audit.
 - [ ] **Finish the hardening ladder.** ~~2d-c (camera/media/sensors/DSP)~~ passed 2026-09-27 (+ 2d-c2/2d-c3: dead services removed, lock screen without clock, passed 2026-09-28) → ~~2d-d (USB functions)~~ passed 2026-10-10 →
-      rung 3 (charge-only USB at the OS level) → rung 4 (strip unneeded apps/services in slices) →
+      ~~rung 3 (USB HAL refuses host role + non-allowlisted functions)~~ passed 2026-10-10 → rung 4 (strip unneeded apps/services in slices) →
       rung 5 (user build: no adb, no dump hook, no screenshots).
 - [ ] **Signed releases + relocked bootloader.** Release-key OTA, recovery that trusts only it,
       relock, and a demonstrated refuse-to-boot on a tampered image.
