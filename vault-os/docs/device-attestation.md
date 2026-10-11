@@ -261,3 +261,13 @@ boot key all zeros. Verdict: **fail** with Developer mode off (development signe
 with it on — as designed. Also visible: vendor/boot patch level 2021-10-05 (the Pixel 3's last
 firmware). Still to run: repeated-challenge refusal and the locked-phone hold (`attesttest.sh`
 cases 2–3, which need the verifier on the build host or a Mac-side runner).
+
+## Pixel 6a (Titan M2) result (b0, 2026-10-11)
+
+Run from the owner's Mac (`aoa_client.py attest` in a venv with pyusb + Homebrew libusb; the
+companion app must be closed, it grabs the accessory). StrongBox chain of 4 to the Google RSA root,
+**provisioning: factory** — no remote key provisioning needed, so the offline vault can attest on
+the 6a (the open question in `port-bluejay.md` is settled). Attestation/KeyMint 300, OS 17.0.0,
+OS patch 2026-10, vendor patch 2026-07-05, boot patch 2026-10; unlocked/orange; package
+`dev.phonevault.signer` (dev signer); bound to the wallet `0x0E21…EcBb`; not revoked. Verdict with
+Developer mode: **development**.

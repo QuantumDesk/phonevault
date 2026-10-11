@@ -74,3 +74,7 @@ zip, current slot only, firmware untouched).
   crosshatch before the USER_STARTED fallback; on 17 the fallback did not fire. Fix in b1.
 - Also seen: "Discover Trust" notification, "belongs to your organization" (org name not yet
   applied because provisioning never ran), clock/date on the keyguard (patch 0005 not ported yet).
+- First run from the Mac (harness needs Homebrew bash ≥4; macOS bash 3.2 lacks `mapfile`): PIN →
+  credential installed on the Titan M2, wallet created with **no** extra PIN prompt (the keystore
+  readiness check works), 3-word spot check, Home, kiosk LOCKED. Attestation: factory-provisioned
+  StrongBox chain, verdict development (see device-attestation.md).

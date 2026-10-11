@@ -47,7 +47,8 @@ wrong_pin() { printf '%d%s' "$(( (10#${PV_TEST_PIN:0:1} + 1) % 10 ))" "${PV_TEST
 # The throwaway phrase: 24 lowercase words; the file must be private to the caller.
 require_words() {
   [[ -n "${PV_WORDS_FILE:-}" && -s "$PV_WORDS_FILE" ]] || die "set PV_WORDS_FILE to a 0600 file holding the THROWAWAY 24-word phrase"
-  [[ "$(stat -c %a "$PV_WORDS_FILE")" =~ ^[0-7]00$ ]] || die "$PV_WORDS_FILE must be mode 0600 (it is a recovery phrase)"
+  local mode; mode="$(stat -c %a "$PV_WORDS_FILE" 2>/dev/null || stat -f %Lp "$PV_WORDS_FILE")"  # GNU or BSD/macOS
+  [[ "$mode" =~ ^[0-7]00$ ]] || die "$PV_WORDS_FILE must be mode 0600 (it is a recovery phrase)"
   mapfile -t WORDS < <(tr -s ' ' '\n' < "$PV_WORDS_FILE" | grep -v '^$')
   [[ ${#WORDS[@]} -eq 24 ]] || die "words file must hold exactly 24 words (has ${#WORDS[@]})"
 }
