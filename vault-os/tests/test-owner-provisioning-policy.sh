@@ -138,11 +138,13 @@ expect_failure "${a17_mismatched}" '!admin.equals(existingOwner)'
 bluejay_overlay_late="${work_dir}/bluejay-overlay-after-inherit"
 make_fixture "${bluejay_overlay_late}"
 python3 - "${bluejay_overlay_late}/vault-os/device/phonevault/bluejay/vault_bluejay.mk" <<'PY'
-import pathlib, sys
+import pathlib, re, sys
 path = pathlib.Path(sys.argv[1])
 text = path.read_text()
-block = "PRODUCT_PACKAGE_OVERLAYS += \\\n    vendor/phonevault/overlay\n"
-assert block in text
+# bluejay lists its own overlay ahead of vendor/phonevault/overlay: move the whole block.
+match = re.search(r"(?m)^PRODUCT_PACKAGE_OVERLAYS \+= \\\n(?:    \S+ \\\n)*    vendor/phonevault/overlay\n", text)
+assert match
+block = match.group(0)
 path.write_text(text.replace(block, "") + "\n" + block)
 PY
 expect_failure "${bluejay_overlay_late}" 'before the first inherit-product in vault-os/device/phonevault/bluejay'

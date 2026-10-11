@@ -23,10 +23,11 @@ RUNG_DIR="${OVERLAY}/dev-ladder-bluejay/rung-${RUNG}"
 echo "== release product → tree (bluejay only)"
 mkdir -p "${TREE}/device/phonevault/bluejay" "${TREE}/vendor/phonevault"
 rsync -a --delete "${OVERLAY}/device/phonevault/bluejay/" "${TREE}/device/phonevault/bluejay/"
-# SystemUI overlay: its only resource comes from frameworks/base 0005 (keyguard clock), which is
-# not rebased to Android 17 yet — not shipped until it is.
+# keys/ is never synced (and, excluded, never deleted): rung b1+ reads the AVB dev key through
+# the tree-local symlink vendor/phonevault/keys/avb_bluejay_dev.pem (see README).
+# The SystemUI overlay (config_phonevaultHideKeyguardClock) ships since b1, when frameworks/base
+# 0005 was rebased to Android 17 (patches/frameworks-base-a17/0005).
 rsync -a --delete --exclude 'keys/' --exclude 'prebuilt/PhoneVault.apk' \
-  --exclude 'overlay/frameworks/base/packages/SystemUI/' \
   "${OVERLAY}/vendor/phonevault/" "${TREE}/vendor/phonevault/"
 
 echo "== rung ${RUNG} deviations"
@@ -69,6 +70,8 @@ echo "   appended BoardConfigVault include to bluejay/BoardConfig.mk"
 FWB="${TREE}/frameworks/base"
 for fp in "${OVERLAY}"/patches/frameworks-base-a17/*.patch; do
   [[ -f "${fp}" ]] || continue
+  # A tree that carries an older revision of a patch (b1 extended 0003) fails both checks:
+  # `git -C frameworks/base checkout -- <its files>` first, then re-run.
   if git -C "${FWB}" apply --reverse --check "${fp}" >/dev/null 2>&1; then
     echo "   frameworks/base patch present: $(basename "${fp}")"
   elif git -C "${FWB}" apply --check "${fp}" >/dev/null 2>&1; then

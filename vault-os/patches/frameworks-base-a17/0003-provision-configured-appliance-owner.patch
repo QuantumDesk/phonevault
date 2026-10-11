@@ -16,6 +16,24 @@ same checks in the same order. Android 17 moved the Owners object behind
 DeviceAdmins, so the owner queries use mDeviceAdmins.hasDeviceOwner() /
 getDeviceOwnerComponent() / hasProfileOwner(); Slogf.wtf calls use the
 format-string overloads.
+
+Wake the owner app (bluejay rung b1). On a factory boot the owner was made
+device owner but its app never ran: setActiveAdmin's DEVICE_ADMIN_ENABLED was
+never delivered, and neither was the owner's USER_STARTED. Two independent
+reasons, both in this tree:
+  1. sendAdminCommandLocked first resolves the admin receiver for the user.
+     At PHASE_ACTIVITY_MANAGER_READY (and at USER_STARTED) the system user is
+     still locked, so only direct-boot-aware components resolve; the owner's
+     receiver is not, the query is empty and nothing is sent.
+  2. config_stopSystemPackagesByDefault (true since Android 14) scans a new
+     system package that has a launcher activity in the "stopped" state, and
+     broadcasts carry FLAG_EXCLUDE_STOPPED_PACKAGES by default: even a
+     resolvable broadcast would be dropped.
+So, after all the checks above have passed: take the configured owner out of
+the stopped state before setActiveAdmin (what its first launch would do), and
+once the system user is unlocked, send DEVICE_ADMIN_ENABLED to the device
+owner a second time (once per boot that provisioned it, in memory only). The
+first-boot checks and the empty-resource no-op are unchanged.
 ---
 diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
 index a19202ff1..8ffc64511 100644
@@ -34,10 +52,18 @@ index a19202ff1..8ffc64511 100644
      <string name="config_systemAppProtectionService" translatable="false"></string>
      <!-- The name of the package that will hold the system calendar sync manager role. -->
 diff --git a/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java b/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
-index 0cb6b68eb..8d7bff803 100644
+index 0cb6b68eb..ee3d00d26 100644
 --- a/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
 +++ b/services/devicepolicy/java/com/android/server/devicepolicy/DevicePolicyManagerService.java
-@@ -2953,6 +2953,7 @@ public class DevicePolicyManagerService extends IDevicePolicyManager.Stub
+@@ -1326,6 +1326,7 @@ public class DevicePolicyManagerService extends IDevicePolicyManager.Stub
+             } else if (Intent.ACTION_USER_UNLOCKED.equals(action)) {
+                 synchronized (getLockObject()) {
+                     maybeSendAdminEnabledBroadcastLocked(userHandle);
++                    maybeSendFixedFunctionOwnerEnabledLocked(userHandle);
+                 }
+                 if (isManagedProfile(userHandle)) {
+                     Slogf.d(LOG_TAG, "Managed profile became unlocked");
+@@ -2953,6 +2954,7 @@ public class DevicePolicyManagerService extends IDevicePolicyManager.Stub
                      policyMigrator.maybeMigratePoliciesPostUpgradeToDevicePolicyEngineLocked();
                      policyMigrator.migratePoliciesToPolicyEngineLocked();
                  }
@@ -45,7 +71,7 @@ index 0cb6b68eb..8d7bff803 100644
                  maybeStartSecurityLogMonitorOnActivityManagerReady();
                  break;
              case SystemService.PHASE_BOOT_COMPLETED:
-@@ -2965,6 +2966,73 @@ public class DevicePolicyManagerService extends IDevicePolicyManager.Stub
+@@ -2965,6 +2967,115 @@ public class DevicePolicyManagerService extends IDevicePolicyManager.Stub
          }
      }
  
@@ -100,6 +126,18 @@ index 0cb6b68eb..8d7bff803 100644
 +            }
 +        }
 +
++        // A system package seen for the first time is scanned "stopped" when it has a launcher
++        // activity (config_stopSystemPackagesByDefault, on since Android 14), and broadcasts
++        // exclude stopped packages by default: every admin broadcast to the new owner would be
++        // dropped. The owner is about to receive device-owner authority, so take it out of the
++        // stopped state first, exactly as a first launch would.
++        try {
++            mInjector.getPackageManagerInternal().setPackageStoppedState(
++                    admin.getPackageName(), /* stopped= */ false, UserHandle.USER_SYSTEM);
++        } catch (RuntimeException e) {
++            Slogf.w(LOG_TAG, e, "Cannot unstop fixed-function owner %s", admin);
++        }
++
 +        try {
 +            setActiveAdmin(admin, /* refreshing= */ false, UserHandle.USER_SYSTEM,
 +                    "fixed-function-system-image");
@@ -110,9 +148,39 @@ index 0cb6b68eb..8d7bff803 100644
 +                mInjector.settingsSecurePutIntForUser(
 +                        USER_SETUP_COMPLETE, 1, UserHandle.USER_SYSTEM);
 +                mInjector.settingsGlobalPutInt(Settings.Global.DEVICE_PROVISIONED, 1);
++                synchronized (getLockObject()) {
++                    mFixedFunctionOwnerEnabledPending = true;
++                }
 +            }
 +        } catch (RuntimeException e) {
 +            Slogf.wtf(LOG_TAG, e, "Failed to provision fixed-function owner %s", admin);
++        }
++    }
++
++    /**
++     * Set when this boot provisioned the fixed-function owner. setActiveAdmin's
++     * DEVICE_ADMIN_ENABLED goes out at PHASE_ACTIVITY_MANAGER_READY, while the system user is
++     * still locked: an owner whose receiver is not direct-boot aware does not resolve then, so
++     * sendAdminCommandLocked sends nothing. Repeat it once the system user is unlocked; that
++     * broadcast is what starts the owner app on a factory boot.
++     */
++    @GuardedBy("getLockObject()")
++    private boolean mFixedFunctionOwnerEnabledPending;
++
++    @GuardedBy("getLockObject()")
++    private void maybeSendFixedFunctionOwnerEnabledLocked(int userHandle) {
++        if (!mFixedFunctionOwnerEnabledPending || userHandle != UserHandle.USER_SYSTEM) {
++            return;
++        }
++        mFixedFunctionOwnerEnabledPending = false;
++        final ActiveAdmin owner = mDeviceAdmins.getDeviceOwnerAdmin();
++        if (owner == null) {
++            return;
++        }
++        if (!sendAdminCommandLocked(owner, DeviceAdminReceiver.ACTION_DEVICE_ADMIN_ENABLED,
++                /* adminExtras= */ null, /* result= */ null, /* inForeground= */ true)) {
++            Slogf.w(LOG_TAG, "Fixed-function owner %s has no enable receiver",
++                    owner.info.getComponent());
 +        }
 +    }
 +

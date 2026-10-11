@@ -9,6 +9,7 @@ RUNG="${1:?rung}"
 TREE="${2:-/build/lineage-24}"
 PV_DEST="${3:-/build/out-${RUNG}}"     # lunch exports OUT/OUT_DIR: never reuse those names
 JOBS="${PV_JOBS:-24}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${TREE}" || exit 9
 export LC_ALL=C
 # shellcheck disable=SC1091
@@ -89,6 +90,45 @@ fi
 echo "boot.img: kernel $(stat -c%s "${UB}/kernel") B, ramdisk $(stat -c%s "${UB}/ramdisk") B with /init"
 rm -rf "${UB}"
 cp "${TF}" "${PV_DEST}/vault_bluejay-target_files-${RUNG}.zip"
+
+if [[ "${RUNG}" != b0 ]]; then
+  # b1+: AVB is ours. vbmeta and the three chained partitions must carry the dev key, and
+  # vbmeta's flags must be 0 (verification on).
+  AVBTOOL=./out/host/linux-x86/bin/avbtool
+  KEY=vendor/phonevault/keys/avb_bluejay_dev.pem
+  "${AVBTOOL}" extract_public_key --key "${KEY}" --output "${PV_DEST}/avb_pkmd_bluejay_DEV.bin" \
+    || { echo "AVB CHECK FAILED: cannot read ${KEY}"; exit 1; }
+  want="$(sha1sum "${PV_DEST}/avb_pkmd_bluejay_DEV.bin" | cut -c1-40)"
+  for img in vbmeta boot vbmeta_system vbmeta_vendor; do
+    got="$("${AVBTOOL}" info_image --image "${PV_DEST}/images/${img}.img" | awk '/^Public key \(sha1\):/{print $4; exit}')"
+    [[ "${got}" == "${want}" ]] || { echo "AVB CHECK FAILED: ${img}.img key ${got:-none} != ${want}"; exit 1; }
+  done
+  "${AVBTOOL}" info_image --image "${PV_DEST}/images/vbmeta.img" > "${PV_DEST}/avb-vbmeta-info.txt"
+  [[ "$(awk '/^Flags:/{print $2; exit}' "${PV_DEST}/avb-vbmeta-info.txt")" == 0 ]] \
+    || { echo "AVB CHECK FAILED: vbmeta flags are not 0"; grep '^Flags' "${PV_DEST}/avb-vbmeta-info.txt"; exit 1; }
+  for img in boot vbmeta_system vbmeta_vendor; do
+    { echo "== ${img}.img"; "${AVBTOOL}" info_image --image "${PV_DEST}/images/${img}.img"; } >> "${PV_DEST}/avb-vbmeta-info.txt"
+  done
+  echo "AVB: vbmeta/boot/vbmeta_system/vbmeta_vendor signed by key sha1 ${want}, vbmeta flags 0"
+
+  # b1+: no launcher; the signer is never scanned stopped; no Lineage Trust.
+  if unzip -l "${TF}" | grep -E 'Launcher3QuickStep|Launcher3Overlay|/Trebuchet'; then
+    echo "OVERRIDE CHECK FAILED: launcher still in the image"; exit 1
+  fi
+  for f in PRODUCT/etc/sysconfig/phonevault-initial-package-state.xml \
+           PRODUCT/etc/sysconfig/phonevault-no-lineage-trust.xml; do
+    unzip -l "${TF}" "${f}" >/dev/null 2>&1 || { echo "MISSING in target files: ${f}"; exit 1; }
+  done
+  echo "product RROs:"; unzip -l "${TF}" 'PRODUCT/overlay/*' | awk '{print $4}' | grep -i -E 'systemui|lineage|platform|framework-res' || true
+
+  # The Mac flashes from the bootloader only (fastbootd writes fail on macOS): a ready sparse
+  # super.img with slot a populated, built from these target files.
+  PATH="${TREE}/out/host/linux-x86/bin:${PATH}" python3 build/make/tools/releasetools/build_super_image.py \
+    "${TF}" "${PV_DEST}/super.img" > "${PV_DEST}/super-build.log" 2>&1 \
+    || { echo "SUPER IMAGE FAILED"; tail -20 "${PV_DEST}/super-build.log"; exit 1; }
+  ls -la "${PV_DEST}/super.img"
+  install -m 0755 "${SCRIPT_DIR}/flash-mac.sh" "${PV_DEST}/flash-${RUNG}-mac.sh"
+fi
 ( cd "${PV_DEST}" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS )
 cat "${PV_DEST}/SHA256SUMS"
 echo "=== ALL DONE $(date)"
