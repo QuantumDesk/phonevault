@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phone Vault (bluejay): the Lineage Trust interface is not started (overlay
+  lineage-sdk/lineage/res config_externalLineageServices). Withdraw its feature as well, so
+  that lineageos.trust.TrustInterface reports "unavailable" instead of throwing when a client
+  (LineageParts' Trust screens) finds no service behind a declared feature.
+-->
+<config>
+    <unavailable-feature name="org.lineageos.trust" />
+</config>

@@ -5,8 +5,18 @@
 # PRODUCT_PACKAGE_OVERLAYS wins, and a product's own value set before its first
 # inherit-product lands ahead of all inherited ones (crosshatch rung 2d-c3 lesson: otherwise
 # vendor/lineage/overlay/common's default_wallpaper wins).
+#
+# device/phonevault/bluejay/overlay holds what only applies to the Lineage 24.0 tree (the
+# lineage-sdk service list, which differs from crosshatch's 22.2); it comes first.
 PRODUCT_PACKAGE_OVERLAYS += \
+    device/phonevault/bluejay/overlay \
     vendor/phonevault/overlay
+
+# No Lineage Trust interface: the overlay above leaves TrustInterfaceService out of the
+# lineage-sdk services (it posts the "Discover Trust" notification on every boot), and this
+# withdraws its feature so TrustInterface clients see "unavailable" rather than throwing.
+PRODUCT_COPY_FILES += \
+    device/phonevault/bluejay/sysconfig/phonevault-no-lineage-trust.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/phonevault-no-lineage-trust.xml
 
 # lineage_bluejay.mk already inherits vendor/google/bluejay/bluejay-vendor.mk (CP2A.260705.006
 # blobs); do not inherit it a second time.

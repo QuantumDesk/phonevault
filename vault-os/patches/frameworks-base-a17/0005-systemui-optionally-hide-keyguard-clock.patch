@@ -1,0 +1,119 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Sun, 11 Oct 2026 13:00:00 -0400
+Subject: [PATCH] SystemUI: optionally hide the keyguard clock, smartspace and
+ date
+
+A fixed-function appliance shows the keyguard only to unlock credential-
+encrypted storage once per boot; the time and date there are noise. Add
+config_phonevaultHideKeyguardClock (default false, upstream behavior). When a
+product overlays it to true, the default keyguard blueprint leaves out the
+clock and smartspace sections, so no clock view is added to the keyguard root
+view (shared by the lockscreen and AOD), and the date slice view is never
+bound. The lock icon, bouncer and indication area (device-owner disclosure,
+charging) are unchanged.
+
+Android 17 rebase of patches/frameworks-base/0005 (Android 15). Differences:
+  - migrate_clocks_to_blueprint no longer exists (the blueprint path is the
+    only View path) and scene_container is DISABLED/READ_ONLY in cp2a, so the
+    View blueprint is what the phone renders.
+  - KeyguardSliceViewSection now inflates its own slice view (when smartspace
+    is off, as on Lineage) instead of moving one out of the legacy status
+    view. The view is still added and constrained, because the notification
+    stack and AOD promoted-notification sections anchor to the
+    smart_space_barrier_bottom it creates, but it starts GONE and is never
+    bound, so it stays empty.
+  - The blueprint reads the flag through the slice section's injected
+    (@ShadeDisplayAware) context instead of taking a new Context parameter.
+---
+diff --git a/packages/SystemUI/res/values/config.xml b/packages/SystemUI/res/values/config.xml
+index 140bb805a..bcfd85b86 100644
+--- a/packages/SystemUI/res/values/config.xml
++++ b/packages/SystemUI/res/values/config.xml
+@@ -1255,4 +1255,9 @@
+     Indicates whether to use the Alerts channel for storage notifications.
+     -->
+     <bool name="config_storageNotificationsUseAlertsChannel">false</bool>
++
++    <!-- Fixed-function appliances: when true the lockscreen shows no clock (large or small), no
++         smartspace and no date slice, on the keyguard and on AOD. The lock icon, bouncer and
++         indication area (owner disclosure, charging) are unchanged. -->
++    <bool name="config_phonevaultHideKeyguardClock">false</bool>
+ </resources>
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
+index 0feca9f66..13cb61103 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/blueprints/DefaultKeyguardBlueprint.kt
+@@ -36,6 +36,7 @@ import com.android.systemui.keyguard.ui.view.layout.sections.KeyguardSectionsMod
+ import com.android.systemui.keyguard.ui.view.layout.sections.KeyguardSectionsModule.Companion.KEYGUARD_BATTERY_CHARGING_SECTION
+ import com.android.systemui.keyguard.ui.view.layout.sections.KeyguardSliceViewSection
+ import com.android.systemui.keyguard.ui.view.layout.sections.SmartspaceSection
++import com.android.systemui.res.R
+ import java.util.Optional
+ import javax.inject.Inject
+ import javax.inject.Named
+@@ -72,6 +73,14 @@ constructor(
+ ) : KeyguardBlueprint {
+     override val id: String = DEFAULT
+ 
++    // config_phonevaultHideKeyguardClock: the clock and smartspace sections are left out, so no
++    // clock view is ever added to the keyguard root view (keyguard and AOD share it). Read
++    // through the slice section's (shade-display) context, which this blueprint already gets.
++    private val hideClock =
++        keyguardSliceViewSection.context.resources.getBoolean(
++            R.bool.config_phonevaultHideKeyguardClock
++        )
++
+     override val sections =
+         listOfNotNull(
+             accessibilityActionsSection,
+@@ -84,9 +93,9 @@ constructor(
+             defaultNotificationStackScrollLayoutSection,
+             aodNotificationIconsSection,
+             aodPromotedNotificationSection,
+-            smartspaceSection,
++            smartspaceSection.takeUnless { hideClock },
+             aodBurnInSection,
+-            clockSection,
++            clockSection.takeUnless { hideClock },
+             keyguardSliceViewSection,
+             defaultDeviceEntrySection,
+             udfpsAccessibilityOverlaySection, // Add LAST: Intentionally has z-order above others
+diff --git a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
+index 4affcb8ef..a38cebb25 100644
+--- a/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
++++ b/packages/SystemUI/src/com/android/systemui/keyguard/ui/view/layout/sections/KeyguardSliceViewSection.kt
+@@ -20,6 +20,7 @@ package com.android.systemui.keyguard.ui.view.layout.sections
+ import android.content.Context
+ import android.os.Handler
+ import android.view.LayoutInflater
++import android.view.View
+ import androidx.constraintlayout.widget.Barrier
+ import androidx.constraintlayout.widget.ConstraintLayout
+ import androidx.constraintlayout.widget.ConstraintSet
+@@ -64,15 +65,22 @@ constructor(
+     private lateinit var sliceView: KeyguardSliceView
+     private var disposableHandle: DisposableHandle? = null
+ 
++    // config_phonevaultHideKeyguardClock: the slice view is still added and constrained (other
++    // sections anchor to its smart_space_barrier_bottom) but stays empty and gone: it is never
++    // bound to the keyguard slice, so no date or alarm is shown.
++    private val hideDate =
++        context.resources.getBoolean(R.bool.config_phonevaultHideKeyguardClock)
++
+     override fun addViews(constraintLayout: ConstraintLayout) {
+         if (smartspaceController.isEnabled) return
+         sliceView =
+             layoutInflater.inflate(R.layout.keyguard_slice_view, null, false) as KeyguardSliceView
++        if (hideDate) sliceView.visibility = View.GONE
+         constraintLayout.addView(sliceView)
+     }
+ 
+     override fun bindData(constraintLayout: ConstraintLayout) {
+-        if (smartspaceController.isEnabled) return
++        if (smartspaceController.isEnabled || hideDate) return
+         val controller =
+             KeyguardSliceViewController(
+                 handler,
+--
+2.50.1

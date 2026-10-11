@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- No Lineage Trust interface. Its system_server service (TrustInterfaceService) posts the
+         "Discover Trust" onboarding notification on every boot until
+         LineageSettings.System.TRUST_INTERFACE_HINTED is 1 (set only by LineageParts' trust
+         onboarding activity, which a kiosk never shows; LineageSettingsProvider has no default
+         for it), and afterwards posts warnings (test-keys, SELinux, encryption) that the
+         appliance user cannot act on. Its only clients are LineageParts' Trust screens, which
+         treat a missing service as unavailable.
+
+         This is Lineage 24.0's lineage-sdk/lineage/res config_externalLineageServices minus
+         TrustInterfaceService. The array replaces the whole list: re-check it against
+         lineage-sdk whenever the tree is updated. Bluejay (Lineage 24.0) only: the crosshatch
+         tree's list differs. -->
+    <string-array name="config_externalLineageServices">
+        <item>org.lineageos.platform.internal.ProfileManagerService</item>
+        <item>org.lineageos.platform.internal.LineageHardwareService</item>
+        <item>org.lineageos.platform.internal.display.LiveDisplayService</item>
+        <item>org.lineageos.platform.internal.LineageSettingsService</item>
+        <item>org.lineageos.platform.internal.LineageGlobalActionsService</item>
+        <item>org.lineageos.platform.internal.health.HealthInterfaceService</item>
+        <item>org.lineageos.platform.internal.SensitivePhoneNumbersService</item>
+    </string-array>
+</resources>

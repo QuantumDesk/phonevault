@@ -238,7 +238,7 @@ am_crash` + `init: Service … exited` repeats) has to be 0, before the next run
 | Rung | Change | Boot test (in addition to the checklist) |
 |---|---|---|
 | **b0** | Lineage 24.0 bluejay + `vault_bluejay` product: app prebuilt, frameworks/base 0003+0004 rebased (as built: 0001/0002/0005 deferred to a later rung so b0 only has to prove boot + owner provisioning), overlays, HOME preferred-apps, setup wizard stripped, userdebug with the pre-authorised dev adb key (like crosshatch rung 0/1b). AVB still Lineage default. | Genuine first boot on wiped data lands on SET PIN, owner = `fixed-function-system-image`, `mLockTaskModeState=LOCKED`. Record the **inventory** for later rungs: `lsmod`, `lshal`, `service list`, `getprop`, `ls /vendor/etc/init`, `cat /proc/cmdline`, `/sys/class/typec`, `ls /config/usb_gadget/g1/functions`. **Run `attesttest.sh`** and record whether the StrongBox chain is factory or RKP (section 6). |
-| b1 | Our AVB key on vbmeta + all chained partitions, `--flags 3` removed, rollback indexes ≥ stock, `board-info-bluejay.txt` with bootloader/baseband pins | `ro.boot.veritymode=enforcing`, `ro.boot.vbmeta.digest` non-empty, `avbtool info_image` of each image shows our key. |
+| b1 | Our AVB **dev** key (RSA-4096, `/home/aipg/.phonevault-keys/avb/`, pkmd sha256 `068a9865…`) on vbmeta + all chained partitions (boot, vbmeta_system, vbmeta_vendor), `--flags 3` removed (verification on), rollback indexes unchanged (≥ stock), `board-info-bluejay.txt` pins (b0). Plus the b0 gaps: factory-boot wake-up (frameworks/base 0003 unstops the owner and re-sends DEVICE_ADMIN_ENABLED after the system user unlocks; sysconfig `initial-package-state stopped=false`), no launcher (`Launcher3QuickStep`, `Launcher3Overlay` overridden), 0005 rebased (no keyguard clock/date), no Lineage Trust (overlay drops `TrustInterfaceService`, sysconfig withdraws `org.lineageos.trust`). Not relocked. | Factory boot after `-w` lands on SET PIN with **no** manual step (`VaultProvision: appliance provisioned on admin enable`), no HOME chooser, no "Discover Trust", keyguard disclosure names "Phone Vault" and shows no clock/date. `ro.boot.veritymode=enforcing`, `ro.boot.vbmeta.digest` non-empty, `avbtool info_image` of each image shows key sha1 `af09b166…`. |
 | b2 | Appliance VINTF manifest for gs101 | No VINTF/`isBuildConsistent` popup, no HAL registration refusals. |
 | b3 | Wi-Fi, Bluetooth, NFC + secure element, GNSS: modules out of load lists + blocklist, their HALs/daemons/rc/VINTF out | No `wlan0`, no `/sys/class/bluetooth`, no NFC HAL, `dumpsys location` shows no GNSS HAL; no crash loops. |
 | b4 | Modem: `cpif`/`cbd`/RIL/IMS/eSIM out | No `rmnet*`/`umts_*` netdevs, `cbd` absent, modem not powered (no `/dev/umts_*`). Battery drain over 12 h idle (expect better than b3). |
@@ -294,6 +294,16 @@ Bluejay-specific points:
   bootloader+radio to **both** slots, per the anti-rollback guidance.
 
 ## 7. Verified boot, rollback indexes, relock
+
+- **Dev key (b1–b8).** Rungs b1+ sign vbmeta, boot, vbmeta_system and vbmeta_vendor with one
+  RSA-4096 **development** key that only exists on the build box
+  (`/home/aipg/.phonevault-keys/avb/`, see `dev-ladder-bluejay/README.md`). Its public blob
+  (`avb_pkmd_bluejay_DEV.bin`) has sha256 `068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c`
+  (avbtool sha1 `af09b166ade90fb31a184e9ab6c59819cd33fc8a`). It could be flashed as
+  `avb_custom_key` for a relock test on a lab phone, but the shipped relock (b9) uses the
+  separate release key. Verification is on (vbmeta flags 0) while the phone stays unlocked: an
+  unlocked bootloader still boots a mis-signed image (orange), so a signing mistake shows up
+  as a verification error instead of bricking anything.
 
 - Custom-key relocking on Tensor is supported: GrapheneOS ships on the 6a exactly this way.
   Steps: `avbtool extract_public_key --key <release avb key> --output avb_pkmd.bin`; in
@@ -501,3 +511,47 @@ and radio, then `fastboot -w update image-bluejay-cp2a.260705.006.zip`. Afterwar
   1790812800 (2026-10-01, the tree's security patch level), which is ≥ the stock CP2A values.
 - **Build time.** First full build: 6 h 58 min on 24 cores (233k ninja steps). An incremental
   rebuild after a board-config change takes about 15 min.
+
+## 11. Findings preparing b1 (2026-10-11)
+
+- **Why the app never started on b0's factory boot** (read in the 24.0 tree, not guessed):
+  - `provisionConfiguredFixedFunctionOwner` runs at `PHASE_ACTIVITY_MANAGER_READY`.
+    `setActiveAdmin` then calls `sendAdminCommandLocked(…DEVICE_ADMIN_ENABLED…)`, which first
+    asks PackageManager for the admin receiver in user 0. User 0 is still **locked** at that
+    point (it unlocks later in boot even without a credential), so only direct-boot-aware
+    components resolve. `VaultDeviceAdminReceiver` is not direct-boot aware: the query is
+    empty and DPMS sends nothing at all. `ACTION_USER_STARTED` → `sendDeviceOwnerUserCommand`
+    goes through the same method while the user is still locked: same result. Android 17 did
+    not change the admin broadcasts or their flags (no `FLAG_INCLUDE_STOPPED_PACKAGES`, as
+    before).
+  - Independently, `config_stopSystemPackagesByDefault` is `true` (since Android 14):
+    `InstallPackageHelper` scans a system package seen for the first time as **stopped** when
+    it has a launcher activity (ours does) and it is not listed in an
+    `<initial-package-state stopped="false">` sysconfig. `BroadcastController` adds
+    `FLAG_EXCLUDE_STOPPED_PACKAGES` to every broadcast by default, so even a resolvable admin
+    broadcast would have been dropped until something launched the app.
+  - On crosshatch the HOME preference launched the activity, which provisions itself, so the
+    gap stayed hidden. On b0 the HOME preference did not hold and Trebuchet produced a chooser.
+- **Fix (b1).** 0003 now (a) unstops the configured owner, after all its checks have passed and
+  before `setActiveAdmin` (what a first launch would do), and (b) remembers that this boot
+  provisioned the owner and re-sends `DEVICE_ADMIN_ENABLED` to the device owner from DPMS'
+  existing `ACTION_USER_UNLOCKED` handler for user 0. The app's receiver
+  (`onEnabled` → `ApplianceProvisioning.apply` → `showVault`) is unchanged and needs no new
+  permission. The product also ships
+  `/product/etc/sysconfig/phonevault-initial-package-state.xml`, so the package is never
+  scanned stopped. The launcher is overridden, so HOME has one real candidate.
+- **0005 on Android 17.** `migrate_clocks_to_blueprint` is gone (the View blueprint is the only
+  View path) and `scene_container` is DISABLED/READ_ONLY in cp2a, so
+  `DefaultKeyguardBlueprint` is what renders. The slice section now inflates its own date view;
+  it must still be added because the notification stack and AOD promoted-notification sections
+  anchor to its `smart_space_barrier_bottom`, so it is added GONE and never bound.
+- **"Discover Trust"** comes from lineage-sdk `TrustInterfaceService.onBootPhase(BOOT_COMPLETED)`
+  while `LineageSettings.System.TRUST_INTERFACE_HINTED` is 0; LineageSettingsProvider has no
+  default resource for that key. The bluejay overlay drops the service from
+  `config_externalLineageServices` (lineage-sdk resources are static-RRO targets in the zygote:
+  `OverlayConfig` maps `org.lineageos.platform-res.apk`), and a product sysconfig marks
+  `org.lineageos.trust` unavailable so `TrustInterface` does not throw in LineageParts.
+- **Org name.** `ApplianceProvisioning.apply` already calls
+  `setOrganizationName(admin, "Phone Vault")` before anything else that can fail after the
+  device-owner check; b0 showed "your organization" only because it never ran.
+

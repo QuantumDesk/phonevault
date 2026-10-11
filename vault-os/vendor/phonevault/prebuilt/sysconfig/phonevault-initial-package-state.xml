@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phone Vault is never scanned in the "stopped" state. With config_stopSystemPackagesByDefault
+  (true since Android 14) PackageManager stops every new system package that has a launcher
+  activity on its first scan, and broadcasts carry FLAG_EXCLUDE_STOPPED_PACKAGES by default, so
+  the device-owner broadcasts that start the app on a factory boot would be dropped. (Bluejay b0,
+  2026-10-11: the app never ran after first-boot provisioning.) frameworks/base 0003 also takes
+  the configured owner out of the stopped state before activating it.
+-->
+<config>
+    <initial-package-state package="dev.phonevault.signer" stopped="false"/>
+</config>

@@ -10,15 +10,18 @@ rung actually builds. Nothing here is shared with the crosshatch tree: the scrip
 dev-ladder-bluejay/
   sync-rung.sh   RUNG [TREE] [APK] [KERNEL_DIST]   product + rung overrides + A17 framework patches + kernel dist → tree
   build-rung.sh  RUNG [TREE] [OUT]                 target-files → firmware-free fastboot zip + loose images + SHA256SUMS
+                                                   (b1+: AVB/launcher checks, sparse super.img, flash-RUNG-mac.sh)
+  flash-mac.sh                                     bootloader-only slot-a flash from macOS (installed as flash-RUNG-mac.sh)
   rung-b0/       files that still override release intent at b0
+  rung-b1/       … at b1 (AVB dev key, no launcher, sysconfig)
 ```
 
 A rung directory has the same meaning as on crosshatch: it holds only the files that still
 override release intent (`common.mk`, `BoardConfigVault.mk`, `Android.bp`, `config.xml`,
 `debug_adbkey.pub`, optional `device-google-bluejay.diff`). `sync-rung.sh`:
 
-1. rsyncs `device/phonevault/bluejay` and `vendor/phonevault` (no `keys/`, no APK; the SystemUI
-   overlay is left out until frameworks/base 0005 is rebased to Android 17);
+1. rsyncs `device/phonevault/bluejay` and `vendor/phonevault` (no `keys/`, no APK; `keys/` in the
+   tree is neither overwritten nor deleted, see "AVB dev key" below);
 2. copies the rung overrides over their targets;
 3. restores `device/google/bluejay` to upstream, applies the rung's device diff if any, and
    appends `include vendor/phonevault/config/BoardConfigVault.mk` to `bluejay/BoardConfig.mk`;
@@ -45,8 +48,25 @@ with `android-info.txt` = `vendor/phonevault/config/board-info-bluejay.txt`
 (`require board=bluejay`, `version-bootloader=bluejay-17.0-15199431`,
 `version-baseband=g5123b-145971-260414-B-15201439`). Output in `/build/out-<rung>/`.
 
-Flashing: from the owner's Mac, per `docs/port-bluejay.md` §8 (`fastboot update` of the image
-zip, current slot only, firmware untouched).
+Flashing: from the owner's Mac, **from the bootloader only** (fastbootd writes fail on macOS, see
+"b0 on the phone"). From b1 the out directory carries everything for that path: `images/` (slot
+partitions + `android-info.txt`), a sparse `super.img` (slot a populated, built by
+`build/make/tools/releasetools/build_super_image.py` from the target files) and
+`flash-<rung>-mac.sh`, which checks SHA256SUMS and the phone (product, bootloader, upper-case-B
+baseband, unlocked, not fastbootd), then `fastboot --slot=a flash` boot vendor_boot dtbo pvmfw
+vbmeta vbmeta_system vbmeta_vendor, `fastboot flash super super.img`, `erase metadata`, `-w`,
+`--set-active=a`, `reboot`. `--check` runs the checks only. Bootloader, radio and
+`avb_custom_key` are never written.
+
+AVB dev key (b1+): RSA-4096, **development only, not the release key**, generated on the build
+box as aipg: private key `/home/aipg/.phonevault-keys/avb/phonevault_bluejay_avb_DEV_rsa4096.pem`
+(0400, dir 0700, never committed, never copied off the box), public blob
+`/home/aipg/.phonevault-keys/avb/avb_pkmd_bluejay_DEV.bin` (`avbtool extract_public_key`;
+sha256 `068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c`, sha1
+`af09b166ade90fb31a184e9ab6c59819cd33fc8a` = what `avbtool info_image` prints). The tree reaches it
+through the symlink `vendor/phonevault/keys/avb_bluejay_dev.pem`; the rung's
+`BoardConfigVault.mk` stops the build if it is missing. The release key for b8/b9 is a separate
+key that never lives on the build box.
 
 ## Rung log
 
