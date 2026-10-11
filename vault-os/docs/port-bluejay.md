@@ -18,7 +18,7 @@ The phone, read over fastboot by the lead (read-only): `product=bluejay`, locked
 |---|---|---|---|
 | lineage-22.2 (Android 15) | BP1A.250505.005 (May 2025); bluejay branch frozen since 2025-05-08 | Android 15 | **No.** Either run Android 15 vendor/kernel on Android 17 firmware (Lineage requires matching firmware), or downgrade the bootloader and radio. No vendor/kernel security fixes after May 2025, so it fails the point of G3 ("still-patched"). Its AVB rollback indexes (SPL 2025-05) are also older than the phone's stored ones, which matters once we relock (section 7). |
 | lineage-23.2 (Android 16, official, weekly) | BP4A.251205.006 (Dec 2025) | `bluejay-16.4-14097577` | **No (not as-is).** The wiki requires Android 16 firmware. The OTA ships 16.4 bootloader + radio images, so installing it writes an older bootloader. |
-| **lineage-24.0** (Android 17, in development, not yet on the wiki or the build roster) | **CP2A.260705.006** (Jul 2026); device, gs101, kernel-config and blob repos all updated 2026-06/08 | **`bluejay-17.0-15199431`** | **Yes.** Exactly the bootloader the phone has. Radio `g5123b-145971-260414-b-15201439` is the same in CP2A.260605.012 and .260705.006. |
+| **lineage-24.0** (Android 17, in development, not yet on the wiki or the build roster) | **CP2A.260705.006** (Jul 2026); device, gs101, kernel-config and blob repos all updated 2026-06/08 | **`bluejay-17.0-15199431`** | **Yes.** Exactly the bootloader the phone has. Radio `g5123b-145971-260414-B-15201439` is the same in CP2A.260605.012 and .260705.006. |
 
 **What bootloader 17.0 means.** I read the factory-image zip directories with HTTP range
 requests, so nothing was downloaded:
@@ -28,7 +28,7 @@ requests, so nothing was downloaded:
 | BP2A.250705.008 | 16 (Jul 2025) | bluejay-16.2-13291547 | g5123b-145971-250328-b-13284995 |
 | BP4A.251205.006 | 16 (Dec 2025) | bluejay-16.4-14097577 | g5123b-145971-251030-b-14356419 |
 | CP1A.260405.005 | 16 (Apr 2026) | bluejay-16.4-14548185 | g5123b-145971-260109-b-14688209 |
-| **CP2A.260605.012 / CP2A.260705.006** | **17 (Jun/Jul 2026)** | **bluejay-17.0-15199431** | **g5123b-145971-260414-b-15201439** |
+| **CP2A.260605.012 / CP2A.260705.006** | **17 (Jun/Jul 2026)** | **bluejay-17.0-15199431** | **g5123b-145971-260414-B-15201439** |
 | CP3A.260905.009 / CP3A.261005.002.A1 | 17 (Sep/Oct 2026) | bluejay-17.0-15681480 | g5123b-145971-260721-b-15910359 |
 
 So the phone runs the June or July 2026 Android 17 release and has not taken the September
@@ -108,7 +108,7 @@ a `require version-bootloader=` gate so a mismatch fails closed.
 - Google factory images: <https://developers.google.com/android/images> (bluejay table;
   anti-rollback sections for May 2025 and May 2026; `flash-all.sh` of CP2A.260705.006, which
   flashes `bootloader-bluejay-bluejay-17.0-15199431.img` and
-  `radio-bluejay-g5123b-145971-260414-b-15201439.img`, then `fastboot -w update image-….zip`).
+  `radio-bluejay-g5123b-145971-260414-B-15201439.img`, then `fastboot -w update image-….zip`).
   Bootloader and radio versions come from the zip central directories (table above).
 - `LineageOS/android_device_google_gs101` `BoardConfig-common.mk` / `BoardConfigLineage.mk`
   (22.2 and 24.0): partition list, AVB chaining and rollback-index locations, module packaging.
@@ -182,7 +182,7 @@ Android 17 build 3–4 h, incremental rung builds 20–60 min.
 - `vendor/phonevault` is shared. Device-specific pieces get per-device files:
   - `board-info.txt` → `board-info-bluejay.txt` (`require board=bluejay`,
     `require version-bootloader=bluejay-17.0-15199431`,
-    `require version-baseband=g5123b-145971-260414-b-15201439`), so that `fastboot update`
+    `require version-baseband=g5123b-145971-260414-B-15201439`), so that `fastboot update`
     refuses a phone on other firmware.
   - The VINTF manifest and matrices are regenerated for gs101 HAL names.
   - `BoardConfigVault.mk` keeps device-neutral lines only. Kernel fragments move to the
@@ -343,7 +343,7 @@ the *other* slot, our stock fallback — `userdata.img`, `unsparse_super_empty.i
 `fastboot-info.txt` listing them; all four are dropped.)
 `android-info.txt` = our `board-info-bluejay.txt`
 (`require board=bluejay`, `require version-bootloader=bluejay-17.0-15199431`,
-`require version-baseband=g5123b-145971-260414-b-15201439`), so fastboot refuses a
+`require version-baseband=g5123b-145971-260414-B-15201439`), so fastboot refuses a
 mismatched phone before writing anything.
 
 ### Rung b0: first install (lead runs the commands, owner confirms on the phone)
@@ -372,7 +372,7 @@ mismatched phone before writing anything.
    fastboot devices
    fastboot getvar product              # bluejay
    fastboot getvar version-bootloader   # bluejay-17.0-15199431
-   fastboot getvar version-baseband     # g5123b-145971-260414-b-15201439
+   fastboot getvar version-baseband     # g5123b-145971-260414-B-15201439
    fastboot getvar current-slot         # b
    fastboot getvar unlocked             # no
    fastboot flashing get_unlock_ability # 1

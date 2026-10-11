@@ -63,7 +63,7 @@ with zipfile.ZipFile(src) as zin:
     info = zin.read("android-info.txt").decode()
     for line in ("require board=bluejay",
                  "require version-bootloader=bluejay-17.0-15199431",
-                 "require version-baseband=g5123b-145971-260414-b-15201439"):
+                 "require version-baseband=g5123b-145971-260414-B-15201439"):
         if line not in info.splitlines():
             sys.exit(f"android-info.txt lacks: {line}\n{info}")
     with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zout:
