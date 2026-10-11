@@ -126,7 +126,9 @@ android_app_import {
         "CompanionDeviceManager",
         "CredentialManager",
         "DynamicSystemInstallationService",
-        "ModuleMetadata",
+        // "ModuleMetadata": KEPT — without it ModuleInfoProvider never loads and
+        // AppRestrictionController.onSystemReady crashes system_server on every boot
+        // (boot loop on phone 2, 2026-10-11).
         "PacProcessor",
         "ProxyHandler",
         "SecureElement",
