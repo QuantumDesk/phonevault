@@ -124,3 +124,8 @@ key that never lives on the build box.
 7. First run as in b0 (PIN, wallet, Titan M2 keystore, kiosk LOCKED), `attesttest.sh` (verdict
    stays development: unlocked, dev key not pinned), crash-loop count 0.
 
+
+## b1 on the phone (2026-10-11)
+
+- Slot a carried an older bootloader/radio (16.4-14097577 / 251030) — Pixel firmware is per-slot and b0 ran on slot a. Wrote Google's CP2A.260705.006 bootloader + radio to slot a from the factory zip (sha256 03992adc…cb33 verified against Google's page) with exactly the two flash-all.sh steps; slot a now 17.0-15199431 / 260414-B-15201439.
+- `flash-b1-mac.sh` (bootloader-only) pre-flight passed, flashed. **Hands-off factory boot PASSED**: no input at all → kiosk LOCKED at SET PIN; `VaultProvision: appliance provisioned on admin enable (attempt 1)`; organizationName=Phone Vault; HOME = Phone Vault only (no launcher3/trebuchet); no Trust notification; `ro.boot.veritymode=enforcing`, vbmeta digest present (our dev AVB key), orange (unlocked).
