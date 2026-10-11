@@ -1,0 +1,408 @@
+diff --git a/compatibility_matrix.xml b/compatibility_matrix.xml
+index 8b06eef..5d3d60b 100644
+--- a/compatibility_matrix.xml
++++ b/compatibility_matrix.xml
+@@ -47,7 +47,7 @@
+             <instance>default</instance>
+         </interface>
+     </hal>
+-    <hal format="hidl" optional="false">
++    <hal format="hidl" optional="true">
+         <name>android.system.wifi.keystore</name>
+         <version>1.0</version>
+         <interface>
+diff --git a/crosshatch/BoardConfig.mk b/crosshatch/BoardConfig.mk
+index 1de0642..bae058c 100644
+--- a/crosshatch/BoardConfig.mk
++++ b/crosshatch/BoardConfig.mk
+@@ -25,3 +25,6 @@ else
+ endif
+ 
+ include device/google/crosshatch/crosshatch/BoardConfigLineage.mk
++
++# Phone Vault branding: prebuilt mono pixel-art boot animation (DEBUG48)
++TARGET_BOOTANIMATION := vendor/phonevault/branding/bootanimation.zip
+diff --git a/device-lineage.mk b/device-lineage.mk
+index 3a88bcc..9e7196a 100644
+--- a/device-lineage.mk
++++ b/device-lineage.mk
+@@ -55,8 +55,9 @@ PRODUCT_PACKAGES += \
+ # Build necessary packages for vendor
+ 
+ # CHRE
+-PRODUCT_PACKAGES += \
+-    chre_daemon_msm
++# Phone Vault (rung 2d-c3): chre_daemon_msm (vendor.chre) is not installed. CHRE runs on the
++# sensor DSP (SLPI), whose drivers and FastRPC are gone since kernel slice C; the daemon
++# crash-looped on 2d-c2. The context hub HAL stays and reports no hubs.
+ 
+ # Configstore
+ PRODUCT_PACKAGES += \
+diff --git a/device.mk b/device.mk
+index 651cd6c..03af758 100644
+--- a/device.mk
++++ b/device.mk
+@@ -195,7 +195,6 @@ PRODUCT_COPY_FILES += \
+     frameworks/native/data/etc/android.hardware.wifi.rtt.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.rtt.xml \
+     frameworks/native/data/etc/android.software.sip.voip.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.software.sip.voip.xml \
+     frameworks/native/data/etc/android.hardware.usb.accessory.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.accessory.xml \
+-    frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml \
+     frameworks/native/data/etc/android.hardware.opengles.aep.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.opengles.aep.xml \
+     frameworks/native/data/etc/android.hardware.nfc.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.nfc.xml \
+     frameworks/native/data/etc/android.hardware.nfc.hce.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.nfc.hce.xml \
+@@ -368,9 +367,11 @@ PRODUCT_PACKAGES += \
+     android.hardware.drm-service.clearkey
+ 
+ # NFC and Secure Element packages
++# Phone Vault (rung 2d-c3): the NFC HAL service (vendor.nfc_hal_service) is not installed. The
++# NFC controller driver is gone since kernel slice A and the appliance VINTF manifest never
++# declared INfc, so the service could only fail and be restarted (~80 restarts / 90 s on 2d-c2).
+ PRODUCT_PACKAGES += \
+     Tag \
+-    android.hardware.nfc@1.2-service \
+     android.hardware.secure_element@1.1-service-disabled
+ 
+ PRODUCT_PRODUCT_PROPERTIES += \
+@@ -408,9 +409,12 @@ PRODUCT_PROPERTY_OVERRIDES += \
+     debug.media.transcoding.codec_max_operating_rate_1080P=240 \
+     debug.media.transcoding.codec_max_operating_rate_4k=120 \
+ 
++# Phone Vault (rung 2d-c3): the camera provider service (vendor.camera-provider-2-4) is not
++# installed. The camera drivers are gone since kernel slice C and the appliance VINTF manifest
++# never declared ICameraProvider, so the service crash-looped on 2d-c2. The passthrough impl
++# libraries stay (nothing loads them without the service; removal is a later slice).
+ PRODUCT_PACKAGES += \
+     android.hardware.camera.provider@2.4-impl \
+-    android.hardware.camera.provider@2.4-service_64 \
+     camera.device@3.2-impl
+ 
+ PRODUCT_COPY_FILES += \
+@@ -440,12 +444,13 @@ PRODUCT_PACKAGES += \
+     android.hardware.vibrator-service.crosshatch
+ 
+ #GNSS HAL
++# Phone Vault (rung 2d-c2): the GNSS HAL service + impl are not installed. The GNSS engine
++# lives in the modem (gone since kernel slice B) and the appliance VINTF manifest never
++# declared IGnss, so gnss_service could only fail to register and be restarted.
+ PRODUCT_PACKAGES += \
+     libgps.utils \
+     libgnss \
+-    liblocation_api \
+-    android.hardware.gnss@1.1-impl-qti \
+-    android.hardware.gnss@1.1-service-qti
++    liblocation_api
+ 
+ ENABLE_VENDOR_RIL_SERVICE := true
+ 
+diff --git a/init.hardware.rc b/init.hardware.rc
+index ed0e59f..6a147af 100644
+--- a/init.hardware.rc
++++ b/init.hardware.rc
+@@ -623,15 +623,9 @@ on property:persist.vendor.sys.ssr.enable_ramdumps=1
+ on property:persist.vendor.sys.ssr.enable_ramdumps=0
+     write /sys/module/subsystem_restart/parameters/enable_ramdumps 0
+ 
+-service adsprpcd /vendor/bin/adsprpcd
+-   class main
+-   user media
+-   group media
+-
+-service cdsprpcd /vendor/bin/cdsprpcd
+-   class main
+-   user system
+-   group system
++# Phone Vault (rung 2d-c2): adsprpcd and cdsprpcd removed. CONFIG_MSM_ADSPRPC is off
++# (kernel slice C), so /dev/adsprpc-smd and /dev/cdsprpc-smd never exist and both daemons
++# could only exit and be restarted by init.
+ 
+ service irsc_util /vendor/bin/irsc_util "/vendor/etc/sec_config"
+     class core
+@@ -655,10 +649,8 @@ service modem_svc /vendor/bin/modem_svc -q
+    group system
+    capabilities NET_BIND_SERVICE
+ 
+-service cnss-daemon /vendor/bin/cnss-daemon -n -l
+-   class late_start
+-   user system
+-   group system inet wifi
++# Phone Vault (rung 2d-c2): cnss-daemon removed; the WLAN/CNSS drivers are gone since
++# kernel slice A (rung 2d-a).
+ 
+ service loc_launcher /vendor/bin/loc_launcher
+     class late_start
+@@ -705,12 +697,9 @@ service msm_irqbalance /vendor/bin/msm_irqbalance -f /vendor/etc/msm_irqbalance.
+     group root
+     task_profiles ServiceCapacityLow
+ 
+-service ppd /vendor/bin/mm-pp-dpps
+-    class late_start
+-    user graphics
+-    group graphics
+-    socket pps stream 0660 system system
+-    disabled
++# Phone Vault (rung 2d-c2): ppd (mm-pp-dpps, display post-processing driven by the
++# ambient-light sensor) removed with the sensor stack. It crash-looped on 2d-c while the
++# panel worked, so hwcomposer does not depend on it.
+ 
+ service wait_for_strongbox /vendor/bin/hw/wait_for_strongbox
+     user root
+@@ -718,12 +707,6 @@ service wait_for_strongbox /vendor/bin/hw/wait_for_strongbox
+     priority -20
+     ioprio rt 0
+ 
+-on property:init.svc.vendor.hwcomposer-2-3=stopped
+-    stop ppd
+-
+-on property:init.svc.vendor.hwcomposer-2-3=running
+-    start ppd
+-
+ on property:ro.boot.mode=sota
+     setprop ro.boot.sota enabled
+ 
+diff --git a/init.hardware.usb.rc b/init.hardware.usb.rc
+index 21c80a6..0893b56 100644
+--- a/init.hardware.usb.rc
++++ b/init.hardware.usb.rc
+@@ -24,37 +24,40 @@ on early-boot
+     write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+     write /config/usb_gadget/g1/strings/0x409/manufacturer ${ro.product.manufacturer}
+     write /config/usb_gadget/g1/strings/0x409/product ${ro.product.model}
++    # Phone Vault (rung 3): only the Android Open Accessory function instance (companion
++    # transport) is created here; adb's FunctionFS instance is created below on debuggable
++    # builds only. No audio_source, MIDI, MTP, PTP, diag, serial, rmnet, RNDIS or QDSS instances
++    # (their kernel drivers are gone since slice D; the gadget HAL also rejects them).
+     mkdir /config/usb_gadget/g1/functions/accessory.gs2
+-    mkdir /config/usb_gadget/g1/functions/audio_source.gs3
+-    mkdir /config/usb_gadget/g1/functions/midi.gs5
+-    mkdir /config/usb_gadget/g1/functions/ffs.adb
+-    mkdir /config/usb_gadget/g1/functions/ffs.mtp
+-    mkdir /config/usb_gadget/g1/functions/ffs.ptp
+-    mkdir /config/usb_gadget/g1/functions/diag.diag
+-    mkdir /config/usb_gadget/g1/functions/cser.dun.0
+-    mkdir /config/usb_gadget/g1/functions/cser.nmea.1
+-    mkdir /config/usb_gadget/g1/functions/gsi.rmnet
+-    mkdir /config/usb_gadget/g1/functions/gsi.rndis
+-    mkdir /config/usb_gadget/g1/functions/qdss.qdss
+     mkdir /config/usb_gadget/g1/configs/b.1 0770
+     mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
+     write /config/usb_gadget/g1/os_desc/b_vendor_code 0x1
+     write /config/usb_gadget/g1/os_desc/qw_sign "MSFT100"
+-    mkdir /dev/usb-ffs 0775 shell shell
+-    mkdir /dev/usb-ffs/adb 0770 shell shell
+-    mount functionfs adb /dev/usb-ffs/adb rmode=0770,fmode=0660,uid=2000,gid=2000,no_disconnect=1
+-    mkdir /dev/usb-ffs/mtp 0770 mtp mtp
+-    mkdir /dev/usb-ffs/ptp 0770 mtp mtp
+-    mount functionfs mtp /dev/usb-ffs/mtp rmode=0770,fmode=0660,uid=1024,gid=1024,no_disconnect=1
+-    mount functionfs ptp /dev/usb-ffs/ptp rmode=0770,fmode=0660,uid=1024,gid=1024,no_disconnect=1
+-    setprop sys.usb.mtp.device_type 3
+     setprop sys.usb.controller "a600000.dwc3"
+     symlink /config/usb_gadget/g1/configs/b.1 /config/usb_gadget/g1/os_desc/b.1
+     write /sys/module/libcomposite/parameters/disable_l1_for_hs "y"
+-    write /config/usb_gadget/g1/functions/gsi.rndis/rndis_class_id 1
++
++# Phone Vault (rung 3): adb's FunctionFS endpoint exists only on debuggable builds (the dev ladder
++# keeps adb until the user build, rung 5). ro.debuggable is immutable, so a user build never has it.
++on early-boot && property:ro.debuggable=1
++    mkdir /config/usb_gadget/g1/functions/ffs.adb
++    mkdir /dev/usb-ffs 0775 shell shell
++    mkdir /dev/usb-ffs/adb 0770 shell shell
++    mount functionfs adb /dev/usb-ffs/adb rmode=0770,fmode=0660,uid=2000,gid=2000,no_disconnect=1
+ 
+ on boot
+     setprop sys.usb.configfs 2
++    # Phone Vault (rung 3): the Type-C port is sink/UFP-only. A dual-role port presents Rp while
++    # toggling and becomes source + USB host for an OTG device/adapter; a sink-only port presents
++    # Rd only, so it charges and is a USB device for a desktop, never a host, and tcpm rejects
++    # DR_SWAP/PR_SWAP. DWC3 itself stays dual-role (rung 2d-d: gadget-only DWC3 broke
++    # enumeration); the role is refused here and in the USB HAL. Same write as stock off-mode
++    # charging (init.hardware.rc, vendor.charger).
++    write /sys/class/typec/port0/port_type sink
++
++# Re-assert after boot in case anything reset the port type while services started.
++on property:sys.boot_completed=1
++    write /sys/class/typec/port0/port_type sink
+ 
+ on property:sys.usb.config=none && property:sys.usb.configfs=1
+     rm /config/usb_gadget/g1/configs/b.1/f1
+@@ -76,7 +79,6 @@ on charger
+     write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+     write /config/usb_gadget/g1/strings/0x409/manufacturer Google
+     write /config/usb_gadget/g1/strings/0x409/product Pixel
+-    mkdir /config/usb_gadget/g1/functions/midi.gs5
+     mkdir /config/usb_gadget/g1/configs/b.1 0770
+     mkdir /config/usb_gadget/g1/configs/b.1/strings/0x409 0770
+     symlink /config/usb_gadget/g1/configs/b.1 /config/usb_gadget/g1/os_desc/b.1
+@@ -84,17 +86,7 @@ on charger
+     setprop sys.usb.controller "a600000.dwc3"
+     setprop sys.usb.configfs 1
+ 
+-on property:ro.bootmode=charger
+-    setprop sys.usb.config midi
+-
+-on property:sys.usb.config=midi && property:sys.usb.configfs=1
+-    write /config/usb_gadget/g1/configs/b.1/strings/0x409/configuration "midi"
+-    rm /config/usb_gadget/g1/configs/b.1/f1
+-    rm /config/usb_gadget/g1/configs/b.1/f2
+-    rm /config/usb_gadget/g1/configs/b.1/f3
+-    rm /config/usb_gadget/g1/configs/b.1/f4
+-    write /config/usb_gadget/g1/idVendor 0x18d1
+-    write /config/usb_gadget/g1/idProduct 0x4eea
+-    symlink /config/usb_gadget/g1/functions/midi.gs5 /config/usb_gadget/g1/configs/b.1/f1
+-    write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+-    setprop sys.usb.state ${sys.usb.config}
++# Phone Vault (rung 3): off-mode charging no longer presents a USB MIDI gadget (stock set
++# sys.usb.config=midi on ro.bootmode=charger; the MIDI driver is gone since slice D, so on 2d-d
++# that gadget already failed to bind). Charging is PMIC/Type-C current, not a gadget function;
++# vendor.charger still writes port_type=sink (init.hardware.rc).
+diff --git a/usb/gadget/UsbGadget.cpp b/usb/gadget/UsbGadget.cpp
+index 16efa99..fb112d6 100644
+--- a/usb/gadget/UsbGadget.cpp
++++ b/usb/gadget/UsbGadget.cpp
+@@ -341,6 +341,12 @@ static V1_0::Status setVidPid(const char *vid, const char *pid) {
+ }
+ 
+ static std::string getVendorFunctions() {
++    // Phone Vault: vendor.usb.config / persist.vendor.usb.usbradio.config and the usbradio boot
++    // mode append Qualcomm diag, serial and rmnet functions to *any* composition, outside the
++    // GadgetFunction allowlist enforced in setCurrentUsbFunctions. The appliance has none.
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true")
++        return "";
++
+     if (GetProperty(BUILD_TYPE, "") == "user")
+         return "user";
+ 
+@@ -671,6 +677,29 @@ Return<void> UsbGadget::setCurrentUsbFunctions(uint64_t functions,
+                                                uint64_t timeout) {
+     std::unique_lock<std::mutex> lk(mLockSetCurrentFunction);
+ 
++    // Phone Vault exposes only Android Open Accessory transport. ADB is
++    // available for userdebug bring-up, but a production user build rejects
++    // it along with every media, audio, MIDI, diagnostic, serial, and network
++    // gadget composition. Enforce this in the HAL rather than trusting a
++    // mutable framework request or the set of functions created by init.
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++        const uint64_t none = static_cast<uint64_t>(GadgetFunction::NONE);
++        const uint64_t accessory = static_cast<uint64_t>(GadgetFunction::ACCESSORY);
++        const uint64_t adb = static_cast<uint64_t>(GadgetFunction::ADB);
++        const bool debuggable = GetProperty("ro.debuggable", "0") == "1";
++        const bool allowed = functions == none || functions == accessory
++                || (debuggable && (functions == adb || functions == (accessory | adb)));
++        if (!allowed) {
++            ALOGE("Phone Vault rejected USB gadget functions: 0x%llx",
++                  static_cast<unsigned long long>(functions));
++            if (callback != nullptr) {
++                callback->setCurrentUsbFunctionsCb(
++                        functions, Status::CONFIGURATION_NOT_SUPPORTED);
++            }
++            return Void();
++        }
++    }
++
+     mCurrentUsbFunctions = functions;
+     mCurrentUsbFunctionsApplied = false;
+ 
+diff --git a/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc b/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
+index c298b0a..dc64d1c 100644
+--- a/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
++++ b/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
+@@ -12,9 +12,9 @@ on boot
+     chmod 664 /sys/class/typec/port0/port_type
+ 
+ on post-fs
++    # Phone Vault (rung 3): dwc3-msm's "id" node is left root-only — writing 0 to it forces the
++    # controller into host mode underneath the Type-C port policy, and no HAL uses it.
+     chown root system /sys/devices/platform/soc/a600000.ssusb/b_sess
+-    chown root system /sys/devices/platform/soc/a600000.ssusb/id
+     chown root system /sys/devices/platform/soc/a600000.ssusb/usb_data_enabled
+     chmod 664 /sys/devices/platform/soc/a600000.ssusb/b_sess
+-    chmod 664 /sys/devices/platform/soc/a600000.ssusb/id
+     chmod 664 /sys/devices/platform/soc/a600000.ssusb/usb_data_enabled
+diff --git a/usb/usb/Usb.cpp b/usb/usb/Usb.cpp
+index cfae662..917f3b4 100644
+--- a/usb/usb/Usb.cpp
++++ b/usb/usb/Usb.cpp
+@@ -254,7 +254,11 @@ void switchToDrp(const string &portName) {
+     if (filename != "") {
+         fp = fopen(filename.c_str(), "w");
+         if (fp != NULL) {
+-            int ret = fputs("dual", fp);
++            // Phone Vault: the port is sink/UFP-only (init writes port_type=sink at boot). A
++            // failed mode switch falls back to that, never to dual-role: a DRP port presents Rp
++            // when toggling and becomes the USB host for any OTG device.
++            const bool vault = GetProperty("ro.vendor.phonevault.offline", "false") == "true";
++            int ret = fputs(vault ? "sink" : "dual", fp);
+             fclose(fp);
+             if (ret == EOF)
+                 ALOGE("Fatal: Error while switching back to drp");
+@@ -346,6 +350,42 @@ Usb::Usb()
+ 
+ ScopedAStatus Usb::switchRole(const string& in_portName, const PortRole& in_role,
+         int64_t in_transactionId) {
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++        bool allowed = false;
++        switch (in_role.getTag()) {
++            case PortRole::powerRole:
++                allowed = in_role.get<PortRole::powerRole>() == PortPowerRole::SINK
++                        || in_role.get<PortRole::powerRole>() == PortPowerRole::NONE;
++                break;
++            case PortRole::dataRole:
++                allowed = in_role.get<PortRole::dataRole>() == PortDataRole::DEVICE
++                        || in_role.get<PortRole::dataRole>() == PortDataRole::NONE;
++                break;
++            case PortRole::mode:
++                allowed = in_role.get<PortRole::mode>() == PortMode::UFP
++                        || in_role.get<PortRole::mode>() == PortMode::NONE;
++                break;
++            default:
++                break;
++        }
++        if (!allowed) {
++            ALOGE("Phone Vault rejected USB host role: %s",
++                  convertRoletoString(in_role).c_str());
++            pthread_mutex_lock(&mLock);
++            if (mCallback != nullptr) {
++                ScopedAStatus ret = mCallback->notifyRoleSwitchStatus(
++                        in_portName, in_role, Status::ERROR, in_transactionId);
++                if (!ret.isOk()) {
++                    ALOGE("RoleSwitchStatus error %s", ret.getDescription().c_str());
++                }
++            } else {
++                ALOGE("Not notifying userspace. Callback is not set");
++            }
++            pthread_mutex_unlock(&mLock);
++            return ScopedAStatus::ok();
++        }
++    }
++
+     string filename = appendRoleNodeHelper(string(in_portName.c_str()), in_role.getTag());
+     string written;
+     FILE *fp;
+@@ -556,13 +596,22 @@ Status getPortStatusHelper(android::hardware::usb::Usb *usb,
+                 goto done;
+             }
+ 
+-            (*currentPortStatus)[i].canChangeMode = true;
+-            (*currentPortStatus)[i].canChangeDataRole =
+-                port.second ? canSwitchRoleHelper(port.first) : false;
+-            (*currentPortStatus)[i].canChangePowerRole =
+-                port.second ? canSwitchRoleHelper(port.first) : false;
++            if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++                // Phone Vault: report the port as it is enforced — UFP (sink + USB device) only,
++                // no mode or role changes — so the framework never offers host/source.
++                (*currentPortStatus)[i].canChangeMode = false;
++                (*currentPortStatus)[i].canChangeDataRole = false;
++                (*currentPortStatus)[i].canChangePowerRole = false;
++                (*currentPortStatus)[i].supportedModes.push_back(PortMode::UFP);
++            } else {
++                (*currentPortStatus)[i].canChangeMode = true;
++                (*currentPortStatus)[i].canChangeDataRole =
++                    port.second ? canSwitchRoleHelper(port.first) : false;
++                (*currentPortStatus)[i].canChangePowerRole =
++                    port.second ? canSwitchRoleHelper(port.first) : false;
+ 
+-            (*currentPortStatus)[i].supportedModes.push_back(PortMode::DRP);
++                (*currentPortStatus)[i].supportedModes.push_back(PortMode::DRP);
++            }
+ 
+             if (!usb->mUsbDataEnabled) {
+                 (*currentPortStatus)[i].usbDataStatus.push_back(UsbDataStatus::DISABLED_FORCE);
