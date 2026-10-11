@@ -36,6 +36,13 @@ for attempt in 1 2 3; do
 done
 stamp "main sync ok=${ok}"
 [[ ${ok} -eq 1 ]] || { stamp "MAIN SYNC FAILED"; exit 4; }
+# `repo init --git-lfs` fetched the LFS objects but, without git-lfs installed in each project,
+# left pointer files in the checkout (2026-10-10: every vendor/google/bluejay blob incl. the radio
+# images, whose SHA1 check then fails the build; the webview APKs). Install LFS per project and
+# check the objects out. (The radio images are only needed for that check; our image zip strips them.)
+for p in vendor/google/bluejay external/chromium-webview/prebuilt/arm64 external/chromium-webview/prebuilt/arm; do
+  ( cd "${T}/${p}" && git lfs install --local && git lfs pull ) || { stamp "LFS PULL FAILED ${p}"; exit 4; }
+done
 
 cd "${K}" || exit 5
 if [[ ! -d .repo/manifests ]]; then
