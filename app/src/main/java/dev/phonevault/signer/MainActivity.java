@@ -705,8 +705,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         for (String restriction : restrictions) {
             policy.addUserRestriction(VaultDeviceAdminReceiver.component(this), restriction);
         }
+        // Only the power menu (long-press Power: power off / restart) works inside the kiosk.
+        // Without it the sole way off is a forced hardware restart. The OS image trims the menu
+        // to power + restart (config_globalActionsList); nothing else of lock task is opened up.
         policy.setLockTaskFeatures(VaultDeviceAdminReceiver.component(this),
-                DevicePolicyManager.LOCK_TASK_FEATURE_NONE);
+                DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS);
         policy.setScreenCaptureDisabled(VaultDeviceAdminReceiver.component(this),
                 !DevTools.SCREENSHOTS);
         if (!policy.setStatusBarDisabled(VaultDeviceAdminReceiver.component(this), true)) {

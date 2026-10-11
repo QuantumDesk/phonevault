@@ -17,4 +17,10 @@
     <!-- Default for Settings.Secure.LOCKSCREEN_USE_DOUBLE_LINE_CLOCK: moot while the clock is
          hidden, single-line if it is ever shown. -->
     <integer name="config_doublelineClockDefault">0</integer>
+    <!-- Phone Vault: the power menu (allowed inside the kiosk) offers only power off and restart;
+         no emergency, lockdown, screenshot, bug report, logout or settings entries. -->
+    <string-array name="config_globalActionsList" translatable="false">
+        <item>power</item>
+        <item>restart</item>
+    </string-array>
 </resources>
