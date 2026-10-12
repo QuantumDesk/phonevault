@@ -619,6 +619,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private void clearSensitiveUi() {
         ui.removeCallbacks(hideSeed);
+        if (approvalDecision == null) keepScreenOn(false);
         sensitive.reset();
         activeSensitive = -1;
         afterReauth = null;
@@ -1726,6 +1727,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         long now = android.os.SystemClock.elapsedRealtime();
         seedHardDeadline = now + SEED_SESSION_MS;
         seedIdleDeadline = now + SEED_TIMEOUT_MS;
+        // The phrase/SeedQR has its own hide timer; don't let a short screen timeout switch the
+        // screen off (and lock) while someone is copying words. Cleared in clearSensitiveUi.
+        keepScreenOn(true);
         ui.removeCallbacks(hideSeed);
         ui.post(hideSeed);
     }
