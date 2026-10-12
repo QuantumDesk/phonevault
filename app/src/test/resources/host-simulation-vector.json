@@ -1,0 +1,30 @@
+{
+ "comment": "hostSimulation produced by companion sim.rs from the recorded eth_simulateV1 fixture usdc_transfer.json (100 USDC to 0x7f3a\u20264b93 on Ethereum). The Rust test the_phone_claim_matches_the_shared_vector asserts it byte for byte; HostSimulationTest parses it on the phone side.",
+ "request": {
+  "chainId": "0x1",
+  "to": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+  "value": "0x0",
+  "data": "0xa9059cbb0000000000000000000000007f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b930000000000000000000000000000000000000000000000000000000005f5e100",
+  "gasLimit": "0x186a0",
+  "maxFeePerGas": "0x77359400",
+  "maxPriorityFeePerGas": "0x3b9aca00"
+ },
+ "hostSimulation": {
+  "changes": [
+   {
+    "asset": "native",
+    "delta": "-66112467575160",
+    "symbol": "ETH",
+    "decimals": 18
+   },
+   {
+    "asset": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "delta": "-100000000",
+    "symbol": "USDC",
+    "decimals": 6
+   }
+  ],
+  "node": "ethereum-rpc.publicnode.com",
+  "block": "0x18f603b"
+ }
+}

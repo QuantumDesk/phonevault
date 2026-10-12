@@ -2089,6 +2089,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         root.addView(details, matchWrap(dp(8)));
         root.addView(raw);
+        if (approval.hostSimulation != null) {
+            // The Mac's claim, in its own box BELOW the phone's own review; display only, never signed.
+            SimulationCheck.Result sim = approval.hostSimulation;
+            LinearLayout box = VaultTheme.box(this);
+            box.addView(VaultTheme.bodyText(this, sim.title, 13, sim.contradicts ? VaultTheme.DANGER_INK : VaultTheme.FAINT));
+            box.addView(VaultTheme.rule(this, dp(8), dp(10)));
+            for (MessageReview.Row row : sim.rows) box.addView(detail(row.label, row.value));
+            root.addView(box, matchWrap(dp(16)));
+        }
         addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
                 approval::signIfIdentityUnchanged,
                 "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
