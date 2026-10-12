@@ -275,3 +275,11 @@ is not wiped by the in-app 10-wrong-PIN erase of the wallet (in credential mode,
 the whole phone); it is a local convenience record, not an integrity-protected log, and a rooted
 attacker could edit it to suppress a first-time warning — which is why every review still shows
 the full address.
+
+**The Mac's simulation (see `simulation.md`).** The companion simulates every transaction on the
+user's node (`eth_simulateV1`, eth_call fallback) and blocks sending one that reverts. It may
+attach the result as the optional `hostSimulation` request field. The phone shows it in a separate
+box labelled "NOT VERIFIED BY THIS PHONE", below its own review, and flags in red a claim that
+contradicts what the phone decoded. The field is never signed, never feeds the phone's decoding and
+is ignored by host-side verification: a lying Mac or node can show fake numbers, but cannot change
+what the phone decodes or signs.

@@ -527,7 +527,7 @@ def request_for(args):
         message = bytes.fromhex(args.hex[2:]) if args.hex else args.text.encode("utf-8")
         return {"id": request_id, "method": "personal_sign",
                 "chainId": args.chain_id, "message": "0x" + message.hex()}
-    return {
+    request = {
         "id": request_id,
         "method": "signEip1559",
         "chainId": args.chain_id,
@@ -539,6 +539,12 @@ def request_for(args):
         "value": args.value,
         "data": args.data,
     }
+    if getattr(args, "host_simulation", None):
+        # The Mac's (untrusted) simulation claim, shown by the phone in its own box; never signed,
+        # and validate_response never reads it (vault-os/docs/simulation.md).
+        with open(args.host_simulation, encoding="utf-8") as f:
+            request["hostSimulation"] = json.load(f)
+    return request
 
 
 def main():
@@ -562,6 +568,8 @@ def main():
     sign.add_argument("--to", default="0x1111111111111111111111111111111111111111")
     sign.add_argument("--value", default="0x0")
     sign.add_argument("--data", default="0x")
+    sign.add_argument("--host-simulation", default=None,
+                      help="JSON file with a hostSimulation claim to attach (display-only on the phone)")
     sign.add_argument(
         "--expect-address", default=None,
         help="Override the pinned signer for this call (the recovered signer must match it)",
