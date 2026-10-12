@@ -51,11 +51,20 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    The phone currently signs only plain transfers and ERC-20 transfer/approve calls, so other
    contract calls (e.g. a swap router) are shown with a warning and the phone refuses them.
 
+6. **Browser extension.** Sites in Chrome, Brave or Edge can use Phone Vault directly: the
+   extension (`extension/`, load unpacked) announces "Phone Vault" through EIP-6963 and passes each
+   request, with the site's origin as the browser reports it, to this app over native messaging.
+   Settings → Browser extension → Install browser connection writes the host manifest (pinned to
+   the extension ID); connected sites are listed there with Revoke. Connections and requests get
+   the WalletConnect cards above and the same phone → verify → broadcast pipeline; the rules are in
+   `src-tauri/src/bridge.rs` (reusing `wc.rs`). Design and threat model:
+   `vault-os/docs/browser-extension.md`.
+
 Preview the UI without Tauri or a phone: `npm run dev` and open http://localhost:1420. With no
 Tauri runtime the app uses fake data (marked PREVIEW DATA); `?paired=0`, `?phone=none` and
 `?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states. A pretend dApp
 drives WalletConnect: `?wc=proposal|session|requests|noid`, `?wcverify=VALID|UNKNOWN|INVALID|SCAM`,
-`?wctx=native|approve|swap` (see `src/wc-mock.ts`).
+`?wctx=native|approve|swap` (see `src/wc-mock.ts`). The browser extension: `?ext=connect|requests|sites|off`.
 
 ## Running it
 

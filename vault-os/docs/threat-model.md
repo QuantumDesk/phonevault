@@ -18,6 +18,10 @@ The Pixel boot ROM, bootloader, baseband firmware, Titan M firmware, and other
 immutable or vendor firmware remain hardware-platform dependencies. Replacing
 Android does not remove those supply-chain or end-of-life risks.
 
+The Mac companion's dApp transports (WalletConnect, and the browser extension in
+`browser-extension.md`) are host-side conveniences on the untrusted side of this boundary:
+they can queue requests for review, never sign or bypass the on-device approval.
+
 ## Required invariants
 
 1. The host can request an address or propose a transaction, but cannot obtain
