@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SeedQR + backup reminder on a THROWAWAY dev phone (not yet run on a phone).
+# SeedQR + backup reminder on a THROWAWAY dev phone.
 #  1. Security → Show as SeedQR asks for the PIN, then shows the CompactSeedQR (25 × 25) with Hide,
 #     the seed timer, and a switch to Standard SeedQR (29 × 29); "Show as words" goes to page 1 of
 #     the phrase and "Show as SeedQR" comes back; Hide returns Home with nothing sensitive left.
@@ -14,7 +14,9 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-wake; unlock_if_locked; go_home
+# An open accessory session (AOA, e.g. left by safetytest/simtest) blocks every sensitive screen
+# ("Disconnect USB first"), by design. Reset the gadget to plain adb first: adb alone is no session.
+usb_reset; wake; unlock_if_locked; go_home
 has_text "Your offline wallet" || die "the backup must be checked first (run backupcheck.sh)"
 
 # --- 1. SeedQR
@@ -24,7 +26,8 @@ if has_text "VERIFY PIN"; then tap_digits "$PV_TEST_PIN"; sleep 5
 elif system_prompt_up; then enter_system_pin; sleep 5; fi
 expect_screen "RECOVERY PHRASE · SEEDQR"
 expect_screen "CompactSeedQR · 25 × 25"
-has_text "Hides in" || die "seed timer missing on the SeedQR screen"
+find_text "Hides in" || die "seed timer missing on the SeedQR screen"   # below the QR and the buttons
+scroll_top
 expect_not "☰"  # no menu over a sensitive screen
 tap_text "Use Standard SeedQR (29 × 29)"; sleep 1.5
 expect_screen "Standard SeedQR · 29 × 29"
@@ -48,7 +51,7 @@ expect_not "SEEDQR"
 # --- 3. reminder settings
 go_security
 scroll_down
-tap_text "Backup reminder"; sleep 1.5
+tap_text 'Backup reminder · [^"]*'; sleep 1.5   # the row names the current interval
 expect_screen "SECURITY / BACKUP REMINDER"
 expect_screen "Last checked"
 for choice in "Off" "Every month" "Every 6 months" "Every 3 months"; do
@@ -56,7 +59,7 @@ for choice in "Off" "Every month" "Every 6 months" "Every 3 months"; do
   expect_screen "SECURITY / BACKUP REMINDER"
 done
 tap_text "Back to Security"; sleep 1.2
-expect_screen "Backup reminder · Every 3 months"
+expect_below "Backup reminder · Every 3 months"
 go_home
 pass "SeedQR shown/hidden inside the PIN flow; reminder interval saves"
 kiosk_locked; no_crashes; unwake

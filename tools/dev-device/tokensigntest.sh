@@ -50,13 +50,13 @@ run_case() {
   local pid=$! found=0 rc=0
   sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
-  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
+  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
   local seen=0 i
   for i in 1 2 3 4 5 6; do uidump | grep -qF "$must" && { seen=1; break; }; scroll_down; sleep 0.6; done
-  [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null; die "$name: review lacks '$must': $(texts 14)"; }
+  [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$must': $(texts 14)"; }
   pass "$name: review shows '$title' and '$must'"
   if [[ "$decision" == approve ]]; then
-    local box; box="$(find_checkbox)" || { kill $pid 2>/dev/null; die "$name: review checkbox not visible"; }
+    local box; box="$(find_checkbox)" || { kill $pid 2>/dev/null || true; die "$name: review checkbox not visible"; }
     tap_bounds "$box"; sleep 1
     tap_text "$button"; sleep 3
     rc=0; wait $pid || rc=$?

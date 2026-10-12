@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Mac's simulation claim (hostSimulation) on a THROWAWAY dev phone (not yet run on a phone).
+# The Mac's simulation claim (hostSimulation) on a THROWAWAY dev phone.
 # vault-os/docs/simulation.md. Same transaction every time: send 100 USDC to 0x7f3a…4b93 on
 # Ethereum (the phone decodes it from its own token list).
 #   1. honest claim (−100 USDC, −fee ETH)   → box "THE MAC'S SIMULATION · NOT VERIFIED BY THIS PHONE"
@@ -26,6 +26,7 @@ OUT="${PV_SIM_OUT:-/tmp/simtest}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"
 grep -q -- "--host-simulation" "$CLIENT" || die "$CLIENT predates --host-simulation: restage tools/aoa_client.py"
+ensure_account1   # the pairing pins Account 1
 
 USDC=0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48
 DATA=0xa9059cbb0000000000000000000000007f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b930000000000000000000000000000000000000000000000000000000005f5e100
@@ -65,11 +66,11 @@ review() {
   local name="$1" title="$2"; shift 2
   local found=0 f i seen
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
-  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
+  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
   for f in "$@"; do
     seen=0
-    for i in 1 2 3 4 5 6 7 8 9 10; do uidump | grep -qF "$f" && { seen=1; break; }; scroll_down; sleep 0.6; done
-    [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null; die "$name: review lacks '$f': $(texts 14)"; }
+    for i in 1 2 3 4 5 6 7 8 9 10; do uidump | grep -qiF "$f" && { seen=1; break; }; scroll_down; sleep 0.6; done
+    [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$f': $(texts 14)"; }
     scroll_top
   done
   pass "$name: review '$title' shows: $*"
@@ -78,7 +79,7 @@ review() {
 # lacks <name> <fragment>: scrolls the whole review; the fragment must never appear
 lacks() {
   local name="$1" f="$2" i
-  for i in 1 2 3 4 5 6 7 8 9 10; do uidump | grep -qF "$f" && { kill $pid 2>/dev/null; die "$name: review unexpectedly shows '$f'"; }; scroll_down; sleep 0.6; done
+  for i in 1 2 3 4 5 6 7 8 9 10; do uidump | grep -qiF "$f" && { kill $pid 2>/dev/null || true; die "$name: review unexpectedly shows '$f'"; }; scroll_down; sleep 0.6; done
   scroll_top
   pass "$name: no '$f'"
 }
@@ -109,7 +110,11 @@ pass "honest: signed; the host verified fields, hash and signer (the claim is no
 
 echo "== 2. lying claim: red mismatch row, phone's review unchanged"
 start_request lying "$OUT.lying.json"
-review lying "Send 100 USDC" "Recipient" "does not match what this transaction does" "trust the phone's review above" "The Mac claims you gain"
+# ETH is part of what the phone decodes (the fee), so its row is a per-asset mismatch ("For ETH the
+# phone decoded … the Mac claims +5 ETH"); "The Mac claims you gain" is only for an asset the
+# decoding never touches (HostSimulationTest).
+review lying "Send 100 USDC" "Recipient" "does not match what this transaction does" "trust the phone's review above" \
+  "the Mac claims +5 ETH" "For USDC the phone decoded −100 USDC; the Mac claims no change"
 reject lying
 
 echo "== 3. malformed claim: refused before any review"

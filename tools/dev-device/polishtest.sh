@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Display polish round trip on a THROWAWAY dev phone (not yet run on a phone):
+# Display polish round trip on a THROWAWAY dev phone:
 #   1. battery indicator in every page header (content-desc "Battery NN percent")
 #   2. Display & auto-lock: screen timeout 30 s → system screen_off_timeout == 30000, then back
 #      to 1 minute (60000); haptics off/on; the "To turn off: hold the power button" line
@@ -68,11 +68,16 @@ pass "screen timeout 30 s applied as device owner (idle lock capped to 30 s)"
 tap_text "Screen off after 1 minute"; sleep 1.5
 [[ "$(timeout_ms)" == "60000" ]] || die "screen_off_timeout is $(timeout_ms), expected 60000"
 pass "screen timeout back to 1 minute"
-tap_text "Turn haptics off"; sleep 1.2; expect_screen "Off · no vibration feedback"
-tap_text "Turn haptics on"; sleep 1.2; expect_screen "On · a tap for PIN keys"
+# Haptics sits below the fold, and each tap rebuilds the page from the top: scroll to it each time.
+find_text "Turn haptics " || die "no haptics toggle on Display &amp; auto-lock"
+if has_text "Turn haptics on"; then  # an interrupted run left haptics off: back to the default first
+  tap_text "Turn haptics on"; sleep 1.2; find_text "Turn haptics off" || die "haptics did not turn on"
+fi
+tap_text "Turn haptics off"; sleep 1.2; expect_below "Off · no vibration feedback"
+find_text "Turn haptics on" || die "no 'Turn haptics on' after turning haptics off"
+tap_text "Turn haptics on"; sleep 1.2; expect_below "On · a tap for PIN keys"
 pass "haptics toggle persists in the UI"
-has_text "To turn off: hold the power button" || { scroll_down; sleep 0.8; }
-expect_screen "To turn off: hold the power button"
+expect_below "To turn off: hold the power button"
 pass "power-off hint shown"
 scroll_top
 

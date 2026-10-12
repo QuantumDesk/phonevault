@@ -15,7 +15,7 @@ OUT="${PV_SIGN_OUT:-/tmp/usbsign.out}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 TO=0x7F3A9C04e2b16d58a41C0f9E6b2D7a8c5e1f4B93   # example recipient (checksummed, not a real wallet)
 
-usb_reset; wake; unlock_if_locked; go_home
+usb_reset; wake; unlock_if_locked; ensure_account1   # pair the standard wallet's Account 1
 scroll_top; expect_screen "Your offline wallet"
 SCREEN_ADDR="$(addr)"; [[ -n "$SCREEN_ADDR" ]] || die "no address on screen"
 
@@ -37,14 +37,14 @@ SIGN_PID=$!
 sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
 found=0
 for _ in $(seq 1 25); do sleep 2; kill -0 $SIGN_PID 2>/dev/null || break; has_text "Review transfer" && { found=1; break; }; done
-[[ $found -eq 1 ]] || { kill $SIGN_PID 2>/dev/null; tail -3 "$OUT"; die "review screen never appeared: $(texts)"; }
+[[ $found -eq 1 ]] || { kill $SIGN_PID 2>/dev/null || true; tail -3 "$OUT"; die "review screen never appeared: $(texts)"; }
 has_text "Ethereum Mainnet (chain ID 1)" || die "network not decoded: $(texts 12)"
 uidump | grep -q "text=\"${TO}\"" || die "recipient not shown exactly as sent"
 pass "review screen shows action, amount, recipient, network, signer and fee"
 # The checkbox and the buttons sit below the fold.
 scroll_down; sleep 0.8; scroll_down; sleep 0.8
 box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true)"
-[[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null; die "review checkbox not visible"; }
+[[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null || true; die "review checkbox not visible"; }
 tap_bounds "$box"; sleep 1
 tap_text "Approve &amp; sign"; sleep 3
 wait $SIGN_PID; SIGN_RC=$?

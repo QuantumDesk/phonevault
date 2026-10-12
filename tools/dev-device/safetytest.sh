@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# "Safety you can see" round trips on a THROWAWAY dev phone (not yet run on a phone):
+# "Safety you can see" round trips on a THROWAWAY dev phone:
 #   1. first send to an address  → "First time sending to this address"; approve; on the receipt
 #      "Save recipient … as contact", typed on the phone's own keyboard as "Alice"
 #   2. second send to it         → "Saved contact: Alice (named on this phone)" + "Sent here once before"; reject
@@ -29,7 +29,9 @@ OUT="${PV_SAFETY_OUT:-/tmp/safetytest}"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"
 [[ -s "$VECTORS" ]] || die "swap vectors not found: $VECTORS"
 
-ALICE=0xabcd7f3a9c04e2b16d58a41c0f9e6b2d7a8c1234    # example recipient (not a real wallet)
+# Example recipient (not a real wallet), fresh each run: the phone keeps a per-wallet send history
+# with no way to clear it, so a fixed address would only be "First time" once per wallet.
+ALICE="0xabcd$(od -An -N16 -tx1 /dev/urandom | tr -d " \n")1234"
 POISON=0xabcd000000000000000000000000000000001234   # same first 4 / last 4 characters
 UNKNOWN_NFT=0x5555555555555555555555555555555555555555
 OPERATOR=3333333333333333333333333333333333333333
@@ -39,6 +41,7 @@ SWAP_TO="$(swap_field 0x65b058dd to)"
 SWAP_DATA="$(swap_field 0x65b058dd data)"
 # 0x05 ‖ rlp([1, 0x63c0…e32b, 0]): an EIP-7702 authorization tuple
 AUTH_HEX=0x05d7019463c0c19a282a1b52b07dd5a65b58948a07dae32b80
+ensure_account1   # the pairing pins Account 1: a request "from" another active account is refused
 
 find_checkbox() {
   local box="" i
@@ -65,11 +68,11 @@ review() {
   local name="$1" title="$2"; shift 2
   local found=0 f i seen
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
-  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
+  [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
   for f in "$@"; do
     seen=0
     for i in 1 2 3 4 5 6 7 8; do uidump | grep -qF "$f" && { seen=1; break; }; scroll_down; sleep 0.6; done
-    [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null; die "$name: review lacks '$f': $(texts 14)"; }
+    [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$f': $(texts 14)"; }
     scroll_top
   done
   pass "$name: review '$title' shows: $*"
