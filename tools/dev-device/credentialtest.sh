@@ -29,7 +29,9 @@ enter_system_pin; go_home; expect_screen "Your offline wallet"
 pass "wrong PIN rejected, right PIN accepted"
 
 # Inside the window no second prompt is expected, but uiautomator navigation is slow enough to
-# run past it, so a prompt here is reported rather than failed.
+# run past it, so a prompt here is reported rather than failed. The harness lands ~29-30 s after
+# the PIN, right on the chip's edge; the app asks again from 22 s on (SeedKeyWindow), so a
+# "Backup unavailable" or a stuck "Opening secure backup" here is an app bug, not timing.
 go_security; tap_text "Show recovery phrase"; sleep 3
 if system_prompt_up; then echo "note: harness reached the phrase after the window; PIN asked"; enter_system_pin
 else pass "phrase inside the window: no second prompt"; fi

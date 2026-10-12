@@ -132,8 +132,42 @@ Open items:
   preference was dropped. `PackageReplacedReceiver` (MY_PACKAGE_REPLACED, not exported, no
   permission) re-provisions and brings the vault back; proved by the next reinstall.
 - **Fewer prompts.** Before showing the system PIN prompt, `withSeedKey` asks the keystore whether
-  the seed key is usable now (cipher init only; the keystore still enforces the window on the real
-  operation). Not yet observed removing the prompt right after SET PIN (needs a factory boot).
+  the seed key is usable now (since 2026-10-11 a complete throwaway encrypt, see next item; the
+  keystore still enforces the window on the real operation), but only when the app did not see the
+  last PIN check itself (boot lock screen, PIN just installed). Not yet observed removing the
+  prompt right after SET PIN (needs a factory boot).
+- **The window's last second (root-caused 2026-10-11, phone 2).** "Backup unavailable" right after
+  a PIN, intermittent on rung 4b. Not a 4b removal: the same edge reproduces on 4a. Two clocks
+  decide the window. keystore2 admits `Cipher.init` (begin) by its own *receipt* time of the auth
+  token, in whole seconds (`token_age.seconds() > 30`), and BiometricService re-delivers the same
+  token when the prompt closes (~0.4 s after issue), so begin works until ~31 s after the token
+  reached keystore2. The Titan M decides on the first update/finish, from the token's *issue*
+  timestamp and a fresh secure-clock TimeStampToken, in ms: 30.000 s after issue. A controlled
+  sweep (open the phrase X s after the PIN) gave, on both rungs: decrypt at ≤ +29.47 s after
+  receipt → shown; +29.68 … +30.78 s → init OK, `KeystoreOperation::update` →
+  `KEY_USER_NOT_AUTHENTICATED` (citadel `UpdateOperation`) every time (4b 4/4, 4a 4/4); ≥ +31.5 s →
+  init refused → PIN prompt → shown. The app's init-only probe passed inside that band, so the app
+  skipped the prompt and the decrypt failed. `credentialtest.sh`'s "inside the window" reveal
+  lands right on it (harness navigation takes ~29–30 s after the PIN: 4a +29.34 s pass, 4b
+  +29.98 / +30.2 s fail), which is why it looked rung-dependent. The automatic re-prompt added earlier the
+  same day never worked: it re-entered `beginSensitive` while the flow was still active, was
+  refused, and left "Opening secure backup" up after the PIN (seen 8/8 in the sweep); its sticky
+  flag then made the next lapse go straight to "Backup unavailable".
+  Fix (app): (1) when the app confirmed the PIN itself it never probes near the edge: ≥ 22 s → ask
+  (`SeedKeyWindow`); (2) the probe runs a complete operation (`init` + `doFinal` of nothing), so the
+  chip's own check answers it, and no StrongBox operation is left open for the GC; (3) the backup
+  retry re-opens inside the same sensitive flow, once. Sweeps with the fix: own-confirm path
+  prompts at 25–31 s and shows the phrase; forced-probe build refuses at +29.69 … +30.78 s and
+  prompts; init-only probe + new retry: decrypt fails, one re-prompt, phrase shown.
+- **Boot asked twice again on rung 4b (fixed 2026-10-11).** Same day, after the reboot step:
+  Android's lock screen took the PIN, then the vault's own prompt appeared 0.7 s later (2 of 2 boots
+  on 4b, baseline and fixed app). Cause in the app, timing from the OS: on a cold start both
+  `onCreate` and `onResume` show the credential gate; the first starts the silent boot attempt, the
+  second replaced its loading screen with the locked page and queued `promptUnlock`, which fired
+  while the attempt was still waiting for the keyguard to finish going away (here 35.07 s exit vs
+  35.16 s prompt). 4a passed its reboots here (2/2), consistent with the attempt winning there (not measured). Fix:
+  the gate returns early while that session's boot attempt is pending (`bootAttemptSession`); the
+  attempt shows the gate itself if the keystore refuses.
 - `lifecycletest.sh` still expects the app's "WRONG PIN · 9 ATTEMPTS LEFT" text; in credential
   mode the count lives in the system prompt.
 - Auditor review: unlock/session boundary changed (system prompt, v2 key, migration, one permission).

@@ -141,9 +141,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * shortly after boot, therefore tries the key before prompting. Any later lock always prompts.
      */
     private boolean bootUnlockEligible = true;
+    /** Session whose boot-time silent unlock attempt is still pending (-1: none). */
+    private int bootAttemptSession = -1;
     private boolean silentUnlockAttempt;
-    /** One automatic PIN re-prompt per backup open when the seed-key window lapsed mid-open. */
-    private boolean backupRetried;
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -351,8 +351,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private void withSeedKey(String why, Runnable op) {
         if (!credentialMode()) { op.run(); return; }
-        long age = android.os.SystemClock.elapsedRealtime() - lastCredentialConfirm;
-        if (lastCredentialConfirm > 0 && age < (SystemCredential.AUTH_WINDOW_SECONDS - 8) * 1000L) { op.run(); return; }
+        SeedKeyWindow.Decision decision = SeedKeyWindow.decide(lastCredentialConfirm, android.os.SystemClock.elapsedRealtime());
+        if (decision == SeedKeyWindow.Decision.RUN) { op.run(); return; }
+        // Our own confirmation is near or past the window's end: probing now could pass keystore2
+        // and still fail on the chip a moment later (SeedKeyWindow), so ask.
+        if (decision == SeedKeyWindow.Decision.ASK) { confirmDevicePin(why, op, null); return; }
         // Ask the chip before asking the person: right after a PIN was set or entered on Android's
         // own screen the key may already be usable, and a second prompt would be pure friction.
         final int s = session.get();
@@ -405,20 +408,28 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** Locked gate in credential mode: our screen, the system verifies the PIN. */
     private void showCredentialGate(int s) {
+        // The boot attempt below is still waiting for this session: onCreate and onResume both
+        // show the gate on a cold start, and a second call used to replace the attempt's loading
+        // screen with the locked page AND queue the system prompt while the boot lock screen was
+        // still animating away (credentialtest "asked a second time", rung 4b, 2026-10-11). The
+        // attempt shows the gate itself if the keystore refuses; a new session (lock) passes.
+        if (bootAttemptSession == s) return;
         boolean freshBoot = android.os.SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
         if (bootUnlockEligible && freshBoot) {
             // The boot lock screen may still be animating away: give it up to 4 s to report the
             // device unlocked, then try the key; if the keystore refuses we come back and prompt.
             bootUnlockEligible = false;
+            bootAttemptSession = s;
             android.app.KeyguardManager keyguard = getSystemService(android.app.KeyguardManager.class);
             final long deadline = android.os.SystemClock.elapsedRealtime() + 4000;
             Runnable attempt = new Runnable() {
                 @Override public void run() {
-                    if (s != session.get() || unlocked) return;
+                    if (s != session.get() || unlocked) { bootAttemptSession = -1; return; }
                     if (keyguard != null && keyguard.isDeviceLocked() && android.os.SystemClock.elapsedRealtime() < deadline) {
                         ui.postDelayed(this, 250);
                         return;
                     }
+                    bootAttemptSession = -1;
                     silentUnlockAttempt = true;
                     unlock(s);
                     if (!unlocked) { silentUnlockAttempt = false; showCredentialGate(session.get()); }
@@ -1644,44 +1655,47 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void confirmRevealBackup() { seedQrRequested = false; startBackupAccess(false); }
 
     private void startBackupAccess(boolean checkOnly) {
-        beginSensitive(checkOnly ? "check your backup" : "view your recovery phrase", () -> {
-            int token = activeSensitive, s = session.get();
-            showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
-            cryptoExecutor.execute(() -> {
-                try {
+        beginSensitive(checkOnly ? "check your backup" : "view your recovery phrase",
+                () -> openBackup(activeSensitive, session.get(), checkOnly, false));
+    }
+
+    /**
+     * Decrypt the phrase for the sensitive flow {@code token} already owns. If the chip refuses
+     * because the PIN window closed before the decrypt reached it (SeedKeyWindow), ask for the PIN
+     * once more and retry inside the SAME flow: re-entering {@link #beginSensitive} would be
+     * refused (the flow is still active) and leave the loading screen up for good.
+     */
+    private void openBackup(int token, int s, boolean checkOnly, boolean retried) {
+        showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (!sensitiveValid(token, s)) return;
+                String mnemonic = vault.revealMnemonic(() -> sensitiveValid(token, s));
+                String[] words = mnemonic.split(" ");
+                runOnUiThread(() -> {
+                    if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
+                    backupWords = words;
+                    backupIdentity = walletId; // the backup covers the wallet: its account-0 identity
+                    backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
+                    startSeedTimer();
+                    if (checkOnly) startWordCheck();
+                    else if (seedQrRequested) showSeedQr();
+                    else showPhrasePage();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
                     if (!sensitiveValid(token, s)) return;
-                    String mnemonic = vault.revealMnemonic(() -> sensitiveValid(token, s));
-                    String[] words = mnemonic.split(" ");
-                    runOnUiThread(() -> {
-                        if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
-                        backupRetried = false;
-                        backupWords = words;
-                        backupIdentity = walletId; // the backup covers the wallet: its account-0 identity
-                        backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
-                        startSeedTimer();
-                        if (checkOnly) startWordCheck();
-                        else if (seedQrRequested) showSeedQr();
-                        else showPhrasePage();
-                    });
-                } catch (Exception e) {
-                    runOnUiThread(() -> {
-                        if (!sensitiveValid(token, s)) return;
-                        // The chip's PIN window can close between the check and the decrypt (a
-                        // few-second race, seen once on phone 2): ask for the PIN again once
-                        // rather than reporting a storage problem.
-                        if (authLapsed(e) && !backupRetried) {
-                            backupRetried = true;
-                            lastCredentialConfirm = 0;
-                            confirmDevicePin("Confirm your PIN to open your backup",
-                                    () -> startBackupAccess(checkOnly), this::hideBackup);
-                            return;
-                        }
-                        backupRetried = false;
-                        android.util.Log.w("Vault", "backup open failed: " + chain(e));
-                        showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
-                    });
-                }
-            });
+                    if (!retried && authLapsed(e)) {
+                        lastCredentialConfirm = 0;
+                        confirmDevicePin("Confirm your PIN to open your backup",
+                                () -> { if (sensitiveValid(token, s)) openBackup(token, s, checkOnly, true); },
+                                this::hideBackup);
+                        return;
+                    }
+                    android.util.Log.w("Vault", "backup open failed: " + chain(e));
+                    showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
+                });
+            }
         });
     }
 
