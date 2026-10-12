@@ -6,21 +6,27 @@ import { api, onProgress, openExternal, appVersion, notify, errText, isTauri } f
 import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, clock, copy } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
+import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
+import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
 type Theme = "dark" | "light" | "system";
-interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean }
+type HomeTab = "assets" | "nfts" | "activity";
+interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean; activity: ActivityFilter; tab: HomeTab; setupDone: boolean }
 const PREFS_KEY = "phonevault.prefs.v1";
 function loadPrefs(): Prefs {
-  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false };
+  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false, activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true };
+    const a = p.activity && typeof p.activity === "object" ? p.activity : {};
+    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true,
+      activity: { kind: ["all", "out", "in", "pending"].includes(a.kind) ? a.kind : "all", thisNetwork: a.thisNetwork === true },
+      tab: ["assets", "nfts", "activity"].includes(p.tab) ? p.tab : d.tab, setupDone: p.setupDone === true };
   } catch { return d; }
 }
 const prefs = loadPrefs();
@@ -102,16 +108,19 @@ async function refreshHistory() {
   if (view === "home") renderSoon();
 }
 
-/** Background receipt check for anything this companion sent that is still pending. */
+/** Receipt check for anything this companion sent that is still pending: mined ones get their
+ *  outcome, and the rest of their nonce group (a speed-up's original, a cancelled transaction)
+ *  is marked dropped. In the app the background watcher does this too, window open or not. */
 async function pollPending() {
-  const open = history.filter((e) => e.kind === "out" && e.status === "pending" && e.hash && Date.now() / 1000 - e.time < 86400 * 2);
-  for (const e of open) {
+  const chains = new Set(history.filter((e) => e.kind === "out" && e.status === "pending" && e.hash && Date.now() / 1000 - e.time < 86400 * 7).map((e) => e.chain_id));
+  for (const c of chains) {
     try {
-      const rc = await api.receipt(rpcFor(e.chain_id), e.hash!);
-      if (rc.mined) { history = await api.historyMark(e.hash!, rc.success ? "confirmed" : "failed", rc.block); refreshBalance(byId(e.chain_id)); }
+      const before = history.filter((e) => e.status === "pending").length;
+      history = await api.historyReconcile(rpcFor(c));
+      if (history.filter((e) => e.status === "pending").length !== before) refreshBalance(byId(c));
     } catch { /* retry next round */ }
   }
-  if (open.length && view === "home") renderSoon();
+  if (chains.size && view === "home") renderSoon();
 }
 
 // ------------------------------------------------------------------ shell
@@ -220,29 +229,20 @@ function homeView() {
     tokenSection(n.id, n.name),
     h("section", { class: "section" },
       h("h3", { class: "section-title" }, "Activity"),
-      history.length ? h("ul", { class: "list activity" }, history.slice(0, 30).map(activityRow))
-        : h("p", { class: "empty" }, "Nothing yet. Transactions you send from this Mac, and funds that arrive while it is open, show up here."),
+      activitySection(activityHost),
     ),
   );
 }
 
-function activityRow(e: HistoryEntry) {
-  const n = byId(e.chain_id);
-  const out = e.kind === "out";
-  const url = e.hash ? `${n.explorer}/tx/${e.hash}` : `${n.explorer}/address/${status?.paired_checksum}`;
-  const badge = e.status === "pending" ? h("span", { class: "badge pending" }, h("i", { class: "mini-spin" }), "Pending")
-    : e.status === "failed" ? h("span", { class: "badge failed" }, "Failed")
-    : e.status === "confirmed" ? h("span", { class: "badge ok" }, "Confirmed") : null;
-  return h("li", null, h("button", { class: "act-row", onclick: () => openExternal(url), title: e.hash ? `${e.hash}\nOpen in explorer` : "Open the address in the explorer" },
-    h("span", { class: `act-ic ${out ? "out" : "in"}` }, icon(out ? "up" : "down", 16)),
-    h("span", { class: "grow" },
-      h("span", { class: "act-title" }, `${out ? "Sent" : "Received"} ${e.token_symbol ? `${fmtExact(e.token_amount ?? "?")} ${e.token_symbol}` : `${fmtAmount(e.amount_eth)} ${n.symbol}`}`),
-      h("span", { class: "act-sub" }, [out && e.counterparty ? `to ${short(e.counterparty)}` : null, n.name, ago(e.time)].filter(Boolean).join(" · ")),
-    ),
-    badge,
-    h("span", { class: "muted ext" }, icon("external", 15)),
-  ));
-}
+const activityHost: ActivityHost = {
+  history: () => history,
+  chainId: () => prefs.chainId,
+  address: () => status?.paired_checksum ?? null,
+  filter: prefs.activity,
+  saveFilter: () => savePrefs(),
+  rerender: () => { if (view === "home") render(); },
+  replace: (e, kind) => { void startReplacement(e, kind); },
+};
 
 // ------------------------------------------------------------------ receive
 
@@ -462,7 +462,10 @@ type Flow =
   | { s: "broadcasting"; quote: Quote; signed: Signed }
   | { s: "broadcast_failed"; quote: Quote; signed: Signed; message: string }
   | { s: "submitted"; quote: Quote; hash: string; t0: number; slow: boolean; trouble: boolean }
-  | { s: "done"; quote: Quote; hash: string; block: number; ok: boolean };
+  | { s: "done"; quote: Quote; hash: string; block: number; ok: boolean; note?: string }
+  // speed-up / cancel of a pending transaction: quoting it, or why it couldn't be quoted
+  | { s: "replacing"; kind: "speedup" | "cancel"; hash: string }
+  | { s: "prep_failed"; kind: "speedup" | "cancel"; hash: string; message: string };
 
 let flow: Flow = { s: "form" };
 let flowNet: Network = net();
@@ -499,7 +502,7 @@ async function loadFee() {
 const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
-    case "form": case "quoting": case "review": return 0;
+    case "form": case "quoting": case "review": case "replacing": case "prep_failed": return 0;
     case "connecting": case "on_phone": case "verifying": case "failed": return 1;
     case "signed": case "broadcasting": case "broadcast_failed": return 2;
     default: return 3;
@@ -515,9 +518,10 @@ function stepper() {
 
 function sendView() {
   const busy = ["connecting", "on_phone", "verifying", "broadcasting", "submitted"].includes(flow.s);
-  const back = busy ? null : () => { if (flow.s === "review") { setFlow({ s: "form" }); } else go("home"); };
+  const repl = replacementOf(flow);
+  const back = busy ? null : () => { if (flow.s === "review" && !repl) { setFlow({ s: "form" }); } else go("home"); };
   return h("div", { class: "stack fade" },
-    topbar(`Send on ${flowNet.name}`, back),
+    topbar(repl ? `${repl === "cancel" ? "Cancel" : "Speed up"} on ${flowNet.name}` : `Send on ${flowNet.name}`, back),
     stepper(),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody()),
   );
@@ -583,8 +587,21 @@ function flowBody(): Node {
       queueMicrotask(() => { checkAddr(); updateFormExtras(); updateFormBalance(); if (!quoting) (draft.to ? amtInput : toInput).focus(); });
       return form;
     }
+    case "replacing":
+      return statusCard("connecting", flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], []);
+    case "prep_failed":
+      return h("section", { class: "card result" },
+        h("div", { class: "result-ic neutral" }, icon("x", 28)),
+        h("h3", null, flow.kind === "cancel" ? "Can't cancel it" : "Can't speed it up"),
+        h("p", null, capitalize(flow.message) + "."),
+        h("div", { class: "actions" },
+          h("button", { class: "big primary", onclick: () => go("home") }, "Back to activity"),
+          flow.kind === "speedup" && /only be cancelled/.test(flow.message) ? h("button", { class: "big", onclick: () => { const e = history.find((x) => x.hash === (flow as { hash: string }).hash); if (e) startReplacement(e, "cancel"); } }, "Cancel it instead") : null,
+        ),
+      );
     case "review": {
       const quote = flow.quote;
+      if (quote.replaces) return replacementReview(quote);
       return h("section", { class: "card" },
         h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
         quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
@@ -639,7 +656,7 @@ function flowBody(): Node {
         flow.err.message && !x.hideDetail ? h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, flow.err.message)) : null,
         h("div", { class: "actions" },
           x.danger ? null : h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("refresh", 18), "Try again"),
-          h("button", { class: "big", onclick: () => setFlow({ s: "form" }) }, "Edit"),
+          x.danger && replacementOf(flow) ? null : h("button", { class: "big", onclick: () => replacementOf(flow) ? go("home") : setFlow({ s: "form" }) }, replacementOf(flow) ? "Close" : "Edit"),
           x.danger ? h("button", { class: "big", onclick: () => go("home") }, "Close") : null,
         ),
       );
@@ -649,6 +666,7 @@ function flowBody(): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
+        quote.replaces ? h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(quote.replaces.hash).toUpperCase()}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
           h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
@@ -681,6 +699,19 @@ function flowBody(): Node {
       );
     }
     case "done": {
+      const r = flow.quote.replaces;
+      if (r && flow.note) return h("section", { class: "card result" },
+        h("div", { class: "result-ic neutral" }, icon("check", 28)),
+        h("h3", null, "The original went through first"),
+        h("p", { class: "muted" }, flow.note),
+        hashLinks(flow.hash),
+        h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
+      if (r && r.kind === "cancel" && flow.ok) return h("section", { class: "card result" },
+        h("div", { class: "result-ic ok big" }, icon("check", 32)),
+        h("h3", null, "Cancelled"),
+        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${flow.block.toLocaleString("en-US")}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
+        hashLinks(flow.hash),
+        h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
@@ -695,9 +726,75 @@ function flowBody(): Node {
   }
 }
 
+// ------------------------------------------------------------------ speed up / cancel
+// A replacement is quoted in Rust (replace.rs) from the recorded transaction and then goes through
+// exactly the Send pipeline below: the phone reviews it like any transaction, Rust verifies it.
+
+function replacementOf(f: Flow): "speedup" | "cancel" | null {
+  if (f.s === "replacing" || f.s === "prep_failed") return f.kind;
+  return "quote" in f && f.quote.replaces ? f.quote.replaces.kind : null;
+}
+
+const gwei = (q: string | null | undefined) => {
+  if (!q) return "?";
+  const v = Number(BigInt(q)) / 1e9;
+  return v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3);
+};
+
+async function startReplacement(e: HistoryEntry, kind: "speedup" | "cancel") {
+  if (!e.hash) return;
+  if (identity.s === "different") { identity.dismissed = false; renderPhoneNotice(); return; }
+  if (device.report?.verdict === "fail") { failDismissed = false; renderPhoneNotice(); return; }
+  const hash = e.hash;
+  flowNet = byId(e.chain_id); activeTicket = null;
+  flow = { s: "replacing", kind, hash };
+  go("send");
+  try {
+    const quote = await api.replacementQuote(rpcFor(e.chain_id), hash, kind);
+    if (flow.s !== "replacing" || flow.hash !== hash) return;
+    if (parseInt(quote.chain_id, 16) !== e.chain_id || quote.replaces?.hash.toLowerCase() !== hash.toLowerCase()) throw "the quote is not for this transaction";
+    setFlow({ s: "review", quote });
+  } catch (err) {
+    if (flow.s === "replacing" && flow.hash === hash) setFlow({ s: "prep_failed", kind, hash, message: errText(err) });
+  }
+}
+
+function replacementReview(quote: Quote) {
+  const n = flowNet;
+  const r = quote.replaces!;
+  const cancel = r.kind === "cancel";
+  const usd = (eth: string) => fmtUsd(eth, price(n));
+  return h("section", { class: "card replace-card" },
+    h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(r.hash).toUpperCase()}`),
+    h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
+    h("p", { class: "muted" }, cancel
+      ? "This sends 0 to your own address with the same nonce and a higher fee. If it is included first, the original can never be included. You pay only the network fee."
+      : "This sends the same transaction again with the same nonce and a higher fee, so the network picks it up sooner. Only one of the two can ever be included."),
+    h("dl", { class: "facts" },
+      fact("Replaces", h("button", { class: "link mono", title: r.hash, onclick: () => openExternal(`${n.explorer}/tx/${r.hash}`) }, shortHash(r.hash), icon("external", 13))),
+      cancel ? fact("Sends", h("span", null, `0 ${n.symbol} to yourself `, h("span", { class: "mono muted" }, short(checksumOf(quote.to)))))
+        : fact("Sends", quote.token ? `${fmtExact(quote.token.amount)} ${quote.token.symbol} to ${short(checksumOf(quote.token.recipient))}` : `${fmtAmount(quote.amount_eth, 8)} ${n.symbol} to ${short(checksumOf(quote.to))}`),
+      fact("Nonce", h("span", { class: "mono" }, `${parseInt(quote.nonce, 16)} (same as the original)`)),
+      fact("Max fee / gas", h("span", null, `${gwei(quote.max_fee_per_gas)} gwei`, h("span", { class: "muted" }, ` · was ${gwei(r.previous_max_fee_per_gas)}`))),
+      fact("Priority fee", h("span", null, `${gwei(quote.max_priority_fee_per_gas)} gwei`, h("span", { class: "muted" }, ` · was ${gwei(r.previous_max_priority_fee_per_gas)}`))),
+      fact("Network fee", h("span", null, `at most ${fmtAmount(quote.max_fee_eth, 8)} ${n.symbol}`, usd(quote.max_fee_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.max_fee_eth)}`) : null)),
+    ),
+    h("p", { class: "note" }, cancel
+      ? `Your phone shows it as a normal transaction: send 0 ${n.symbol} to your own address. Approve there only if that is what it says.`
+      : "Your phone shows it as a normal transaction with these same details. Approve there only if they match."),
+    h("div", { class: "actions" },
+      h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("phone", 18), "Send to phone"),
+      h("button", { class: "big", onclick: () => go("home") }, "Not now"),
+    ),
+  );
+}
+
 function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 let toChecksum: string | null = null;
-function checksumOf(lower: string) { return toChecksum && toChecksum.toLowerCase() === lower ? toChecksum : lower; }
+function checksumOf(lower: string) {
+  if (status?.paired_checksum && status.paired_checksum.toLowerCase() === lower.toLowerCase()) return status.paired_checksum;
+  return toChecksum && toChecksum.toLowerCase() === lower ? toChecksum : lower;
+}
 function hostOf(url: string) { try { return new URL(url).host; } catch { return url; } }
 function hashLinks(hash: string) {
   const url = `${flowNet.explorer}/tx/${hash}`;
@@ -907,6 +1004,19 @@ async function submitted(quote: Quote, hash: string) {
         setFlow({ s: "done", quote, hash, block: rc.block, ok: rc.success });
         refreshBalance(n);
         return;
+      }
+      // A replacement races its original: if the original was included instead, say so.
+      const orig = quote.replaces?.hash;
+      if (orig) {
+        const ro = await api.receipt(rpcFor(n.id), orig);
+        if (flow.s !== "submitted" || flow.hash !== hash) return;
+        if (ro.mined) {
+          try { history = await api.historyMark(orig, ro.success ? "confirmed" : "failed", ro.block); } catch { /* best effort */ }
+          setFlow({ s: "done", quote, hash: orig, block: ro.block, ok: ro.success,
+            note: `${shortHash(orig)} was included in block ${ro.block.toLocaleString("en-US")} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
+          refreshBalance(n);
+          return;
+        }
       }
       const slow = Date.now() - t0 > 180_000;
       if (slow !== flow.slow || flow.trouble) setFlow({ ...flow, slow, trouble: false });

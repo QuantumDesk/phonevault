@@ -512,7 +512,7 @@ fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str) -> Result
         amount_eth: eth::format_eth(draft.value), max_fee_eth: eth::format_eth(max_cost), total_eth: eth::format_eth(total),
         balance_eth: eth::format_eth(balance), network: crate::network_name(chain as u128),
         // dApp calldata is passed through as-is; verify.rs checks it byte-for-byte, not as a token send
-        token: None,
+        token: None, replaces: None,
     };
     Ok(Prepared::Transaction { chain_id: chain, quote, call, notes })
 }

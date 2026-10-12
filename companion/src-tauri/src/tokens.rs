@@ -219,7 +219,7 @@ pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amou
             value: "0x0".into(), data,
             amount_eth: "0".into(), max_fee_eth: eth::format_eth(max_cost), total_eth: eth::format_eth(max_cost),
             balance_eth: eth::format_eth(eth_balance), network: crate::network_name(chain),
-            token: Some(TokenIntent { contract, symbol: t.symbol.clone(), name: t.name.clone(), decimals: t.decimals, recipient, amount_raw: value.to_string(), amount: token_amount }),
+            token: Some(TokenIntent { contract, symbol: t.symbol.clone(), name: t.name.clone(), decimals: t.decimals, recipient, amount_raw: value.to_string(), amount: token_amount }), replaces: None,
         })
     }).await
 }
@@ -314,7 +314,7 @@ mod tests {
             recipient: recipient.clone(), amount_raw: "50000000".into(), amount: "50".into() };
         let q = Quote { chain_id: "0x1".into(), nonce: "0x0".into(), max_priority_fee_per_gas: "0x1".into(), max_fee_per_gas: "0x2".into(), gas_limit: "0xfde8".into(),
             to: t.contract.clone(), value: "0x0".into(), data: transfer_calldata(&recipient, 50_000_000).unwrap(),
-            amount_eth: "0".into(), max_fee_eth: "0".into(), total_eth: "0".into(), balance_eth: "0".into(), network: "Ethereum Mainnet".into(), token: Some(t.clone()) };
+            amount_eth: "0".into(), max_fee_eth: "0".into(), total_eth: "0".into(), balance_eth: "0".into(), network: "Ethereum Mainnet".into(), token: Some(t.clone()), replaces: None };
         (q, t)
     }
 

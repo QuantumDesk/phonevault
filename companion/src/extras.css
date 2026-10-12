@@ -1,0 +1,73 @@
+/* Activity filters, speed up / cancel, home tabs, NFTs, USD totals, guided setup.
+   Uses the tokens from styles.css. */
+
+/* ---------------------------------------------------------------- activity */
+.act-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.act-filters .segmented { flex: 1; min-width: 260px; }
+.segmented.four { grid-template-columns: repeat(4, 1fr); }
+.chip-btn.on { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
+.chip-btn .net-dot { width: 7px; height: 7px; }
+.badge.pending { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.badge.dropped { color: var(--faint); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--faint) 60%, transparent); }
+.act-ic.cx { color: var(--muted); }
+.act-stuck { border-radius: 12px; background: color-mix(in srgb, var(--warn) 5%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 22%, transparent); }
+.act-actions { display: flex; align-items: center; gap: 8px; padding: 0 12px 10px 56px; flex-wrap: wrap; }
+.act-actions .chip-btn { gap: 5px; }
+.replace-card .kicker { color: var(--warn); }
+
+/* ---------------------------------------------------------------- home tabs */
+.tabs { display: flex; gap: 4px; padding: 3px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); position: sticky; top: 62px; z-index: 5; }
+.tabs button { flex: 1; border: 0; background: none; min-height: 34px; border-radius: 9px; font-size: 13px; color: var(--muted); }
+.tabs button.on { background: var(--raise); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2); }
+.tabs .count { font-size: 11px; color: var(--warn); margin-left: 2px; }
+.total-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 2px 4px; }
+.total-line .usd { font-size: 20px; font-weight: 640; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.token-row .usd-col { min-width: 72px; text-align: right; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.scan-note { display: flex; gap: 8px; align-items: flex-start; }
+.scan-note .ic { margin-top: 2px; color: var(--warn); }
+
+/* ---------------------------------------------------------------- NFTs */
+.nft-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.nft { display: grid; gap: 6px; padding: 8px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); min-width: 0; }
+.nft-art { aspect-ratio: 1; border-radius: 10px; background: var(--surface-2); display: grid; place-items: center; overflow: hidden; color: var(--faint); font: 9px/1.4 var(--pixel); text-align: center; padding: 8px; }
+.nft-art img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.nft-art button { font-family: var(--sans); font-size: 12px; }
+.nft-name { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nft-sub { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nft.gone { opacity: 0.5; }
+.add-row { display: flex; gap: 8px; }
+.add-row input { flex: 1; }
+
+/* ---------------------------------------------------------------- guided setup */
+.setup { display: grid; gap: 18px; min-height: calc(100vh - 140px); align-content: start; }
+.setup .stepper { grid-template-columns: repeat(5, 1fr); }
+.setup-card { display: grid; justify-items: center; text-align: center; gap: 12px; padding: 30px 24px 24px; }
+.setup-card > p { max-width: 420px; }
+.setup-card .actions { width: 100%; max-width: 380px; }
+.setup-card .callout, .setup-card .att-card, .setup-card .qr-tile, .setup-card .addr-compare, .setup-card .addr-full, .setup-card .facts { width: 100%; text-align: left; }
+.setup-card .qr-tile { width: min(220px, 100%); }
+.setup-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.setup-foot button { min-height: 32px; }
+.plug { position: relative; width: 120px; height: 120px; display: grid; place-items: center; }
+.plug .phone-art { margin: 0; }
+.plug.searching::before, .plug.searching::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent-line); animation: ripple 2s ease-out infinite; }
+.plug.searching::after { animation-delay: 1s; }
+@keyframes ripple { from { transform: scale(0.6); opacity: 1; } to { transform: scale(1.35); opacity: 0; } }
+.plug.found .phone-screen { animation: none; background: color-mix(in srgb, var(--accent) 25%, transparent); }
+.verdict-big { display: grid; justify-items: center; gap: 8px; }
+.verdict-big .shield { width: 84px; height: 84px; border-radius: 26px; display: grid; place-items: center; }
+.verdict-big .shield.att-ok { background: var(--accent-soft); color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line); animation: pop 360ms cubic-bezier(0.2, 1.4, 0.4, 1); }
+.verdict-big .shield.att-dev { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 45%, transparent); }
+.verdict-big .shield.att-fail { background: var(--danger-soft); color: var(--danger); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 45%, transparent); }
+.verdict-big .shield.att-checking { background: var(--surface-2); }
+.verdict-big .label { font: 11px/1.4 var(--pixel); letter-spacing: 0.06em; }
+.verdict-big .att-ok + .label { color: var(--accent); } .verdict-big .att-dev + .label { color: var(--warn); } .verdict-big .att-fail + .label { color: var(--danger); }
+.compare-legend { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; text-align: left; }
+.compare-legend > div { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line-2); font-size: 12.5px; color: var(--muted); }
+.compare-legend strong { display: block; color: var(--ink); font-size: 13px; margin-bottom: 2px; }
+.compare-legend .ok strong { color: var(--accent); } .compare-legend .dev strong { color: var(--warn); }
+.wait-line { display: inline-flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+.celebrate { position: relative; }
+.confetti { position: absolute; inset: -20px 0 auto; height: 0; pointer-events: none; }
+.confetti i { position: absolute; top: 0; width: 6px; height: 10px; border-radius: 2px; opacity: 0; animation: fall 1.6s cubic-bezier(0.2, 0.6, 0.4, 1) forwards; }
+@keyframes fall { 0% { opacity: 1; transform: translateY(0) rotate(0); } 100% { opacity: 0; transform: translateY(170px) rotate(540deg); } }

@@ -20,7 +20,13 @@ use tauri::{AppHandle, Emitter, State};
 /// How long the phone may take between receiving the request and answering (unlock + review).
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 
-struct VerifiedTx { raw: String, chain_id: u128, to: String, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent> }
+struct VerifiedTx {
+    raw: String, chain_id: u128, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent>,
+    /// the signed fields, kept in history so a stuck transaction can be sped up or cancelled
+    params: history::TxParams,
+    /// (hash, "speedup" | "cancel") when this replaces a pending transaction
+    replaces: Option<(String, String)>,
+}
 
 /// Requests in flight, by ticket: each can be cancelled on its own (a queued Send and a
 /// WalletConnect request may both be waiting for the phone).
@@ -81,6 +87,8 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
             Some(t) => Some(tokens::check_quote(&quote, t).map_err(|m| fail("internal", format!("token quote rejected: {m}"), false))?),
             None => None,
         };
+        // A speed-up/cancel must really replace a pending transaction from here (replace.rs).
+        crate::replace::check(&quote, &pinned).map_err(|m| fail("internal", format!("replacement rejected: {m}"), false))?;
         // Exactly the request the original `sign` command builds.
         let request = json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
@@ -123,10 +131,15 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
         }
         let gas = q(&quote.gas_limit, "gasLimit")?;
         let max_fee = q(&quote.max_fee_per_gas, "maxFeePerGas")?;
+        // These are the signed fields: validate_signature compared every one with the request.
+        let params = history::TxParams {
+            to: quote.to.to_ascii_lowercase(), value: quote.value.clone(), data: quote.data.to_ascii_lowercase(), gas_limit: quote.gas_limit.clone(),
+            max_fee_per_gas: quote.max_fee_per_gas.clone(), max_priority_fee_per_gas: quote.max_priority_fee_per_gas.clone(),
+        };
         let tx = VerifiedTx {
-            raw: v.raw_hex, chain_id: q(&quote.chain_id, "chainId")?, to: verify::checksum(&quote.to),
+            raw: v.raw_hex, chain_id: q(&quote.chain_id, "chainId")?,
             value_wei: q(&quote.value, "value")?, max_fee_wei: gas.saturating_mul(max_fee), nonce: q(&quote.nonce, "nonce")?,
-            token: quote.token.clone(),
+            token: quote.token.clone(), params, replaces: quote.replaces.as_ref().map(|r| (r.hash.clone(), r.kind.clone())),
         };
         store.lock().map_err(|_| fail("internal", "state poisoned", true))?.insert(v.tx_hash.to_ascii_lowercase(), tx);
         Ok(Signed { hash: v.tx_hash, signer: verify::checksum(&v.signer) })
@@ -148,20 +161,17 @@ pub(crate) async fn broadcast_verified(state: State<'_, SendState>, rpc_url: Str
     let store = state.verified.clone();
     blocking(move || {
         let key = hash.to_ascii_lowercase();
-        let (raw, chain_id, to, value_wei, max_fee_wei, nonce, token) = {
+        let (raw, chain_id, value_wei, max_fee_wei, nonce, token, params, replaces) = {
             let map = store.lock().map_err(|_| "state poisoned".to_string())?;
             let tx = map.get(&key).ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
-            (tx.raw.clone(), tx.chain_id, tx.to.clone(), tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone())
+            (tx.raw.clone(), tx.chain_id, tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone(), tx.params.clone(), tx.replaces.clone())
         };
         let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
         let node_chain = rpc.chain_id().map_err(|e| e.0)?;
         if node_chain != chain_id { return Err(format!("the selected node is on chain {node_chain}, but this transaction is for chain {chain_id}; switch back to that network")); }
         let sent = rpc.send_raw(&raw).map_err(|e| e.0)?;
         if sent.to_ascii_lowercase() != key { return Err(format!("node returned hash {sent}, expected {hash}")); }
-        let _ = match &token {
-            Some(t) => history::record_sent_token(&hash, chain_id, t, max_fee_wei, nonce),
-            None => history::record_sent(&hash, chain_id, &to, value_wei, max_fee_wei, nonce),
-        };
+        let _ = history::record_broadcast(history::Broadcast { hash: &hash, chain_id, value_wei, max_fee_wei, nonce, token: token.as_ref(), tx: params, replaces });
         Ok(hash)
     }).await
 }

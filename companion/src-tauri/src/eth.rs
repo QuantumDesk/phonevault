@@ -23,8 +23,15 @@ impl Rpc {
 
     fn call(&self, method: &str, params: Value) -> Result<Value, EthError> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        let resp: Value = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?
-            .json().map_err(|e| err(format!("node returned non-JSON: {e}")))?;
+        let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?;
+        let code = http.status();
+        // Public nodes answer refusals (rate limits, "archive requests need a token") with an HTTP
+        // error and a JSON-RPC error body: keep the node's own words.
+        let resp: Value = match http.json() {
+            Ok(v) => v,
+            Err(_) if !code.is_success() => return Err(err(format!("node refused {method}: HTTP {code}"))),
+            Err(e2) => return Err(err(format!("node returned non-JSON: {e2}"))),
+        };
         if let Some(e) = resp.get("error") { return Err(err(format!("node error for {method}: {}", e.get("message").and_then(Value::as_str).unwrap_or("unknown")))); }
         resp.get("result").cloned().ok_or_else(|| err(format!("node returned no result for {method}")))
     }
@@ -75,6 +82,38 @@ impl Rpc {
         let v = self.call("eth_sendRawTransaction", json!([raw_hex]))?;
         v.as_str().map(str::to_string).ok_or_else(|| err("broadcast returned no hash"))
     }
+
+    /// Transactions mined from `address` so far (the next nonce not yet in a block).
+    pub fn nonce_latest(&self, address: &str) -> Result<u128, EthError> { Self::hex_u128(&self.call("eth_getTransactionCount", json!([address, "latest"]))?, "nonce") }
+
+    /// Balance at a given block (so a balance and the block it belongs to are read together).
+    pub fn balance_at(&self, address: &str, block: u128) -> Result<u128, EthError> {
+        Self::hex_u128(&self.call("eth_getBalance", json!([address, crate::verify::to_quantity(block)]))?, "balance")
+    }
+
+    /// (maxPriorityFeePerGas, maxFeePerGas) of a transaction the node knows, if it is EIP-1559.
+    pub fn tx_fees(&self, hash: &str) -> Result<Option<(u128, u128)>, EthError> {
+        let v = self.call("eth_getTransactionByHash", json!([hash]))?;
+        if v.is_null() { return Ok(None); }
+        match (v.get("maxPriorityFeePerGas"), v.get("maxFeePerGas")) {
+            (Some(p), Some(m)) => Ok(Some((Self::hex_u128(p, "priorityFee")?, Self::hex_u128(m, "maxFee")?))),
+            _ => Ok(None),
+        }
+    }
+
+    /// `eth_getLogs` between two blocks (inclusive). `address` may be one contract, several, or none.
+    pub fn logs(&self, from: u128, to: u128, address: Option<Value>, topics: Value) -> Result<Vec<Value>, EthError> {
+        let mut filter = json!({"fromBlock": crate::verify::to_quantity(from), "toBlock": crate::verify::to_quantity(to), "topics": topics});
+        if let Some(a) = address { filter["address"] = a; }
+        match self.call("eth_getLogs", json!([filter]))? { Value::Array(a) => Ok(a), _ => Err(err("eth_getLogs: expected an array")) }
+    }
+
+    /// A block with its full transactions (for finding incoming native transfers).
+    pub fn block_with_txs(&self, number: u128) -> Result<Value, EthError> {
+        self.call("eth_getBlockByNumber", json!([crate::verify::to_quantity(number), true]))
+    }
+
+    pub fn parse_quantity(v: &Value, what: &str) -> Result<u128, EthError> { Self::hex_u128(v, what) }
 
     /// None while pending; Some(true) mined OK; Some(false) reverted.
     pub fn receipt_status(&self, hash: &str) -> Result<Option<(bool, u128)>, EthError> {

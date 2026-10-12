@@ -14,6 +14,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
+mod replace;
 // ERC-20: the phone's built-in token list, balances, token sends
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
@@ -99,6 +101,9 @@ struct Quote {
     /// Set for an ERC-20 transfer (tokens::token_quote); re-checked against the list before signing.
     #[serde(default)]
     token: Option<tokens::TokenIntent>,
+    /// Set for a speed-up/cancel (replace::replacement_quote); re-checked against history before signing.
+    #[serde(default)]
+    replaces: Option<replace::Replacement>,
 }
 
 fn network_name(chain: u128) -> String {
@@ -133,7 +138,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
             max_fee_per_gas: verify::to_quantity(max_fee), gas_limit: verify::to_quantity(gas), to: to_l.to_ascii_lowercase(),
             value: verify::to_quantity(value), data: "0x".into(),
             amount_eth: eth::format_eth(value), max_fee_eth: eth::format_eth(max_cost), total_eth: eth::format_eth(total),
-            balance_eth: eth::format_eth(balance), network: network_name(chain), token: None,
+            balance_eth: eth::format_eth(balance), network: network_name(chain), token: None, replaces: None,
         })
     }).await
 }
@@ -190,7 +195,8 @@ pub fn run() {
         .manage(send::SendState::default())
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
-            history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
+            history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd,
+            replace::replacement_quote,
             signing::sign_message, signing::sign_typed_data,
             attest::attest_phone, attest::attestation_cached,
             tokens::token_list, tokens::token_balances, tokens::token_quote,

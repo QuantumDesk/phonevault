@@ -4,7 +4,7 @@
 // URL knobs: ?paired=0  ?phone=none|android|accessory  ?outcome=approve|reject|timeout|verify|nophone|broadcastfail
 //            ?attest=development|genuine|fail|oldapp   (device check; "development" = today's dev phones: FAIL until Developer mode is on)
 
-import type { Attestation, AttestationDetails, HistoryEntry, Stage } from "./api";
+import type { Attestation, AttestationDetails, HistoryEntry, Stage, Quote, TxParams, Nft } from "./api";
 
 const params = new URLSearchParams(location.search);
 const ADDRESS = "0x7A3b9C1d2E4f5061728394A5b6C7d8E9f0A1B2c3";
@@ -56,7 +56,15 @@ function mockAttestation(kind: string, allowDev: boolean): Attestation {
 export interface Mock {
   invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
   onProgress(cb: (ticket: string, stage: Stage) => void): () => void;
+  onEvent(name: string, cb: (payload: unknown) => void): () => void;
 }
+
+const SENDER = "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C";
+const rndHash = () => "0x" + Array.from({ length: 64 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
+/** A recorded signed transaction (what broadcast_verified keeps for speed-up / cancel). */
+const txp = (to: string, value: string, maxFee = "0x3b9aca00", prio = "0xf4240"): TxParams => ({ to: to.toLowerCase(), value, data: "0x", gas_limit: "0x5208", max_fee_per_gas: maxFee, max_priority_fee_per_gas: prio });
+/** A small inline SVG standing in for an NFT image (the app fetches real ones only on request). */
+const art = (hue: number, label: string) => "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges"><rect width="8" height="8" fill="hsl(${hue} 55% 18%)"/><rect x="2" y="1" width="4" height="1" fill="hsl(${hue} 80% 70%)"/><rect x="1" y="2" width="1" height="2" fill="hsl(${hue} 80% 70%)"/><rect x="6" y="2" width="1" height="2" fill="hsl(${hue} 80% 70%)"/><rect x="1" y="4" width="6" height="3" fill="hsl(${hue} 80% 70%)"/><title>${label}</title></svg>`);
 
 export function createMock(): Mock {
   let paired: string | null = params.get("paired") === "0" ? null : ADDRESS.toLowerCase();
@@ -65,14 +73,30 @@ export function createMock(): Mock {
   let cancelled = false;
   const listeners = new Set<(t: string, s: Stage) => void>();
   const emit = (t: string, s: Stage) => listeners.forEach((l) => l(t, s));
+  const events = new Map<string, Set<(p: unknown) => void>>();
+  const fire = (name: string, p: unknown) => events.get(name)?.forEach((l) => l(p));
   const now = Math.floor(Date.now() / 1000);
-  let history: HistoryEntry[] = [
-    { kind: "out", hash: "0x5f1c9a7e3b2d4c6f8a0e1b3d5c7f9a2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a", chain_id: 8453, counterparty: "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C", amount_eth: "0.005", fee_max_eth: "0.00000412", nonce: 3, time: now - 3600 * 5, status: "confirmed", block: 20511233 },
-    { kind: "in", hash: null, chain_id: 8453, counterparty: null, amount_eth: "0.025", fee_max_eth: null, nonce: null, time: now - 86400 * 2, status: "received", block: null },
-    { kind: "out", hash: "0x9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", chain_id: 1, counterparty: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount_eth: "0.01", fee_max_eth: "0.00042", nonce: 11, time: now - 86400 * 9, status: "failed", block: 20111000 },
+  const base = (e: Partial<HistoryEntry>): HistoryEntry => ({ kind: "out", hash: null, chain_id: 8453, counterparty: null, amount_eth: "0", fee_max_eth: null, nonce: null, time: now, status: "received", block: null, ...e });
+  const STUCK = "0x3c7e1f5a9b2d4e6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f";
+  const SPED_ORIG = "0x71aa3e5c7b9d1f2a4c6e8b0d3f5a7c9e1b2d4f6a8c0e3b5d7f9a1c2e4b6d8f0a";
+  let history: HistoryEntry[] = params.get("history") === "0" ? [] : [
+    base({ kind: "out", hash: STUCK, counterparty: SENDER, amount_eth: "0.0125", fee_max_eth: "0.0000213", nonce: 6, time: now - 60 * 14, status: "pending", tx: txp(SENDER, "0x2c68af0bb140000") }),
+    base({ kind: "in", hash: "0xa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", counterparty: SENDER, token_symbol: "USDC", token_amount: "125.5", token_contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", time: now - 3600 * 2, block: 20511100, log_index: 3 }),
+    base({ kind: "out", hash: "0x5f1c9a7e3b2d4c6f8a0e1b3d5c7f9a2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a", counterparty: SENDER, amount_eth: "0.005", fee_max_eth: "0.00000412", nonce: 5, time: now - 3600 * 5, status: "confirmed", block: 20511233, replaces: SPED_ORIG, replacement_kind: "speedup", tx: txp(SENDER, "0x11c37937e08000", "0x59682f00") }),
+    base({ kind: "out", hash: SPED_ORIG, counterparty: SENDER, amount_eth: "0.005", fee_max_eth: "0.00000210", nonce: 5, time: now - 3600 * 5 - 600, status: "dropped", tx: txp(SENDER, "0x11c37937e08000") }),
+    base({ kind: "in", hash: "0x0f9e8d7c6b5a49382716051f2e3d4c5b6a79880f9e8d7c6b5a49382716051f2e", counterparty: SENDER, amount_eth: "0.02", time: now - 86400, block: 20480000 }),
+    base({ kind: "in", amount_eth: "0.025", time: now - 86400 * 2 }),
+    base({ kind: "out", hash: "0x9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", chain_id: 1, counterparty: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount_eth: "0.01", fee_max_eth: "0.00042", nonce: 11, time: now - 86400 * 9, status: "failed", block: 20111000 }),
   ];
-  let pending: { hash: string; to: string; amount: string; chain: number; polls: number } | null = null;
+  // ?deposit=1: the onboarding "waiting for a deposit" step sees funds arrive after a few seconds
+  if (params.get("deposit")) setTimeout(() => { BAL[8453] = "0.05213377"; fire("watch-balance", { chain_id: 8453, balance_wei: toWei(BAL[8453]), balance_eth: BAL[8453], block: 20511300 }); }, 6000);
+  let pending: { hash: string; to: string; amount: string; chain: number; polls: number; quote: Quote } | null = null;
   let lastAttestation: Attestation | null = null;
+  let nfts: Nft[] = [
+    { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "4211", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
+    { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "88", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
+    { chain_id: 8453, contract: "0x9a8B7c6D5e4F3a2B1c0D9e8F7a6B5c4D3e2F1a0B", token_id: "3", name: "Onchain Summer Pass", symbol: "OSP", owned: true, checked_at: now },
+  ];
 
   async function invoke<T>(cmd: string, a: Record<string, unknown> = {}): Promise<T> {
     const chainOf = (url: unknown) => RPC_CHAIN[String(url)] ?? 8453;
@@ -121,8 +145,8 @@ export function createMock(): Mock {
         if (outcome === "timeout") throw { kind: "timeout", message: "the phone did not answer within 300 s", delivered: true };
         if (outcome === "verify") throw { kind: "verify", message: "signed transaction differs from the request in: value", delivered: true };
         emit(t, "verifying"); await sleep(400);
-        const hash = "0x" + Array.from({ length: 64 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
-        pending = { hash, to: q.to, amount: q.amount_eth, chain: parseInt(q.chain_id, 16), polls: 0 };
+        const hash = rndHash();
+        pending = { hash, to: q.to, amount: q.amount_eth, chain: parseInt(q.chain_id, 16), polls: 0, quote: a.quote as Quote };
         return { hash, signer: ADDRESS } as T;
       }
       case "sign_cancel": cancelled = true; return undefined as T;
@@ -130,18 +154,65 @@ export function createMock(): Mock {
         await sleep(800);
         if (outcome === "broadcastfail") throw "node error for eth_sendRawTransaction: replacement transaction underpriced";
         if (!pending || pending.hash !== a.hash) throw "this transaction was not verified in this session, so it will not be broadcast";
-        history = [{ kind: "out", hash: pending.hash, chain_id: pending.chain, counterparty: pending.to, amount_eth: pending.amount, fee_max_eth: "0.0000042", nonce: 4, time: Math.floor(Date.now() / 1000), status: "pending", block: null }, ...history];
+        const q = pending.quote;
+        history = [base({ kind: "out", hash: pending.hash, chain_id: pending.chain, counterparty: q.token ? q.token.recipient : pending.to, amount_eth: pending.amount, fee_max_eth: q.max_fee_eth, nonce: parseInt(q.nonce, 16),
+          time: Math.floor(Date.now() / 1000), status: "pending", token_symbol: q.token?.symbol ?? null, token_amount: q.token?.amount ?? null,
+          tx: { to: q.to, value: q.value, data: q.data, gas_limit: q.gas_limit, max_fee_per_gas: q.max_fee_per_gas, max_priority_fee_per_gas: q.max_priority_fee_per_gas },
+          replaces: q.replaces?.hash ?? null, replacement_kind: q.replaces?.kind ?? null }), ...history];
         return pending.hash as T;
       }
       case "receipt": {
         await sleep(200);
         if (pending && pending.hash === a.hash && ++pending.polls < 2) return { mined: false, success: false, block: 0 } as T;
+        // the stuck preview transaction stays stuck (so its speed-up wins the race)
+        if (history.some((x) => x.hash === a.hash && x.status === "pending") && !(pending && pending.hash === a.hash)) return { mined: false, success: false, block: 0 } as T;
         return { mined: true, success: true, block: 20511299 } as T;
       }
       case "history_list": return history as T;
-      case "history_mark": history = history.map((h) => h.hash === a.hash ? { ...h, status: a.status as HistoryEntry["status"], block: a.block as number } : h); return history as T;
+      case "history_mark": {
+        const target = history.find((h) => h.hash === a.hash);
+        history = history.map((h) => h.hash === a.hash ? { ...h, status: a.status as HistoryEntry["status"], block: a.block as number }
+          : target && h.kind === "out" && h.status === "pending" && h.chain_id === target.chain_id && h.nonce === target.nonce && a.status !== "pending" ? { ...h, status: "dropped" } : h);
+        return history as T;
+      }
       case "history_add_incoming": return history as T;
-      case "spot_usd": await sleep(200); return (a.symbol === "POL" ? 0.21 : 2451.37) as T;
+      case "history_reconcile": await sleep(200); return history as T;
+      case "replacement_quote": {
+        await sleep(600);
+        const e = history.find((x) => x.hash === a.hash);
+        if (!e || e.status !== "pending") throw "this transaction is no longer pending (confirmed)";
+        const cancel = a.kind === "cancel";
+        if (!cancel && !e.tx) throw "this transaction was sent before this app kept its details, so it can only be cancelled";
+        const c = e.chain_id;
+        return { chain_id: "0x" + c.toString(16), nonce: "0x" + (e.nonce ?? 0).toString(16), max_priority_fee_per_gas: "0x1312d0", max_fee_per_gas: "0x47868c00", gas_limit: "0x5208",
+          to: cancel ? ADDRESS.toLowerCase() : e.tx!.to, value: cancel ? "0x0" : e.tx!.value, data: "0x", amount_eth: cancel ? "0" : e.amount_eth, max_fee_eth: "0.0000252", total_eth: cancel ? "0.0000252" : (Number(e.amount_eth) + 0.0000252).toFixed(8),
+          balance_eth: BAL[c] ?? "0", network: c === 8453 ? "Base" : "Ethereum Mainnet", token: null,
+          replaces: { hash: e.hash!, kind: a.kind, previous_max_fee_per_gas: e.tx?.max_fee_per_gas ?? "0x3b9aca00", previous_max_priority_fee_per_gas: e.tx?.max_priority_fee_per_gas ?? "0xf4240" } } as T;
+      }
+      case "spot_usd": await sleep(200); return (a.symbol === "POL" ? 0.21 : a.symbol === "BTC" ? 61234.5 : 2451.37) as T;
+      case "prices_usd": await sleep(200); return { ETH: 2451.37, POL: 0.21, BTC: 61234.5 } as T;
+      case "watch_configure": return undefined as T;
+      case "watch_scan_status": return [
+        { chain_id: 8453, from_block: 20502300, to_block: 20511298, error: null },
+        { chain_id: 42161, from_block: null, to_block: null, error: "node refused eth_getLogs: Archive requests require a personal token" },
+      ] as T;
+      case "nft_list": return nfts.filter((n) => n.chain_id === Number(a.chainId)) as T;
+      case "nft_scan": {
+        await sleep(1200); const c = chainOf(a.rpcUrl);
+        if (c === 1) return { chain_id: c, nfts: [], from_block: null, to_block: null, error: "this node only answers log searches for specific contracts (\"Please specify an address in your request\")" } as T;
+        return { chain_id: c, nfts: nfts.filter((n) => n.chain_id === c), from_block: 20502300, to_block: 20511298, error: null } as T;
+      }
+      case "nft_add_contract": {
+        await sleep(900); const c = chainOf(a.rpcUrl);
+        const n: Nft = { chain_id: c, contract: String(a.contract), token_id: "77", name: "Field Notes", symbol: "NOTE", owned: true, checked_at: now };
+        nfts = [...nfts, n];
+        return { chain_id: c, nfts: nfts.filter((x) => x.chain_id === c), from_block: 20502300, to_block: 20511298, error: null } as T;
+      }
+      case "nft_metadata": {
+        await sleep(700);
+        const i = nfts.findIndex((n) => n.contract === a.contract && n.token_id === a.tokenId);
+        return { name: `${nfts[i]?.name ?? "Token"} #${a.tokenId}`, description: "Preview artwork.", image: art((i * 97 + 150) % 360, String(a.tokenId)), error: null } as T;
+      }
       // ERC-20 (preview): a few entries shaped like the built-in list
       case "token_list": return MOCK_TOKENS as T;
       case "token_balances": {
@@ -163,5 +234,9 @@ export function createMock(): Mock {
     throw `preview: no mock for ${cmd}`;
   }
 
-  return { invoke, onProgress: (cb) => { listeners.add(cb); return () => listeners.delete(cb); } };
+  return {
+    invoke,
+    onProgress: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
+    onEvent: (name, cb) => { if (!events.has(name)) events.set(name, new Set()); events.get(name)!.add(cb); return () => events.get(name)?.delete(cb); },
+  };
 }
