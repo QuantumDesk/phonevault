@@ -43,6 +43,8 @@ async fn device_status() -> CmdResult<Status> {
 }
 
 fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
+    // One conversation with the phone at a time: wait for any other request to finish.
+    let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     let mut session = aoa::Session::connect().map_err(|e| e.to_string())?;
     session.exchange(&request, timeout).map_err(|e| e.to_string())
 }

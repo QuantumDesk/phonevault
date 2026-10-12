@@ -111,6 +111,8 @@ export function createMock(): Mock {
       case "sign_start": {
         const t = String(a.ticket); cancelled = false;
         const q = a.quote as { to: string; amount_eth: string; chain_id: string };
+        // ?phonebusy=1: the phone is answering another request first (queued, not an error)
+        if (params.get("phonebusy")) { await sleep(50); emit(t, "waiting"); for (let i = 0; i < 60; i++) { await sleep(100); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: false }; } }
         emit(t, "connecting"); await sleep(900);
         if (outcome === "nophone") throw { kind: "no_phone", message: "no Android device on USB", delivered: false };
         emit(t, "delivered");

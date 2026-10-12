@@ -382,7 +382,7 @@ async function switchChain(it: Item, chain: number, inSession: boolean) {
 
 async function cancel(it: Item) {
   it.cancelling = true; render();
-  try { await api.signCancel(); } catch { /* the command result says */ }
+  try { if (it.ticket) await api.signCancel(it.ticket); } catch { /* the command result says */ }
 }
 
 onProgress((ticket, stage) => {

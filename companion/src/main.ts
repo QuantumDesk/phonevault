@@ -454,7 +454,7 @@ type Flow =
   | { s: "form" }
   | { s: "quoting" }
   | { s: "review"; quote: Quote }
-  | { s: "connecting"; quote: Quote; ticket: string; t0: number; cancelling?: boolean }
+  | { s: "connecting"; quote: Quote; ticket: string; t0: number; cancelling?: boolean; waiting?: boolean }
   | { s: "on_phone"; quote: Quote; ticket: string; t0: number; cancelling?: boolean }
   | { s: "verifying"; quote: Quote; ticket: string }
   | { s: "failed"; quote: Quote; err: SendError }
@@ -609,6 +609,8 @@ function flowBody(): Node {
       );
     }
     case "connecting":
+      if (flow.waiting) return statusCard("connecting", "Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
+        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
       return statusCard("connecting", "Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
         [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
     case "on_phone":
@@ -796,12 +798,14 @@ async function sendToPhone(quote: Quote) {
   activeTicket = ticket;
   setFlow({ s: "connecting", quote, ticket, t0: Date.now() });
   // Last-resort UI watchdog: the Rust side already bounds each phase; this only guards the UI.
-  const watchdog = window.setTimeout(() => {
-    if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone")) {
-      api.signCancel().catch(() => {});
+  // Time spent queued behind another request on the phone does not count (each phase resets t0).
+  const watchdog = window.setInterval(() => {
+    if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone") && !(flow.s === "connecting" && flow.waiting)
+      && Date.now() - flow.t0 > REVIEW_LIMIT_MS + 90_000) {
+      api.signCancel(ticket).catch(() => {});
       setFlow({ s: "failed", quote, err: { kind: "timeout", message: "no result from the USB session", delivered: flow.s === "on_phone" } });
     }
-  }, REVIEW_LIMIT_MS + 90_000);
+  }, 5000);
   try {
     const signed = await api.signStart(ticket, quote);
     // A verified signature is always shown if this attempt is still the current one, even if
@@ -812,7 +816,7 @@ async function sendToPhone(quote: Quote) {
     const err = asSendError(e);
     if (err.kind === "attestation") refreshCachedDevice();
     setFlow({ s: "failed", quote, err });
-  } finally { clearTimeout(watchdog); }
+  } finally { clearInterval(watchdog); }
 }
 
 function asSendError(e: unknown): SendError {
@@ -824,7 +828,7 @@ async function cancelSign() {
   if (flow.s !== "connecting" && flow.s !== "on_phone") return;
   const ticket = flow.ticket;
   setFlow({ ...flow, cancelling: true });
-  try { await api.signCancel(); } catch { /* the command result will say */ }
+  try { await api.signCancel(ticket); } catch { /* the command result will say */ }
   // The Rust side answers within a few seconds; if it can't (e.g. mid USB switch), stop waiting.
   setTimeout(() => {
     if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone")) setFlow({ s: "failed", quote: flow.quote, err: { kind: "cancelled", message: "cancelled on this Mac", delivered: flow.s === "on_phone" } });
@@ -833,7 +837,9 @@ async function cancelSign() {
 
 onProgress((ticket, stage) => {
   if (ticket !== activeTicket) return;
-  if (stage === "delivered" && flow.s === "connecting") setFlow({ s: "on_phone", quote: flow.quote, ticket, t0: Date.now(), cancelling: flow.cancelling });
+  if (stage === "waiting" && flow.s === "connecting") setFlow({ ...flow, waiting: true });
+  else if (stage === "connecting" && flow.s === "connecting" && flow.waiting) setFlow({ ...flow, waiting: false, t0: Date.now() });
+  else if (stage === "delivered" && flow.s === "connecting") setFlow({ s: "on_phone", quote: flow.quote, ticket, t0: Date.now(), cancelling: flow.cancelling });
   else if (stage === "verifying" && flow.s === "on_phone") setFlow({ s: "verifying", quote: flow.quote, ticket });
 });
 

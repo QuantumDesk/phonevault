@@ -22,10 +22,11 @@ const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct VerifiedTx { raw: String, chain_id: u128, to: String, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent> }
 
+/// Requests in flight, by ticket: each can be cancelled on its own (a queued Send and a
+/// WalletConnect request may both be waiting for the phone).
 #[derive(Default)]
 pub struct SendState {
-    cancel: Arc<AtomicBool>,
-    busy: Arc<AtomicBool>,
+    cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     verified: Arc<Mutex<HashMap<String, VerifiedTx>>>,
 }
 
@@ -40,23 +41,32 @@ struct Progress { ticket: String, stage: &'static str }
 #[derive(Serialize)]
 pub struct Signed { hash: String, signer: String }
 
-/// Clears the busy flag however the command ends.
-struct BusyGuard(Arc<AtomicBool>);
-impl Drop for BusyGuard { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
+/// Forgets the ticket however the command ends.
+struct TicketGuard(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>, String);
+impl Drop for TicketGuard { fn drop(&mut self) { if let Ok(mut m) = self.0.lock() { m.remove(&self.1); } } }
 
 fn q(v: &str, what: &str) -> Result<u128, SendError> { verify::quantity(v).map_err(|e| fail("internal", format!("{what}: {e}"), false)) }
 
 #[tauri::command]
 pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, ticket: String, quote: Quote) -> Result<Signed, SendError> {
-    if state.busy.swap(true, Ordering::SeqCst) { return Err(fail("busy", "another request is already waiting for the phone", false)); }
-    let guard = BusyGuard(state.busy.clone());
-    state.cancel.store(false, Ordering::SeqCst);
-    let cancel = state.cancel.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut m = state.cancels.lock().map_err(|_| fail("internal", "state poisoned", false))?;
+        if m.contains_key(&ticket) { return Err(fail("busy", "this request is already running", false)); }
+        m.insert(ticket.clone(), cancel.clone());
+    }
+    let guard = TicketGuard(state.cancels.clone(), ticket.clone());
     let store = state.verified.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
         let emit = |stage: &'static str| { let _ = app.emit("send-progress", Progress { ticket: ticket.clone(), stage }); };
         let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", "not paired yet", false))?;
+        // Wait our turn with the phone (an identify, a device check or a dApp request may be on
+        // it): the UI shows "waiting for the phone" instead of failing with "USB busy".
+        let mut waited = false;
+        let _turn = aoa::take_turn(|| { waited = true; emit("waiting"); }, || cancel.load(Ordering::SeqCst))
+            .map_err(|_| fail("cancelled", aoa::CANCELLED, false))?;
+        if waited { emit("connecting"); }
         // The phone must have passed the device check in this connection (runs it if not yet).
         crate::attest::require_ok(&pinned).map_err(|m| {
             if m.starts_with("attestation:") { fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false) }
@@ -123,9 +133,14 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
     }).await.map_err(|e| fail("internal", e.to_string(), false))?
 }
 
-/// Stop waiting for the phone. The phone may still show the request; the user rejects it there.
+/// Stop waiting for the phone: one request by ticket, or every request in flight without one.
+/// The phone may still show the request; the user rejects it there.
 #[tauri::command]
-pub(crate) fn sign_cancel(state: State<'_, SendState>) { state.cancel.store(true, Ordering::SeqCst); }
+pub(crate) fn sign_cancel(state: State<'_, SendState>, ticket: Option<String>) {
+    if let Ok(m) = state.cancels.lock() {
+        for (t, c) in m.iter() { if ticket.as_deref().map_or(true, |x| x == t) { c.store(true, Ordering::SeqCst); } }
+    }
+}
 
 /// Broadcast a transaction this session verified, by hash. Records it in the local history.
 #[tauri::command]

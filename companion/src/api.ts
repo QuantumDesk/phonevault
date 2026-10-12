@@ -44,7 +44,7 @@ export interface Attestation {
 }
 /** Typed failure from sign_start. */
 export interface SendError { kind: string; message: string; delivered: boolean }
-export type Stage = "connecting" | "delivered" | "verifying";
+export type Stage = "waiting" | "connecting" | "delivered" | "verifying";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -65,7 +65,8 @@ export const api = {
   wallet: (rpcUrl: string) => call<Wallet>("wallet", { rpcUrl }),
   quote: (rpcUrl: string, to: string, amountEth: string) => call<Quote>("quote", { rpcUrl, to, amountEth }),
   signStart: (ticket: string, quote: Quote) => call<Signed>("sign_start", { ticket, quote }),
-  signCancel: () => call<void>("sign_cancel"),
+  /** Cancel one request by ticket, or every request in flight. */
+  signCancel: (ticket?: string) => call<void>("sign_cancel", { ticket: ticket ?? null }),
   broadcast: (rpcUrl: string, hash: string) => call<string>("broadcast_verified", { rpcUrl, hash }),
   receipt: (rpcUrl: string, hash: string) => call<Receipt>("receipt", { rpcUrl, hash }),
   feeEstimate: (rpcUrl: string) => call<FeeEstimate>("fee_estimate", { rpcUrl }),

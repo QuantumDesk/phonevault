@@ -202,6 +202,8 @@ fn cached() -> Option<Report> {
 
 /// Ask the phone on USB for a fresh attestation and verify it.
 pub fn run(allow_dev: bool) -> Result<Report, String> {
+    // Queue behind any other request on the phone (re-entrant when a send already holds the turn).
+    let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     if RUNNING.swap(true, Ordering::SeqCst) { return Err("a device check is already running".into()); }
     let _guard = RunGuard;
     let epoch = { let mut s = STATE.lock().map_err(|_| "state poisoned")?; s.allow_dev = allow_dev; s.epoch };
@@ -221,6 +223,9 @@ fn blocked(r: &Report) -> String { format!("attestation: {}", r.summary()) }
 /// Gate for every signing path: the phone on USB must have passed (GENUINE or DEVELOPMENT) for
 /// the pinned address in this connection; runs the check first if there is no current verdict.
 pub fn require_ok(pinned: &str) -> Result<Report, String> {
+    // Hold the phone while deciding, so a check another caller started finishes first and its
+    // verdict is used here instead of a second check.
+    let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     let report = match cached() { Some(r) => r, None => run(STATE.lock().map(|s| s.allow_dev).unwrap_or(false))? };
     if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
     match &report.address {
