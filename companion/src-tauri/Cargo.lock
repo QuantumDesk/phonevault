@@ -566,6 +566,7 @@ dependencies = [
  "dirs 5.0.1",
  "hex",
  "k256",
+ "libc",
  "rcgen",
  "reqwest 0.12.28",
  "ring",

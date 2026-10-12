@@ -36,6 +36,8 @@ tauri-plugin-notification = "2"
 x509-parser = "=0.18.1"
 ring = "=0.17.14"
 base64 = "=0.22.1"
+# Browser extension bridge: socket peer checks (getpeereid, LOCAL_PEERPID, proc_pidpath); already in the tree
+libc = "0.2"
 
 [dev-dependencies]
 # Test-only certificate chains under a throwaway test root (generated in memory per test run).

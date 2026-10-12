@@ -18,6 +18,8 @@ mod send;
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
 mod wc;
+// Browser extension: another dApp transport over native messaging; policy reuses wc.rs
+pub mod bridge;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -182,17 +184,22 @@ fn default_rpc() -> String { eth::DEFAULT_RPC.to_string() }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let browser_bridge = bridge::create();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
+        .manage(browser_bridge.clone())
+        .setup(move |app| { bridge::start(app.handle(), &browser_bridge); Ok(()) })
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
             signing::sign_message, signing::sign_typed_data,
             attest::attest_phone, attest::attestation_cached,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
-            wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare])
+            wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
+            bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
+            bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall])
         .run(tauri::generate_context!())
         .expect("error while running Phone Vault Companion");
 }
