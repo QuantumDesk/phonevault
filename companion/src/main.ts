@@ -180,8 +180,17 @@ function render() {
   // no pairing yet: the guided setup (it pairs as step 3)
   if (!status.paired && view !== "tool" && view !== "setup") { setupStart(setupHost); view = "setup"; }
   const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : view === "setup" ? setupView(setupHost) : toolView();
+  // Background refreshes (balances, prices, watcher, the clock) redraw the same screen: don't replay
+  // the entrance animation or jump the scroll position then — only animate a real screen change.
+  const sameScreen = view === lastRendered;
+  if (sameScreen) el.querySelectorAll(".fade").forEach((n) => n.classList.remove("fade"));
+  if (sameScreen && el.classList.contains("fade")) el.classList.remove("fade");
+  const y = main.scrollTop, wy = window.scrollY;
   main.replaceChildren(el);
+  if (sameScreen) { main.scrollTop = y; window.scrollTo(0, wy); }
+  lastRendered = view;
 }
+let lastRendered: View | null = null;
 
 // ------------------------------------------------------------------ home
 
@@ -432,8 +441,16 @@ async function identifyPhone() {
 }
 
 let noticeEl: HTMLElement | null = null;
+let noticeKey = "";
 function renderPhoneNotice() {
+  // Re-render the same notice in place without replaying its entrance animation.
+  const key = device.report?.verdict === "fail" && !failDismissed && view !== "pair" && view !== "setup"
+    ? `fail:${device.report?.headline ?? ""}`
+    : identity.s === "different" && !identity.dismissed && view !== "pair" ? `diff:${identity.address}` : "";
+  const replaying = !!noticeEl && key !== "" && key === noticeKey;
+  noticeKey = key;
   noticeEl?.remove(); noticeEl = null;
+  if (replaying) queueMicrotask(() => noticeEl?.classList.remove("fade"));
   if (device.report?.verdict === "fail" && !failDismissed && view !== "pair" && view !== "setup") {
     const close = () => { failDismissed = true; renderPhoneNotice(); };
     noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
