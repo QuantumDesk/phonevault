@@ -69,6 +69,25 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Counterparties of the transaction just signed, offered as "Save as contact" on its receipt. */
     private List<TransactionReview.Party> receiptParties;
     private volatile ApprovalDecision approvalDecision;
+    // --- accounts + passphrase wallet (AccountBook, AccountScreens). Published with credentials.
+    /** Non-secret description of the key in {@link #credentials}; set and cleared with it under stateLock. */
+    private volatile SigningAccount activeAccount;
+    /** Lowercase account-0 address of the STANDARD wallet: identity of the backup check and the saved account list. */
+    private volatile String walletId;
+    /** The standard wallet's accounts (persisted in the "accounts" preferences, bound to walletId). */
+    private AccountBook standardBook;
+    /** The open passphrase wallet's accounts, memory only; null while the standard wallet is active. */
+    private AccountBook passphraseBook;
+    private String passphraseFingerprint;
+    /**
+     * The open passphrase wallet's passphrase, held only so its other accounts can be derived
+     * without retyping. Never stored, never sent; zeroed on lock, close and destroy.
+     */
+    private char[] passphrase;
+    /** A passphrase is being typed or confirmed: USB requests wait and the ☰ menu hides. */
+    private volatile boolean passphraseEntry;
+    private AccountScreens accountScreens;
+    private static final String ACCOUNT_PREFS = "accounts", ACCOUNT_BOOK_KEY = "account_book_v1";
     private volatile boolean walletLoaded, backupVerified;
     private volatile String walletAddress;
     private volatile android.graphics.Bitmap walletQr;
@@ -196,7 +215,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * the screen to files/vault_dump.png for UI review. The release source set compiles a no-op,
      * so a release APK contains no screenshot code at all.
      */
-    boolean isSensitiveScreen() { return sensitive.active(); }
+    boolean isSensitiveScreen() { return sensitive.active() || (passphraseEntry && accountScreens != null && accountScreens.revealing()); }
 
     private void devDumpUi() { DevTools.dumpUi(this); }
 
@@ -204,6 +223,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!unlocked) { lock(); return; }
         if (approvalDecision != null) return; // use the explicit Reject action
         if (sensitive.active()) { hideBackup(); return; }
+        if (passphraseEntry) { endPassphraseEntry(); showHome(); return; }
         if ("wallet".equals(screenName)) lock();
         else showHome();
     }
@@ -510,6 +530,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private void wipeWalletForFailedPin() throws Exception {
         credentials = null;
+        activeAccount = null;
+        getSharedPreferences(ACCOUNT_PREFS, MODE_PRIVATE).edit().remove(ACCOUNT_BOOK_KEY).commit();
         vault.secureErase();
         backupCheck.clear();
         android.util.Log.w("Vault", "wallet erased after " + VaultPin.MAX_ATTEMPTS + " failed PIN attempts");
@@ -537,6 +559,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             session.incrementAndGet(); // invalidates any in-flight PIN op / load / regeneration
             unlocked = false;
             credentials = null;
+            clearPassphraseWallet(); // the passphrase never outlives the unlocked session
             // An un-activated candidate is discarded; a commit or a signing in progress holds
             // stateLock, so by now it has either finished (key dropped above) or never ran.
             replacement.reset();
@@ -588,6 +611,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         seedTimer = null;
         clearRestoreEntry(); // typed recovery words never outlive the unlocked session
         clearDice();
+        endPassphraseEntry(); // nor a typed passphrase
         firstRunPinFresh = false;
         restoreReplacing = false;
         restoreOverOp = -1;
@@ -730,6 +754,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             operational = false;
             unlocked = false;
             credentials = null;
+            clearPassphraseWallet();
             replacement.reset();
             sensitive.reset();
             cancelApproval();
@@ -832,6 +857,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** The menu is available on the ordinary unlocked screens: never over a PIN gate, a sensitive
      *  flow, an approval, or before a wallet exists. */
     private boolean menuAvailable() {
+        return accountScreensReady() && !passphraseEntry;
+    }
+
+    /** The account / passphrase screens work (the menu itself hides while a passphrase is typed). */
+    private boolean accountScreensReady() {
         return unlocked && operational && walletLoaded && !sensitive.active() && approvalDecision == null
                 && !replacementActive() && !restoreReplacing;
     }
@@ -843,6 +873,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("MENU", "Where to?", null);
         String current = screenName;
         action(root, "Wallet", "wallet".equals(current), () -> { if (menuAvailable()) showHome(); });
+        action(root, "Accounts", current.startsWith("account"), () -> { if (menuAvailable()) showAccounts(); });
+        action(root, passphraseBook != null ? "Passphrase wallet · open" : "Passphrase wallet", current.startsWith("passphrase"),
+                () -> { if (menuAvailable()) showPassphraseWallet(); });
         action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
         action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
         action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
@@ -878,9 +911,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             showLoading("Opening your wallet", "Verifying the wallet saved on this device…");
             return;
         }
-        LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Back up your wallet",
+        endPassphraseEntry();
+        SigningAccount account = activeAccount;
+        String accountName = account != null ? account.name : AccountBook.defaultName(0);
+        boolean passphraseWallet = account != null && account.passphrase;
+        LinearLayout root = page(passphraseWallet ? "PASSPHRASE WALLET · " + accountName : accountName,
+                !backupVerified ? "Back up your wallet" : passphraseWallet ? "Passphrase wallet" : "Your offline wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
                         : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
+        if (backupVerified && passphraseWallet) {
+            card(root, "Passphrase wallet · fingerprint " + account.fingerprint,
+                    "Opened with your passphrase. It is not saved: locking the phone closes it. Check the fingerprint is the one you expect.");
+        }
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
             box.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -892,12 +934,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             qlp.gravity = Gravity.CENTER_HORIZONTAL;
             qlp.setMargins(0, dp(4), 0, dp(18));
             box.addView(qrView, qlp);
-            box.addView(VaultTheme.bodyText(this, "ACCOUNT 1 · RECEIVE", 13, VaultTheme.FAINT));
+            box.addView(VaultTheme.bodyText(this, accountName.toUpperCase(java.util.Locale.ROOT)
+                    + (passphraseWallet ? " · PASSPHRASE" : "") + " · RECEIVE", 13, VaultTheme.FAINT));
             addressView = VaultTheme.monoText(this, formatAddress(
                     org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), largeText ? 18 : 16, VaultTheme.INK);
             addressView.setPadding(0, dp(12), 0, dp(8));
             box.addView(addressView);
             root.addView(box, matchWrap(dp(22)));
+            action(root, "Switch account", false, this::showAccounts);
             card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
         } else {
             card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
@@ -921,6 +965,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 : "Not checked yet. Receiving and signing stay paused until it is.");
         action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
         action(root, "Show recovery phrase", false, this::confirmRevealBackup);
+        card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
+        action(root, "Passphrase wallet", false, this::showPassphraseWallet);
         card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
         action(root, "Replace with a new wallet", false, this::confirmReplace);
         action(root, "Restore a different wallet", false, this::confirmRestoreOver);
@@ -1014,6 +1060,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
                     credentials = fresh;
+                    adoptNewWallet(fresh.getAddress());
                     walletAddress = address;
                     walletQr = qr;
                     backupVerified = false;
@@ -1047,7 +1094,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!walletLoaded || credentials == null) return;
         LinearLayout root = page("SECURITY / RESTORE", "Restore a different wallet?",
                 "You will type a 24-word recovery phrase on this phone. The wallet it produces REPLACES the current one on this device. Nothing changes until you confirm the address it shows.");
-        card(root, "Current Account 1", org.web3j.crypto.Keys.toChecksumAddress(walletAddress));
+        card(root, "Current Account 1", org.web3j.crypto.Keys.toChecksumAddress(walletId != null ? walletId : walletAddress));
         card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
         action(root, "Continue · verify PIN", true, () -> beginSensitive("restore a different wallet", () -> {
             int op;
@@ -1078,6 +1125,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     address = restored.getAddress();
                     backupCheck.record(address);
                     credentials = restored;
+                    adoptNewWallet(address);
                     walletAddress = address;
                     backupVerified = true;
                     walletLoaded = true;
@@ -1281,6 +1329,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     address = restored.getAddress();
                     backupCheck.record(address);
                     credentials = restored;
+                    adoptNewWallet(address);
                     walletAddress = address;
                     backupVerified = true;
                     walletLoaded = true;
@@ -1340,7 +1389,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 ? "StrongBox wrapping is required when loading. EVM signing runs in Android memory."
                 : "Development build permits software wrapping. EVM signing runs in Android memory.");
         card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
-        card(root, "Account path", "m/44'/60'/0'/0/0 · no passphrase");
+        SigningAccount shownAccount = activeAccount;
+        card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
+                : shownAccount.path() + (shownAccount.passphrase ? " · passphrase wallet " + shownAccount.fingerprint : " · no passphrase"));
         card(root, "PIN protection", credentialMode()
                 ? "Checked by the security chip (Titan M), which slows repeated guesses · "
                         + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs reset the phone · the seed key works only for "
@@ -1377,8 +1428,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
         String[][] items = {
             {"Change PIN", "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect until then."},
-            {"Multiple accounts", "Account discovery, explicit derivation paths, and watch-only export."},
-            {"Passphrase wallets", "A separate wallet for each exact passphrase. A typo creates a different wallet; recovery must be tested before release."},
+            {"Account discovery", "Finding used accounts automatically and watch-only export. Accounts and passphrase wallets themselves are in ☰ → Accounts and ☰ → Passphrase wallet."},
             {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
             {"Browser wallets", "MetaMask and other integrations need a supported adapter. This build does not impersonate Ledger or Trezor."},
             {"Typed-data signing", "Permission-aware EIP-712 review for permits, orders, and authentication. Unsupported signing requests remain refused."},
@@ -1511,7 +1561,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
                         backupRetried = false;
                         backupWords = words;
-                        backupIdentity = walletAddress;
+                        backupIdentity = walletId; // the backup covers the wallet: its account-0 identity
                         backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
                         startSeedTimer();
                         if (checkOnly) startWordCheck();
@@ -1664,7 +1714,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         cryptoExecutor.execute(() -> {
             try {
                 synchronized (stateLock) {
-                    if (!sensitiveValid(token, s) || credentials == null || !credentials.getAddress().equalsIgnoreCase(address)) return;
+                    if (!sensitiveValid(token, s) || credentials == null || address == null || !address.equalsIgnoreCase(walletId)) return;
                     backupCheck.record(address);
                     backupVerified = true;
                 }
@@ -1739,6 +1789,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     Credentials fresh = vault.commitReplacement(candidate.mnemonic);
                     backupCheck.record(fresh.getAddress());
                     credentials = fresh;
+                    adoptNewWallet(fresh.getAddress());
                     walletAddress = fresh.getAddress();
                     backupVerified = true;
                     walletLoaded = true;
@@ -1771,6 +1822,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         backupVerified = false;
         walletAddress = null;
         walletQr = null;
+        activeAccount = null;
+        walletId = null;
     }
 
     private void loadKey() {
@@ -1788,17 +1841,35 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     return;
                 }
                 if (credentialMode() && !store.credentialBound()) store.migrateToCredentialKey();
-                Credentials loaded = store.loadOrCreate();
-                String address = loaded.getAddress();
+                // The standard wallet's active account (saved list); one decrypt, like before.
+                // Unlock always opens the standard wallet: a passphrase wallet must be re-entered.
+                String savedBook = getSharedPreferences(ACCOUNT_PREFS, MODE_PRIVATE).getString(ACCOUNT_BOOK_KEY, null);
+                SeedVault.Derived derived = store.deriveAccount(AccountBook.storedActiveIndex(savedBook), null);
+                AccountBook book = AccountBook.load(savedBook, derived.account0Address);
+                if (book.activeIndex() != derived.index) derived = store.deriveAccount(book.activeIndex(), null);
+                String address = derived.credentials.getAddress();
+                if (!book.active().address.equalsIgnoreCase(address)) {
+                    // Saved metadata disagrees with the seed: start the list over at account 1.
+                    book = AccountBook.fresh(derived.account0Address);
+                    if (derived.index != 0) derived = store.deriveAccount(0, null);
+                    address = derived.credentials.getAddress();
+                }
+                final Credentials loaded = derived.credentials;
+                final AccountBook loadedBook = book;
                 android.graphics.Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
                     credentials = loaded;
+                    clearPassphraseWallet();
+                    walletId = derived.account0Address;
+                    standardBook = loadedBook;
+                    activeAccount = new SigningAccount(loadedBook.activeIndex(), loadedBook.active().name(), false, derived.fingerprint, address);
                     walletAddress = address;
                     walletQr = qr;
-                    backupVerified = backupCheck.verified(address);
+                    backupVerified = backupCheck.verified(walletId);
                     walletLoaded = true;
                 }
+                saveStandardBook(loadedBook);
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     silentUnlockAttempt = false;
@@ -1938,6 +2009,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 sendError(source, id, "Wallet is not ready: unlock and complete the backup check first");
                 return;
             }
+            if (passphraseEntry || activeAccount == null) {
+                sendError(source, id, "Wallet is not ready: finish choosing the account on the phone, then try again");
+                return;
+            }
         }
         if ("getAddress".equals(json.optString("method"))) {
             try {
@@ -1945,7 +2020,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 id = Eip1559Request.validatedId(json.getString("id"));
                 synchronized (stateLock) {
                     if (s != session.get() || source != transport || !unlocked || !backupVerified || sensitive.active()) return;
-                    source.send(json("id", id, "status", "ok", "address", credentials.getAddress()));
+                    SigningAccount account = activeAccount;
+                    if (credentials == null || account == null || !account.address.equalsIgnoreCase(credentials.getAddress())) {
+                        throw new IllegalStateException("Wallet is not ready: finish choosing the account on the phone");
+                    }
+                    // The ACTIVE account, plus which one it is (1-based number, standard/passphrase)
+                    // so the companion can label its pairing. No label, no fingerprint, no passphrase.
+                    source.send(json("id", id, "status", "ok", "address", credentials.getAddress(),
+                            "account", account.accountNumber(), "wallet", account.walletKind()));
                 }
             } catch (Exception e) { sendError(source, id, e.getMessage()); }
             return;
@@ -1964,14 +2046,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             approvalDecision = decision;
         }
         try {
+            // The ACTIVE account signs: key and its description are read together.
+            final Credentials signer;
+            final SigningAccount account;
+            synchronized (stateLock) { signer = credentials; account = activeAccount; }
+            if (signer == null || account == null || !account.address.equalsIgnoreCase(signer.getAddress())) {
+                throw new IllegalStateException("Wallet is not ready: finish choosing the account on the phone");
+            }
             if (MessageRequest.handles(json.optString("method"))) {
                 // Parsed once: the review and the digest both come from this object.
-                MessageApprovalSession approval = new MessageApprovalSession(MessageRequest.parse(json), credentials);
+                MessageRequest message = MessageRequest.parse(json);
+                RequestRefusal.requireFrom(message.from, account.headline(), account.address);
+                MessageApprovalSession approval = new MessageApprovalSession(message, signer);
+                approval.signingAs = account;
                 runOnUiThread(() -> showMessageApproval(source, approval, decision, s));
                 return;
             }
             Eip1559Request request = Eip1559Request.parse(json);
-            ApprovalSession approval = new ApprovalSession(request, credentials, tokens(), safety());
+            RequestRefusal.requireFrom(request.from, account.headline(), account.address);
+            ApprovalSession approval = new ApprovalSession(request, signer, tokens(), safety());
+            approval.signingAs = account;
             runOnUiThread(() -> showApproval(source, approval, decision, s));
         } catch (Exception e) {
             finishApproval(decision);
@@ -2075,6 +2169,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
+        if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
         for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
         LinearLayout raw = new LinearLayout(this);
         raw.setOrientation(LinearLayout.VERTICAL);
@@ -2213,6 +2308,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
+        if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
         for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
         LinearLayout raw = new LinearLayout(this);
         raw.setOrientation(LinearLayout.VERTICAL);
@@ -2265,6 +2361,310 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         row.addView(valueView);
         SafetyScreens.style(this, row, label, valueView, value);
         return row;
+    }
+
+    // ------------------------------------------------------------------ accounts + passphrase wallet
+    //
+    // One private key in memory, as before: the ACTIVE account's (credentials). Switching derives
+    // the new account from the seed inside the PIN window (withSeedKey → VaultKeyStore.deriveAccount,
+    // one decrypt) and replaces credentials under stateLock, like unlock does. The passphrase lives
+    // only in `passphrase` (char[]) while its wallet is open, and is zeroed on lock / close.
+
+    /** A typed passphrase handed over by "Use this wallet", until its wallet is open. Zeroed on lock. */
+    private char[] pendingPassphrase;
+
+    private AccountBook currentBook() { return passphraseBook != null ? passphraseBook : standardBook; }
+
+    /** Zero and forget the passphrase wallet. Call under stateLock (or where nothing else runs). */
+    private void clearPassphraseWallet() {
+        if (passphrase != null) java.util.Arrays.fill(passphrase, '\0');
+        if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0');
+        passphrase = null;
+        pendingPassphrase = null;
+        passphraseBook = null;
+        passphraseFingerprint = null;
+    }
+
+    /** Leave passphrase typing: the screen buffer is overwritten, USB requests are answered again. */
+    private void endPassphraseEntry() {
+        passphraseEntry = false;
+        if (accountScreens != null) accountScreens.clear();
+    }
+
+    private void saveStandardBook(AccountBook book) {
+        if (book == null) return;
+        if (!getSharedPreferences(ACCOUNT_PREFS, MODE_PRIVATE).edit().putString(ACCOUNT_BOOK_KEY, book.encode()).commit()) {
+            android.util.Log.w("Vault", "account list not saved (it is rebuilt from the seed on demand)");
+        }
+    }
+
+    /** A wallet was created, restored or replaced: its account 1 is active and the list starts over. Under stateLock. */
+    private void adoptNewWallet(String account0Address) {
+        clearPassphraseWallet();
+        walletId = account0Address.toLowerCase(java.util.Locale.ROOT);
+        standardBook = AccountBook.fresh(walletId);
+        activeAccount = new SigningAccount(0, standardBook.active().name(), false, null, walletId);
+        saveStandardBook(standardBook);
+    }
+
+    private void showAccounts() {
+        if (!accountScreensReady()) return;
+        if (!backupVerified) { showInfo("Check your backup first", "Accounts open after the backup spot-check, like receiving and signing.", this::showHome); return; }
+        accountScreens().showAccounts();
+    }
+
+    private void showPassphraseWallet() {
+        if (!accountScreensReady()) return;
+        if (!backupVerified) { showInfo("Check your backup first", "A passphrase wallet opens after the backup spot-check of your 24 words.", this::showHome); return; }
+        accountScreens().showPassphraseIntro();
+    }
+
+    /** Derive {@code index} of the open wallet (adding it to the list when {@code add}) and make it the signing account. */
+    private void activateAccount(int index, boolean add) {
+        if (!accountScreensReady() || !backupVerified) return;
+        if (requestPending.get()) { showInfo("Finish the request first", "Approve or reject the request on screen before switching accounts.", this::showHome); return; }
+        withSeedKey("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, false));
+    }
+
+    private void deriveAndActivate(int index, boolean add, boolean retried) {
+        final int s = session.get();
+        final AccountBook book;
+        final String fingerprint;
+        synchronized (stateLock) { book = currentBook(); fingerprint = passphraseFingerprint; }
+        if (book == null || !unlocked) return;
+        final String name = book.get(index) != null ? book.get(index).name() : AccountBook.defaultName(index);
+        showLoading(add ? "Adding " + name : "Switching to " + name, "Deriving its address from your recovery phrase…");
+        cryptoExecutor.execute(() -> {
+            try {
+                String pass;
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked) return;
+                    if (currentBook() != book) throw new IllegalStateException("the wallet changed while switching");
+                    // web3j derives from a String passphrase: this copy is short-lived and unreferenced after derivation.
+                    pass = passphrase == null ? null : new String(passphrase);
+                }
+                if ((pass == null) != (fingerprint == null)) throw new IllegalStateException("the wallet changed while switching");
+                SeedVault.Derived d = vault.deriveAccount(index, pass);
+                pass = null;
+                String address = d.credentials.getAddress();
+                android.graphics.Bitmap qr = qrFor(address);
+                boolean switched = false;
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational) return;
+                    boolean sameWallet = currentBook() == book && (fingerprint != null
+                            ? fingerprint.equals(d.fingerprint) && fingerprint.equals(passphraseFingerprint)
+                            : d.account0Address.equals(walletId));
+                    if (!sameWallet) throw new IllegalStateException("the wallet changed while switching");
+                    if (!requestPending.get() && approvalDecision == null) {
+                        if (add && book.get(index) == null) book.add(index, address);
+                        book.select(index, address);
+                        credentials = d.credentials;
+                        activeAccount = new SigningAccount(index, book.active().name(), fingerprint != null, d.fingerprint, address);
+                        walletAddress = address;
+                        walletQr = qr;
+                        switched = true;
+                    }
+                }
+                if (switched && fingerprint == null) saveStandardBook(book);
+                final boolean done = switched;
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    if (approvalDecision != null) return; // the request's own screen is showing
+                    statusMessage = done ? "Now using " + name + (fingerprint != null ? " (passphrase wallet)" : "")
+                            : "Account not switched: a request arrived. Try again after it.";
+                    showHome();
+                    drainPendingUsb();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    if (authLapsed(e) && !retried) {
+                        lastCredentialConfirm = 0;
+                        confirmDevicePin("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, true), this::showHome);
+                        return;
+                    }
+                    android.util.Log.w("Vault", "account switch failed: " + chain(e));
+                    showInfo("Account not switched", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                });
+            }
+        });
+    }
+
+    /** Derive the passphrase wallet's identity (fingerprint, account 1) for the user to recognise. Keeps no key. */
+    private void previewPassphrase(char[] chars, AccountScreens.PreviewResult result) {
+        withSeedKey("Confirm your PIN to open the passphrase wallet", () -> previewWorker(chars, result, false));
+    }
+
+    private void previewWorker(char[] chars, AccountScreens.PreviewResult result, boolean retried) {
+        final int s = session.get();
+        if (!passphraseEntry || chars == null || chars.length == 0 || SeedVault.passphraseProblem(java.nio.CharBuffer.wrap(chars)) != null) return;
+        final String pass = new String(chars); // short-lived; web3j derives from a String
+        showLoading("Opening passphrase wallet", "Deriving its fingerprint and first address…");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (s != session.get() || !unlocked) return;
+                SeedVault.Derived d = vault.deriveAccount(0, pass);
+                final String fingerprint = d.fingerprint, account0 = d.account0Address;
+                runOnUiThread(() -> { if (s == session.get() && unlocked && passphraseEntry) result.preview(fingerprint, account0); });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    if (authLapsed(e) && !retried) {
+                        lastCredentialConfirm = 0;
+                        confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> previewWorker(chars, result, true), this::showHome);
+                        return;
+                    }
+                    android.util.Log.w("Vault", "passphrase preview failed: " + chain(e));
+                    showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. Lock and retry.", this::showHome);
+                });
+            }
+        });
+    }
+
+    /** "Use this wallet": takes ownership of {@code chars}. */
+    private void usePassphrase(char[] chars) {
+        synchronized (stateLock) {
+            if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0');
+            pendingPassphrase = chars;
+        }
+        withSeedKey("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(false));
+    }
+
+    private void openPassphraseWallet(boolean retried) {
+        final int s = session.get();
+        final String pass;
+        synchronized (stateLock) {
+            if (pendingPassphrase == null || !unlocked) return;
+            pass = new String(pendingPassphrase); // short-lived; web3j derives from a String
+        }
+        showLoading("Opening passphrase wallet", "Deriving Account 1…");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (s != session.get() || !unlocked) return;
+                SeedVault.Derived d = vault.deriveAccount(0, pass);
+                String address = d.credentials.getAddress();
+                android.graphics.Bitmap qr = qrFor(address);
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational || pendingPassphrase == null) return;
+                    if (requestPending.get() || approvalDecision != null) throw new IllegalStateException("a request arrived; try again after it");
+                    if (passphrase != null) java.util.Arrays.fill(passphrase, '\0');
+                    passphrase = pendingPassphrase;
+                    pendingPassphrase = null;
+                    passphraseFingerprint = d.fingerprint;
+                    passphraseBook = AccountBook.fresh(d.account0Address);
+                    credentials = d.credentials;
+                    activeAccount = new SigningAccount(0, passphraseBook.active().name(), true, d.fingerprint, address);
+                    walletAddress = address;
+                    walletQr = qr;
+                }
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    endPassphraseEntry();
+                    statusMessage = "Passphrase wallet open · fingerprint " + d.fingerprint + " · closes when the phone locks";
+                    showHome();
+                    drainPendingUsb();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    if (authLapsed(e) && !retried) {
+                        lastCredentialConfirm = 0;
+                        confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(true),
+                                () -> { synchronized (stateLock) { if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; } endPassphraseEntry(); showHome(); });
+                        return;
+                    }
+                    synchronized (stateLock) { if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; }
+                    endPassphraseEntry();
+                    android.util.Log.w("Vault", "passphrase wallet open failed: " + chain(e));
+                    showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                });
+            }
+        });
+    }
+
+    /** Back to the standard wallet's active account; the passphrase is zeroed. */
+    private void closePassphraseWallet() {
+        if (!accountScreensReady()) return;
+        withSeedKey("Confirm your PIN to return to the standard wallet", () -> closePassphraseWorker(false));
+    }
+
+    private void closePassphraseWorker(boolean retried) {
+        final int s = session.get();
+        final AccountBook book = standardBook;
+        if (book == null || passphraseBook == null) { showHome(); return; }
+        showLoading("Closing passphrase wallet", "Returning to the standard wallet…");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (s != session.get() || !unlocked) return;
+                SeedVault.Derived d = vault.deriveAccount(book.activeIndex(), null);
+                String address = d.credentials.getAddress();
+                android.graphics.Bitmap qr = qrFor(address);
+                synchronized (stateLock) {
+                    if (s != session.get() || !unlocked || !operational) return;
+                    if (!d.account0Address.equals(walletId) || !book.active().address.equalsIgnoreCase(address)) throw new IllegalStateException("the standard wallet did not match its saved account list");
+                    if (requestPending.get() || approvalDecision != null) throw new IllegalStateException("a request arrived; try again after it");
+                    clearPassphraseWallet();
+                    credentials = d.credentials;
+                    activeAccount = new SigningAccount(book.activeIndex(), book.active().name(), false, d.fingerprint, address);
+                    walletAddress = address;
+                    walletQr = qr;
+                }
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    statusMessage = "Passphrase wallet closed · back to the standard wallet";
+                    showHome();
+                    drainPendingUsb();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked) return;
+                    if (authLapsed(e) && !retried) {
+                        lastCredentialConfirm = 0;
+                        confirmDevicePin("Confirm your PIN to return to the standard wallet", () -> closePassphraseWorker(true), this::showHome);
+                        return;
+                    }
+                    showInfo("Still in the passphrase wallet", "Locking the phone always closes it. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                });
+            }
+        });
+    }
+
+    private AccountScreens accountScreens() {
+        if (accountScreens == null) {
+            final MainActivity activity = this;
+            accountScreens = new AccountScreens(new AccountScreens.Host() {
+                @Override public Context context() { return activity; }
+                @Override public LinearLayout page(String eyebrow, String title, String description) { return activity.page(eyebrow, title, description); }
+                @Override public void present(LinearLayout root, String screen) { activity.present(root, screen); }
+                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { activity.action(parent, label, primary, run); }
+                @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
+                @Override public boolean ready() { return accountScreensReady() && backupVerified; }
+                @Override public void showHome() { endPassphraseEntry(); activity.showHome(); }
+                @Override public float bodySize() { return activity.bodySize(); }
+                @Override public void harden(View view) { hardenTouch(view); }
+                @Override public int dp(int value) { return activity.dp(value); }
+                @Override public AccountBook book() { return currentBook(); }
+                @Override public String passphraseFingerprint() { return passphraseFingerprint; }
+                @Override public SigningAccount active() { return activeAccount; }
+                @Override public void activate(int index, boolean add) { activateAccount(index, add); }
+                @Override public void bookChanged() {
+                    // Labels change the name shown everywhere; the passphrase wallet's list stays in memory.
+                    synchronized (stateLock) {
+                        AccountBook book = currentBook();
+                        SigningAccount a = activeAccount;
+                        if (book != null && a != null && book.get(a.index) != null) {
+                            activeAccount = new SigningAccount(a.index, book.get(a.index).name(), a.passphrase, a.fingerprint, a.address);
+                        }
+                    }
+                    if (passphraseBook == null) saveStandardBook(standardBook);
+                }
+                @Override public void previewPassphrase(char[] chars, AccountScreens.PreviewResult result) { activity.previewPassphrase(chars, result); }
+                @Override public void usePassphrase(char[] chars) { activity.usePassphrase(chars); }
+                @Override public void closePassphrase() { closePassphraseWallet(); }
+                @Override public void entryActive(boolean active) { passphraseEntry = active; }
+            });
+        }
+        return accountScreens;
     }
 
     /** The phone's address book and recipient history (app-private files); see AddressSafety. */
@@ -2326,6 +2726,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             unlocked = false;
             operational = false;
             credentials = null;
+            clearPassphraseWallet();
             cancelApproval();
             sensitive.reset();
             if (transport != null) transport.close();

@@ -164,10 +164,8 @@ final class SeedVault {
 
     /** Re-derive the EVM key for a backed-up mnemonic (recovery / additional accounts). */
     static Credentials deriveEvm(String mnemonic, String passphrase, int accountIndex) {
-        if (!MnemonicUtils.validateMnemonic(mnemonic)) {
-            throw new IllegalArgumentException("Invalid BIP39 mnemonic");
-        }
-        byte[] seed = MnemonicUtils.generateSeed(mnemonic, passphrase == null ? "" : passphrase);
+        if (accountIndex < 0) throw new IllegalArgumentException("accountIndex must be >= 0");
+        byte[] seed = bip39Seed(mnemonic, passphrase);
         try {
             Bip32ECKeyPair master = Bip32ECKeyPair.generateKeyPair(seed);
             int[] path = {44 | HARDENED, 60 | HARDENED, 0 | HARDENED, 0, accountIndex};
@@ -176,6 +174,91 @@ final class SeedVault {
         } finally {
             Arrays.fill(seed, (byte) 0); // the BIP39 seed; web3j keeps the private key as BigInteger
         }
+    }
+
+    /** Highest account index the phone derives (m/44'/60'/0'/0/0 … /MAX_ACCOUNT_INDEX). */
+    static final int MAX_ACCOUNT_INDEX = 19;
+    /** Longest BIP-39 passphrase the on-phone keyboard accepts. */
+    static final int MAX_PASSPHRASE_LENGTH = 100;
+
+    /**
+     * BIP-39 seed: PBKDF2-HMAC-SHA512(mnemonic, "mnemonic" ‖ NFKD(passphrase), 2048). The caller
+     * zeroes the returned array. An empty passphrase is the standard (no-passphrase) wallet.
+     */
+    static byte[] bip39Seed(String mnemonic, String passphrase) {
+        if (mnemonic == null || !MnemonicUtils.validateMnemonic(mnemonic)) {
+            throw new IllegalArgumentException("Invalid BIP39 mnemonic");
+        }
+        String normalized = passphrase == null ? ""
+                : java.text.Normalizer.normalize(passphrase, java.text.Normalizer.Form.NFKD);
+        return MnemonicUtils.generateSeed(mnemonic, normalized);
+    }
+
+    /**
+     * BIP-32 master key fingerprint: the first 4 bytes of HASH160(compressed master public key),
+     * as 8 uppercase hex characters — the same "master fingerprint" other wallets show for a
+     * passphrase wallet, so the user can recognise it. Not secret; reveals nothing about the key.
+     */
+    static String masterFingerprint(byte[] seed) {
+        Bip32ECKeyPair master = Bip32ECKeyPair.generateKeyPair(seed);
+        byte[] pub = master.getPublicKeyPoint().getEncoded(true);
+        byte[] id = org.web3j.crypto.Hash.sha256hash160(pub);
+        StringBuilder out = new StringBuilder(8);
+        for (int i = 0; i < 4; i++) out.append(String.format(java.util.Locale.ROOT, "%02X", id[i] & 0xFF));
+        return out.toString();
+    }
+
+    /** One account of a wallet: its key, plus the wallet's identity (account-0 address, fingerprint). */
+    static final class Derived {
+        final Credentials credentials;
+        final int index;
+        /** Lowercase account-0 address of this (passphrase) wallet: its stable identity. */
+        final String account0Address;
+        /** {@link #masterFingerprint} of this wallet's seed. */
+        final String fingerprint;
+
+        Derived(Credentials credentials, int index, String account0Address, String fingerprint) {
+            this.credentials = credentials;
+            this.index = index;
+            this.account0Address = account0Address;
+            this.fingerprint = fingerprint;
+        }
+    }
+
+    /**
+     * Derive account {@code index} (m/44'/60'/0'/0/index) of the wallet the mnemonic and optional
+     * passphrase define, plus that wallet's identity. Only the requested account's key is returned;
+     * the account-0 key is derived transiently to name the wallet (its address) and dropped.
+     */
+    static Derived deriveAccount(String mnemonic, String passphrase, int index) {
+        if (index < 0 || index > MAX_ACCOUNT_INDEX) throw new IllegalArgumentException("account index out of range");
+        byte[] seed = bip39Seed(mnemonic, passphrase);
+        try {
+            Bip32ECKeyPair master = Bip32ECKeyPair.generateKeyPair(seed);
+            String fingerprint = masterFingerprint(seed);
+            int[] parentPath = {44 | HARDENED, 60 | HARDENED, 0 | HARDENED, 0};
+            Bip32ECKeyPair parent = Bip32ECKeyPair.deriveKeyPair(master, parentPath);
+            Credentials active = Credentials.create(Bip32ECKeyPair.deriveKeyPair(parent, new int[] {index}));
+            String account0 = index == 0 ? active.getAddress()
+                    : Credentials.create(Bip32ECKeyPair.deriveKeyPair(parent, new int[] {0})).getAddress();
+            return new Derived(active, index, account0.toLowerCase(java.util.Locale.ROOT), fingerprint);
+        } finally {
+            Arrays.fill(seed, (byte) 0);
+        }
+    }
+
+    /**
+     * Why a typed passphrase cannot be used, or null. Printable ASCII only (what the phone's own
+     * keyboard types, so the same passphrase is typeable on any other wallet), 1–100 characters.
+     */
+    static String passphraseProblem(CharSequence passphrase) {
+        if (passphrase == null || passphrase.length() == 0) return "Type a passphrase first";
+        if (passphrase.length() > MAX_PASSPHRASE_LENGTH) return "Passphrase is longer than " + MAX_PASSPHRASE_LENGTH + " characters";
+        for (int i = 0; i < passphrase.length(); i++) {
+            char c = passphrase.charAt(i);
+            if (c < 0x20 || c > 0x7E) return "Passphrase may only use the characters on this keyboard";
+        }
+        return null;
     }
 
     /**

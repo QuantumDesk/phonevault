@@ -21,6 +21,8 @@ final class MessageApprovalSession {
     private final byte[] digest;
     private final Credentials reviewedCredentials;
     private final String reviewedAddress;
+    /** Which account (of which wallet) the reviewed key is, for the "Signing with" row. Display only. */
+    SigningAccount signingAs;
 
     MessageApprovalSession(MessageRequest request, Credentials credentials) {
         if (request == null || credentials == null) {
@@ -44,6 +46,9 @@ final class MessageApprovalSession {
                 || !reviewedAddress.equals(currentCredentials.getAddress().toLowerCase(Locale.ROOT))) {
             throw new IllegalStateException(
                     "Signing identity changed after review; request must be reviewed again");
+        }
+        if (request.from != null && !request.from.equals(reviewedAddress)) {
+            throw new IllegalStateException("Request is for another account; switch accounts on the phone");
         }
         return sign(request.id, digest, reviewedCredentials);
     }

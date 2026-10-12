@@ -312,11 +312,20 @@ def validate_response(request, response, expected_signer=None):
             raise ValueError("Phone returned a malformed error response")
         return
     if request.get("method") == "getAddress":
-        if set(response) != {"id", "status", "address"} or status != "ok":
+        # Phones with multiple accounts also say which account is active ("account": "1".."20",
+        # "wallet": "standard" | "passphrase"); older apps send only the address.
+        if set(response) not in ({"id", "status", "address"},
+                                 {"id", "status", "address", "account", "wallet"}) or status != "ok":
             raise ValueError("Phone returned a malformed address response")
         if not isinstance(response["address"], str) or not re.fullmatch(
                 r"0x[0-9a-fA-F]{40}", response["address"]):
             raise ValueError("Phone returned an invalid signer address")
+        if "account" in response and (
+                not isinstance(response["account"], str)
+                or not re.fullmatch(r"[1-9][0-9]?", response["account"])
+                or int(response["account"]) > 20
+                or response["wallet"] not in ("standard", "passphrase")):
+            raise ValueError("Phone returned a malformed account description")
         return
     if request.get("method") != "signEip1559":
         raise ValueError("Cannot validate response for an unsupported request method")

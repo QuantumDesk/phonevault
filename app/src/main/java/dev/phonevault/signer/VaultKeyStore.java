@@ -84,6 +84,20 @@ final class VaultKeyStore {
         return generateAndStore(new byte[0]);
     }
 
+    /**
+     * Derive account {@code index} of the stored wallet, under {@code passphrase} (null or empty:
+     * the standard wallet). One decrypt of the record with the seed key, so it runs inside the
+     * same PIN window as {@link #loadOrCreate}. Only that account's key is returned; the passphrase
+     * is neither stored nor kept here.
+     */
+    synchronized SeedVault.Derived deriveAccount(int index, String passphrase) throws Exception {
+        ensureWrappingKey();
+        enforceSecureHardwarePolicy();
+        WalletRecord record = persistence.load();
+        if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
+        return SeedVault.deriveAccount(decrypt(record), passphrase, index);
+    }
+
     /** Authoritative identity from disk after an uncertain commit. Throws if none verifies. */
     synchronized Credentials reconcile() throws Exception {
         ensureWrappingKey();

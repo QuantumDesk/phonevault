@@ -46,6 +46,12 @@ final class Eip1559Request {
     final NftCall nftCall;
     /** The decoded router call for {@link Kind#SWAP}; otherwise null. */
     final SwapPlan swap;
+    /**
+     * Optional signer the host expects (lowercase 0x address), or null. Not part of what is
+     * signed: a request naming another account than the phone's active one is refused
+     * ({@link RequestRefusal#requireFrom}).
+     */
+    String from;
 
     private Eip1559Request(String id, long chainId, BigInteger nonce,
                            BigInteger maxPriorityFeePerGas, BigInteger maxFeePerGas,
@@ -77,7 +83,10 @@ final class Eip1559Request {
                 || "4".equals(json.optString("type"))) {
             throw RequestRefusal.delegation("type-4 set-code transaction");
         }
-        requireExactFields(json, REQUEST_FIELDS);
+        String from = optionalFrom(json);
+        Set<String> fields = REQUEST_FIELDS;
+        if (from != null) { fields = new HashSet<>(REQUEST_FIELDS); fields.add("from"); }
+        requireExactFields(json, fields);
         if (!"signEip1559".equals(json.getString("method"))) {
             throw new JSONException("Unsupported method");
         }
@@ -146,8 +155,23 @@ final class Eip1559Request {
             recipient = call.party;
             displayedAmount = call.amount;
         }
-        return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
+        Eip1559Request parsed = new Eip1559Request(id, chainId, nonce, priority, fee, gas,
                 normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call, nft, swap);
+        parsed.from = from;
+        return parsed;
+    }
+
+    /**
+     * The optional {@code from} field (WalletConnect / extension requests name their account): a
+     * strict 0x + 40 hex string, returned lowercase; null when absent. Anything else is refused.
+     */
+    static String optionalFrom(JSONObject json) throws JSONException {
+        if (!json.has("from")) return null;
+        Object value = json.get("from");
+        if (!(value instanceof String) || !((String) value).matches("0x[0-9a-fA-F]{40}")) {
+            throw new JSONException("from must be a 0x address with 40 hex characters");
+        }
+        return ((String) value).toLowerCase(java.util.Locale.ROOT);
     }
 
     static String validatedId(String id) throws JSONException {

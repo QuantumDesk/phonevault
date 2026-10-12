@@ -31,6 +31,8 @@ final class MessageRequest {
     final PersonalMessage personal;
     /** Non-null for {@link Kind#TYPED_DATA}. */
     final Eip712.TypedData typedData;
+    /** Optional signer the host expects (lowercase), or null; see {@link Eip1559Request#optionalFrom}. */
+    String from;
 
     private MessageRequest(String id, long chainId, Kind kind, PersonalMessage personal, Eip712.TypedData typedData) {
         this.id = id;
@@ -46,10 +48,13 @@ final class MessageRequest {
 
     static MessageRequest parse(JSONObject json) throws JSONException {
         String method = json.optString("method");
+        String from = Eip1559Request.optionalFrom(json);
         if (PERSONAL_SIGN.equals(method)) {
-            Eip1559Request.requireExactFields(json, "id", "method", "chainId", "message");
+            if (from == null) Eip1559Request.requireExactFields(json, "id", "method", "chainId", "message");
+            else Eip1559Request.requireExactFields(json, "id", "method", "chainId", "message", "from");
         } else if (SIGN_TYPED_DATA_V4.equals(method)) {
-            Eip1559Request.requireExactFields(json, "id", "method", "chainId", "typedData");
+            if (from == null) Eip1559Request.requireExactFields(json, "id", "method", "chainId", "typedData");
+            else Eip1559Request.requireExactFields(json, "id", "method", "chainId", "typedData", "from");
         } else {
             throw new JSONException("Unsupported method");
         }
@@ -73,7 +78,9 @@ final class MessageRequest {
                 bytes[i] = (byte) Integer.parseInt(hex.substring(2 + 2 * i, 4 + 2 * i), 16);
             }
             if (Eip7702.isAuthorizationTuple(bytes)) throw RequestRefusal.delegation("message is a 0x05 authorization tuple");
-            return new MessageRequest(id, chainId, Kind.PERSONAL, PersonalMessage.of(bytes), null);
+            MessageRequest personal = new MessageRequest(id, chainId, Kind.PERSONAL, PersonalMessage.of(bytes), null);
+            personal.from = from;
+            return personal;
         }
         Eip712.TypedData typed;
         try {
@@ -83,7 +90,9 @@ final class MessageRequest {
         }
         String delegation = Eip7702.typedDataDelegation(typed);
         if (delegation != null) throw RequestRefusal.delegation(delegation);
-        return new MessageRequest(id, chainId, Kind.TYPED_DATA, null, typed);
+        MessageRequest typedRequest = new MessageRequest(id, chainId, Kind.TYPED_DATA, null, typed);
+        typedRequest.from = from;
+        return typedRequest;
     }
 
     /** The 32 bytes that will be signed, derived only from the parsed message object. */

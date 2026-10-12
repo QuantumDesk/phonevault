@@ -14,6 +14,8 @@ final class ApprovalSession {
     final TransactionReview review;
     private final Credentials reviewedCredentials;
     private final String reviewedAddress;
+    /** Which account (of which wallet) the reviewed key is, for the "Signing with" row. Display only. */
+    SigningAccount signingAs;
 
     ApprovalSession(Eip1559Request request, Credentials credentials) {
         this(request, credentials, TokenList.empty());
@@ -48,6 +50,11 @@ final class ApprovalSession {
                 || !reviewedAddress.equals(currentCredentials.getAddress().toLowerCase(java.util.Locale.ROOT))) {
             throw new IllegalStateException(
                     "Signing identity changed after review; request must be reviewed again");
+        }
+        // Defence in depth: the request was refused before review if its "from" named another
+        // account (RequestRefusal.requireFrom); never sign one that slipped past.
+        if (request.from != null && !request.from.equals(reviewedAddress)) {
+            throw new IllegalStateException("Request is for another account; switch accounts on the phone");
         }
         return EvmSigner.sign(request, reviewedCredentials);
     }
