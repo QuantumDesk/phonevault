@@ -63,6 +63,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private TextView statusView;
     private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
     private TokenList tokenList;
+    /** Address book + recipient history for the reviews (AddressSafety); opened on first use. */
+    private AddressSafety addressSafety;
+    private SafetyScreens safetyScreens;
+    /** Counterparties of the transaction just signed, offered as "Save as contact" on its receipt. */
+    private List<TransactionReview.Party> receiptParties;
     private volatile ApprovalDecision approvalDecision;
     private volatile boolean walletLoaded, backupVerified;
     private volatile String walletAddress;
@@ -840,6 +845,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         action(root, "Wallet", "wallet".equals(current), () -> { if (menuAvailable()) showHome(); });
         action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
         action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
+        action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
         action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
         action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
         action(root, "Lock now", false, this::lock);
@@ -1916,7 +1922,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
             } catch (Exception e) {
-                b = "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
+                b = e instanceof RequestRefusal ? e.getMessage() + " It will be refused after you unlock."
+                        : "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
                 synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
             }
             label = l; body = b;
@@ -1964,11 +1971,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 return;
             }
             Eip1559Request request = Eip1559Request.parse(json);
-            ApprovalSession approval = new ApprovalSession(request, credentials, tokens());
+            ApprovalSession approval = new ApprovalSession(request, credentials, tokens(), safety());
             runOnUiThread(() -> showApproval(source, approval, decision, s));
         } catch (Exception e) {
             finishApproval(decision);
             sendError(source, id, e.getMessage());
+            if (e instanceof RequestRefusal) {
+                RequestRefusal refusal = (RequestRefusal) e;
+                runOnUiThread(() -> {
+                    if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
+                    showInfo(refusal.title, refusal.getMessage(), this::showHome);
+                });
+            }
         }
     }
 
@@ -2078,7 +2092,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
                 approval::signIfIdentityUnchanged,
                 "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
-                "Transaction hash", "transactionHash", true);
+                "Transaction hash", "transactionHash", true, () -> {
+                    // A signature exists: count its counterparties in this phone's history and offer to name them.
+                    safety().record(approval.reviewedAddress(), review.parties, System.currentTimeMillis());
+                    receiptParties = review.parties;
+                });
         present(root, "approval");
     }
 
@@ -2112,7 +2130,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
                                      String requestId, String prompt, String signText, ReviewedSigner signer,
-                                     String doneMessage, String receiptLabel, String receiptField, boolean transaction) {
+                                     String doneMessage, String receiptLabel, String receiptField, boolean transaction,
+                                     Runnable afterSigned) {
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
         reviewed.setTextSize(bodySize());
@@ -2161,6 +2180,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
                         statusMessage = "Signature created · delivery not confirmed";
+                        if (afterSigned != null) afterSigned.run();
                         showReceipt("Signature created", doneMessage, receiptLabel, response.optString(receiptField), transaction);
                     });
                 } catch (Exception e) {
@@ -2210,7 +2230,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
                 approval::signIfIdentityUnchanged,
                 "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
-                "Signed digest", "digest", false);
+                "Signed digest", "digest", false, null);
         present(root, "message-approval");
     }
 
@@ -2223,6 +2243,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (value != null && !value.isEmpty()) card(root, label, value);
         if (transaction) card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
         else card(root, "Where it goes", "This offline phone cannot see how the host or website uses the signature.");
+        List<TransactionReview.Party> save = receiptParties;
+        receiptParties = null;
+        if (save != null && !save.isEmpty()) safetyScreens().addSaveActions(root, save);
         action(root, "Back to Wallet", true, this::showHome);
         action(root, "Lock now", false, this::lock);
         present(root, "receipt");
@@ -2240,7 +2263,37 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         valueView.setPadding(0, dp(6), 0, dp(15));
         row.addView(labelView);
         row.addView(valueView);
+        SafetyScreens.style(this, row, label, valueView, value);
         return row;
+    }
+
+    /** The phone's address book and recipient history (app-private files); see AddressSafety. */
+    private synchronized AddressSafety safety() {
+        if (addressSafety == null) {
+            FileSafetyStore store = new FileSafetyStore(this);
+            addressSafety = new AddressSafety(new AddressBook(store), new RecipientHistory(store));
+        }
+        return addressSafety;
+    }
+
+    private SafetyScreens safetyScreens() {
+        if (safetyScreens == null) {
+            final MainActivity activity = this;
+            safetyScreens = new SafetyScreens(new SafetyScreens.Host() {
+                @Override public Context context() { return activity; }
+                @Override public LinearLayout page(String eyebrow, String title, String description) { return activity.page(eyebrow, title, description); }
+                @Override public void present(LinearLayout root, String screen) { activity.present(root, screen); }
+                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { activity.action(parent, label, primary, run); }
+                @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
+                @Override public boolean ready() { return menuAvailable(); }
+                @Override public void showMenu() { activity.showMenu(); }
+                @Override public void showHome() { activity.showHome(); }
+                @Override public float bodySize() { return activity.bodySize(); }
+                @Override public void harden(View view) { hardenTouch(view); }
+                @Override public int dp(int value) { return activity.dp(value); }
+            }, safety().book);
+        }
+        return safetyScreens;
     }
 
     private void sendError(AccessoryTransport source, String id, String message) {

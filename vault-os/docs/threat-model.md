@@ -43,7 +43,11 @@ they can queue requests for review, never sign or bypass the on-device approval.
    `transferFrom(address,address,uint256)` or `increaseAllowance(address,uint256)`
    calls (exact length: missing or trailing bytes, dirty address padding, zero
    addresses and native value on a token call are refused) are accepted during
-   the prototype phase. A four-byte selector and well-formed arguments do not
+   the prototype phase, plus — since 2026-10-11 — canonical ERC-721/1155
+   `setApprovalForAll`/`safeTransferFrom`/`safeBatchTransferFrom` and calls to the
+   pinned Uniswap routers that decode completely (see "Safety you can see"
+   below). Every other non-empty calldata is refused with a reason shown on the
+   phone; nothing is offered for blind approval. A four-byte selector and well-formed arguments do not
    authenticate the target contract's interface or execution semantics; the
    technical details show the exact selector and calldata. Token symbol and
    decimals come only from the token list built into the APK
@@ -202,3 +206,72 @@ wrapping and stronger storage threat-model work land.
 
 The development dump skips sensitive flows, but external screen capture remains available on
 the development OS. Physical UI verification and the hardened/relocked release remain required.
+
+## Safety you can see (2026-10-11)
+
+Display-only additions to the review; none of them changes what is signed, and every review is
+still built from the one parsed `Eip1559Request` / `MessageRequest` that is signed.
+
+**Unknown calldata (behavior check).** Before this change the parser already refused any
+calldata that was not one of the four canonical ERC-20 calls (`Erc20Call.decode` threw), so the
+phone never offered opaque calldata for blind signing; the host got an error and the phone only
+updated its status line. Now the explained set grows (NFT calls; pinned Uniswap routers), every
+other non-empty calldata is still refused — `RequestRefusal.unknownCall`: "This contract call
+can't be explained by the phone, so it was refused and nothing was signed", with the contract and
+selector — and the refusal is also shown on the phone as a full screen. Native transfers with
+empty calldata stay allowed; when the recipient is a contract the phone knows (listed token,
+listed NFT collection, pinned router) the review adds a WARNING that coin sent straight to it is
+usually lost, otherwise a note that the phone cannot tell a wallet from a contract.
+
+**EIP-7702.** Refused by name ("Account delegation (EIP-7702) is not supported: it can hand
+control of this wallet to a contract"): a request carrying `authorizationList` or `type` 0x4; a
+`personal_sign` whose bytes are `0x05 ‖ rlp([chain_id, address, nonce])`; typed data whose
+primary type is a 7702 authorization (an "…Authorization" type with a nonce and an address, or a
+name containing 7702) or an ERC-7710 `Delegation`. The signer only ever encodes type 0x02
+(EvmSigner), so a set-code transaction was already impossible; message digests (0x19 prefixes)
+cannot equal a 7702 authorization digest (0x05), so the message checks are defense in depth
+against a host passing a delegation off as an ordinary message. The companion independently
+refuses dApp transactions of a type other than 0/2 and unknown fields such as `authorizationList`.
+
+**NFT calls.** `setApprovalForAll(op, true)` is a DANGER review ("Lets 0x… move EVERY NFT in this
+collection, now and in future"); `false` is a revoke. ERC-721 `approve(to, id)` and
+`transferFrom(from, to, id)` share their selectors with ERC-20; the phone uses its lists to
+disambiguate: a contract in the token list is fungible, a contract in the small pinned NFT list
+(`NftCollections`, `app/token-list/NFT-SOURCES.md`) is an NFT, and an unlisted contract shows BOTH
+meanings under a WARNING ("Two possible meanings…") rather than being refused — the decoded
+fields (two addresses and one uint256) are identical in both readings, so nothing shown differs
+from what is signed, and refusing would break existing unknown-token transfers. Collection names
+come only from the pinned list, never from the host.
+
+**Uniswap swaps.** Only calls to router addresses pinned per chain (`UniswapRouters`, sources in
+`app/token-list/ROUTER-SOURCES.md`) are decoded; the same calldata to any other address is an
+unknown contract call. Universal Router 2.0/2.1 `execute` with commands V2/V3 swaps, WRAP_ETH,
+UNWRAP_WETH, SWEEP, TRANSFER, PAY_PORTION(_FULL_PRECISION), PERMIT2_PERMIT (spender must be the
+router), PERMIT2_TRANSFER_FROM (to the router only) and V4_SWAP (exact-in/out single and
+multi-hop, SETTLE, SETTLE_ALL, TAKE, TAKE_ALL, TAKE_PORTION), and SwapRouter02
+`exactInput(Single)`/`exactOutput(Single)`/`unwrapWETH9`/`refundETH`/`sweepToken`/`multicall`.
+All inputs must be canonical ABI (decoded, re-encoded, compared byte for byte) so the router's
+assembly decoding reads the values the phone showed. A conservative model of the router's
+balances turns the commands into "You give · You get at least · Recipient · Expires"; the swap is
+REFUSED ("This swap uses features the phone can't explain; nothing was signed") for any other
+command or V4 action, the allow-revert flag, native coin left unused, a spend of a router balance
+the transaction never funded, an unsettled V4 delta, a price-limited SwapRouter02 swap, or more
+than 64 bytes appended after `execute()` (up to 64 — apps' tracking tags — are shown and are
+never read by the router). DANGER for output to another address and for a zero minimum; WARNING
+for unknown tokens (raw base units), pool hooks, fees above 1%, unlimited Permit2 allowances and
+missing deadlines. Deadlines are shown as written (UTC); the offline clock is not trusted.
+
+**Address book, history, look-alikes.** The phone records, per wallet, each address it signed a
+transfer to (or approved as spender/operator) with the first date and a count, in app-private
+files (`files/safety/`, FBE credential-encrypted like the wallet's preferences, written
+atomically), after the signature is created — "sent" therefore means "signed on this phone".
+Reviews say "First time sending to this address" (WARNING) or "Sent here N times before", and
+flag a DIFFERENT address that shares the first 4 and last 4 hex characters (or ≥7 end characters,
+or is within one edit at each 6-character end) of a past recipient or contact as DANGER, with
+both full addresses in an aligned 4-character chunk grid. Contact names are typed on the phone
+(no PIN to add, rename or delete: names never change what is signed) and come only from the
+phone; the request schema has no field a host could use to label an address. Limits: the history
+is not wiped by the in-app 10-wrong-PIN erase of the wallet (in credential mode, wrong PINs reset
+the whole phone); it is a local convenience record, not an integrity-protected log, and a rooted
+attacker could edit it to suppress a first-time warning — which is why every review still shows
+the full address.

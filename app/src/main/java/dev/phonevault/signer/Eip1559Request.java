@@ -20,7 +20,13 @@ final class Eip1559Request {
             "id", "method", "chainId", "nonce", "maxPriorityFeePerGas",
             "maxFeePerGas", "gasLimit", "to", "value", "data"));
 
-    enum Kind { NATIVE_TRANSFER, TOKEN_TRANSFER, TOKEN_APPROVAL, TOKEN_TRANSFER_FROM, TOKEN_INCREASE_ALLOWANCE }
+    enum Kind {
+        NATIVE_TRANSFER, TOKEN_TRANSFER, TOKEN_APPROVAL, TOKEN_TRANSFER_FROM, TOKEN_INCREASE_ALLOWANCE,
+        /** setApprovalForAll / safeTransferFrom (ERC-721, ERC-1155): {@link #nftCall}. */
+        NFT_CALL,
+        /** A call to a pinned Uniswap router: {@link #swap}. */
+        SWAP
+    }
 
     final String id;
     final long chainId;
@@ -36,11 +42,16 @@ final class Eip1559Request {
     final BigInteger displayedAmount;
     /** The decoded ERC-20 call for token kinds; null for a native transfer. */
     final Erc20Call tokenCall;
+    /** The decoded NFT call for {@link Kind#NFT_CALL}; otherwise null. */
+    final NftCall nftCall;
+    /** The decoded router call for {@link Kind#SWAP}; otherwise null. */
+    final SwapPlan swap;
 
     private Eip1559Request(String id, long chainId, BigInteger nonce,
                            BigInteger maxPriorityFeePerGas, BigInteger maxFeePerGas,
                            BigInteger gasLimit, String to, BigInteger value, String data,
-                           Kind kind, String displayedRecipient, BigInteger displayedAmount, Erc20Call tokenCall) {
+                           Kind kind, String displayedRecipient, BigInteger displayedAmount, Erc20Call tokenCall,
+                           NftCall nftCall, SwapPlan swap) {
         this.id = id;
         this.chainId = chainId;
         this.nonce = nonce;
@@ -54,9 +65,18 @@ final class Eip1559Request {
         this.displayedRecipient = displayedRecipient;
         this.displayedAmount = displayedAmount;
         this.tokenCall = tokenCall;
+        this.nftCall = nftCall;
+        this.swap = swap;
     }
 
     static Eip1559Request parse(JSONObject json) throws JSONException {
+        // The only transaction this phone builds is EIP-1559 (type 0x02): the request has no type
+        // field and EvmSigner always encodes 0x02. A host asking for an EIP-7702 set-code
+        // transaction (type 0x04, authorizationList) gets an explicit refusal, not a schema error.
+        if (json.has("authorizationList") || "0x4".equals(json.optString("type")) || "0x04".equals(json.optString("type"))
+                || "4".equals(json.optString("type"))) {
+            throw RequestRefusal.delegation("type-4 set-code transaction");
+        }
         requireExactFields(json, REQUEST_FIELDS);
         if (!"signEip1559".equals(json.getString("method"))) {
             throw new JSONException("Unsupported method");
@@ -97,10 +117,29 @@ final class Eip1559Request {
         String recipient;
         BigInteger displayedAmount;
         Erc20Call call = null;
+        NftCall nft = null;
+        SwapPlan swap = null;
+        String selector = data.length() >= 10 ? data.substring(2, 10).toLowerCase(java.util.Locale.ROOT) : null;
+        UniswapRouters.Router router = UniswapRouters.lookup(chainId, normalizedTo);
         if ("0x".equals(data)) {
             kind = Kind.NATIVE_TRANSFER;
             recipient = normalizedTo;
             displayedAmount = value;
+        } else if (router != null) {
+            // Every call to a pinned router is decoded in full or refused (SwapPlan.CANNOT_EXPLAIN).
+            swap = SwapDecoder.decode(router, data, value);
+            kind = Kind.SWAP;
+            recipient = normalizedTo;
+            displayedAmount = value;
+        } else if (selector != null && NftCall.handles(selector)) {
+            nft = NftCall.decode(data);
+            if (value.signum() != 0) throw new JSONException(nft.function.signature + " must not include native value");
+            kind = Kind.NFT_CALL;
+            recipient = nft.party;
+            displayedAmount = nft.tokenIds.isEmpty() ? BigInteger.ZERO : nft.tokenIds.get(0);
+        } else if (selector != null && !Erc20Call.handles(selector)) {
+            // Refuse by default: calldata the phone cannot fully decode is never offered for blind approval.
+            throw RequestRefusal.unknownCall(Keys.toChecksumAddress(normalizedTo), selector);
         } else {
             call = parseTokenCall(data, value);
             kind = kindOf(call.function);
@@ -108,7 +147,7 @@ final class Eip1559Request {
             displayedAmount = call.amount;
         }
         return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
-                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call);
+                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call, nft, swap);
     }
 
     static String validatedId(String id) throws JSONException {
