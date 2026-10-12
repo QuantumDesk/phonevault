@@ -20,12 +20,19 @@ use tauri::{AppHandle, Emitter, State};
 /// How long the phone may take between receiving the request and answering (unlock + review).
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 
-struct VerifiedTx { raw: String, chain_id: u128, to: String, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent> }
+struct VerifiedTx {
+    raw: String, chain_id: u128, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent>,
+    /// the signed fields, kept in history so a stuck transaction can be sped up or cancelled
+    params: history::TxParams,
+    /// (hash, "speedup" | "cancel") when this replaces a pending transaction
+    replaces: Option<(String, String)>,
+}
 
+/// Requests in flight, by ticket: each can be cancelled on its own (a queued Send and a
+/// WalletConnect request may both be waiting for the phone).
 #[derive(Default)]
 pub struct SendState {
-    cancel: Arc<AtomicBool>,
-    busy: Arc<AtomicBool>,
+    cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     verified: Arc<Mutex<HashMap<String, VerifiedTx>>>,
 }
 
@@ -40,23 +47,32 @@ struct Progress { ticket: String, stage: &'static str }
 #[derive(Serialize)]
 pub struct Signed { hash: String, signer: String }
 
-/// Clears the busy flag however the command ends.
-struct BusyGuard(Arc<AtomicBool>);
-impl Drop for BusyGuard { fn drop(&mut self) { self.0.store(false, Ordering::SeqCst); } }
+/// Forgets the ticket however the command ends.
+struct TicketGuard(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>, String);
+impl Drop for TicketGuard { fn drop(&mut self) { if let Ok(mut m) = self.0.lock() { m.remove(&self.1); } } }
 
 fn q(v: &str, what: &str) -> Result<u128, SendError> { verify::quantity(v).map_err(|e| fail("internal", format!("{what}: {e}"), false)) }
 
 #[tauri::command]
 pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, ticket: String, quote: Quote) -> Result<Signed, SendError> {
-    if state.busy.swap(true, Ordering::SeqCst) { return Err(fail("busy", "another request is already waiting for the phone", false)); }
-    let guard = BusyGuard(state.busy.clone());
-    state.cancel.store(false, Ordering::SeqCst);
-    let cancel = state.cancel.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut m = state.cancels.lock().map_err(|_| fail("internal", "state poisoned", false))?;
+        if m.contains_key(&ticket) { return Err(fail("busy", "this request is already running", false)); }
+        m.insert(ticket.clone(), cancel.clone());
+    }
+    let guard = TicketGuard(state.cancels.clone(), ticket.clone());
     let store = state.verified.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
         let emit = |stage: &'static str| { let _ = app.emit("send-progress", Progress { ticket: ticket.clone(), stage }); };
         let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", "not paired yet", false))?;
+        // Wait our turn with the phone (an identify, a device check or a dApp request may be on
+        // it): the UI shows "waiting for the phone" instead of failing with "USB busy".
+        let mut waited = false;
+        let _turn = aoa::take_turn(|| { waited = true; emit("waiting"); }, || cancel.load(Ordering::SeqCst))
+            .map_err(|_| fail("cancelled", aoa::CANCELLED, false))?;
+        if waited { emit("connecting"); }
         // The phone must have passed the device check in this connection (runs it if not yet).
         crate::attest::require_ok(&pinned).map_err(|m| {
             if m.starts_with("attestation:") { fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false) }
@@ -71,6 +87,8 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
             Some(t) => Some(tokens::check_quote(&quote, t).map_err(|m| fail("internal", format!("token quote rejected: {m}"), false))?),
             None => None,
         };
+        // A speed-up/cancel must really replace a pending transaction from here (replace.rs).
+        crate::replace::check(&quote, &pinned).map_err(|m| fail("internal", format!("replacement rejected: {m}"), false))?;
         // Exactly the request the original `sign` command builds.
         let request = json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
@@ -113,19 +131,29 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
         }
         let gas = q(&quote.gas_limit, "gasLimit")?;
         let max_fee = q(&quote.max_fee_per_gas, "maxFeePerGas")?;
+        // These are the signed fields: validate_signature compared every one with the request.
+        let params = history::TxParams {
+            to: quote.to.to_ascii_lowercase(), value: quote.value.clone(), data: quote.data.to_ascii_lowercase(), gas_limit: quote.gas_limit.clone(),
+            max_fee_per_gas: quote.max_fee_per_gas.clone(), max_priority_fee_per_gas: quote.max_priority_fee_per_gas.clone(),
+        };
         let tx = VerifiedTx {
-            raw: v.raw_hex, chain_id: q(&quote.chain_id, "chainId")?, to: verify::checksum(&quote.to),
+            raw: v.raw_hex, chain_id: q(&quote.chain_id, "chainId")?,
             value_wei: q(&quote.value, "value")?, max_fee_wei: gas.saturating_mul(max_fee), nonce: q(&quote.nonce, "nonce")?,
-            token: quote.token.clone(),
+            token: quote.token.clone(), params, replaces: quote.replaces.as_ref().map(|r| (r.hash.clone(), r.kind.clone())),
         };
         store.lock().map_err(|_| fail("internal", "state poisoned", true))?.insert(v.tx_hash.to_ascii_lowercase(), tx);
         Ok(Signed { hash: v.tx_hash, signer: verify::checksum(&v.signer) })
     }).await.map_err(|e| fail("internal", e.to_string(), false))?
 }
 
-/// Stop waiting for the phone. The phone may still show the request; the user rejects it there.
+/// Stop waiting for the phone: one request by ticket, or every request in flight without one.
+/// The phone may still show the request; the user rejects it there.
 #[tauri::command]
-pub(crate) fn sign_cancel(state: State<'_, SendState>) { state.cancel.store(true, Ordering::SeqCst); }
+pub(crate) fn sign_cancel(state: State<'_, SendState>, ticket: Option<String>) {
+    if let Ok(m) = state.cancels.lock() {
+        for (t, c) in m.iter() { if ticket.as_deref().map_or(true, |x| x == t) { c.store(true, Ordering::SeqCst); } }
+    }
+}
 
 /// Broadcast a transaction this session verified, by hash. Records it in the local history.
 #[tauri::command]
@@ -133,20 +161,17 @@ pub(crate) async fn broadcast_verified(state: State<'_, SendState>, rpc_url: Str
     let store = state.verified.clone();
     blocking(move || {
         let key = hash.to_ascii_lowercase();
-        let (raw, chain_id, to, value_wei, max_fee_wei, nonce, token) = {
+        let (raw, chain_id, value_wei, max_fee_wei, nonce, token, params, replaces) = {
             let map = store.lock().map_err(|_| "state poisoned".to_string())?;
             let tx = map.get(&key).ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
-            (tx.raw.clone(), tx.chain_id, tx.to.clone(), tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone())
+            (tx.raw.clone(), tx.chain_id, tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone(), tx.params.clone(), tx.replaces.clone())
         };
         let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
         let node_chain = rpc.chain_id().map_err(|e| e.0)?;
         if node_chain != chain_id { return Err(format!("the selected node is on chain {node_chain}, but this transaction is for chain {chain_id}; switch back to that network")); }
         let sent = rpc.send_raw(&raw).map_err(|e| e.0)?;
         if sent.to_ascii_lowercase() != key { return Err(format!("node returned hash {sent}, expected {hash}")); }
-        let _ = match &token {
-            Some(t) => history::record_sent_token(&hash, chain_id, t, max_fee_wei, nonce),
-            None => history::record_sent(&hash, chain_id, &to, value_wei, max_fee_wei, nonce),
-        };
+        let _ = history::record_broadcast(history::Broadcast { hash: &hash, chain_id, value_wei, max_fee_wei, nonce, token: token.as_ref(), tx: params, replaces });
         Ok(hash)
     }).await
 }

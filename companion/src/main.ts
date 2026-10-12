@@ -2,30 +2,38 @@
 // Phone Vault Companion UI. One main view (account, balances, Send, Receive, activity), a send
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
-import { api, onProgress, openExternal, appVersion, notify, errText, isTauri } from "./api";
-import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation } from "./api";
+import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri } from "./api";
+import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, clock, copy } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
-import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
+import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 import { extSettingsSection } from "./extension";
+import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
+import { nftSection, type NftHost } from "./nfts";
+import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
+import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
 type Theme = "dark" | "light" | "system";
-interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean }
+type HomeTab = "assets" | "nfts" | "activity";
+interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean; activity: ActivityFilter; tab: HomeTab; setupDone: boolean }
 const PREFS_KEY = "phonevault.prefs.v1";
 function loadPrefs(): Prefs {
-  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false };
+  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false, activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
-    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true };
+    const a = p.activity && typeof p.activity === "object" ? p.activity : {};
+    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true,
+      activity: { kind: ["all", "out", "in", "pending"].includes(a.kind) ? a.kind : "all", thisNetwork: a.thisNetwork === true },
+      tab: ["assets", "nfts", "activity"].includes(p.tab) ? p.tab : d.tab, setupDone: p.setupDone === true };
   } catch { return d; }
 }
 const prefs = loadPrefs();
-function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* preferences are a convenience */ } }
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* preferences are a convenience */ } pushWatchConfig(); }
 const rpcFor = (id: number) => prefs.rpc[id] || byId(id).rpc;
 const net = () => byId(prefs.chainId);
 function applyTheme() {
@@ -55,7 +63,7 @@ async function refreshStatus() {
     else if (appeared) identifyPhone();
     renderHeader();
     if (pairedChanged) { balances.clear(); balErrors.clear(); if (s.paired) { refreshAllBalances(); } render(); }
-    else if (phoneChanged && (view === "pair" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
+    else if (phoneChanged && (view === "pair" || view === "setup" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
   } catch (e) { statusError = errText(e); renderHeader(); }
 }
 
@@ -66,9 +74,7 @@ async function refreshBalance(n: Network) {
     if (w.chain_id !== n.id) throw `this node is on chain ${w.chain_id}, not ${n.name}. Check the node in Settings.`;
     const wei = BigInt(w.balance_wei);
     const prev = balances.get(n.id);
-    balances.set(n.id, { eth: w.balance_eth, wei, at: Date.now() });
-    balErrors.delete(n.id);
-    if (prev && wei > prev.wei) await incoming(n, wei - prev.wei, w.balance_eth);
+    setBalance(n.id, wei, w.balance_eth, prev);
   } catch (e) { balErrors.set(n.id, errText(e)); }
   if (view === "home") renderSoon();
   if (view === "send" && flow.s === "form") updateFormBalance();
@@ -82,42 +88,48 @@ async function refreshBalance(n: Network) {
 }
 const refreshAllBalances = () => Promise.allSettled(NETWORKS.map(refreshBalance));
 
-function weiToEth(wei: bigint): string {
-  const whole = wei / 10n ** 18n; const frac = (wei % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : `${whole}`;
-}
-async function incoming(n: Network, delta: bigint, balanceEth: string) {
-  try { history = await api.historyAddIncoming(n.id, delta.toString()); } catch { /* history is best effort */ }
-  if (prefs.notify) await notify(`Received ${fmtAmount(weiToEth(delta), 8)} ${n.symbol} on ${n.name}. Balance ${fmtAmount(balanceEth, 8)} ${n.symbol}.`);
+/** Balance increases, for the setup's "waiting for your test deposit" step. Recording incoming
+ *  transfers and notifying is the background watcher's job (Rust), window open or not. */
+const increaseListeners = new Set<(chainId: number, prevWei: bigint) => void>();
+function setBalance(chainId: number, wei: bigint, eth: string, prev = balances.get(chainId)) {
+  balances.set(chainId, { eth, wei, at: Date.now() });
+  balErrors.delete(chainId);
+  if (prev && wei > prev.wei) increaseListeners.forEach((l) => l(chainId, prev.wei));
 }
 
 async function refreshPrices() {
-  for (const sym of new Set(NETWORKS.map((n) => n.symbol))) {
-    try { prices[sym] = await api.spotUsd(sym); } catch { prices[sym] = prices[sym] ?? null; }
-  }
+  try { const p = await api.prices(); prices.ETH = p.ETH ?? prices.ETH ?? null; prices.POL = p.POL ?? prices.POL ?? null; prices.BTC = p.BTC ?? prices.BTC ?? null; }
+  catch { /* keep the last ones */ }
   if (view === "home") renderSoon();
 }
+
+/** The watcher runs in Rust with the UI's settings (custom nodes, notifications, selected network). */
+function pushWatchConfig() { if (isTauri) api.watchConfigure(prefs.rpc, prefs.notify, prefs.chainId).catch(() => {}); }
 
 async function refreshHistory() {
   try { history = await api.history(); } catch { /* keep what we have */ }
   if (view === "home") renderSoon();
+  if (view === "setup") setupNoticeFunds(setupHost, null);
 }
 
-/** Background receipt check for anything this companion sent that is still pending. */
+/** Receipt check for anything this companion sent that is still pending: mined ones get their
+ *  outcome, and the rest of their nonce group (a speed-up's original, a cancelled transaction)
+ *  is marked dropped. In the app the background watcher does this too, window open or not. */
 async function pollPending() {
-  const open = history.filter((e) => e.kind === "out" && e.status === "pending" && e.hash && Date.now() / 1000 - e.time < 86400 * 2);
-  for (const e of open) {
+  const chains = new Set(history.filter((e) => e.kind === "out" && e.status === "pending" && e.hash && Date.now() / 1000 - e.time < 86400 * 7).map((e) => e.chain_id));
+  for (const c of chains) {
     try {
-      const rc = await api.receipt(rpcFor(e.chain_id), e.hash!);
-      if (rc.mined) { history = await api.historyMark(e.hash!, rc.success ? "confirmed" : "failed", rc.block); refreshBalance(byId(e.chain_id)); }
+      const before = history.filter((e) => e.status === "pending").length;
+      history = await api.historyReconcile(rpcFor(c));
+      if (history.filter((e) => e.status === "pending").length !== before) refreshBalance(byId(c));
     } catch { /* retry next round */ }
   }
-  if (open.length && view === "home") renderSoon();
+  if (chains.size && view === "home") renderSoon();
 }
 
 // ------------------------------------------------------------------ shell
 
-type View = "home" | "send" | "receive" | "pair" | "tool";
+type View = "home" | "send" | "receive" | "pair" | "tool" | "setup";
 let view: View = "home";
 let drawerOpen = false;
 const app = document.getElementById("app")!;
@@ -165,8 +177,9 @@ function renderSoon() {
 
 function render() {
   if (!status) { main.replaceChildren(h("div", { class: "boot" }, h("div", { class: "spinner" }))); return; }
-  if (!status.paired && view !== "tool") view = "pair";
-  const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : toolView();
+  // no pairing yet: the guided setup (it pairs as step 3)
+  if (!status.paired && view !== "tool" && view !== "setup") { setupStart(setupHost); view = "setup"; }
+  const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : view === "setup" ? setupView(setupHost) : toolView();
   main.replaceChildren(el);
 }
 
@@ -205,45 +218,102 @@ function homeView() {
       ),
     ),
     wcHomeSlot(),
+    homeTabs(),
+    prefs.tab === "nfts" ? nftSection(nftHost) : prefs.tab === "activity" ? activitySection(activityHost) : assetsTab(n),
+  );
+}
+
+function homeTabs() {
+  const pending = history.filter((e) => e.status === "pending").length;
+  const tab = (t: HomeTab, label: string, extra?: Node | null) => h("button", { class: prefs.tab === t ? "on" : "", onclick: () => { prefs.tab = t; savePrefs(); render(); } }, label, extra ?? null);
+  return h("nav", { class: "tabs", "aria-label": "Wallet" }, tab("assets", "Assets"), tab("nfts", "NFTs"), tab("activity", "Activity", pending ? h("span", { class: "count" }, `· ${pending}`) : null));
+}
+
+/** USD of everything loaded: native coins (Coinbase spot) and listed tokens (see tokens.ts usdBasis). */
+function usdTotal(chains: Network[]): { usd: number; partial: boolean } {
+  let usd = 0, partial = false;
+  for (const x of chains) {
+    if (x.testnet) continue;
+    const b = balances.get(x.id); const p = price(x);
+    if (!b || p === null) { partial = true; continue; }
+    usd += Number(b.eth) * p;
+    for (const t of tokenBalancesFor(x.id) ?? []) {
+      if (!t.amount || t.raw === "0") continue;
+      const v = tokenUsd(t.symbol, t.amount, prices);
+      if (v === null) partial = true; else usd += v;
+    }
+    if (tokensOn(x.id).length && !tokenBalancesFor(x.id)) partial = true;
+  }
+  return { usd, partial };
+}
+
+let tokensLoadedAt = 0;
+function assetsTab(n: Network) {
+  // token balances for every network, at most every two minutes, for the totals
+  if (Date.now() - tokensLoadedAt > 120_000 && status?.paired) {
+    tokensLoadedAt = Date.now();
+    for (const x of NETWORKS) if (x.id !== n.id) void refreshTokenBalances(x.id, rpcFor(x.id)).then(() => { if (view === "home") renderSoon(); });
+  }
+  const all = usdTotal(NETWORKS);
+  const here = usdTotal([n]);
+  const fmt = (v: number) => fmtUsd(v, 1) ?? "";
+  return h("div", { class: "stack" },
     h("section", { class: "section" },
-      h("h3", { class: "section-title" }, "Balances"),
+      h("div", { class: "total-line" },
+        h("h3", { class: "section-title" }, "Balances"),
+        all.usd > 0 ? h("span", { title: all.partial ? "Some balances or prices are not loaded yet" : "Native coins and listed tokens on all mainnets" }, h("span", { class: "muted small" }, "Total "), h("span", { class: "usd" }, `${all.partial ? "≈ " : ""}${fmt(all.usd)}`)) : null,
+      ),
       h("ul", { class: "list nets" }, NETWORKS.map((x) => {
         const bx = balances.get(x.id); const ex = balErrors.get(x.id);
         const zero = bx && bx.wei === 0n;
+        const t = usdTotal([x]);
         return h("li", null, h("button", { class: `net-row${x.id === n.id ? " on" : ""}${zero ? " zero" : ""}`, onclick: () => { prefs.chainId = x.id; savePrefs(); render(); refreshBalance(x); } },
           h("i", { class: `net-dot n${x.id}` }),
           h("span", { class: "grow" }, x.name, x.testnet ? h("span", { class: "tag" }, "testnet") : null),
           ex && !bx ? h("span", { class: "muted small", title: ex }, "unavailable") : h("span", { class: "mono num" }, bx ? `${fmtAmount(bx.eth, 5)} ${x.symbol}` : "…"),
-          h("span", { class: "muted small fiat-col" }, bx && !x.testnet ? fmtUsd(bx.eth, price(x)) ?? "" : ""),
+          h("span", { class: "muted small fiat-col", title: "Native coin plus listed tokens" }, bx && !x.testnet && price(x) !== null ? fmt(t.usd) : ""),
         ));
       })),
     ),
-    tokenSection(n.id, n.name),
-    h("section", { class: "section" },
-      h("h3", { class: "section-title" }, "Activity"),
-      history.length ? h("ul", { class: "list activity" }, history.slice(0, 30).map(activityRow))
-        : h("p", { class: "empty" }, "Nothing yet. Transactions you send from this Mac, and funds that arrive while it is open, show up here."),
-    ),
+    tokenSection(n.id, n.name, (sym, amt) => { const v = tokenUsd(sym, amt, prices); return v === null || n.testnet ? null : fmtUsd(v, 1); }),
+    here.usd > 0 && !n.testnet ? h("p", { class: "muted small" }, `On ${n.name}: ${here.partial ? "≈ " : ""}${fmt(here.usd)} including listed tokens.`) : null,
   );
 }
 
-function activityRow(e: HistoryEntry) {
-  const n = byId(e.chain_id);
-  const out = e.kind === "out";
-  const url = e.hash ? `${n.explorer}/tx/${e.hash}` : `${n.explorer}/address/${status?.paired_checksum}`;
-  const badge = e.status === "pending" ? h("span", { class: "badge pending" }, h("i", { class: "mini-spin" }), "Pending")
-    : e.status === "failed" ? h("span", { class: "badge failed" }, "Failed")
-    : e.status === "confirmed" ? h("span", { class: "badge ok" }, "Confirmed") : null;
-  return h("li", null, h("button", { class: "act-row", onclick: () => openExternal(url), title: e.hash ? `${e.hash}\nOpen in explorer` : "Open the address in the explorer" },
-    h("span", { class: `act-ic ${out ? "out" : "in"}` }, icon(out ? "up" : "down", 16)),
-    h("span", { class: "grow" },
-      h("span", { class: "act-title" }, `${out ? "Sent" : "Received"} ${e.token_symbol ? `${fmtExact(e.token_amount ?? "?")} ${e.token_symbol}` : `${fmtAmount(e.amount_eth)} ${n.symbol}`}`),
-      h("span", { class: "act-sub" }, [out && e.counterparty ? `to ${short(e.counterparty)}` : null, n.name, ago(e.time)].filter(Boolean).join(" · ")),
-    ),
-    badge,
-    h("span", { class: "muted ext" }, icon("external", 15)),
-  ));
-}
+// ------------------------------------------------------------------ guided setup (onboarding.ts)
+
+const setupHost: SetupHost = {
+  status: () => status,
+  device: () => device,
+  devMode: () => prefs.devMode,
+  setDevMode: (on) => { prefs.devMode = on; savePrefs(); identifyPhone(); render(); },
+  recheck: () => { void identifyPhone(); },
+  confirmPairing: async (address) => { await api.confirmPairing(address); identity = { s: "match" }; await refreshStatus(); },
+  chainId: () => prefs.chainId,
+  setChain: (id) => { prefs.chainId = id; savePrefs(); },
+  balanceOf: (id) => balances.get(id)?.wei ?? null,
+  refreshBalance: (id) => { void refreshBalance(byId(id)); },
+  history: () => history,
+  finish: (then) => {
+    prefs.setupDone = true; savePrefs();
+    if (then === "home") go("home");
+    else { draft.to = then.sendTo ?? ""; draft.amount = ""; draft.asset = ""; startSend(); }
+  },
+  rerender: () => { if (view === "setup") render(); },
+};
+increaseListeners.add((chainId, prevWei) => { if (view === "setup") setupNoticeFunds(setupHost, chainId, prevWei); });
+
+const nftHost: NftHost = { chainId: () => prefs.chainId, rpcFor, rerender: () => { if (view === "home" && prefs.tab === "nfts") renderSoon(); } };
+
+const activityHost: ActivityHost = {
+  history: () => history,
+  chainId: () => prefs.chainId,
+  address: () => status?.paired_checksum ?? null,
+  filter: prefs.activity,
+  saveFilter: () => savePrefs(),
+  rerender: () => { if (view === "home") render(); },
+  replace: (e, kind) => { void startReplacement(e, kind); },
+};
 
 // ------------------------------------------------------------------ receive
 
@@ -352,7 +422,7 @@ async function identifyPhone() {
     const report = await checkDevice();
     const address = report.address;
     if (!address) { identity = { s: "unknown" }; } // refused without naming a wallet (e.g. an app too old to attest); the badge says why
-    else if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
+    else if (!status?.paired) { identity = { s: "unknown" }; if (view === "setup") render(); else { pair = { s: "compare", address }; go("pair"); } }
     else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
     else identity = { s: "different", address, dismissed: false };
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
@@ -364,7 +434,7 @@ async function identifyPhone() {
 let noticeEl: HTMLElement | null = null;
 function renderPhoneNotice() {
   noticeEl?.remove(); noticeEl = null;
-  if (device.report?.verdict === "fail" && !failDismissed && view !== "pair") {
+  if (device.report?.verdict === "fail" && !failDismissed && view !== "pair" && view !== "setup") {
     const close = () => { failDismissed = true; renderPhoneNotice(); };
     noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
       h("div", { class: "modal", role: "dialog", "aria-modal": "true" },
@@ -377,7 +447,7 @@ function renderPhoneNotice() {
     document.body.append(noticeEl);
     return;
   }
-  if (identity.s !== "different" || identity.dismissed || view === "pair") return;
+  if (identity.s !== "different" || identity.dismissed || view === "pair" || view === "setup") return;
   const found = identity.address;
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
   noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
@@ -421,7 +491,7 @@ async function checkDevice(): Promise<Attestation> {
     device = { ...device, checking: false, error: explainPlain(errText(e)) };
     throw e;
   } finally {
-    renderHeader(); if (drawerOpen) renderDrawer(); if (view === "pair") render(); else if (view === "home") renderSoon();
+    renderHeader(); if (drawerOpen) renderDrawer(); if (view === "pair" || view === "setup") render(); else if (view === "home") renderSoon();
     renderPhoneNotice();
   }
 }
@@ -455,7 +525,7 @@ type Flow =
   | { s: "form" }
   | { s: "quoting" }
   | { s: "review"; quote: Quote }
-  | { s: "connecting"; quote: Quote; ticket: string; t0: number; cancelling?: boolean }
+  | { s: "connecting"; quote: Quote; ticket: string; t0: number; cancelling?: boolean; waiting?: boolean }
   | { s: "on_phone"; quote: Quote; ticket: string; t0: number; cancelling?: boolean }
   | { s: "verifying"; quote: Quote; ticket: string }
   | { s: "failed"; quote: Quote; err: SendError }
@@ -463,7 +533,10 @@ type Flow =
   | { s: "broadcasting"; quote: Quote; signed: Signed }
   | { s: "broadcast_failed"; quote: Quote; signed: Signed; message: string }
   | { s: "submitted"; quote: Quote; hash: string; t0: number; slow: boolean; trouble: boolean }
-  | { s: "done"; quote: Quote; hash: string; block: number; ok: boolean };
+  | { s: "done"; quote: Quote; hash: string; block: number; ok: boolean; note?: string }
+  // speed-up / cancel of a pending transaction: quoting it, or why it couldn't be quoted
+  | { s: "replacing"; kind: "speedup" | "cancel"; hash: string }
+  | { s: "prep_failed"; kind: "speedup" | "cancel"; hash: string; message: string };
 
 let flow: Flow = { s: "form" };
 let flowNet: Network = net();
@@ -500,7 +573,7 @@ async function loadFee() {
 const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
-    case "form": case "quoting": case "review": return 0;
+    case "form": case "quoting": case "review": case "replacing": case "prep_failed": return 0;
     case "connecting": case "on_phone": case "verifying": case "failed": return 1;
     case "signed": case "broadcasting": case "broadcast_failed": return 2;
     default: return 3;
@@ -516,9 +589,10 @@ function stepper() {
 
 function sendView() {
   const busy = ["connecting", "on_phone", "verifying", "broadcasting", "submitted"].includes(flow.s);
-  const back = busy ? null : () => { if (flow.s === "review") { setFlow({ s: "form" }); } else go("home"); };
+  const repl = replacementOf(flow);
+  const back = busy ? null : () => { if (flow.s === "review" && !repl) { setFlow({ s: "form" }); } else go("home"); };
   return h("div", { class: "stack fade" },
-    topbar(`Send on ${flowNet.name}`, back),
+    topbar(repl ? `${repl === "cancel" ? "Cancel" : "Speed up"} on ${flowNet.name}` : `Send on ${flowNet.name}`, back),
     stepper(),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody()),
   );
@@ -584,8 +658,21 @@ function flowBody(): Node {
       queueMicrotask(() => { checkAddr(); updateFormExtras(); updateFormBalance(); if (!quoting) (draft.to ? amtInput : toInput).focus(); });
       return form;
     }
+    case "replacing":
+      return statusCard("connecting", flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], []);
+    case "prep_failed":
+      return h("section", { class: "card result" },
+        h("div", { class: "result-ic neutral" }, icon("x", 28)),
+        h("h3", null, flow.kind === "cancel" ? "Can't cancel it" : "Can't speed it up"),
+        h("p", null, capitalize(flow.message) + "."),
+        h("div", { class: "actions" },
+          h("button", { class: "big primary", onclick: () => go("home") }, "Back to activity"),
+          flow.kind === "speedup" && /only be cancelled/.test(flow.message) ? h("button", { class: "big", onclick: () => { const e = history.find((x) => x.hash === (flow as { hash: string }).hash); if (e) startReplacement(e, "cancel"); } }, "Cancel it instead") : null,
+        ),
+      );
     case "review": {
       const quote = flow.quote;
+      if (quote.replaces) return replacementReview(quote);
       return h("section", { class: "card" },
         h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
         quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
@@ -610,6 +697,8 @@ function flowBody(): Node {
       );
     }
     case "connecting":
+      if (flow.waiting) return statusCard("connecting", "Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
+        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
       return statusCard("connecting", "Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
         [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
     case "on_phone":
@@ -638,7 +727,7 @@ function flowBody(): Node {
         flow.err.message && !x.hideDetail ? h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, flow.err.message)) : null,
         h("div", { class: "actions" },
           x.danger ? null : h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("refresh", 18), "Try again"),
-          h("button", { class: "big", onclick: () => setFlow({ s: "form" }) }, "Edit"),
+          x.danger && replacementOf(flow) ? null : h("button", { class: "big", onclick: () => replacementOf(flow) ? go("home") : setFlow({ s: "form" }) }, replacementOf(flow) ? "Close" : "Edit"),
           x.danger ? h("button", { class: "big", onclick: () => go("home") }, "Close") : null,
         ),
       );
@@ -648,6 +737,7 @@ function flowBody(): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
+        quote.replaces ? h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(quote.replaces.hash).toUpperCase()}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
           h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
@@ -680,6 +770,19 @@ function flowBody(): Node {
       );
     }
     case "done": {
+      const r = flow.quote.replaces;
+      if (r && flow.note) return h("section", { class: "card result" },
+        h("div", { class: "result-ic neutral" }, icon("check", 28)),
+        h("h3", null, "The original went through first"),
+        h("p", { class: "muted" }, flow.note),
+        hashLinks(flow.hash),
+        h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
+      if (r && r.kind === "cancel" && flow.ok) return h("section", { class: "card result" },
+        h("div", { class: "result-ic ok big" }, icon("check", 32)),
+        h("h3", null, "Cancelled"),
+        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${flow.block.toLocaleString("en-US")}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
+        hashLinks(flow.hash),
+        h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
@@ -694,9 +797,75 @@ function flowBody(): Node {
   }
 }
 
+// ------------------------------------------------------------------ speed up / cancel
+// A replacement is quoted in Rust (replace.rs) from the recorded transaction and then goes through
+// exactly the Send pipeline below: the phone reviews it like any transaction, Rust verifies it.
+
+function replacementOf(f: Flow): "speedup" | "cancel" | null {
+  if (f.s === "replacing" || f.s === "prep_failed") return f.kind;
+  return "quote" in f && f.quote.replaces ? f.quote.replaces.kind : null;
+}
+
+const gwei = (q: string | null | undefined) => {
+  if (!q) return "?";
+  const v = Number(BigInt(q)) / 1e9;
+  return v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toPrecision(3);
+};
+
+async function startReplacement(e: HistoryEntry, kind: "speedup" | "cancel") {
+  if (!e.hash) return;
+  if (identity.s === "different") { identity.dismissed = false; renderPhoneNotice(); return; }
+  if (device.report?.verdict === "fail") { failDismissed = false; renderPhoneNotice(); return; }
+  const hash = e.hash;
+  flowNet = byId(e.chain_id); activeTicket = null;
+  flow = { s: "replacing", kind, hash };
+  go("send");
+  try {
+    const quote = await api.replacementQuote(rpcFor(e.chain_id), hash, kind);
+    if (flow.s !== "replacing" || flow.hash !== hash) return;
+    if (parseInt(quote.chain_id, 16) !== e.chain_id || quote.replaces?.hash.toLowerCase() !== hash.toLowerCase()) throw "the quote is not for this transaction";
+    setFlow({ s: "review", quote });
+  } catch (err) {
+    if (flow.s === "replacing" && flow.hash === hash) setFlow({ s: "prep_failed", kind, hash, message: errText(err) });
+  }
+}
+
+function replacementReview(quote: Quote) {
+  const n = flowNet;
+  const r = quote.replaces!;
+  const cancel = r.kind === "cancel";
+  const usd = (eth: string) => fmtUsd(eth, price(n));
+  return h("section", { class: "card replace-card" },
+    h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(r.hash).toUpperCase()}`),
+    h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
+    h("p", { class: "muted" }, cancel
+      ? "This sends 0 to your own address with the same nonce and a higher fee. If it is included first, the original can never be included. You pay only the network fee."
+      : "This sends the same transaction again with the same nonce and a higher fee, so the network picks it up sooner. Only one of the two can ever be included."),
+    h("dl", { class: "facts" },
+      fact("Replaces", h("button", { class: "link mono", title: r.hash, onclick: () => openExternal(`${n.explorer}/tx/${r.hash}`) }, shortHash(r.hash), icon("external", 13))),
+      cancel ? fact("Sends", h("span", null, `0 ${n.symbol} to yourself `, h("span", { class: "mono muted" }, short(checksumOf(quote.to)))))
+        : fact("Sends", quote.token ? `${fmtExact(quote.token.amount)} ${quote.token.symbol} to ${short(checksumOf(quote.token.recipient))}` : `${fmtAmount(quote.amount_eth, 8)} ${n.symbol} to ${short(checksumOf(quote.to))}`),
+      fact("Nonce", h("span", { class: "mono" }, `${parseInt(quote.nonce, 16)} (same as the original)`)),
+      fact("Max fee / gas", h("span", null, `${gwei(quote.max_fee_per_gas)} gwei`, h("span", { class: "muted" }, ` · was ${gwei(r.previous_max_fee_per_gas)}`))),
+      fact("Priority fee", h("span", null, `${gwei(quote.max_priority_fee_per_gas)} gwei`, h("span", { class: "muted" }, ` · was ${gwei(r.previous_max_priority_fee_per_gas)}`))),
+      fact("Network fee", h("span", null, `at most ${fmtAmount(quote.max_fee_eth, 8)} ${n.symbol}`, usd(quote.max_fee_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.max_fee_eth)}`) : null)),
+    ),
+    h("p", { class: "note" }, cancel
+      ? `Your phone shows it as a normal transaction: send 0 ${n.symbol} to your own address. Approve there only if that is what it says.`
+      : "Your phone shows it as a normal transaction with these same details. Approve there only if they match."),
+    h("div", { class: "actions" },
+      h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("phone", 18), "Send to phone"),
+      h("button", { class: "big", onclick: () => go("home") }, "Not now"),
+    ),
+  );
+}
+
 function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 let toChecksum: string | null = null;
-function checksumOf(lower: string) { return toChecksum && toChecksum.toLowerCase() === lower ? toChecksum : lower; }
+function checksumOf(lower: string) {
+  if (status?.paired_checksum && status.paired_checksum.toLowerCase() === lower.toLowerCase()) return status.paired_checksum;
+  return toChecksum && toChecksum.toLowerCase() === lower ? toChecksum : lower;
+}
 function hostOf(url: string) { try { return new URL(url).host; } catch { return url; } }
 function hashLinks(hash: string) {
   const url = `${flowNet.explorer}/tx/${hash}`;
@@ -797,12 +966,14 @@ async function sendToPhone(quote: Quote) {
   activeTicket = ticket;
   setFlow({ s: "connecting", quote, ticket, t0: Date.now() });
   // Last-resort UI watchdog: the Rust side already bounds each phase; this only guards the UI.
-  const watchdog = window.setTimeout(() => {
-    if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone")) {
-      api.signCancel().catch(() => {});
+  // Time spent queued behind another request on the phone does not count (each phase resets t0).
+  const watchdog = window.setInterval(() => {
+    if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone") && !(flow.s === "connecting" && flow.waiting)
+      && Date.now() - flow.t0 > REVIEW_LIMIT_MS + 90_000) {
+      api.signCancel(ticket).catch(() => {});
       setFlow({ s: "failed", quote, err: { kind: "timeout", message: "no result from the USB session", delivered: flow.s === "on_phone" } });
     }
-  }, REVIEW_LIMIT_MS + 90_000);
+  }, 5000);
   try {
     const signed = await api.signStart(ticket, quote);
     // A verified signature is always shown if this attempt is still the current one, even if
@@ -813,7 +984,7 @@ async function sendToPhone(quote: Quote) {
     const err = asSendError(e);
     if (err.kind === "attestation") refreshCachedDevice();
     setFlow({ s: "failed", quote, err });
-  } finally { clearTimeout(watchdog); }
+  } finally { clearInterval(watchdog); }
 }
 
 function asSendError(e: unknown): SendError {
@@ -825,7 +996,7 @@ async function cancelSign() {
   if (flow.s !== "connecting" && flow.s !== "on_phone") return;
   const ticket = flow.ticket;
   setFlow({ ...flow, cancelling: true });
-  try { await api.signCancel(); } catch { /* the command result will say */ }
+  try { await api.signCancel(ticket); } catch { /* the command result will say */ }
   // The Rust side answers within a few seconds; if it can't (e.g. mid USB switch), stop waiting.
   setTimeout(() => {
     if (activeTicket === ticket && (flow.s === "connecting" || flow.s === "on_phone")) setFlow({ s: "failed", quote: flow.quote, err: { kind: "cancelled", message: "cancelled on this Mac", delivered: flow.s === "on_phone" } });
@@ -834,7 +1005,9 @@ async function cancelSign() {
 
 onProgress((ticket, stage) => {
   if (ticket !== activeTicket) return;
-  if (stage === "delivered" && flow.s === "connecting") setFlow({ s: "on_phone", quote: flow.quote, ticket, t0: Date.now(), cancelling: flow.cancelling });
+  if (stage === "waiting" && flow.s === "connecting") setFlow({ ...flow, waiting: true });
+  else if (stage === "connecting" && flow.s === "connecting" && flow.waiting) setFlow({ ...flow, waiting: false, t0: Date.now() });
+  else if (stage === "delivered" && flow.s === "connecting") setFlow({ s: "on_phone", quote: flow.quote, ticket, t0: Date.now(), cancelling: flow.cancelling });
   else if (stage === "verifying" && flow.s === "on_phone") setFlow({ s: "verifying", quote: flow.quote, ticket });
 });
 
@@ -903,6 +1076,19 @@ async function submitted(quote: Quote, hash: string) {
         refreshBalance(n);
         return;
       }
+      // A replacement races its original: if the original was included instead, say so.
+      const orig = quote.replaces?.hash;
+      if (orig) {
+        const ro = await api.receipt(rpcFor(n.id), orig);
+        if (flow.s !== "submitted" || flow.hash !== hash) return;
+        if (ro.mined) {
+          try { history = await api.historyMark(orig, ro.success ? "confirmed" : "failed", ro.block); } catch { /* best effort */ }
+          setFlow({ s: "done", quote, hash: orig, block: ro.block, ok: ro.success,
+            note: `${shortHash(orig)} was included in block ${ro.block.toLocaleString("en-US")} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
+          refreshBalance(n);
+          return;
+        }
+      }
       const slow = Date.now() - t0 > 180_000;
       if (slow !== flow.slow || flow.trouble) setFlow({ ...flow, slow, trouble: false });
     } catch {
@@ -938,6 +1124,23 @@ function openDrawer() { drawerOpen = true; renderDrawer(); document.body.classLi
 function closeDrawer() { drawerOpen = false; document.body.classList.remove("drawer-open"); drawer.setAttribute("aria-hidden", "true"); }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawerOpen) closeDrawer(); });
 
+/** Settings → Incoming transfers: how far back each node let the watcher search token transfers. */
+function scanStatusSection() {
+  const list = h("div", { class: "att-details" }, h("p", { class: "muted small" }, "…"));
+  api.scanStatus().then((rows) => {
+    list.replaceChildren(...NETWORKS.map((x) => {
+      const r = rows.find((s) => s.chain_id === x.id);
+      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : `blocks ${r.from_block.toLocaleString("en-US")}–${(r.to_block ?? 0).toLocaleString("en-US")}`;
+      return h("div", { class: "set-row" }, h("span", { class: "muted" }, x.name), h("span", { class: "att-val", title: r?.error ?? "" }, text, r?.error && r.from_block !== null ? " (partial)" : ""));
+    }));
+  }).catch(() => list.replaceChildren(h("p", { class: "muted small" }, "Unavailable.")));
+  return h("section", { class: "set" },
+    h("h4", null, "INCOMING TRANSFERS"),
+    h("p", { class: "muted small" }, "Token transfers into this wallet are found in Transfer logs on your node for each network, starting from a recent window and then continuously. Some public nodes only serve the last few minutes of logs; a node of your own shows more. Plain ETH transfers are matched from the blocks since the last balance check; anything else that raises the balance is listed without a hash."),
+    list,
+  );
+}
+
 let version = "";
 function renderDrawer() {
   const paired = status?.paired_checksum;
@@ -961,6 +1164,7 @@ function renderDrawer() {
       h("div", { class: "set-row" }, h("span", null, "Paired address"), paired ? h("button", { class: "link mono", title: paired, onclick: () => copy(paired) }, short(paired), icon("copy", 14)) : h("span", { class: "muted" }, "Not paired")),
       h("div", { class: "row gap" },
         h("button", { onclick: () => { closeDrawer(); pair = { s: "idle" }; go("pair"); } }, paired ? "Pair again" : "Pair phone"),
+        h("button", { onclick: () => { closeDrawer(); setupStart(setupHost); go("setup"); } }, icon("refresh", 15), "Run setup again"),
         paired ? h("button", { class: "danger-ghost", onclick: async (ev: Event) => {
           const b = ev.currentTarget as HTMLButtonElement;
           if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Click again to forget"; return; }
@@ -988,8 +1192,9 @@ function renderDrawer() {
       h("h4", null, "NOTIFICATIONS"),
       h("label", { class: "toggle" }, h("span", null, "Tell me when funds arrive"),
         (() => { const t = h("input", { type: "checkbox", role: "switch", checked: prefs.notify }); t.addEventListener("change", () => { prefs.notify = t.checked; savePrefs(); if (t.checked) notify("Notifications are on."); }); return t; })(), h("i", { class: "knob" })),
-      h("p", { class: "muted small" }, "Checks balances while this app is open."),
+      h("p", { class: "muted small" }, isTauri ? "Checked in the background on your nodes, also when the window is closed: Phone Vault stays in the menu bar (Quit from its menu)." : "Checked in the background on your nodes."),
     ),
+    scanStatusSection(),
     h("section", { class: "set" },
       h("h4", null, "APPEARANCE"),
       h("div", { class: "segmented" }, seg("dark", "Dark"), seg("light", "Light"), seg("system", "System")),
@@ -1033,9 +1238,22 @@ mountWalletConnect({
   refreshHistory().then(pollPending);
   refreshPrices();
   setInterval(refreshStatus, 3000);
-  setInterval(() => { if (status?.paired) refreshBalance(net()); }, 15_000);
-  setInterval(() => { if (status?.paired) refreshAllBalances(); }, 60_000);
+  pushWatchConfig();
+  // The background watcher (Rust) reads balances, finds incoming transfers and settles pending
+  // transactions on its own schedule and tells the UI; the preview has no watcher, so it polls.
+  void onEvent<WatchBalance>("watch-balance", (b) => {
+    const n = byId(b.chain_id); if (n.id !== b.chain_id || !status?.paired) return;
+    setBalance(n.id, BigInt(b.balance_wei), b.balance_eth);
+    if (view === "home") renderSoon();
+    if (view === "send" && flow.s === "form") updateFormBalance();
+    if (n.id === prefs.chainId) void refreshTokenBalances(n.id, rpcFor(n.id)).then(() => { if (view === "home") renderSoon(); });
+  });
+  void onEvent("history-changed", () => { void refreshHistory(); });
+  if (!isTauri) {
+    setInterval(() => { if (status?.paired) refreshBalance(net()); }, 15_000);
+    setInterval(() => { if (status?.paired) refreshAllBalances(); }, 60_000);
+  }
   setInterval(refreshPrices, 60_000);
-  setInterval(pollPending, 15_000);
+  setInterval(pollPending, isTauri ? 60_000 : 15_000);
   setInterval(() => { if (view === "home") renderSoon(); }, 60_000); // relative times
 })();

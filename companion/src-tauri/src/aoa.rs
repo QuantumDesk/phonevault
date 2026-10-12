@@ -185,6 +185,74 @@ impl Drop for Session {
     fn drop(&mut self) { let _ = self.handle.release_interface(self.iface); }
 }
 
+// ---------------------------------------------------------------- one conversation at a time
+//
+// The accessory interface can be claimed by one session at a time; a second `connect` while
+// another request is on the phone fails with "held by another program", which used to surface as
+// "USB busy" when Send started during an identify or a WalletConnect request. Every exchange now
+// takes a turn first. Holders are bounded by their own timeouts, so a turn always comes.
+
+use std::cell::Cell;
+use std::sync::{Mutex, MutexGuard, TryLockError};
+
+static PHONE: Mutex<()> = Mutex::new(());
+thread_local!(static HELD: Cell<bool> = const { Cell::new(false) });
+
+/// This thread's turn with the phone; released on drop. Re-entrant on the same thread (the send
+/// path takes a turn, then the device check inside it asks the phone too).
+pub struct PhoneTurn { guard: Option<MutexGuard<'static, ()>> }
+impl Drop for PhoneTurn {
+    fn drop(&mut self) { if self.guard.take().is_some() { HELD.with(|h| h.set(false)); } }
+}
+
+/// Wait for the phone. `on_wait` runs once if someone else has it; `cancelled` is polled while waiting.
+pub fn take_turn(on_wait: impl FnOnce(), cancelled: impl Fn() -> bool) -> Result<PhoneTurn, AoaError> {
+    if HELD.with(|h| h.get()) { return Ok(PhoneTurn { guard: None }); }
+    let mut on_wait = Some(on_wait);
+    loop {
+        match PHONE.try_lock() {
+            Ok(g) => { HELD.with(|h| h.set(true)); return Ok(PhoneTurn { guard: Some(g) }); }
+            Err(TryLockError::Poisoned(p)) => { HELD.with(|h| h.set(true)); return Ok(PhoneTurn { guard: Some(p.into_inner()) }); }
+            Err(TryLockError::WouldBlock) => {}
+        }
+        if let Some(f) = on_wait.take() { f(); }
+        if cancelled() { return Err(proto(CANCELLED)); }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn turns_serialize_reenter_and_cancel() {
+        let first = take_turn(|| panic!("free phone must not wait"), || false).unwrap();
+        // re-entrant on the same thread
+        let inner = take_turn(|| panic!("same thread must not wait"), || false).unwrap();
+        drop(inner);
+        // another thread waits, says so once, and can be cancelled
+        let waited = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (w, c) = (waited.clone(), cancel.clone());
+        let t = std::thread::spawn(move || take_turn(|| { w.fetch_add(1, Ordering::SeqCst); }, || c.load(Ordering::SeqCst)).map(|_| ()));
+        std::thread::sleep(Duration::from_millis(400));
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(t.join().unwrap(), Err(AoaError::Protocol(ref m)) if m == CANCELLED));
+        assert_eq!(waited.load(Ordering::SeqCst), 1);
+        // and gets the phone once the holder lets go
+        let w2 = waited.clone();
+        let t2 = std::thread::spawn(move || take_turn(|| { w2.fetch_add(1, Ordering::SeqCst); }, || false).map(|_| ()));
+        std::thread::sleep(Duration::from_millis(300));
+        drop(first);
+        assert!(t2.join().unwrap().is_ok());
+        assert_eq!(waited.load(Ordering::SeqCst), 2);
+        assert!(take_turn(|| panic!("released"), || false).is_ok());
+    }
+}
+
 // ---------------------------------------------------------------- observed exchange (UI progress)
 //
 // Same framing, caps and id check as `exchange`, plus two hooks the send flow needs so the UI can

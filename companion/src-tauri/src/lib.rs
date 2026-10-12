@@ -14,6 +14,12 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
+mod replace;
+// background: balances, incoming transfers, pending settlement, notifications; menu-bar item; NFTs
+mod nft;
+mod tray;
+mod watcher;
 // ERC-20: the phone's built-in token list, balances, token sends
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
@@ -45,6 +51,8 @@ async fn device_status() -> CmdResult<Status> {
 }
 
 fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
+    // One conversation with the phone at a time: wait for any other request to finish.
+    let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     let mut session = aoa::Session::connect().map_err(|e| e.to_string())?;
     session.exchange(&request, timeout).map_err(|e| e.to_string())
 }
@@ -99,6 +107,9 @@ struct Quote {
     /// Set for an ERC-20 transfer (tokens::token_quote); re-checked against the list before signing.
     #[serde(default)]
     token: Option<tokens::TokenIntent>,
+    /// Set for a speed-up/cancel (replace::replacement_quote); re-checked against history before signing.
+    #[serde(default)]
+    replaces: Option<replace::Replacement>,
 }
 
 fn network_name(chain: u128) -> String {
@@ -133,7 +144,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
             max_fee_per_gas: verify::to_quantity(max_fee), gas_limit: verify::to_quantity(gas), to: to_l.to_ascii_lowercase(),
             value: verify::to_quantity(value), data: "0x".into(),
             amount_eth: eth::format_eth(value), max_fee_eth: eth::format_eth(max_cost), total_eth: eth::format_eth(total),
-            balance_eth: eth::format_eth(balance), network: network_name(chain), token: None,
+            balance_eth: eth::format_eth(balance), network: network_name(chain), token: None, replaces: None,
         })
     }).await
 }
@@ -190,16 +201,38 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
-        .setup(move |app| { bridge::start(app.handle(), &browser_bridge); Ok(()) })
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
-            history::history_list, history::history_mark, history::history_add_incoming, price::spot_usd,
+            history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
+            replace::replacement_quote,
+            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
             signing::sign_message, signing::sign_typed_data,
             attest::attest_phone, attest::attestation_cached,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
             bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall])
-        .run(tauri::generate_context!())
-        .expect("error while running Phone Vault Companion");
+        .setup(move |app| {
+            // browser-extension bridge (native-messaging relay socket)
+            bridge::start(app.handle(), &browser_bridge);
+            // menu-bar item + the background watcher (balances, incoming transfers, notifications)
+            tray::setup(app.handle())?;
+            watcher::start(app.handle().clone());
+            Ok(())
+        })
+        // Closing the window hides it: the app keeps running in the menu bar (Quit is in its menu).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building Phone Vault Companion")
+        .run(|app, event| {
+            // clicking the Dock icon brings the window back
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event { tray::show_main(app); }
+            let _ = (app, event);
+        });
 }

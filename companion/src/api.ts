@@ -12,7 +12,11 @@ export interface Quote {
   to: string; value: string; data: string; amount_eth: string; max_fee_eth: string; total_eth: string; balance_eth: string; network: string;
   /** ERC-20 transfer (from token_quote); the Rust side re-checks it against the built-in list. */
   token?: TokenIntent | null;
+  /** Speed-up/cancel of a pending transaction (replacement_quote); re-checked in Rust before signing. */
+  replaces?: Replacement | null;
 }
+export interface Replacement { hash: string; kind: "speedup" | "cancel"; previous_max_fee_per_gas: string | null; previous_max_priority_fee_per_gas: string | null }
+export interface TxParams { to: string; value: string; data: string; gas_limit: string; max_fee_per_gas: string; max_priority_fee_per_gas: string }
 /** One entry of the built-in token list (app/src/main/res/raw/tokens.json, shared with the phone). */
 export interface TokenInfo { chainId: number; address: string; symbol: string; name: string; decimals: number }
 export interface TokenIntent { contract: string; symbol: string; name: string; decimals: number; recipient: string; amount_raw: string; amount: string }
@@ -25,9 +29,21 @@ export interface MaxAmount { amount_eth: string; amount_wei: string }
 export interface AddressCheck { ok: boolean; checksum: string | null; error: string | null }
 export interface HistoryEntry {
   kind: "out" | "in"; hash: string | null; chain_id: number; counterparty: string | null; amount_eth: string;
-  fee_max_eth: string | null; nonce: number | null; time: number; status: "pending" | "confirmed" | "failed" | "received"; block: number | null;
+  fee_max_eth: string | null; nonce: number | null; time: number; status: "pending" | "confirmed" | "failed" | "received" | "dropped"; block: number | null;
   token_symbol?: string | null; token_amount?: string | null; token_contract?: string | null;
+  /** sent from here: the signed fields (speed-up / cancel need them) */
+  tx?: TxParams | null;
+  replaces?: string | null; replacement_kind?: "speedup" | "cancel" | null; log_index?: number | null;
 }
+/** USD per unit for the coins whose price the app knows (Coinbase spot; null when unavailable). */
+export interface Prices { ETH: number | null; POL: number | null; BTC: number | null }
+/** Pushed by the background watcher (Rust) whenever it reads a native balance. */
+export interface WatchBalance { chain_id: number; balance_wei: string; balance_eth: string; block: number }
+/** How far back the watcher could search transfer logs on a network, or why it couldn't. */
+export interface ScanStatus { chain_id: number; from_block: number | null; to_block: number | null; error: string | null }
+export interface Nft { chain_id: number; contract: string; token_id: string; name: string | null; symbol: string | null; owned: boolean | null; checked_at: number }
+export interface NftScan { chain_id: number; nfts: Nft[]; from_block: number | null; to_block: number | null; error: string | null }
+export interface NftMeta { name: string | null; description: string | null; image: string | null; error: string | null }
 /** Device attestation report (src-tauri/src/attest, vault-os/docs/device-attestation.md). */
 export type Verdict = "genuine" | "development" | "fail";
 export interface AttestationDetails {
@@ -44,7 +60,7 @@ export interface Attestation {
 }
 /** Typed failure from sign_start. */
 export interface SendError { kind: string; message: string; delivered: boolean }
-export type Stage = "connecting" | "delivered" | "verifying";
+export type Stage = "waiting" | "connecting" | "delivered" | "verifying";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
@@ -65,7 +81,8 @@ export const api = {
   wallet: (rpcUrl: string) => call<Wallet>("wallet", { rpcUrl }),
   quote: (rpcUrl: string, to: string, amountEth: string) => call<Quote>("quote", { rpcUrl, to, amountEth }),
   signStart: (ticket: string, quote: Quote) => call<Signed>("sign_start", { ticket, quote }),
-  signCancel: () => call<void>("sign_cancel"),
+  /** Cancel one request by ticket, or every request in flight. */
+  signCancel: (ticket?: string) => call<void>("sign_cancel", { ticket: ticket ?? null }),
   broadcast: (rpcUrl: string, hash: string) => call<string>("broadcast_verified", { rpcUrl, hash }),
   receipt: (rpcUrl: string, hash: string) => call<Receipt>("receipt", { rpcUrl, hash }),
   feeEstimate: (rpcUrl: string) => call<FeeEstimate>("fee_estimate", { rpcUrl }),
@@ -75,6 +92,17 @@ export const api = {
   historyMark: (hash: string, status: string, block: number | null) => call<HistoryEntry[]>("history_mark", { hash, status, block }),
   historyAddIncoming: (chainId: number, amountWei: string) => call<HistoryEntry[]>("history_add_incoming", { chainId, amountWei }),
   spotUsd: (symbol: string) => call<number>("spot_usd", { symbol }),
+  prices: () => call<Prices>("prices_usd"),
+  historyReconcile: (rpcUrl: string) => call<HistoryEntry[]>("history_reconcile", { rpcUrl }),
+  /** Speed up (same transaction, higher fees) or cancel (0 to yourself, higher fees) a pending transaction. */
+  replacementQuote: (rpcUrl: string, hash: string, kind: "speedup" | "cancel") => call<Quote>("replacement_quote", { rpcUrl, hash, kind }),
+  /** Background watcher settings (nodes, notifications, selected network). */
+  watchConfigure: (rpcs: Record<string, string>, notify: boolean, chainId: number) => call<void>("watch_configure", { rpcs, notify, chainId }),
+  scanStatus: () => call<ScanStatus[]>("watch_scan_status"),
+  nftList: (chainId: number) => call<Nft[]>("nft_list", { chainId }),
+  nftScan: (rpcUrl: string) => call<NftScan>("nft_scan", { rpcUrl }),
+  nftAddContract: (rpcUrl: string, contract: string) => call<NftScan>("nft_add_contract", { rpcUrl, contract }),
+  nftMetadata: (rpcUrl: string, contract: string, tokenId: string) => call<NftMeta>("nft_metadata", { rpcUrl, contract, tokenId }),
   tokenList: () => call<TokenInfo[]>("token_list"),
   tokenBalances: (rpcUrl: string) => call<TokenBalances>("token_balances", { rpcUrl }),
   tokenQuote: (rpcUrl: string, token: string, to: string, amount: string) => call<Quote>("token_quote", { rpcUrl, token, to, amount }),
@@ -88,6 +116,13 @@ export async function onProgress(cb: (ticket: string, stage: Stage) => void): Pr
   if (!isTauri) return (await mock()).onProgress(cb);
   const { listen } = await import("@tauri-apps/api/event");
   return listen<{ ticket: string; stage: Stage }>("send-progress", (e) => cb(e.payload.ticket, e.payload.stage));
+}
+
+/** Subscribe to an app event from Rust (the background watcher). In the preview, the mock emits them. */
+export async function onEvent<T>(name: string, cb: (payload: T) => void): Promise<() => void> {
+  if (!isTauri) return (await mock()).onEvent(name, cb as (p: unknown) => void);
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(name, (e) => cb(e.payload));
 }
 
 export async function openExternal(url: string) {
