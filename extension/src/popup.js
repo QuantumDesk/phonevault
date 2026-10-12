@@ -1,0 +1,31 @@
+// Popup: is the companion reachable, and is the current tab's site connected?
+"use strict";
+const $ = (id) => document.getElementById(id);
+const NAMES = { 1: "Ethereum", 10: "Optimism", 137: "Polygon", 8453: "Base", 42161: "Arbitrum One", 11155111: "Sepolia" };
+const STATES = {
+  connected: ["ok", "Connected to Phone Vault Companion"],
+  not_running: ["warn", "Phone Vault Companion isn't running"],
+  not_installed: ["bad", "Browser connection not installed"],
+  error: ["bad", "Can't reach Phone Vault Companion"],
+  unknown: ["", "Checking the companion…"],
+};
+
+async function refresh() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const url = tab?.url ?? "";
+  chrome.runtime.sendMessage({ type: "status", url }, (r) => {
+    if (!r) return;
+    const [tone, text] = STATES[r.state] ?? STATES.unknown;
+    $("dot").className = `dot ${tone}`;
+    $("state").textContent = text;
+    $("msg").textContent = r.state === "not_running" ? "Open Phone Vault Companion on this Mac, then try again." : (r.message ?? "");
+    if (!r.origin) return;
+    $("site").hidden = false;
+    $("host").textContent = r.origin.replace(/^https:\/\//, "");
+    const s = r.site;
+    $("siteState").textContent = !s ? "" : s.connected ? `Connected · ${NAMES[s.chain] ?? `chain ${s.chain}`}` : s.paired ? "Not connected" : "Phone Vault isn't paired with a phone yet";
+    $("disconnect").hidden = !s?.connected;
+    $("disconnect").onclick = () => chrome.runtime.sendMessage({ type: "disconnect_site", url }, () => refresh());
+  });
+}
+refresh();

@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Phone Vault</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header><img src="icons/icon-32.png" width="22" height="22" alt=""><strong>Phone Vault</strong></header>
+  <div class="row"><span class="dot" id="dot"></span><span id="state">Checking the companion…</span></div>
+  <p class="msg" id="msg"></p>
+  <section id="site" hidden>
+    <div class="host" id="host"></div>
+    <div class="row small" id="siteState"></div>
+    <button id="disconnect" hidden>Disconnect this site</button>
+  </section>
+  <p class="foot">Signing happens on your phone. Sites and requests are managed in Phone Vault Companion on this Mac.</p>
+  <script src="popup.js"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EIP-6963 test dApp</title>
+  <style>
+    :root { --bg: #f4f5f7; --card: #fff; --fg: #15171a; --muted: #616a75; --line: #e1e4e8; --ok: #1f9d63; --bad: #c43d3d; }
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 28px 16px; background: var(--bg); color: var(--fg); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { max-width: 640px; margin: 0 auto; }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { color: var(--muted); margin: 0 0 20px; }
+    .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+    h2 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+    .wallet { display: flex; align-items: center; gap: 12px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+    .wallet img { width: 40px; height: 40px; border-radius: 9px; }
+    .wallet .name { font-weight: 600; }
+    .wallet .rdns { color: var(--muted); font: 12px ui-monospace, Menlo, monospace; }
+    .wallet button { margin-left: auto; }
+    button { font: inherit; padding: 7px 12px; border-radius: 8px; border: 1px solid var(--line); background: #15171a; color: #fff; cursor: pointer; }
+    #log { font: 12px/1.6 ui-monospace, Menlo, monospace; margin: 0; padding: 0; list-style: none; }
+    #log li { border-bottom: 1px dashed var(--line); padding: 3px 0; word-break: break-all; }
+    #log .ok { color: var(--ok); } #log .err { color: var(--bad); } #log .ev { color: #6b4fd8; }
+    .empty { color: var(--muted); }
+  </style>
+</head>
+<body>
+<main>
+  <h1>EIP-6963 test dApp</h1>
+  <p class="sub">Lists the wallets that announce themselves through EIP-6963. Used by extension/test/e2e.mjs.</p>
+  <section class="card"><h2>Detected wallets</h2><div id="wallets"><p class="empty">None yet.</p></div></section>
+  <section class="card"><h2>Log</h2><ul id="log"></ul></section>
+</main>
+<script>
+  window.__providers = [];
+  window.__events = [];
+  const log = (cls, text) => { const li = document.createElement("li"); li.className = cls; li.textContent = text; document.getElementById("log").append(li); };
+  const short = (v) => { const s = JSON.stringify(v); return s && s.length > 90 ? s.slice(0, 87) + "…" : s; };
+
+  window.call = async (method, params) => {
+    const p = window.__providers.find((x) => x.info.rdns === "dev.phonevault")?.provider;
+    const timeout = new Promise((_, no) => setTimeout(() => no(Object.assign(new Error("test timeout: no answer"), { code: "timeout" })), 8000));
+    try { const r = await Promise.race([p.request({ method, params }), timeout]); log("ok", `${method} → ${short(r)}`); return { result: r }; }
+    catch (e) { log("err", `${method} ✕ ${e.code} ${e.message}`); return { error: { code: e.code, message: e.message } }; }
+  };
+
+  window.addEventListener("eip6963:announceProvider", (ev) => {
+    const { info, provider } = ev.detail;
+    if (window.__providers.some((x) => x.info.uuid === info.uuid)) return;
+    window.__providers.push({ info, provider });
+    for (const name of ["accountsChanged", "chainChanged", "connect"]) provider.on(name, (d) => { window.__events.push({ name, data: d }); log("ev", `event ${name} ${short(d)}`); });
+    const box = document.getElementById("wallets");
+    if (box.querySelector(".empty")) box.replaceChildren();
+    const row = document.createElement("div"); row.className = "wallet";
+    const img = document.createElement("img"); img.src = info.icon; img.alt = "";
+    const text = document.createElement("div");
+    const n = document.createElement("div"); n.className = "name"; n.textContent = info.name;
+    const r = document.createElement("div"); r.className = "rdns"; r.textContent = info.rdns;
+    text.append(n, r);
+    const b = document.createElement("button"); b.textContent = "Connect"; b.onclick = () => window.call("eth_requestAccounts", []);
+    row.append(img, text, b);
+    box.append(row);
+  });
+  window.dispatchEvent(new Event("eip6963:requestProvider"));
+</script>
+</body>
+</html>

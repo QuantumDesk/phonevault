@@ -1,0 +1,81 @@
+// Build the Phone Vault browser extension: dist/chrome (Chrome, Brave, Edge, Chromium) and
+// dist/firefox. No dependencies, no bundler: the sources are plain JS copied as they are, plus the
+// manifest and the EIP-6963 icon (companion/brand/icon.svg as a data: URI).
+//
+//   node build.mjs          # → dist/chrome, dist/firefox
+//
+// The Chrome manifest carries the public key that pins the extension ID
+// (fbomijndbpoddicmbngledanaafapmlk). The companion's native host manifest allows only that ID
+// (companion/src-tauri/src/bridge.rs, CHROME_EXTENSION_ID); change both together.
+
+import { readFileSync, writeFileSync, mkdirSync, rmSync, copyFileSync, readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const src = join(here, "src");
+const dist = join(here, "dist");
+const VERSION = JSON.parse(readFileSync(join(here, "package.json"), "utf8")).version;
+
+// SubjectPublicKeyInfo (DER, base64) of the extension signing key. The ID is derived from it.
+const KEY = "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA017oKLDRwuRk8HRA7ZUynO4cTdh67m4kSQ5dd1hUFSSW7Q14L5+JuicL9KnsAgZmxzrRdERZs68GxdNICYuVogM71Dupxr4fmVJRZvtYFbNHMeC/7WUyscP+J2IcS4xK4rPIGzWMFd5xCCBic8fe0re0Yhke5h1iXE/CwlxCnjrm7IFCrWgR+wEiDMHAcozVSvu8xYgoFsZTxz96Ic3ujS4yJ3jUg09RpFpakMmgOl2g2dRUlRI1BBZaKNdi9yYtNZVTCH/r6AYUCVXqLcVoBgvcyJjm+/tgZqBXtN7qgD2AQmmTY3K09QLXExQ5dwGE/Vf3uhBjG6bKItigzAkkeQIDAQAB";
+const EXPECTED_ID = "fbomijndbpoddicmbngledanaafapmlk";
+const FIREFOX_ID = "browser-extension@phonevault.dev";
+
+function extensionId(keyB64) {
+  const hex = createHash("sha256").update(Buffer.from(keyB64, "base64")).digest("hex").slice(0, 32);
+  return [...hex].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join("");
+}
+if (extensionId(KEY) !== EXPECTED_ID) throw new Error(`manifest key gives ID ${extensionId(KEY)}, expected ${EXPECTED_ID}`);
+
+const MATCHES = ["https://*/*", "http://localhost/*", "http://127.0.0.1/*", "http://[::1]/*"];
+const ICONS = { 16: "icons/icon-16.png", 32: "icons/icon-32.png", 48: "icons/icon-48.png", 128: "icons/icon-128.png" };
+
+function manifest(target) {
+  const m = {
+    manifest_version: 3,
+    name: "Phone Vault",
+    version: VERSION,
+    description: "Use your Phone Vault with web3 sites. Requests go to Phone Vault Companion on this Mac; every signature is approved on your phone.",
+    icons: ICONS,
+    action: { default_title: "Phone Vault", default_popup: "popup.html", default_icon: ICONS },
+    permissions: ["nativeMessaging", "activeTab"],
+    content_scripts: [
+      { matches: MATCHES, js: ["inpage.js"], run_at: "document_start", all_frames: false, world: "MAIN" },
+      { matches: MATCHES, js: ["content.js"], run_at: "document_start", all_frames: false },
+    ],
+  };
+  if (target === "chrome") {
+    m.key = KEY;
+    m.minimum_chrome_version = "111"; // content_scripts world: MAIN
+    m.background = { service_worker: "background.js" };
+  } else {
+    m.background = { scripts: ["background.js"] };
+    m.browser_specific_settings = { gecko: { id: FIREFOX_ID, strict_min_version: "128.0" } };
+  }
+  return m;
+}
+
+const iconSvg = readFileSync(join(here, "..", "companion", "brand", "icon.svg"));
+const ICON_URI = `data:image/svg+xml;base64,${iconSvg.toString("base64")}`;
+
+rmSync(dist, { recursive: true, force: true });
+for (const target of ["chrome", "firefox"]) {
+  const out = join(dist, target);
+  mkdirSync(join(out, "icons"), { recursive: true });
+  for (const f of readdirSync(src)) {
+    let body = readFileSync(join(src, f), "utf8");
+    if (f === "inpage.js") {
+      if (!body.includes("__PHONEVAULT_ICON__")) throw new Error("inpage.js lost its icon placeholder");
+      body = body.replace("__PHONEVAULT_ICON__", ICON_URI);
+    }
+    writeFileSync(join(out, f), body);
+  }
+  for (const f of readdirSync(join(here, "icons"))) copyFileSync(join(here, "icons", f), join(out, "icons", f));
+  writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest(target), null, 2) + "\n");
+  for (const f of readdirSync(out).filter((x) => x.endsWith(".js"))) execFileSync(process.execPath, ["--check", join(out, f)]);
+  console.log(`built ${out}`);
+}
+console.log(`extension ID (Chrome, Brave, Edge): ${EXPECTED_ID}`);
