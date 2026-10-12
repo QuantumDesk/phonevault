@@ -2,7 +2,8 @@
 //! the background watcher found (with their real hashes when the node can show them), and balance
 //! increases it could not attribute to a transaction. Public-chain facts only (hashes, amounts,
 //! counterparties): no keys, nothing the node or an explorer does not already know. Stored 0600
-//! next to the pairing file.
+//! next to the pairing file, one file per paired account (`history-<address>.json`); the commands
+//! work on the account the Mac currently shows, the watcher names the account it scanned.
 
 use crate::{blocking, eth, pairing, verify, CmdResult};
 use serde::{Deserialize, Serialize};
@@ -71,14 +72,15 @@ impl Entry {
     fn is_hash(&self, hash: &str) -> bool { self.hash.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(hash)) }
 }
 
-fn path() -> Result<PathBuf, String> {
-    Ok(pairing::path().map_err(|e| e.0)?.with_file_name("history.json"))
-}
+fn path(owner: &str) -> Result<PathBuf, String> { pairing::account_file("history", owner).map_err(|e| e.0) }
+
+/// The account the Mac shows (pairing::load).
+fn active_owner() -> Result<String, String> { pairing::load().map_err(|e| e.0)?.ok_or_else(|| "not paired yet".to_string()) }
 
 pub fn now() -> u64 { SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
 
-fn load() -> Result<Vec<Entry>, String> {
-    let p = path()?;
+fn load(owner: &str) -> Result<Vec<Entry>, String> {
+    let p = path(owner)?;
     match fs::read_to_string(&p) {
         Ok(text) => Ok(serde_json::from_str(&text).unwrap_or_default()), // a corrupt history is not worth failing over
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -86,8 +88,8 @@ fn load() -> Result<Vec<Entry>, String> {
     }
 }
 
-fn save(entries: &[Entry]) -> Result<(), String> {
-    let p = path()?;
+fn save(owner: &str, entries: &[Entry]) -> Result<(), String> {
+    let p = path(owner)?;
     if let Some(dir) = p.parent() { fs::create_dir_all(dir).map_err(|e| e.to_string())?; }
     let tmp = p.with_extension("json.tmp");
     let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
@@ -96,19 +98,26 @@ fn save(entries: &[Entry]) -> Result<(), String> {
     fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
-fn update(f: impl FnOnce(&mut Vec<Entry>)) -> Result<Vec<Entry>, String> {
+fn update(f: impl FnOnce(&mut Vec<Entry>)) -> Result<Vec<Entry>, String> { update_for(&active_owner()?, f) }
+
+fn update_for(owner: &str, f: impl FnOnce(&mut Vec<Entry>)) -> Result<Vec<Entry>, String> {
     let _g = LOCK.lock().map_err(|_| "history lock poisoned".to_string())?;
-    let mut entries = load()?;
+    let mut entries = load(owner)?;
     f(&mut entries);
     entries.sort_by(|a, b| b.time.cmp(&a.time));
     entries.truncate(MAX_ENTRIES);
-    save(&entries)?;
+    save(owner, &entries)?;
     Ok(entries)
 }
 
+/// The history of the account the Mac shows (empty when nothing is paired).
 pub fn list() -> Result<Vec<Entry>, String> {
+    match pairing::load().map_err(|e| e.0)? { Some(owner) => list_for(&owner), None => Ok(Vec::new()) }
+}
+
+pub fn list_for(owner: &str) -> Result<Vec<Entry>, String> {
     let _g = LOCK.lock().map_err(|_| "history lock poisoned".to_string())?;
-    load()
+    load(owner)
 }
 
 
@@ -144,10 +153,10 @@ pub fn record_broadcast(b: Broadcast) -> Result<(), String> {
 pub struct Incoming { pub hash: String, pub chain_id: u128, pub from: Option<String>, pub amount_eth: String,
     pub token: Option<(String, String, String)>, pub log_index: Option<u64>, pub block: Option<u128> }
 
-/// Add incoming transfers not seen before. Returns the ones that were new.
-pub fn record_incoming(items: Vec<Incoming>) -> Result<Vec<Entry>, String> {
+/// Add incoming transfers to `owner` not seen before. Returns the ones that were new.
+pub fn record_incoming(owner: &str, items: Vec<Incoming>) -> Result<Vec<Entry>, String> {
     let mut added = Vec::new();
-    update(|e| {
+    update_for(owner, |e| {
         for i in items {
             if e.iter().any(|x| x.kind == "in" && x.chain_id == i.chain_id && x.is_hash(&i.hash) && x.log_index == i.log_index) { continue; }
             let mut x = Entry::blank("in", i.chain_id, "received");
@@ -163,8 +172,8 @@ pub fn record_incoming(items: Vec<Incoming>) -> Result<Vec<Entry>, String> {
 
 /// A balance increase the watcher could not attribute to a transaction (e.g. an internal transfer
 /// from a contract, or a window too wide to scan): no hash.
-pub fn record_balance_increase(chain_id: u128, wei: u128) -> Result<Vec<Entry>, String> {
-    update(|e| { let mut x = Entry::blank("in", chain_id, "received"); x.amount_eth = eth::format_eth(wei); e.push(x); })
+pub fn record_balance_increase(owner: &str, chain_id: u128, wei: u128) -> Result<Vec<Entry>, String> {
+    update_for(owner, |e| { let mut x = Entry::blank("in", chain_id, "received"); x.amount_eth = eth::format_eth(wei); e.push(x); })
 }
 
 fn set_status(e: &mut [Entry], hash: &str, status: &str, block: Option<u128>) {
@@ -184,7 +193,7 @@ pub fn settle(e: &mut [Entry], chain_id: u128, nonce: u128, mined_hash: &str, ok
 /// the rest of their nonce group); ones whose nonce was used by a transaction not sent from here
 /// are dropped. Returns true if anything changed.
 pub fn reconcile(rpc: &eth::Rpc, chain_id: u128, owner: &str) -> Result<bool, String> {
-    let pending: Vec<Entry> = list()?.into_iter().filter(|x| x.kind == "out" && x.status == "pending" && x.chain_id == chain_id && x.hash.is_some()).collect();
+    let pending: Vec<Entry> = list_for(owner)?.into_iter().filter(|x| x.kind == "out" && x.status == "pending" && x.chain_id == chain_id && x.hash.is_some()).collect();
     if pending.is_empty() { return Ok(false); }
     let mut outcomes: Vec<(u128, String, bool, u128)> = Vec::new();
     let mut unmined: Vec<(u128, String)> = Vec::new();
@@ -205,7 +214,7 @@ pub fn reconcile(rpc: &eth::Rpc, chain_id: u128, owner: &str) -> Result<bool, St
         }
     }
     if outcomes.is_empty() && dropped.is_empty() { return Ok(false); }
-    update(|e| {
+    update_for(owner, |e| {
         for (nonce, hash, ok, block) in &outcomes { settle(e, chain_id, *nonce, hash, *ok, *block); }
         for hash in &dropped { set_status(e, hash, "dropped", None); }
     })?;
@@ -245,7 +254,7 @@ pub(crate) async fn history_reconcile(rpc_url: String) -> CmdResult<Vec<Entry>> 
 #[tauri::command]
 pub(crate) async fn history_add_incoming(chain_id: u128, amount_wei: String) -> CmdResult<Vec<Entry>> {
     let wei: u128 = amount_wei.parse().map_err(|_| "bad amount".to_string())?;
-    blocking(move || record_balance_increase(chain_id, wei)).await
+    blocking(move || record_balance_increase(&active_owner()?, chain_id, wei)).await
 }
 
 #[cfg(test)]

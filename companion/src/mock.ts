@@ -6,6 +6,8 @@
 //            ?phonebusy=1   Send queues behind another request on the phone ("Waiting for your phone")
 //            ?deposit=N     a deposit arrives N seconds after load (setup step 4, notifications)
 //            ?history=0     empty activity (default: a stuck pending send, a speed-up pair, incoming ETH/USDC)
+//            ?accounts=3    three paired accounts (Account 1, Account 2, Account 1 · passphrase)
+//            ?phoneacct=2|pp|new  the phone is on Account 2 / the passphrase wallet / an unpaired account
 // With ?paired=0 the guided setup opens. NFTs: three on Base; on Ethereum the scan is refused like on
 // public nodes. The stuck transaction stays pending, so Speed up / Cancel can be walked through.
 
@@ -13,6 +15,11 @@ import type { Attestation, AttestationDetails, HistoryEntry, Stage, Quote, TxPar
 
 const params = new URLSearchParams(location.search);
 const ADDRESS = "0x7A3b9C1d2E4f5061728394A5b6C7d8E9f0A1B2c3";
+const ADDRESS2 = "0x51eA0b8F1a0C6f3F0c1B2e5A6d7C8b9A0e1F2d3C";
+const ADDRESS_PP = "0x9F3e2D1c0B9a8F7e6D5c4B3a2F1e0D9c8B7a6F5e";
+const ADDRESS_NEW = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
+/** The address the mock phone is on (its active account). */
+const PHONE_ADDRESS = ({ "2": ADDRESS2, pp: ADDRESS_PP, new: ADDRESS_NEW } as Record<string, string>)[params.get("phoneacct") ?? ""] ?? ADDRESS;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const BAL: Record<number, string> = { 8453: "0.04213377", 1: "0.1284", 10: "0.0", 42161: "0.0031", 137: "12.5", 11155111: "1.9" };
 const RPC_CHAIN: Record<string, number> = {
@@ -39,7 +46,7 @@ function mockAttestation(kind: string, allowDev: boolean): Attestation {
     root: "Google Hardware Attestation Root (RSA)", provisioning: "factory", chain_length: 4, revocation: "Not revoked (Google status list of 2026-10-10)",
   };
   const now = Math.floor(Date.now() / 1000);
-  const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: ADDRESS, checked_at: now, dev_mode: allowDev, ...a });
+  const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: PHONE_ADDRESS, checked_at: now, dev_mode: allowDev, ...a });
   switch (kind) {
     case "genuine": return r({ verdict: "genuine", headline: "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M",
       details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4e", verified_boot_key_known: true,
@@ -72,7 +79,14 @@ const txp = (to: string, value: string, maxFee = "0x3b9aca00", prio = "0xf4240")
 const art = (hue: number, label: string) => "data:image/svg+xml;base64," + btoa(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8" shape-rendering="crispEdges"><rect width="8" height="8" fill="hsl(${hue} 55% 18%)"/><rect x="2" y="1" width="4" height="1" fill="hsl(${hue} 80% 70%)"/><rect x="1" y="2" width="1" height="2" fill="hsl(${hue} 80% 70%)"/><rect x="6" y="2" width="1" height="2" fill="hsl(${hue} 80% 70%)"/><rect x="1" y="4" width="6" height="3" fill="hsl(${hue} 80% 70%)"/><title>${label}</title></svg>`);
 
 export function createMock(): Mock {
-  let paired: string | null = params.get("paired") === "0" ? null : ADDRESS.toLowerCase();
+  type Acct = { address: string; label: string; wallet: "standard" | "passphrase" | null; account: number | null };
+  const accounts: Acct[] = params.get("paired") === "0" ? [] : [{ address: ADDRESS, label: "Account 1", wallet: "standard", account: 1 }];
+  if (accounts.length && Number(params.get("accounts") ?? "1") >= 2) accounts.push({ address: ADDRESS2, label: "Account 2", wallet: "standard", account: 2 });
+  if (accounts.length && Number(params.get("accounts") ?? "1") >= 3) accounts.push({ address: ADDRESS_PP, label: "Account 1 · passphrase", wallet: "passphrase", account: 1 });
+  let paired: string | null = accounts.length ? ADDRESS.toLowerCase() : null;
+  const activeAcct = () => accounts.find((x) => x.address.toLowerCase() === paired) ?? null;
+  const phoneAcct = (): { account: number | null; wallet: "standard" | "passphrase" | null } =>
+    PHONE_ADDRESS === ADDRESS2 ? { account: 2, wallet: "standard" } : PHONE_ADDRESS === ADDRESS_PP ? { account: 1, wallet: "passphrase" } : PHONE_ADDRESS === ADDRESS_NEW ? { account: 3, wallet: "standard" } : { account: 1, wallet: "standard" };
   const phone = params.get("phone") ?? "accessory";
   const outcome = params.get("outcome") ?? "approve";
   let cancelled = false;
@@ -106,20 +120,37 @@ export function createMock(): Mock {
   async function invoke<T>(cmd: string, a: Record<string, unknown> = {}): Promise<T> {
     const chainOf = (url: unknown) => RPC_CHAIN[String(url)] ?? 8453;
     switch (cmd) {
-      case "device_status": return { phone, paired, paired_checksum: paired ? ADDRESS : null, pairing_path: "~/Library/Application Support/PhoneVault/paired-signer.json" } as T;
-      case "read_address": await sleep(1200); if (phone === "none") throw "no Android device on USB"; return ADDRESS as T;
+      case "device_status": return { phone, paired, paired_checksum: activeAcct()?.address ?? null, paired_label: activeAcct()?.label ?? null,
+        accounts: accounts.map((x) => ({ address: x.address.toLowerCase(), checksum: x.address, label: x.label, wallet: x.wallet, account: x.account, active: x.address.toLowerCase() === paired })),
+        pairing_path: "~/Library/Application Support/PhoneVault/paired-accounts.json" } as T;
+      case "read_address": {
+        await sleep(1200); if (phone === "none") throw "no Android device on USB";
+        const p = phoneAcct(); const known = accounts.find((x) => x.address === PHONE_ADDRESS);
+        return { address: PHONE_ADDRESS, ...p, label: known?.label ?? (p.wallet === "passphrase" ? `Account ${p.account} · passphrase` : `Account ${p.account}`) } as T;
+      }
+      case "select_account": { const x = accounts.find((y) => y.address.toLowerCase() === String(a.address).toLowerCase()); if (!x) throw "that address is not paired with this Mac"; paired = x.address.toLowerCase(); return undefined as T; }
+      case "rename_account": { const x = accounts.find((y) => y.address.toLowerCase() === String(a.address).toLowerCase()); if (x) x.label = String(a.label).trim() || x.label; return undefined as T; }
+      case "forget_account": {
+        const i = accounts.findIndex((y) => y.address.toLowerCase() === String(a.address).toLowerCase()); if (i >= 0) accounts.splice(i, 1);
+        if (!activeAcct()) paired = accounts[0]?.address.toLowerCase() ?? null; return undefined as T;
+      }
       case "attest_phone": {
         await sleep(1500); if (phone === "none") throw "no Android device on USB";
         lastAttestation = mockAttestation(params.get("attest") ?? "development", Boolean(a.allowDev)); return lastAttestation as T;
       }
       case "attestation_cached": return lastAttestation as T;
-      case "confirm_pairing": paired = ADDRESS.toLowerCase(); return "" as T;
-      case "forget_pairing": paired = null; return undefined as T;
+      case "confirm_pairing": {
+        const addr = String(a.address); const known = accounts.find((x) => x.address.toLowerCase() === addr.toLowerCase());
+        const label = (a.label as string | null) ?? `Account ${accounts.length + 1}`;
+        if (known) known.label = label; else accounts.push({ address: addr, label, wallet: (a.wallet as Acct["wallet"]) ?? null, account: (a.account as number | null) ?? null });
+        paired = addr.toLowerCase(); return "" as T;
+      }
+      case "forget_pairing": paired = null; accounts.length = 0; return undefined as T;
       case "wallet": {
         await sleep(300 + Math.random() * 500);
         if (!paired) throw "not paired yet";
         const c = chainOf(a.rpcUrl); const eth = BAL[c] ?? "0";
-        return { address: ADDRESS, balance_wei: toWei(eth), balance_eth: eth, chain_id: c, block: 20511298 } as T;
+        return { address: activeAcct()?.address ?? ADDRESS, balance_wei: toWei(eth), balance_eth: eth, chain_id: c, block: 20511298 } as T;
       }
       case "fee_estimate": await sleep(250); return { chain_id: chainOf(a.rpcUrl), gas: 21000, typical_fee_wei: "1260000000000", typical_fee_eth: "0.00000126", max_fee_wei: "4200000000000", max_fee_eth: "0.0000042" } as T;
       case "max_sendable": await sleep(250); return { amount_eth: "0.04203377", amount_wei: toWei("0.04203377") } as T;
@@ -152,7 +183,7 @@ export function createMock(): Mock {
         emit(t, "verifying"); await sleep(400);
         const hash = rndHash();
         pending = { hash, to: q.to, amount: q.amount_eth, chain: parseInt(q.chain_id, 16), polls: 0, quote: a.quote as Quote };
-        return { hash, signer: ADDRESS } as T;
+        return { hash, signer: activeAcct()?.address ?? ADDRESS } as T;
       }
       case "sign_cancel": cancelled = true; return undefined as T;
       case "broadcast_verified": {

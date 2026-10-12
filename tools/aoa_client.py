@@ -521,6 +521,15 @@ def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
 
 
 def request_for(args):
+    request = _request_for(args)
+    # Optional signer the request is for (phones with several accounts refuse a request for an
+    # account that is not active on them: "Switch to the right account on the phone").
+    if getattr(args, "sender", None):
+        request["from"] = args.sender.lower()
+    return request
+
+
+def _request_for(args):
     request_id = str(uuid.uuid4())
     if args.command in ("address", "pair"):
         return {"id": request_id, "method": "getAddress"}
@@ -571,6 +580,8 @@ def main():
     sign.add_argument("--to", default="0x1111111111111111111111111111111111111111")
     sign.add_argument("--value", default="0x0")
     sign.add_argument("--data", default="0x")
+    sign.add_argument("--from", dest="sender", default=None,
+                      help="Name the signing account in the request (the phone refuses another one)")
     sign.add_argument(
         "--expect-address", default=None,
         help="Override the pinned signer for this call (the recovered signer must match it)",
@@ -587,6 +598,8 @@ def main():
         help="0x digest the signature must cover (required for --typed-file: this client has no "
              "EIP-712 encoder; personal_sign digests are computed here)")
     message.add_argument("--expect-address", default=None)
+    message.add_argument("--from", dest="sender", default=None,
+                         help="Name the signing account in the request (the phone refuses another one)")
     attest = subparsers.add_parser(
         "attest", help="Ask the phone to attest a fresh challenge (device check); saves the exchange")
     attest.add_argument("--challenge", default=None, help="lowercase hex, 16..64 bytes (default: 32 random bytes)")

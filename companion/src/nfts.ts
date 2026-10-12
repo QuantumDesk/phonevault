@@ -12,6 +12,9 @@ const views = new Map<number, ChainView>();
 const meta = new Map<string, { loading: boolean; image: string | null; name: string | null; error: string | null }>();
 const key = (n: Nft) => `${n.chain_id}:${n.contract.toLowerCase()}:${n.token_id}`;
 
+/** Another account is shown: its NFTs are loaded fresh (each account has its own store). */
+export function resetNfts() { views.clear(); }
+
 export interface NftHost { chainId: () => number; rpcFor: (id: number) => string; rerender: () => void }
 
 function viewFor(chainId: number, host: NftHost): ChainView {

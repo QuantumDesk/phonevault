@@ -5,7 +5,12 @@
 import type { Mock } from "./mock";
 
 export type Presence = "none" | "android" | "accessory";
-export interface Status { phone: Presence; paired: string | null; paired_checksum: string | null; pairing_path: string }
+/** One paired account (a phone can have several, plus passphrase wallets). */
+export interface PairedAccount { address: string; checksum: string; label: string; wallet: "standard" | "passphrase" | null; account: number | null; active: boolean }
+/** `paired` is the ACTIVE account: the one the UI shows and every request is pinned to. */
+export interface Status { phone: Presence; paired: string | null; paired_checksum: string | null; paired_label: string | null; accounts: PairedAccount[]; pairing_path: string }
+/** The phone's active account as getAddress reports it (account/wallet are null for older phone apps). */
+export interface PhoneAccount { address: string; account: number | null; wallet: "standard" | "passphrase" | null; label: string }
 export interface Wallet { address: string; balance_wei: string; balance_eth: string; chain_id: number; block: number }
 export interface Quote {
   chain_id: string; nonce: string; max_priority_fee_per_gas: string; max_fee_per_gas: string; gas_limit: string;
@@ -38,7 +43,7 @@ export interface HistoryEntry {
 /** USD per unit for the coins whose price the app knows (Coinbase spot; null when unavailable). */
 export interface Prices { ETH: number | null; POL: number | null; BTC: number | null }
 /** Pushed by the background watcher (Rust) whenever it reads a native balance. */
-export interface WatchBalance { chain_id: number; balance_wei: string; balance_eth: string; block: number }
+export interface WatchBalance { owner?: string; chain_id: number; balance_wei: string; balance_eth: string; block: number }
 /** How far back the watcher could search transfer logs on a network, or why it couldn't. */
 export interface ScanStatus { chain_id: number; from_block: number | null; to_block: number | null; error: string | null }
 export interface Nft { chain_id: number; contract: string; token_id: string; name: string | null; symbol: string | null; owned: boolean | null; checked_at: number }
@@ -75,8 +80,13 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
 
 export const api = {
   status: () => call<Status>("device_status"),
-  readAddress: () => call<string>("read_address"),
-  confirmPairing: (address: string) => call<string>("confirm_pairing", { address }),
+  readAddress: () => call<PhoneAccount>("read_address"),
+  confirmPairing: (address: string, label?: string | null, account?: number | null, wallet?: string | null) =>
+    call<string>("confirm_pairing", { address, label: label ?? null, account: account ?? null, wallet: wallet ?? null }),
+  /** Show (and pin new requests to) another paired account. */
+  selectAccount: (address: string) => call<void>("select_account", { address }),
+  renameAccount: (address: string, label: string) => call<void>("rename_account", { address, label }),
+  forgetAccount: (address: string) => call<void>("forget_account", { address }),
   forgetPairing: () => call<void>("forget_pairing"),
   wallet: (rpcUrl: string) => call<Wallet>("wallet", { rpcUrl }),
   quote: (rpcUrl: string, to: string, amountEth: string) => call<Quote>("quote", { rpcUrl, to, amountEth }),

@@ -145,3 +145,13 @@ Open items:
 3. v2 auth-bound key + migration + phrase re-reveal via credential prompt.
 4. Wipe-after-10 by policy; remove the app-side attempt counter once the system one is proven.
 5. Change PIN. Harness updated; auditor review requested (session/unlock boundary changes).
+
+
+## Accounts and passphrase wallets (2026-10-11)
+
+Switching accounts, adding one, opening or closing a passphrase wallet all decrypt the seed
+record once (`VaultKeyStore.deriveAccount`), so they run inside the seed key's
+`AUTH_WINDOW_SECONDS` exactly like unlock: through `withSeedKey`, which reuses a fresh PIN
+confirmation or asks for the PIN, and with one automatic re-prompt when the window lapsed between
+the check and the decrypt (`authLapsed`). Unlock itself derives the saved active account of the
+standard wallet in the same single decrypt as before; the passphrase is never part of unlock.

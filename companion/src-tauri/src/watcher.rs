@@ -65,10 +65,26 @@ struct Persisted {
     rpcs: HashMap<String, String>,
     notify: bool,
     chain_id: u64,
+    /** Scan state of `owner` (the account the Mac shows). */
     chains: HashMap<String, ChainState>,
+    /** Scan state of the other paired accounts, kept while another one is shown. */
+    #[serde(default)]
+    other_owners: HashMap<String, HashMap<String, ChainState>>,
 }
 impl Default for Persisted {
-    fn default() -> Self { Persisted { owner: None, rpcs: HashMap::new(), notify: true, chain_id: 8453, chains: HashMap::new() } }
+    fn default() -> Self { Persisted { owner: None, rpcs: HashMap::new(), notify: true, chain_id: 8453, chains: HashMap::new(), other_owners: HashMap::new() } }
+}
+
+impl Persisted {
+    /// Show another account: park the current account's scan state, bring back the new one's
+    /// (so switching back and forth does not re-scan or re-notify). Returns true if it changed.
+    fn switch_owner(&mut self, owner: &str) -> bool {
+        if self.owner.as_deref() == Some(owner) { return false; }
+        if let Some(old) = self.owner.take() { let parked = std::mem::take(&mut self.chains); self.other_owners.insert(old, parked); }
+        self.chains = self.other_owners.remove(owner).unwrap_or_default();
+        self.owner = Some(owner.to_string());
+        true
+    }
 }
 
 /// How far back transfer logs were searched on a network, or why it failed.
@@ -178,7 +194,7 @@ fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String
     if node_chain != chain as u128 { return Err(format!("the node for chain {chain} is on chain {node_chain}")); }
     let block = rpc.block_number().map_err(|e| e.0)?;
     let balance = rpc.balance_at(owner, block).map_err(|e| e.0)?;
-    let _ = app.emit("watch-balance", json!({"chain_id": chain, "balance_wei": balance.to_string(), "balance_eth": eth::format_eth(balance), "block": block}));
+    let _ = app.emit("watch-balance", json!({"owner": owner, "chain_id": chain, "balance_wei": balance.to_string(), "balance_eth": eth::format_eth(balance), "block": block}));
     if chain == selected_chain() { crate::tray::set_balance(app, chain, balance); }
 
     let mut found = Found { incoming: Vec::new(), changed: false };
@@ -210,10 +226,10 @@ fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String
             }
             if items.iter().any(|i| i.hash.is_empty()) { items.clear(); }
             if items.is_empty() {
-                let entries = history::record_balance_increase(chain as u128, delta)?;
+                let entries = history::record_balance_increase(owner, chain as u128, delta)?;
                 found.incoming.extend(entries.into_iter().take(1));
             } else {
-                found.incoming.extend(history::record_incoming(items)?);
+                found.incoming.extend(history::record_incoming(owner, items)?);
             }
             found.changed = true;
         }
@@ -242,7 +258,7 @@ fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String
                 });
             }
             items.retain(|i| !i.hash.is_empty());
-            let added = history::record_incoming(items)?;
+            let added = history::record_incoming(owner, items)?;
             if !added.is_empty() { found.changed = true; }
             // the first (backfill) search fills history quietly; later ones notify
             if !first { found.incoming.extend(added); }
@@ -282,8 +298,8 @@ pub fn start(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(2));
             let woke = WAKE.swap(false, std::sync::atomic::Ordering::SeqCst);
             let Ok(Some(owner)) = pairing::load() else { crate::tray::set_unpaired(&app); continue };
-            // a different wallet starts from scratch
-            let reset = with_state(|s| { if s.owner.as_deref() != Some(owner.as_str()) { s.owner = Some(owner.clone()); s.chains.clear(); true } else { false } }).unwrap_or(false);
+            // another account: its own scan state (a newly paired one starts from scratch)
+            let reset = with_state(|s| s.switch_owner(&owner)).unwrap_or(false);
             if reset { due.clear(); crate::tray::set_address(&app, &verify::checksum(&owner)); }
             let selected = selected_chain();
             let mut any = false;
@@ -361,6 +377,24 @@ mod tests {
             let (logs, covered, err) = search_logs(&rpc, head - (network(chain).unwrap().4 - 1), head, Some(toks), json!([TRANSFER_TOPIC, Value::Null, topic_address(busy)]));
             println!("{chain}: {} logs, covered from {covered:?} of {}..{head}, {err:?}", logs.len(), head - (network(chain).unwrap().4 - 1));
         }
+    }
+
+    #[test]
+    fn scan_state_is_kept_per_account() {
+        let mut s = Persisted::default();
+        assert!(s.switch_owner(ME));
+        s.chains.insert("1".into(), ChainState::default());
+        assert!(!s.switch_owner(ME));
+        let other = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+        assert!(s.switch_owner(other));
+        assert!(s.chains.is_empty(), "a newly shown account starts from scratch");
+        s.chains.insert("8453".into(), ChainState::default());
+        assert!(s.switch_owner(ME));
+        assert!(s.chains.contains_key("1") && !s.chains.contains_key("8453"), "switching back restores its state");
+        assert!(s.other_owners[other].contains_key("8453"));
+        // a state file from before accounts (no other_owners) still loads
+        let old: Persisted = serde_json::from_str(r#"{"owner":null,"rpcs":{},"notify":true,"chain_id":8453,"chains":{}}"#).unwrap();
+        assert!(old.other_owners.is_empty());
     }
 
     #[test]

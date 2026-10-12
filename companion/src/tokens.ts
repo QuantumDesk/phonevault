@@ -32,6 +32,9 @@ export const tokenBalancesFor = (chainId: number): TokenBalance[] | null => held
 export const tokenBalanceOf = (chainId: number, address: string): TokenBalance | undefined =>
   held.get(chainId)?.balances.find((b) => b.address.toLowerCase() === address.toLowerCase());
 
+/** Another account is shown: its token balances are fetched fresh. */
+export function resetTokenBalances() { held.clear(); heldErrors.clear(); }
+
 /** balanceOf for every listed token on `chainId` through `rpcUrl`. Display only. */
 export async function refreshTokenBalances(chainId: number, rpcUrl: string): Promise<void> {
   if ((await tokenList()).every((t) => t.chainId !== chainId)) return;

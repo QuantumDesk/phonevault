@@ -275,3 +275,55 @@ is not wiped by the in-app 10-wrong-PIN erase of the wallet (in credential mode,
 the whole phone); it is a local convenience record, not an integrity-protected log, and a rooted
 attacker could edit it to suppress a first-time warning — which is why every review still shows
 the full address.
+
+
+## Accounts and passphrase wallets (2026-10-11)
+
+**Accounts.** The phone derives m/44'/60'/0'/0/i for i = 0…19 from the one stored 24-word phrase.
+☰ → Accounts lists the opened ones (number, short address, optional label typed on the phone),
+adds the next index, renames, hides (never deletes: derivation is deterministic, a hidden account
+comes back with the same address) and selects the active one. The list is non-secret metadata in
+the app's `accounts` preferences (`AccountBook`: index, address, label, hidden flag, active index),
+bound to the wallet's account-0 address: after replace / restore / wipe it is discarded. Addresses
+in it are display hints only; selecting an account re-derives its key from the seed and must
+produce the stored address (`AccountBook.select`).
+
+**Keys in memory.** Unchanged in number: exactly one wallet private key is held while unlocked,
+the ACTIVE account's (`MainActivity.credentials`). Switching derives the new account inside the
+seed-key PIN window (`withSeedKey` → `VaultKeyStore.deriveAccount`, one decrypt of the record, as
+at unlock) and replaces the key under the state lock. Deriving also computes, transiently, the
+wallet's account-0 address and BIP-32 master fingerprint (to name the wallet); those keys are not
+kept. web3j keeps private keys as BigInteger, so — as before — dropped keys are unreferenced, not
+zeroed.
+
+**Passphrase ("25th word") wallet.** Optional BIP-39 passphrase, typed on the phone's own
+keyboard (printable ASCII, ≤ 100 characters, NFKD as BIP-39 requires), never stored, never sent
+over USB. While its wallet is open the passphrase is held as a `char[]` (so its other accounts can
+be derived without retyping) and zeroed on lock, close, deactivation and destroy; the typing
+buffer is a fixed-capacity `StringBuilder` overwritten on every exit; a "Use this wallet" char[]
+not yet consumed is zeroed on lock. web3j derives from a `String`, so each derivation creates a
+short-lived immutable copy that cannot be zeroed (documented limitation, same class as the
+mnemonic `String` at unlock). Unlock always opens the standard wallet: the passphrase must be
+re-entered after every unlock or reboot. Nothing about a passphrase wallet is persisted (its
+account list lives in memory only), so the phone keeps no trace that one was used.
+
+A wrong passphrase is not an error — it opens a different, empty wallet, by design. The phone
+shows the wallet's master fingerprint and Account 1 address before it is used and on Home
+("Passphrase wallet · fingerprint 1A2B3C4D") so the user recognises the right one. The 24-word
+backup does not include the passphrase; the Security page and the passphrase screens say so.
+
+**Which key signs.** Every review, getAddress and attestation uses the active account. The
+approval screens show "Signing with: Account 2 (passphrase wallet) · fingerprint … 0x…". A request
+may name its signer in an optional `from` field (the companion always does; WalletConnect and the
+extension pass the dApp's account); one that names another account is refused before any review
+with "Switch to the right account on the phone" (`RequestRefusal.requireFrom`), and the signing
+step re-checks it (`ApprovalSession` / `MessageApprovalSession`). Switching accounts is not
+possible while a request is on screen; a review built for one key never signs with another
+(`signIfIdentityUnchanged`). getAddress adds `account` ("1"…"20") and `wallet`
+("standard"/"passphrase") — never the label, fingerprint or passphrase.
+
+**Companion.** Pairing is per address (`paired-accounts.json`, 0600: address, label, wallet kind,
+account number, plus the ACTIVE address the Mac shows). Every request is pinned to the account
+active when it starts: it carries `from`, the attestation must name it, and the recovered signer
+must equal it. The single-address file of earlier versions migrates to "Account 1" (its history
+moves to `history-<address>.json`); history, NFTs and the watcher's scan state are per address.

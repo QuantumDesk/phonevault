@@ -368,6 +368,29 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
         assert!(validate_signature(&fixture_request(), &rej, SIGNER).unwrap_err().0.contains("rejected"));
     }
 
+    /// Several paired accounts: the signature must recover to the account that was ACTIVE when the
+    /// request started (pairing::load), not merely to any paired address.
+    #[test]
+    fn verify_pins_to_the_account_active_at_request_time() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("pv-verify-pin-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let other = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+        crate::pairing::add_in(&dir, SIGNER, None, Some("standard"), Some(1)).unwrap();
+        crate::pairing::add_in(&dir, other, None, Some("standard"), Some(2)).unwrap(); // now active
+        let active = crate::pairing::load_in(&dir).unwrap().active.unwrap();
+        assert_eq!(active, other);
+        let request = crate::pinned_request(fixture_request(), &active);
+        assert_eq!(request["from"], other, "the request names the account it is pinned to");
+        let e = validate_signature(&request, &fixture_response(), &active).unwrap_err();
+        assert!(e.0.contains("is not the paired phone"), "{}", e.0);
+        // the user switches the Mac to Account 1: a new request is pinned to it and verifies
+        let active = crate::pairing::select_in(&dir, SIGNER).unwrap().active.unwrap();
+        let request = crate::pinned_request(fixture_request(), &active);
+        assert_eq!(validate_signature(&request, &fixture_response(), &active).unwrap().signer, SIGNER);
+    }
+
     // ------------------------------------------------ shared vectors with the phone's JVM tests
     const VECTORS: &str = include_str!("../../../app/src/test/resources/message-signing-vectors.json");
     fn vectors() -> Value { serde_json::from_str(VECTORS).unwrap() }

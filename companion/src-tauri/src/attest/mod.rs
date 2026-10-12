@@ -226,11 +226,18 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
     // Hold the phone while deciding, so a check another caller started finishes first and its
     // verdict is used here instead of a second check.
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
-    let report = match cached() { Some(r) => r, None => run(STATE.lock().map(|s| s.allow_dev).unwrap_or(false))? };
+    let allow_dev = STATE.lock().map(|s| s.allow_dev).unwrap_or(false);
+    let report = match cached() {
+        // The phone may have switched accounts since the cached check (same USB connection):
+        // a cached verdict for another address is asked again, once, before refusing.
+        Some(r) if r.verdict() != Verdict::Fail && !r.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(pinned)) => run(allow_dev)?,
+        Some(r) => r,
+        None => run(allow_dev)?,
+    };
     if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
     match &report.address {
         Some(a) if a.eq_ignore_ascii_case(pinned) => Ok(report),
-        _ => Err("attestation: the phone on USB holds a different wallet than the one this Mac is paired with".into()),
+        _ => Err("attestation: the phone on USB is using a different account or wallet than the one selected on this Mac. Switch accounts on the phone (☰ → Accounts) or on this Mac".into()),
     }
 }
 

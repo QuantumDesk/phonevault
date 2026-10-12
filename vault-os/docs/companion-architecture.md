@@ -214,3 +214,15 @@ three operating systems.
 
 Useful upstream references: [Tauri](https://tauri.app/) and
 [libusb](https://github.com/libusb/libusb/wiki).
+
+
+## Addendum: several accounts (2026-10-11)
+
+The phone can hold several accounts (m/44'/60'/0'/0/i) and passphrase wallets. The companion keeps
+a list of paired addresses with labels ("Account 1", "Account 2 · passphrase") and one ACTIVE
+address that the UI, the menu bar and the watcher show. Each address is paired on its own after
+the user compared it with the phone's screen and the device check attested that address. A
+request is pinned to the active address at the moment it starts: it names it in `from` (the phone
+refuses it when another account is active there), the attestation must name it, and the recovered
+signer must equal it. On identify the companion compares the phone's active account with the list
+and offers to show it ("The phone is using Account 2") or to pair it if it is new.

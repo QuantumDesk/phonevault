@@ -3,16 +3,16 @@
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
 import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri } from "./api";
-import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance } from "./api";
+import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance, PairedAccount } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
-import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
+import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 import { extSettingsSection } from "./extension";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
-import { nftSection, type NftHost } from "./nfts";
+import { nftSection, resetNfts, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
 import "./extras.css";
 
@@ -59,10 +59,16 @@ async function refreshStatus() {
     const phoneChanged = s.phone !== status?.phone;
     const appeared = (status?.phone ?? "none") === "none" && s.phone !== "none";
     status = s; statusError = null;
-    if (s.phone === "none") { identity = { s: "unknown" }; if (device.report || device.error) { device = { report: null, checking: false, error: null }; failDismissed = false; renderPhoneNotice(); } }
+    if (s.phone === "none") { identity = { s: "unknown" }; phoneAddress = null; if (device.report || device.error) { device = { report: null, checking: false, error: null }; failDismissed = false; renderPhoneNotice(); } }
     else if (appeared) identifyPhone();
     renderHeader();
-    if (pairedChanged) { balances.clear(); balErrors.clear(); if (s.paired) { refreshAllBalances(); } render(); }
+    if (pairedChanged) {
+      // another account is shown (or pairing changed): everything per-account starts over
+      balances.clear(); balErrors.clear(); resetTokenBalances(); resetNfts(); history = [];
+      if (phoneAddress && identity.s !== "checking" && identity.s !== "unreadable") { identity = classifyPhone(phoneAddress); renderHeader(); renderPhoneNotice(); }
+      if (s.paired) { refreshAllBalances(); void refreshHistory(); }
+      render();
+    }
     else if (phoneChanged && (view === "pair" || view === "setup" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
   } catch (e) { statusError = errText(e); renderHeader(); }
 }
@@ -149,11 +155,12 @@ function renderHeader() {
   if (!statusError && phone !== "none") {
     if (identity.s === "checking") { label = "Checking phone…"; title = "Asking the phone which wallet it holds."; }
     else if (identity.s === "match") { label = "Your phone"; title = "The phone on USB holds the wallet this Mac is paired with."; cls = "accessory"; }
-    else if (identity.s === "different") { label = "Different wallet"; title = "The phone on USB holds a different wallet. Click to review."; cls = "danger"; }
+    else if (identity.s === "other") { label = `Phone on ${identity.label}`; title = `The phone is using ${identity.label}; this Mac shows ${activeLabel()}. Click to switch.`; cls = "android"; }
+    else if (identity.s === "different") { label = "Unpaired account"; title = "The phone on USB is using an account or wallet this Mac has not paired. Click to review."; cls = "danger"; }
     else if (identity.s === "unreadable") { label = "Unlock your phone"; title = "The phone is asking to be unlocked. This updates by itself once you unlock it."; }
   }
   const retry = identity.s === "unreadable" ? () => identifyPhone()
-    : identity.s === "different" ? () => { if (identity.s === "different") identity.dismissed = false; renderPhoneNotice(); } : undefined;
+    : identity.s === "different" || identity.s === "other" ? () => { if (identity.s === "different" || identity.s === "other") identity.dismissed = false; renderPhoneNotice(); } : undefined;
   header.replaceChildren(...[
     h("button", { class: "brand", onclick: () => go("home"), title: "Home" }, padlock(2), h("span", null, "PHONE VAULT")),
     retry ? h("button", { class: `chip ${cls}`, title, onclick: retry }, h("i", { class: "dot" }), label)
@@ -203,7 +210,7 @@ function homeView() {
       icon(device.report.verdict === "fail" ? "alert" : "shield", 16), h("span", { class: "grow" }, device.report.verdict === "fail" ? "This phone failed the device check. Sending is blocked." : device.report.headline), h("span", { class: "small" }, "Details")) : null,
     h("section", { class: "card account" },
       h("div", { class: "row between" },
-        h("p", { class: "kicker" }, "ACCOUNT 1"),
+        accountSelect(),
         networkSelect(),
       ),
       h("button", { class: "addr-btn", title: `${addr}\nClick to copy`, onclick: () => copy(addr) }, h("span", { class: "mono" }, short(addr)), icon("copy", 15)),
@@ -221,6 +228,25 @@ function homeView() {
     homeTabs(),
     prefs.tab === "nfts" ? nftSection(nftHost) : prefs.tab === "activity" ? activitySection(activityHost) : assetsTab(n),
   );
+}
+
+/** The paired accounts. Shows which one the phone is using; switching pins new requests to it. */
+const activeLabel = () => status?.paired_label ?? "Account 1";
+const pairedAccounts = (): PairedAccount[] => status?.accounts ?? [];
+const accountBusy = () => view === "send" && flow.s !== "form";
+async function selectAccount(address: string) {
+  if (accountBusy()) return;
+  try { await api.selectAccount(address); await refreshStatus(); } catch (e) { statusError = errText(e); renderHeader(); }
+}
+function accountSelect() {
+  const list = pairedAccounts();
+  const onPhone = (a: PairedAccount) => phoneAddress?.toLowerCase() === a.address.toLowerCase() && identity.s !== "unreadable";
+  if (list.length < 2) return h("p", { class: "kicker" }, activeLabel().toUpperCase());
+  const sel = h("select", { class: "net-select", "aria-label": "Account" },
+    list.map((a) => h("option", { value: a.address, selected: a.active }, `${a.label} · ${short(a.checksum)}${onPhone(a) ? " · on the phone" : ""}`)));
+  sel.addEventListener("change", () => { void selectAccount(sel.value); });
+  return h("label", { class: "net-chip acct-chip", title: "Accounts paired with this Mac. Requests are pinned to the one shown; the phone must be on the same account." },
+    h("span", { class: "kicker" }, activeLabel().toUpperCase()), icon("chevron", 14), sel);
 }
 
 function homeTabs() {
@@ -288,7 +314,7 @@ const setupHost: SetupHost = {
   devMode: () => prefs.devMode,
   setDevMode: (on) => { prefs.devMode = on; savePrefs(); identifyPhone(); render(); },
   recheck: () => { void identifyPhone(); },
-  confirmPairing: async (address) => { await api.confirmPairing(address); identity = { s: "match" }; await refreshStatus(); },
+  confirmPairing: async (address) => { await pairAccount(address, null); phoneAddress = address; identity = { s: "match" }; await refreshStatus(); },
   chainId: () => prefs.chainId,
   setChain: (id) => { prefs.chainId = id; savePrefs(); },
   balanceOf: (id) => balances.get(id)?.wei ?? null,
@@ -346,7 +372,20 @@ function topbar(title: string, back: (() => void) | null, extra?: Node) {
 
 // ------------------------------------------------------------------ pairing
 
-type PairState = { s: "idle"; error?: string } | { s: "reading" } | { s: "compare"; address: string } | { s: "mismatch" };
+type PairState = { s: "idle"; error?: string } | { s: "reading" } | { s: "compare"; address: string; label?: string; account?: number | null; wallet?: string | null } | { s: "mismatch" };
+
+/** Ask the phone which account it is on (number, standard/passphrase) to label a new pairing. Best effort. */
+async function describePhoneAccount(address: string): Promise<{ label: string; account: number | null; wallet: string | null } | null> {
+  try {
+    const info = await api.readAddress();
+    return info.address.toLowerCase() === address.toLowerCase() ? { label: info.label, account: info.account, wallet: info.wallet } : null;
+  } catch { return null; }
+}
+
+async function pairAccount(address: string, label: string | null, known?: { account?: number | null; wallet?: string | null }) {
+  const info = known?.account !== undefined ? null : await describePhoneAccount(address);
+  await api.confirmPairing(address, label ?? info?.label ?? null, known?.account ?? info?.account ?? null, known?.wallet ?? info?.wallet ?? null);
+}
 let pair: PairState = { s: "idle" };
 
 function pairView() {
@@ -356,16 +395,25 @@ function pairView() {
   let body: Node;
   if (pair.s === "compare") {
     const address = pair.address;
+    const cmp = pair;
     const att = device.report;
     const attOk = !!att && att.verdict !== "fail" && att.address?.toLowerCase() === address.toLowerCase();
+    const labelInput = h("input", { type: "text", maxlength: "40", spellcheck: "false", value: cmp.label ?? "", placeholder: `Account ${pairedAccounts().length + 1}`, "aria-label": "Name for this account on this Mac" }) as HTMLInputElement;
+    if (cmp.label === undefined) void describePhoneAccount(address).then((info) => {
+      if (pair !== cmp) return;
+      cmp.label = info?.label ?? ""; cmp.account = info?.account ?? null; cmp.wallet = info?.wallet ?? null;
+      if (!labelInput.value) labelInput.value = cmp.label;
+    });
     body = h("div", { class: "stack" }, h("section", { class: "card" },
       h("p", { class: "kicker" }, "COMPARE"),
       h("h3", null, "Does this match your phone?"),
       h("p", { class: "muted" }, "On the phone, open Wallet. Compare every group of four characters below with the address it shows."),
       h("p", { class: "addr-compare mono" }, grouped(address)),
+      h("label", { class: "field" }, h("span", { class: "muted small" }, "Name on this Mac"), labelInput),
+      cmp.wallet === "passphrase" ? h("p", { class: "muted small" }, "This is a passphrase wallet. The phone forgets the passphrase when it locks: open the same passphrase wallet on the phone before each use.") : null,
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
-          try { await api.confirmPairing(address); pair = { s: "idle" }; identity = { s: "match" }; await refreshStatus(); renderPhoneNotice(); go("home"); } catch (e) { pair = { s: "idle", error: errText(e) }; render(); }
+          try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null }); pair = { s: "idle" }; await refreshStatus(); phoneAddress = address; identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); go("home"); } catch (e) { pair = { s: "idle", error: errText(e) }; render(); }
         }, disabled: !attOk, title: attOk ? "" : device.checking ? "Waiting for the device check" : "The device check must pass first" }, icon("check", 18), device.checking ? "Checking phone…" : "It matches"),
         h("button", { class: "big", onclick: () => { pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),
@@ -381,10 +429,12 @@ function pairView() {
     const reading = pair.s === "reading";
     body = h("section", { class: "card pair" },
       h("div", { class: "pair-hero" }, padlock(6)),
-      h("h3", null, paired ? "Pair again" : "Pair your phone"),
-      h("p", { class: "muted" }, "This Mac remembers your phone's address and checks every signature against it. It never sees a key."),
+      h("h3", null, paired ? "Pair another account" : "Pair your phone"),
+      h("p", { class: "muted" }, paired
+        ? "Each account (and each passphrase wallet) is paired on its own. On the phone, switch to it first (☰ → Accounts, or ☰ → Passphrase wallet), then read it here."
+        : "This Mac remembers your phone's address and checks every signature against it. It never sees a key."),
       h("ol", { class: "steps" },
-        h("li", { class: phone !== "none" ? "done" : "" }, "Plug the vault into this Mac and unlock it."),
+        h("li", { class: phone !== "none" ? "done" : "" }, paired ? "Plug in the vault, unlock it and switch to the account." : "Plug the vault into this Mac and unlock it."),
         h("li", null, "Read its address over USB."),
         h("li", null, "Compare it with the phone's screen, then pair."),
       ),
@@ -404,8 +454,19 @@ function pairView() {
 // restored or swapped phone is noticed at once instead of at signing time. Pairing itself still
 // ends with the person comparing the address against the phone's own screen.
 type Identity = { s: "unknown" } | { s: "checking" } | { s: "match" }
+  | { s: "other"; address: string; label: string; dismissed: boolean }
   | { s: "different"; address: string; dismissed: boolean } | { s: "unreadable"; error: string };
 let identity: Identity = { s: "unknown" };
+/** The account the phone on USB said it is using (attestation), until it leaves the bus. */
+let phoneAddress: string | null = null;
+
+/** Where the phone's account stands against this Mac: the one shown, another paired one, or unpaired. */
+function classifyPhone(address: string): Identity {
+  if (!status?.paired) return { s: "unknown" };
+  if (address.toLowerCase() === status.paired.toLowerCase()) return { s: "match" };
+  const other = pairedAccounts().find((a) => a.address.toLowerCase() === address.toLowerCase());
+  return other ? { s: "other", address, label: other.label, dismissed: false } : { s: "different", address, dismissed: false };
+}
 
 let identifying = false;
 /** Read fresh each time: status changes while a request is in flight. */
@@ -421,10 +482,10 @@ async function identifyPhone() {
   try {
     const report = await checkDevice();
     const address = report.address;
+    phoneAddress = address;
     if (!address) { identity = { s: "unknown" }; } // refused without naming a wallet (e.g. an app too old to attest); the badge says why
     else if (!status?.paired) { identity = { s: "unknown" }; if (view === "setup") render(); else { pair = { s: "compare", address }; go("pair"); } }
-    else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
-    else identity = { s: "different", address, dismissed: false };
+    else identity = classifyPhone(address);
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
   finally { identifying = false; }
   renderHeader(); renderPhoneNotice();
@@ -447,18 +508,36 @@ function renderPhoneNotice() {
     document.body.append(noticeEl);
     return;
   }
+  if (identity.s === "other" && !identity.dismissed && view !== "pair" && view !== "setup") {
+    const { address, label } = identity;
+    const close = () => { if (identity.s === "other") identity.dismissed = true; renderPhoneNotice(); };
+    noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
+      h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
+        h("p", { class: "kicker" }, "OTHER ACCOUNT ON THE PHONE"),
+        h("h3", null, `The phone is using ${label}`),
+        h("p", { class: "muted" }, `This Mac shows ${activeLabel()}. Requests from this Mac are pinned to the account it shows, and the phone refuses a request for an account that is not active on it. Show ${label} here, or switch accounts on the phone (☰ → Accounts).`),
+        h("div", { class: "set-row" }, h("span", { class: "muted" }, "This Mac shows"), h("span", { class: "mono" }, `${activeLabel()} · ${short(status?.paired_checksum ?? "")}`)),
+        h("div", { class: "set-row" }, h("span", { class: "muted" }, "Phone is on"), h("span", { class: "mono" }, `${label} · ${short(address)}`)),
+        h("div", { class: "actions" },
+          h("button", { class: "big primary", disabled: accountBusy(), onclick: () => { noticeEl?.remove(); noticeEl = null; void selectAccount(address); } }, icon("check", 18), `Show ${label} here`),
+          h("button", { class: "big", onclick: close }, "Not now"),
+        ),
+      ));
+    document.body.append(noticeEl);
+    return;
+  }
   if (identity.s !== "different" || identity.dismissed || view === "pair" || view === "setup") return;
   const found = identity.address;
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
   noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
     h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-      h("p", { class: "kicker" }, "NEW WALLET ON USB"),
-      h("h3", null, "This phone holds a different wallet"),
-      h("p", { class: "muted" }, "That happens after the phone was reset or restored, or when it is a different phone. Sending stays blocked until you pair it."),
+      h("p", { class: "kicker" }, "UNPAIRED ACCOUNT ON USB"),
+      h("h3", null, "The phone is using an account this Mac hasn't paired"),
+      h("p", { class: "muted" }, "That happens when you switch to a new account or a passphrase wallet on the phone, after the phone was reset or restored, or with a different phone. Sending from it stays blocked until you pair it; your other paired accounts stay as they are."),
       h("div", { class: "set-row" }, h("span", { class: "muted" }, "Paired with"), h("span", { class: "mono" }, short(status?.paired_checksum ?? ""))),
       h("div", { class: "set-row" }, h("span", { class: "muted" }, "Phone on USB"), h("span", { class: "mono" }, short(found))),
       h("div", { class: "actions" },
-        h("button", { class: "big primary", onclick: () => { noticeEl?.remove(); noticeEl = null; identity = { s: "unknown" }; pair = { s: "compare", address: found }; go("pair"); } }, icon("phone", 18), "Pair this phone"),
+        h("button", { class: "big primary", onclick: () => { noticeEl?.remove(); noticeEl = null; identity = { s: "unknown" }; pair = { s: "compare", address: found }; go("pair"); } }, icon("phone", 18), "Pair this account"),
         h("button", { class: "big", onclick: close }, "Not now"),
       ),
     ));
@@ -645,7 +724,7 @@ function flowBody(): Node {
       const assetField = tokensOn(n.id).length ? h("label", { class: "field" }, h("span", { class: "field-label" }, "Asset"),
         h("span", { class: "net-chip asset-chip" }, h("span", null, tok ? `${tok.symbol} · ${tok.name}` : `${n.symbol} (native)`), icon("chevron", 14), assetSel)) : null;
       const form = h("form", { class: "card form", novalidate: true },
-        h("div", { class: "from-line" }, h("span", { class: "muted small" }, "From Account 1 · ", h("span", { class: "mono" }, short(status!.paired_checksum!))), refs.avail),
+        h("div", { class: "from-line" }, h("span", { class: "muted small" }, `From ${activeLabel()} · `, h("span", { class: "mono" }, short(status!.paired_checksum!))), refs.avail),
         assetField,
         h("label", { class: "field" }, h("span", { class: "field-label" }, "To"), toInput, refs.toMsg),
         h("label", { class: "field" }, h("span", { class: "field-label" }, "Amount"),
@@ -1141,6 +1220,28 @@ function scanStatusSection() {
   );
 }
 
+/** Settings → Phone: every paired account; show one, rename it, or forget it. */
+function accountsSettings() {
+  const rows = pairedAccounts().map((a) => {
+    const onPhone = phoneAddress?.toLowerCase() === a.address.toLowerCase();
+    const name = h("input", { type: "text", class: "acct-name", value: a.label, maxlength: "40", spellcheck: "false", "aria-label": `Name for ${a.checksum}` }) as HTMLInputElement;
+    name.addEventListener("change", async () => { const v = name.value.trim(); if (!v) { name.value = a.label; return; } try { await api.renameAccount(a.address, v); await refreshStatus(); renderDrawer(); renderHeader(); if (view === "home") render(); } catch (e) { name.value = a.label; statusError = errText(e); } });
+    return h("div", { class: "acct-row" },
+      h("div", { class: "grow" }, name,
+        h("button", { class: "link mono small", title: a.checksum, onclick: () => copy(a.checksum) }, short(a.checksum), icon("copy", 12)),
+        a.wallet === "passphrase" ? h("span", { class: "tag" }, "passphrase") : null,
+        onPhone ? h("span", { class: "tag" }, "on the phone") : null),
+      a.active ? h("span", { class: "tag on" }, "Shown") : h("button", { disabled: accountBusy(), onclick: async () => { await selectAccount(a.address); renderDrawer(); } }, "Show"),
+      pairedAccounts().length > 1 ? h("button", { class: "danger-ghost", title: "Unpair this account (its local history stays on disk)", onclick: async (ev: Event) => {
+        const b = ev.currentTarget as HTMLButtonElement;
+        if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Click again"; return; }
+        try { await api.forgetAccount(a.address); await refreshStatus(); renderDrawer(); } catch (e) { b.textContent = errText(e); }
+      } }, "Forget") : null,
+    );
+  });
+  return h("div", { class: "acct-list" }, h("p", { class: "muted small" }, "Paired accounts. Sending, signing and the menu bar use the one shown; the phone must be on the same account."), ...rows);
+}
+
 let version = "";
 function renderDrawer() {
   const paired = status?.paired_checksum;
@@ -1161,15 +1262,15 @@ function renderDrawer() {
     h("section", { class: "set" },
       h("h4", null, "PHONE"),
       h("div", { class: "set-row" }, h("span", null, "USB"), h("span", { class: `chip ${phone}` }, h("i", { class: "dot" }), phone === "accessory" ? "Connected" : phone === "android" ? "On USB" : "Not connected")),
-      h("div", { class: "set-row" }, h("span", null, "Paired address"), paired ? h("button", { class: "link mono", title: paired, onclick: () => copy(paired) }, short(paired), icon("copy", 14)) : h("span", { class: "muted" }, "Not paired")),
+      paired ? accountsSettings() : h("div", { class: "set-row" }, h("span", null, "Paired address"), h("span", { class: "muted" }, "Not paired")),
       h("div", { class: "row gap" },
-        h("button", { onclick: () => { closeDrawer(); pair = { s: "idle" }; go("pair"); } }, paired ? "Pair again" : "Pair phone"),
+        h("button", { onclick: () => { closeDrawer(); pair = { s: "idle" }; go("pair"); } }, paired ? "Pair another account" : "Pair phone"),
         h("button", { onclick: () => { closeDrawer(); setupStart(setupHost); go("setup"); } }, icon("refresh", 15), "Run setup again"),
         paired ? h("button", { class: "danger-ghost", onclick: async (ev: Event) => {
           const b = ev.currentTarget as HTMLButtonElement;
           if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Click again to forget"; return; }
           try { await api.forgetPairing(); closeDrawer(); await refreshStatus(); } catch (e) { b.textContent = errText(e); }
-        } }, "Forget phone") : null,
+        } }, pairedAccounts().length > 1 ? "Forget all accounts" : "Forget phone") : null,
       ),
       status?.pairing_path ? h("p", { class: "muted small" }, "Stored in ", h("span", { class: "mono" }, status.pairing_path)) : null,
     ),
@@ -1225,7 +1326,8 @@ mountWalletConnect({
   paired: () => status?.paired_checksum ?? null,
   rpcFor,
   phoneBlocked: () => device.report?.verdict === "fail" ? "This phone failed the device check (Settings → Device). Signing is blocked."
-    : identity.s === "different" ? "The phone on USB holds a different wallet. Pair it first (Settings → Phone)."
+    : identity.s === "different" ? "The phone on USB is using an account this Mac hasn't paired. Pair it first (Settings → Phone)."
+    : identity.s === "other" ? `The phone is using ${identity.label}, but this Mac shows ${activeLabel()}. Switch accounts on the phone or in Settings → Phone.`
     : identifying ? "Checking which wallet the phone holds. Try again in a moment."
     : view === "send" && ["connecting", "on_phone", "verifying"].includes(flow.s) ? "The phone is busy with your Send. Finish it first." : null,
   changed: () => { if (view === "home") renderSoon(); if (drawerOpen && !drawer.contains(document.activeElement)) renderDrawer(); },
@@ -1235,6 +1337,8 @@ mountWalletConnect({
 (async () => {
   await refreshStatus();
   render();
+  // Preview only (no Tauri): ?open=drawer opens Settings, ?open=pair the pairing screen, for screenshots.
+  if (!isTauri) { const o = new URLSearchParams(location.search).get("open"); if (o === "drawer") openDrawer(); else if (o === "pair") { pair = { s: "idle" }; go("pair"); } }
   refreshHistory().then(pollPending);
   refreshPrices();
   setInterval(refreshStatus, 3000);
@@ -1243,6 +1347,7 @@ mountWalletConnect({
   // transactions on its own schedule and tells the UI; the preview has no watcher, so it polls.
   void onEvent<WatchBalance>("watch-balance", (b) => {
     const n = byId(b.chain_id); if (n.id !== b.chain_id || !status?.paired) return;
+    if (b.owner && b.owner.toLowerCase() !== status.paired.toLowerCase()) return; // a reading for the previously shown account
     setBalance(n.id, BigInt(b.balance_wei), b.balance_eth);
     if (view === "home") renderSoon();
     if (view === "send" && flow.s === "form") updateFormBalance();

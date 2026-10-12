@@ -90,11 +90,11 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
         // A speed-up/cancel must really replace a pending transaction from here (replace.rs).
         crate::replace::check(&quote, &pinned).map_err(|m| fail("internal", format!("replacement rejected: {m}"), false))?;
         // Exactly the request the original `sign` command builds.
-        let request = json!({
+        let request = crate::pinned_request(json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
             "chainId": quote.chain_id, "nonce": quote.nonce, "maxPriorityFeePerGas": quote.max_priority_fee_per_gas,
             "maxFeePerGas": quote.max_fee_per_gas, "gasLimit": quote.gas_limit, "to": quote.to, "value": quote.value, "data": quote.data,
-        });
+        }), &pinned);
         emit("connecting");
         let mut session = aoa::Session::connect().map_err(|e| match e {
             aoa::AoaError::NoDevice => fail("no_phone", e.to_string(), false),

@@ -37,17 +37,45 @@ fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static
     async move { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())? }
 }
 
+/// One paired account as the UI shows it.
 #[derive(Serialize)]
-struct Status { phone: aoa::Presence, paired: Option<String>, paired_checksum: Option<String>, pairing_path: String }
+struct PairedAccount { address: String, checksum: String, label: String, wallet: Option<String>, account: Option<u32>, active: bool }
+
+#[derive(Serialize)]
+struct Status {
+    phone: aoa::Presence,
+    /// The ACTIVE paired address (what the UI shows and every request is pinned to).
+    paired: Option<String>, paired_checksum: Option<String>, paired_label: Option<String>,
+    accounts: Vec<PairedAccount>,
+    pairing_path: String,
+}
+
+fn accounts_view(p: &pairing::Pairings) -> Vec<PairedAccount> {
+    p.accounts.iter().map(|a| PairedAccount {
+        address: a.address.clone(), checksum: verify::checksum(&a.address), label: a.label.clone(), wallet: a.wallet.clone(), account: a.account,
+        active: p.active.as_deref() == Some(a.address.as_str()),
+    }).collect()
+}
 
 #[tauri::command]
 async fn device_status() -> CmdResult<Status> {
     blocking(|| {
         let phone = aoa::presence().map_err(|e| e.to_string())?;
         attest::note_presence(phone);
-        let paired = pairing::load().map_err(|e| e.0)?;
-        Ok(Status { paired_checksum: paired.as_deref().map(verify::checksum), paired, phone, pairing_path: pairing::path().map(|p| p.display().to_string()).unwrap_or_default() })
+        let p = pairing::list().map_err(|e| e.0)?;
+        let paired = p.active.clone();
+        Ok(Status {
+            paired_checksum: paired.as_deref().map(verify::checksum), paired_label: p.active_account().map(|a| a.label.clone()),
+            accounts: accounts_view(&p), paired, phone, pairing_path: pairing::path().map(|p| p.display().to_string()).unwrap_or_default(),
+        })
     }).await
+}
+
+/// Every signing request names the account it is pinned to: the phone refuses it ("Switch to the
+/// right account on the phone") when another account is active there, before any review.
+pub(crate) fn pinned_request(mut request: Value, pinned: &str) -> Value {
+    if let Some(o) = request.as_object_mut() { o.insert("from".into(), Value::from(pinned.to_ascii_lowercase())); }
+    request
 }
 
 fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
@@ -57,29 +85,63 @@ fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
     session.exchange(&request, timeout).map_err(|e| e.to_string())
 }
 
-/// Ask the phone for its address. Nothing is pinned until the user confirms it against the phone's screen.
+/// The phone's ACTIVE account, as getAddress reports it.
+#[derive(Serialize, Debug, PartialEq)]
+pub(crate) struct PhoneAccount { address: String, account: Option<u32>, wallet: Option<String>, label: String }
+
+/// Strict parse of a getAddress answer: `{id,status,address}` from older apps, plus
+/// `account` ("1".."20") and `wallet` ("standard" | "passphrase") from apps with accounts.
+pub(crate) fn parse_address_response(request: &Value, response: &Value) -> CmdResult<(String, Option<u32>, Option<String>)> {
+    let obj = response.as_object().ok_or("malformed response")?;
+    if obj.get("id") != request.get("id") { return Err("the phone's answer is for a different request".into()); }
+    if obj.get("status").and_then(Value::as_str) == Some("error") {
+        return Err(format!("phone: {}", obj.get("error").and_then(Value::as_str).unwrap_or("error")));
+    }
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect(); keys.sort();
+    let with_account = keys == ["account", "address", "id", "status", "wallet"];
+    if !(keys == ["address", "id", "status"] || with_account) || obj["status"] != "ok" { return Err("malformed address response".into()); }
+    let addr = obj["address"].as_str().ok_or("no address")?;
+    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) { return Err("invalid address from phone".into()); }
+    if !with_account { return Ok((addr.to_ascii_lowercase(), None, None)); }
+    let n = obj["account"].as_str().and_then(|s| if s.starts_with('0') { None } else { s.parse::<u32>().ok() }).filter(|n| (1..=20).contains(n)).ok_or("malformed account number")?;
+    let w = obj["wallet"].as_str().filter(|w| *w == "standard" || *w == "passphrase").ok_or("malformed wallet kind")?;
+    Ok((addr.to_ascii_lowercase(), Some(n), Some(w.to_string())))
+}
+
+/// Ask the phone for its ACTIVE account. Nothing is pinned until the user confirms it against the phone's screen.
 #[tauri::command]
-async fn read_address() -> CmdResult<String> {
+async fn read_address() -> CmdResult<PhoneAccount> {
     blocking(|| {
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "getAddress"});
         let response = ask_phone(request.clone(), Duration::from_secs(30))?;
-        let obj = response.as_object().ok_or("malformed response")?;
-        if obj.get("status").and_then(Value::as_str) == Some("error") {
-            return Err(format!("phone: {}", obj.get("error").and_then(Value::as_str).unwrap_or("error")));
-        }
-        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect(); keys.sort();
-        if keys != ["address", "id", "status"] || obj["status"] != "ok" { return Err("malformed address response".into()); }
-        let addr = obj["address"].as_str().ok_or("no address")?;
-        if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) { return Err("invalid address from phone".into()); }
-        Ok(verify::checksum(addr))
+        let (addr, account, wallet) = parse_address_response(&request, &response)?;
+        let existing = pairing::list().map_err(|e| e.0)?;
+        let label = existing.find(&addr).map(|p| p.label.clone()).unwrap_or_else(|| pairing::default_label(&existing, account, wallet.as_deref()));
+        Ok(PhoneAccount { address: verify::checksum(&addr), account, wallet, label })
     }).await
 }
 
+/// Pair one account (and make it the one the Mac shows). Several accounts can be paired.
 #[tauri::command]
-async fn confirm_pairing(address: String) -> CmdResult<String> {
+async fn confirm_pairing(address: String, label: Option<String>, account: Option<u32>, wallet: Option<String>) -> CmdResult<String> {
     // Only an address that a phone which passed the device check attested to in this connection.
-    blocking(move || attest::require_pairable(&address).and_then(|_| pairing::save(&address).map_err(|e| e.0)).map(|p| p.display().to_string())).await
+    blocking(move || attest::require_pairable(&address)
+        .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(|e| e.0))
+        .map(|p| p.display().to_string())).await
 }
+
+/// Show (and pin new requests to) another paired account.
+#[tauri::command]
+async fn select_account(address: String) -> CmdResult<()> {
+    blocking(move || { pairing::select(&address).map_err(|e| e.0)?; watcher::WAKE.store(true, std::sync::atomic::Ordering::SeqCst); Ok(()) }).await
+}
+
+#[tauri::command]
+async fn rename_account(address: String, label: String) -> CmdResult<()> { blocking(move || pairing::rename(&address, &label).map(|_| ()).map_err(|e| e.0)).await }
+
+/// Unpair one account (its local history file stays on disk).
+#[tauri::command]
+async fn forget_account(address: String) -> CmdResult<()> { blocking(move || pairing::remove(&address).map(|_| ()).map_err(|e| e.0)).await }
 
 #[tauri::command]
 async fn forget_pairing() -> CmdResult<()> { blocking(|| pairing::forget().map_err(|e| e.0)).await }
@@ -158,11 +220,11 @@ async fn sign(q: Quote) -> CmdResult<SignedTx> {
     blocking(move || {
         let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
         attest::require_ok(&pinned)?;
-        let request = json!({
+        let request = pinned_request(json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
             "chainId": q.chain_id, "nonce": q.nonce, "maxPriorityFeePerGas": q.max_priority_fee_per_gas,
             "maxFeePerGas": q.max_fee_per_gas, "gasLimit": q.gas_limit, "to": q.to, "value": q.value, "data": q.data,
-        });
+        }), &pinned);
         let response = ask_phone(request.clone(), Duration::from_secs(300))?;
         let v = verify::validate_signature(&request, &response, &pinned).map_err(|e| e.0)?;
         Ok(SignedTx { raw: v.raw_hex, hash: v.tx_hash, signer: verify::checksum(&v.signer) })
@@ -201,7 +263,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
@@ -235,4 +297,36 @@ pub fn run() {
             if let tauri::RunEvent::Reopen { .. } = event { tray::show_main(app); }
             let _ = (app, event);
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADDR: &str = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
+
+    #[test]
+    fn address_answers_from_old_and_new_phone_apps() {
+        let req = json!({"id": "a-1", "method": "getAddress"});
+        assert_eq!(parse_address_response(&req, &json!({"id": "a-1", "status": "ok", "address": ADDR})).unwrap(), (ADDR.into(), None, None));
+        assert_eq!(parse_address_response(&req, &json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "passphrase"})).unwrap(),
+            (ADDR.into(), Some(2), Some("passphrase".into())));
+        for bad in [
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "0", "wallet": "standard"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "21", "wallet": "standard"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "02", "wallet": "standard"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "hidden"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": 2, "wallet": "standard"}),
+            json!({"id": "a-2", "status": "ok", "address": ADDR}),
+            json!({"id": "a-1", "status": "ok", "address": "0x12"}),
+        ] { assert!(parse_address_response(&req, &bad).is_err(), "accepted {bad}"); }
+    }
+
+    #[test]
+    fn pinned_request_names_the_account() {
+        let r = pinned_request(json!({"id": "x", "method": "personal_sign", "chainId": "0x1", "message": "0x68"}), &ADDR.to_ascii_uppercase().replace("0X", "0x"));
+        assert_eq!(r["from"], ADDR);
+        assert_eq!(r.as_object().unwrap().len(), 5);
+    }
 }

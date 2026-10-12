@@ -43,15 +43,19 @@ pub struct Meta { name: Option<String>, description: Option<String>, image: Opti
 struct Store { owner: Option<String>, nfts: Vec<Nft> }
 static LOCK: Mutex<()> = Mutex::new(());
 
-fn store_path() -> Result<std::path::PathBuf, String> { Ok(pairing::path().map_err(|e| e.0)?.with_file_name("nfts.json")) }
+/// One store per paired account (`nfts-<address>.json`).
+fn store_path(owner: &str) -> Result<std::path::PathBuf, String> { pairing::account_file("nfts", owner).map_err(|e| e.0) }
+/// The single store of versions before accounts; read for the address it belonged to.
+fn legacy_store_path() -> Result<std::path::PathBuf, String> { Ok(pairing::path().map_err(|e| e.0)?.with_file_name("nfts.json")) }
 
 fn load(owner: &str) -> Vec<Nft> {
-    let s: Store = store_path().ok().and_then(|p| fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
-    if s.owner.as_deref() == Some(owner) { s.nfts } else { Vec::new() }
+    let read = |p: std::path::PathBuf| -> Option<Store> { fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) };
+    let s = store_path(owner).ok().and_then(read).or_else(|| legacy_store_path().ok().and_then(read)).unwrap_or_default();
+    if s.owner.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(owner)) { s.nfts } else { Vec::new() }
 }
 
 fn save(owner: &str, nfts: &[Nft]) -> Result<(), String> {
-    let p = store_path()?;
+    let p = store_path(owner)?;
     let tmp = p.with_extension("json.tmp");
     let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
     f.write_all(&serde_json::to_vec_pretty(&Store { owner: Some(owner.into()), nfts: nfts.to_vec() }).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;

@@ -223,6 +223,11 @@ certificate (`d8eab12d…4b53`) that signs the dev appliance APK.
 - `cargo run --example attest_verify -- request.json response.json [--dev-mode]` runs the same
   verifier on a captured exchange (used by `attesttest.sh`).
 
+- Accounts (2026-10-11): the attestation binds the phone's ACTIVE account. A cached verdict for a
+  different address (the user switched accounts on the phone during the same USB connection) is
+  asked again once before a request is refused; pairing is per address, each address attested
+  when it is paired.
+
 ## Tests
 
 - Rust (`attest/tests.rs`, `der.rs`, `revocation.rs`): real chains published by Google in

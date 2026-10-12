@@ -25,6 +25,8 @@ fn request_signature(request: Value) -> CmdResult<SignedMessage> {
     crate::attest::require_ok(&pinned)?;
     // Refuse locally what the phone would refuse, before bothering the user on the phone.
     verify::expected_message_digest(&request).map_err(|e| e.0)?;
+    // Pinned to the account active NOW: the phone refuses it if another account is active there.
+    let request = crate::pinned_request(request, &pinned);
     let response = ask_phone(request.clone(), Duration::from_secs(300))?;
     let v = verify::validate_message_signature(&request, &response, &pinned).map_err(|e| e.0)?;
     Ok(SignedMessage { signature: v.signature, digest: v.digest, signer: verify::checksum(&v.signer) })
