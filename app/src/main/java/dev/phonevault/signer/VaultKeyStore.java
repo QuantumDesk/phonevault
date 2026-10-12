@@ -292,16 +292,21 @@ final class VaultKeyStore {
     }
 
     /**
-     * Would the chip let the seed key work right now, without asking for the PIN? Initializing a
-     * cipher is side-effect free and is refused with {@code UserNotAuthenticatedException} once the
-     * PIN window has lapsed, so this only saves a redundant prompt: the keystore still enforces the
-     * window on the real operation. Creates the credential-bound key if it does not exist yet.
+     * Would the chip let the seed key work right now, without asking for the PIN? Runs one complete
+     * throwaway operation (encrypt nothing under a fresh random IV, result discarded). {@code init}
+     * alone is not enough: keystore2 admits it by its own receipt time of the auth token, but the
+     * StrongBox checks the window only on the first update/finish (SeedKeyWindow), so an init-only
+     * probe said "usable" up to ~1 s after the chip had closed the window. Finishing the operation
+     * also frees its StrongBox slot instead of leaving it open until garbage collection. This only
+     * saves a redundant prompt: the keystore still enforces the window on the real operation.
+     * Creates the credential-bound key if it does not exist yet.
      */
     synchronized boolean seedKeyUsableNow() {
         try {
             ensureWrappingKey();
             Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
             cipher.init(Cipher.ENCRYPT_MODE, key(activeAlias()));
+            cipher.doFinal(new byte[0]);
             return true;
         } catch (Exception refused) {
             return false;
