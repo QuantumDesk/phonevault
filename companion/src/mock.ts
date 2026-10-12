@@ -115,6 +115,7 @@ export function createMock(): Mock {
       case "attestation_cached": return lastAttestation as T;
       case "confirm_pairing": paired = ADDRESS.toLowerCase(); return "" as T;
       case "forget_pairing": paired = null; return undefined as T;
+      case "open_backup_card": return undefined as T;
       case "wallet": {
         await sleep(300 + Math.random() * 500);
         if (!paired) throw "not paired yet";

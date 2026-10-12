@@ -22,7 +22,9 @@ final class BackupCheck {
             throw new IllegalArgumentException("Invalid backup identity");
         String normalized = address.toLowerCase(Locale.ROOT);
         uncertain = true;
-        if (!preferences.edit().putString(KEY, normalized).commit()
+        // The reminder's "last checked" day goes in the same commit: every successful check
+        // (spot check, replacement, restore) restarts the "check your backup" interval.
+        if (!BackupReminder.markChecked(preferences.edit().putString(KEY, normalized), System.currentTimeMillis()).commit()
                 || !normalized.equals(preferences.getString(KEY, "")))
             throw new IllegalStateException("Backup check could not be saved. Check again before receiving.");
         uncertain = false;

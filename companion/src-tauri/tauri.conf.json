@@ -40,6 +40,12 @@
     "longDescription": "Pairs with a Phone Vault signer over USB, quotes transactions from an Ethereum node, and broadcasts only what you approved on the phone.",
     "macOS": {
       "minimumSystemVersion": "12.0"
+    },
+    "resources": {
+      "../../tools/backup-card/out/phone-vault-backup-card-a4-compact25.pdf": "backup-card/phone-vault-backup-card-a4-compact25.pdf",
+      "../../tools/backup-card/out/phone-vault-backup-card-a4-standard29.pdf": "backup-card/phone-vault-backup-card-a4-standard29.pdf",
+      "../../tools/backup-card/out/phone-vault-backup-card-letter-compact25.pdf": "backup-card/phone-vault-backup-card-letter-compact25.pdf",
+      "../../tools/backup-card/out/phone-vault-backup-card-letter-standard29.pdf": "backup-card/phone-vault-backup-card-letter-standard29.pdf"
     }
   }
 }

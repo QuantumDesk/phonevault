@@ -78,6 +78,8 @@ export const api = {
   readAddress: () => call<string>("read_address"),
   confirmPairing: (address: string) => call<string>("confirm_pairing", { address }),
   forgetPairing: () => call<void>("forget_pairing"),
+  /** Open the bundled blank backup card (PDF) in the system viewer for printing. */
+  openBackupCard: (paper: "a4" | "letter", grid: "compact" | "standard") => call<void>("open_backup_card", { paper, grid }),
   wallet: (rpcUrl: string) => call<Wallet>("wallet", { rpcUrl }),
   quote: (rpcUrl: string, to: string, amountEth: string) => call<Quote>("quote", { rpcUrl, to, amountEth }),
   signStart: (ticket: string, quote: Quote) => call<Signed>("sign_start", { ticket, quote }),

@@ -12,6 +12,7 @@ import { NETWORKS, byId, type Network } from "./networks";
 import { h, icon, padlock, grouped, short, fmtAmount, copy } from "./ui";
 import { qrSvg } from "./qr";
 import { fmtExact } from "./tokens";
+import { backupCardPicker } from "./backup-card";
 
 export interface SetupHost {
   status: () => Status | null;
@@ -256,6 +257,10 @@ function doneStep(host: SetupHost) {
       h("li", null, icon("check", 14), "This Mac is paired with your phone and checks every signature against it"),
       h("li", null, icon("check", 14), "Notifications tell you when funds arrive; Phone Vault keeps watching from the menu bar when the window is closed"),
       h("li", null, icon("check", 14), "Stuck transaction? Activity → Speed up or Cancel")),
+    h("div", { class: "callout" },
+      h("strong", null, "Back up on paper"),
+      h("span", null, "Print a blank backup card and copy your 24 words onto it by hand from the phone (Security → Show recovery phrase). Two copies, separate places, never photographed. Settings → Backup has it later too."),
+      backupCardPicker()),
     h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => host.finish("home") }, "Open my wallet")),
   );
 }

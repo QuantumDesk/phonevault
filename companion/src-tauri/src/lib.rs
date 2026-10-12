@@ -26,6 +26,8 @@ mod tokens;
 mod wc;
 // Browser extension: another dApp transport over native messaging; policy reuses wc.rs
 pub mod bridge;
+// Settings / setup: open the bundled blank backup card (no secrets on this Mac)
+mod backup_card;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -211,7 +213,8 @@ pub fn run() {
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
-            bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall])
+            bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall,
+            backup_card::open_backup_card])
         .setup(move |app| {
             // browser-extension bridge (native-messaging relay socket)
             bridge::start(app.handle(), &browser_bridge);
