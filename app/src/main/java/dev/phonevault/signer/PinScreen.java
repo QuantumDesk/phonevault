@@ -31,6 +31,7 @@ final class PinScreen {
     private final TextView policy;
     private final TextView submit;
     private final android.widget.ScrollView scroll;
+    private final LinearLayout battery;
     private boolean submitRequired;
     /** Fixed buffer + length instead of a StringBuilder, so digits can be zeroed, not just hidden. */
     private final char[] entered = new char[VaultPin.PIN_LENGTH];
@@ -44,8 +45,17 @@ final class PinScreen {
         int pad = VaultTheme.dp(c, 26);
         root = new LinearLayout(c);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, VaultTheme.dp(c, 56), pad, VaultTheme.dp(c, 30));
+        root.setPadding(pad, VaultTheme.dp(c, 24), pad, VaultTheme.dp(c, 30));
         root.setBackgroundColor(VaultTheme.BG);
+
+        // Battery, top right, above the title (keeps the title its full width at large text).
+        battery = VaultTheme.batteryIndicator(c);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, VaultTheme.dp(c, 20));
+        blp.gravity = Gravity.END;
+        blp.bottomMargin = VaultTheme.dp(c, 12);
+        root.addView(battery, blp);
+        VaultTheme.showBattery(battery, BatteryStatus.UNKNOWN);
 
         LinearLayout head = new LinearLayout(c);
         head.setOrientation(LinearLayout.HORIZONTAL);
@@ -109,11 +119,8 @@ final class PinScreen {
     View view() { return scroll; }
 
     void setPolicy(String text) { policy.setText(text); }
-    void setLargeText(boolean large) {
-        subtitle.setTextSize(large ? 19 : 16);
-        error.setTextSize(large ? 18 : 15);
-        policy.setTextSize(large ? 17 : 14);
-    }
+    /** Header battery indicator (MainActivity's battery receiver keeps it current). */
+    void setBattery(BatteryStatus status) { VaultTheme.showBattery(battery, status); }
     void setSubmitRequired(boolean required) {
         submitRequired = required;
         submit.setVisibility(required ? View.VISIBLE : View.GONE);
@@ -145,6 +152,7 @@ final class PinScreen {
 
     void showError(String message) {
         error.setText(message == null ? "" : message);
+        if (message != null && !message.isEmpty()) Haptics.reject(root);
         reset();
     }
 
@@ -178,7 +186,9 @@ final class PinScreen {
 
     private TextView keyButton(String key) {
         TextView b = VaultTheme.pixelButton(context, key, false);
-        b.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 22f);
+        VaultTheme.size(b, 22f);
+        // Fixed 64 dp key: no vertical padding, so the digit never clips at large text.
+        b.setPadding(0, 0, 0, 0);
         if ("⌫".equals(key)) b.setContentDescription("Delete last digit");
         hardenTouch(b);
         b.setOnClickListener(v -> press(key));
@@ -187,6 +197,7 @@ final class PinScreen {
 
     private void press(String key) {
         if (locked) return;
+        Haptics.tick(root);
         if ("⌫".equals(key)) {
             if (enteredLength > 0) entered[--enteredLength] = '0';
             renderDots();

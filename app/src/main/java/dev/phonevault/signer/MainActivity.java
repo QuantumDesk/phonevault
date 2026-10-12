@@ -76,6 +76,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private BackupReminder backupReminder;
     private boolean largeText;
     private long idleTimeoutMs = IDLE_LOCK_MS;
+    /** Display & auto-lock preferences (text scale, screen timeout, idle lock, haptics). */
+    private DisplaySettings display;
+    /** Last battery reading and the header indicator of the page on screen (see onBattery). */
+    private BatteryStatus battery = BatteryStatus.UNKNOWN;
+    private View batteryIndicator;
+    private boolean batteryRegistered;
+    private final android.content.BroadcastReceiver batteryReceiver = new android.content.BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) { onBattery(readBattery(intent)); }
+    };
     private String screenName = "loading";
     private String statusMessage = "USB disconnected · connect a host when ready";
     private int activeSensitive = -1, backupPage, replacementOperation;
@@ -170,7 +179,39 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         // Any PIN entry that was in flight when we were stopped belongs to a dead session: show a
         // fresh gate (its callbacks carry the old token and are ignored).
         if (operational && !unlocked) showPinGate(null);
+        // Battery header: the sticky ACTION_BATTERY_CHANGED (protected, system-only; no
+        // permission) is delivered at once, then every change while we are in front.
+        if (!batteryRegistered) {
+            batteryRegistered = true;
+            Intent sticky = registerReceiver(batteryReceiver, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            if (sticky != null) onBattery(readBattery(sticky));
+        }
         devDumpUi();
+    }
+
+    @Override protected void onPause() {
+        if (batteryRegistered) {
+            batteryRegistered = false;
+            try { unregisterReceiver(batteryReceiver); } catch (IllegalArgumentException ignored) { }
+        }
+        super.onPause();
+    }
+
+    private static BatteryStatus readBattery(Intent intent) {
+        if (intent == null) return BatteryStatus.UNKNOWN;
+        return BatteryStatus.of(intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1),
+                intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1),
+                intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1),
+                intent.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0));
+    }
+
+    /** UI thread (receiver). Updates the header in place; Home re-renders only when "low" flips. */
+    private void onBattery(BatteryStatus next) {
+        boolean lowChanged = next.low() != battery.low();
+        battery = next;
+        if (batteryIndicator != null) VaultTheme.showBattery(batteryIndicator, next);
+        if (pinScreen != null) pinScreen.setBattery(next);
+        if (lowChanged && unlocked && "wallet".equals(screenName)) showHome();
     }
 
     /**
@@ -652,7 +693,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             }
             if (admin == null) return;
             policy.setSystemSetting(admin, Settings.System.SCREEN_OFF_TIMEOUT,
-                    String.valueOf(SCREEN_OFF_TIMEOUT_MS));
+                    String.valueOf(display != null ? display.screenTimeoutMs() : SCREEN_OFF_TIMEOUT_MS));
         } catch (Exception e) {
             android.util.Log.w("Vault", "idle policy not applied", e);
         }
@@ -760,7 +801,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     // ---------- Native, scrollable pages. Sensitive operations never use floating dialogs.
 
-    private float bodySize() { return largeText ? 19 : 16; }
+    /** Base body size; VaultTheme applies the Text size scale (one factor for every screen). */
+    private float bodySize() { return 16; }
 
     private LinearLayout page(String eyebrow, String title, String description) {
         LinearLayout root = new LinearLayout(this);
@@ -768,30 +810,32 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.setPadding(dp(24), dp(48), dp(24), dp(30));
         root.setBackgroundColor(VaultTheme.BG);
         TextView brand = VaultTheme.pixelText(this, "PHONE VAULT", 10, VaultTheme.ACCENT);
+        // Header row: brand on the left, battery, then ☰ (when available). One menu everywhere.
+        LinearLayout header = new LinearLayout(this);
+        header.setOrientation(LinearLayout.HORIZONTAL);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setMinimumHeight(dp(42));
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        header.addView(brand, blp);
+        batteryIndicator = VaultTheme.batteryIndicator(this);
+        VaultTheme.showBattery(batteryIndicator, battery);
+        header.addView(batteryIndicator);
+        root.addView(header);
         if (menuAvailable()) {
-            // Header row: brand on the left, ☰ on the right. One menu everywhere instead of tab rows.
-            LinearLayout header = new LinearLayout(this);
-            header.setOrientation(LinearLayout.HORIZONTAL);
-            header.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-            header.addView(brand, blp);
             TextView menu = VaultTheme.pixelButton(this, "☰", false);
-            menu.setTextSize(22);
+            VaultTheme.size(menu, 22);
             menu.setPadding(0, 0, 0, 0);
             menu.setContentDescription("Menu");
             hardenTouch(menu);
             menu.setOnClickListener(v -> { if (menuAvailable()) showMenu(); });
             LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(56), dp(48));
-            mlp.setMargins(dp(8), -dp(6), 0, 0);
+            mlp.setMargins(dp(12), -dp(6), 0, 0);
             header.addView(menu, mlp);
-            root.addView(header);
-        } else {
-            root.addView(brand);
         }
         TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(java.util.Locale.ROOT), 12, VaultTheme.FAINT);
         label.setPadding(0, dp(30), 0, dp(8));
         root.addView(label);
-        TextView heading = VaultTheme.bodyText(this, title, largeText ? 32 : 28, VaultTheme.INK);
+        TextView heading = VaultTheme.bodyText(this, title, 28, VaultTheme.INK);
         heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
         root.addView(heading);
         if (description != null && !description.isEmpty()) {
@@ -863,11 +907,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         setTurnScreenOn(true);
         getWindow().setStatusBarColor(VaultTheme.BG);
         getWindow().setNavigationBarColor(VaultTheme.BG);
-        largeText = getPreferences(MODE_PRIVATE).getBoolean("large_text", false);
-        int saved = getPreferences(MODE_PRIVATE).getInt("idle_seconds", 120);
-        idleTimeoutMs = (saved == 30 || saved == 60 || saved == 120) ? saved * 1000L : IDLE_LOCK_MS;
+        display = new DisplaySettings(getPreferences(MODE_PRIVATE));
+        applyDisplaySettings();
+        battery = readBattery(registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
         statusView = VaultTheme.bodyText(this, "", bodySize(), VaultTheme.DIM);
         showLoading("Opening Phone Vault", "Checking appliance policy…");
+    }
+
+    /** Text scale, haptics and idle lock from the saved Display & auto-lock choices. */
+    private void applyDisplaySettings() {
+        largeText = display.largeText();
+        VaultTheme.setTextScale(DisplaySettings.textScale(largeText));
+        Haptics.setEnabled(display.haptics());
+        idleTimeoutMs = display.idleLockMs();
     }
 
     private void showLoading(String title, String caption) {
@@ -885,6 +937,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = page("ACCOUNT 1", backupVerified ? "Your offline wallet" : "Back up your wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
                         : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
+        if (battery.low()) card(root, "Battery " + battery.label() + " · charge before signing",
+                "Plug in before reviewing a request. If the phone shuts down mid-review, the request is simply lost; nothing is signed.");
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
             box.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -898,7 +952,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             box.addView(qrView, qlp);
             box.addView(VaultTheme.bodyText(this, "ACCOUNT 1 · RECEIVE", 13, VaultTheme.FAINT));
             addressView = VaultTheme.monoText(this, formatAddress(
-                    org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), largeText ? 18 : 16, VaultTheme.INK);
+                    org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
             addressView.setPadding(0, dp(12), 0, dp(8));
             box.addView(addressView);
             root.addView(box, matchWrap(dp(22)));
@@ -975,7 +1029,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         for (int face = 1; face <= 6; face++) {
             final char c = (char) ('0' + face);
             TextView b = VaultTheme.pixelButton(this, String.valueOf(face), true);
-            b.setTextSize(20);
+            VaultTheme.size(b, 20);
             b.setPadding(0, 0, 0, 0);
             b.setGravity(android.view.Gravity.CENTER);
             hardenTouch(b);
@@ -1153,8 +1207,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             for (int i = rowStart; i < Math.min(rowStart + 3, suggestions.size()); i++) {
                 final String word = suggestions.get(i);
                 TextView b = VaultTheme.pixelButton(this, word, i == 0);
-                b.setTextSize(15);
-                b.setPadding(dp(4), b.getPaddingTop(), dp(4), b.getPaddingBottom());
+                VaultTheme.size(b, 15);
+                // Fixed 52 dp slot: no vertical padding, so the word never clips at large text.
+                b.setPadding(dp(4), 0, dp(4), 0);
                 hardenTouch(b);
                 b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
                 LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
@@ -1199,7 +1254,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         row.setOrientation(LinearLayout.HORIZONTAL);
         for (String key : keys) {
             TextView b = VaultTheme.pixelButton(this, key, false);
-            b.setTextSize(18);
+            VaultTheme.size(b, 18);
             b.setPadding(0, 0, 0, 0); // a ninth of the width: any horizontal padding hides the letter
             b.setGravity(android.view.Gravity.CENTER);
             hardenTouch(b);
@@ -1314,26 +1369,57 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showPreferences() {
-        LinearLayout root = page("SECURITY / PREFERENCES", "Make it comfortable", "Larger text and shorter idle locking are available now.");
+        LinearLayout root = page("SECURITY / PREFERENCES", "Display & auto-lock",
+                "Text size, screen timeout, locking and touch feedback. Changes apply at once.");
         card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
         action(root, largeText ? "Use standard text" : "Use larger text", true, () -> {
-            boolean next = !largeText;
-            if (getPreferences(MODE_PRIVATE).edit().putBoolean("large_text", next).commit()) {
-                largeText = next;
+            if (display.setLargeText(!largeText)) {
+                applyDisplaySettings();
                 showPreferences();
             } else showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
         });
-        card(root, "Idle lock", (idleTimeoutMs / 1000) + " seconds without interaction. Screen off always locks immediately; the appliance screen-off policy is 60 seconds.");
-        for (int seconds : new int[] {30, 60, 120}) {
-            action(root, seconds == 120 ? "Lock after 2 minutes" : "Lock after " + seconds + " seconds",
-                    idleTimeoutMs == seconds * 1000L, () -> {
-                if (getPreferences(MODE_PRIVATE).edit().putInt("idle_seconds", seconds).commit()) {
-                    idleTimeoutMs = seconds * 1000L;
+
+        int screen = display.screenTimeoutSeconds();
+        card(root, "Screen timeout", "The screen turns off after " + DisplaySettings.durationLabel(screen)
+                + " without a touch. Screen off always locks the vault.");
+        for (int seconds : DisplaySettings.SCREEN_TIMEOUT_CHOICES) {
+            action(root, "Screen off after " + DisplaySettings.durationLabel(seconds), seconds == screen, () -> {
+                if (display.setScreenTimeoutSeconds(seconds)) {
+                    applyDisplaySettings();
+                    DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+                    if (policy.isDeviceOwnerApp(getPackageName())) applyIdlePolicy(policy);
+                    armIdleLock();
+                    showPreferences();
+                } else showInfo("Setting not saved", "Your previous screen timeout is still active.", this::showPreferences);
+            });
+        }
+
+        int idle = display.idleSeconds();
+        int effective = DisplaySettings.effectiveIdleSeconds(idle, screen);
+        card(root, "Idle lock", "Locks after " + DisplaySettings.durationLabel(effective)
+                + " without a touch, even while a review keeps the screen on."
+                + (effective < idle ? " (Capped by the screen timeout.)" : ""));
+        for (int seconds : DisplaySettings.IDLE_CHOICES) {
+            action(root, "Lock after " + DisplaySettings.durationLabel(seconds), idle == seconds, () -> {
+                if (display.setIdleSeconds(seconds)) {
+                    applyDisplaySettings();
                     armIdleLock();
                     showPreferences();
                 } else showInfo("Setting not saved", "Your previous idle timeout is still active.", this::showPreferences);
             });
         }
+
+        boolean haptics = display.haptics();
+        card(root, "Haptics", haptics ? "On · a tap for PIN keys, a pulse when you sign, a double pulse on reject"
+                : "Off · no vibration feedback");
+        action(root, haptics ? "Turn haptics off" : "Turn haptics on", false, () -> {
+            if (display.setHaptics(!haptics)) {
+                applyDisplaySettings();
+                showPreferences();
+            } else showInfo("Setting not saved", "Your previous haptics setting is still active.", this::showPreferences);
+        });
+
+        card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart.");
         action(root, "Back to Security", false, this::showSecurity);
         present(root, "preferences");
     }
@@ -1362,6 +1448,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
             card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
         }
+        card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
         action(root, "Back to Security", false, this::showSecurity);
         present(root, "integrity");
     }
@@ -1494,7 +1581,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void updatePinPolicy(PinScreen gate) {
-        gate.setLargeText(largeText);
+        gate.setBattery(battery);
         int remaining = pin.attemptsRemaining();
         gate.setPolicy((DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
                 + (SystemCredential.willBind(this) && !pin.isSet()
@@ -1678,7 +1765,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             TextView number = VaultTheme.monoText(this, String.format(java.util.Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
             number.setWidth(dp(44));
             row.addView(number);
-            row.addView(VaultTheme.monoText(this, backupWords[i], largeText ? 26 : 23, VaultTheme.INK),
+            row.addView(VaultTheme.monoText(this, backupWords[i], 23, VaultTheme.INK),
                     new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             root.addView(row, matchWrap(dp(12)));
         }
@@ -2078,6 +2165,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
                     showInfo(refusal.title, refusal.getMessage(), this::showHome);
+                    Haptics.reject(getWindow().getDecorView());
                 });
             }
         }
@@ -2231,7 +2319,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                      Runnable afterSigned) {
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
-        reviewed.setTextSize(bodySize());
+        VaultTheme.size(reviewed, bodySize());
         reviewed.setTextColor(VaultTheme.INK);
         reviewed.setMinHeight(dp(56));
         reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
@@ -2245,6 +2333,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         reviewed.setOnCheckedChangeListener((v, checked) -> sign.setEnabled(checked && decision.state() == ApprovalDecision.State.REVIEW));
         reject.setOnClickListener(v -> {
             if (!decision.reject()) return;
+            Haptics.reject(v);
             source.send(json("id", requestId, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Request rejected · no signature created";
@@ -2256,6 +2345,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         || approvalDecision != decision || !reviewed.isChecked() || !decision.beginSigning()) return;
             }
             // The decision is now irreversible through Reject. Lock still invalidates queued work.
+            Haptics.confirm(v);
             sign.setEnabled(false);
             reject.setEnabled(false);
             reviewed.setEnabled(false);
@@ -2438,7 +2528,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private TextView text(String value, float size, int color) {
         TextView view = new TextView(this);
         view.setText(value);
-        view.setTextSize(size);
+        VaultTheme.size(view, size);
         view.setTextColor(color);
         view.setLineSpacing(0, 1.12f);
         return view;

@@ -27,8 +27,24 @@ final class VaultTheme {
     static final int DANGER_INK = Color.rgb(255, 90, 90); // reserved for DANGER only (safety-critical legibility)
 
     private static Typeface pixelFace;
+    /**
+     * The one text-size factor (Display &amp; auto-lock → Text size). Every helper here takes the
+     * base size as written at the call site and applies this, so a screen never needs its own
+     * "large ? x : y"; a size set after construction goes through {@link #size}.
+     */
+    private static volatile float textScale = DisplaySettings.STANDARD_TEXT_SCALE;
 
     private VaultTheme() {}
+
+    static void setTextScale(float scale) { textScale = scale > 0f ? scale : DisplaySettings.STANDARD_TEXT_SCALE; }
+
+    static float textScale() { return textScale; }
+
+    /** A base size in sp under the current text scale. */
+    static float sp(float baseSp) { return DisplaySettings.scaledSp(baseSp, textScale); }
+
+    /** Set a view's text size from a base size (scaled). Use instead of TextView#setTextSize. */
+    static void size(TextView t, float baseSp) { t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sp(baseSp)); }
 
     static Typeface pixel(Context context) {
         if (pixelFace == null) {
@@ -56,7 +72,7 @@ final class VaultTheme {
         TextView t = new TextView(c);
         t.setText(value);
         t.setTypeface(pixel(c));
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
+        size(t, sizeSp);
         t.setTextColor(color);
         t.setLineSpacing(dp(c, 4), 1f);
         return t;
@@ -67,7 +83,7 @@ final class VaultTheme {
         TextView t = new TextView(c);
         t.setText(value);
         t.setTypeface(mono());
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp);
+        size(t, sizeSp);
         t.setTextColor(color);
         t.setLineSpacing(0, 1.25f);
         return t;
@@ -92,7 +108,7 @@ final class VaultTheme {
         TextView t = new android.widget.Button(c);
         t.setText(label);
         t.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        t.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f);
+        size(t, 16f);
         t.setAllCaps(false);
         t.setGravity(Gravity.CENTER);
         t.setTextColor(new android.content.res.ColorStateList(
@@ -215,6 +231,13 @@ final class VaultTheme {
                 "########",
                 "########",
         };
+        android.widget.ImageView iv = new android.widget.ImageView(c);
+        iv.setImageBitmap(pixelArt(rows, cell, color));
+        return iv;
+    }
+
+    /** '#' cells of the pattern filled with color; everything else transparent. */
+    private static android.graphics.Bitmap pixelArt(String[] rows, int cell, int color) {
         int w = rows[0].length(), h = rows.length;
         android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
                 w * cell, h * cell, android.graphics.Bitmap.Config.ARGB_8888);
@@ -228,9 +251,73 @@ final class VaultTheme {
                 }
             }
         }
-        android.widget.ImageView iv = new android.widget.ImageView(c);
-        iv.setImageBitmap(bmp);
-        return iv;
+        return bmp;
+    }
+
+    // ------------------------------------------------------------------ battery indicator
+
+    /** Fill cells inside the pixel battery outline. */
+    private static final int BATTERY_CELLS = 8;
+    private static final String[] BOLT = {
+            "...##",
+            "..##.",
+            ".##..",
+            "#####",
+            "..##.",
+            ".##..",
+            "##...",
+    };
+
+    /**
+     * Header battery indicator: [bolt when charging] [pixel battery] [87%]. Small and FAINT so it
+     * never competes with the page. Update with {@link #showBattery}.
+     */
+    static LinearLayout batteryIndicator(Context c) {
+        LinearLayout row = new LinearLayout(c);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        android.widget.ImageView bolt = new android.widget.ImageView(c);
+        bolt.setImageBitmap(pixelArt(BOLT, dp(c, 1) + 1, ACCENT));
+        bolt.setVisibility(View.GONE);
+        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        blp.rightMargin = dp(c, 4);
+        row.addView(bolt, blp);
+        row.addView(new android.widget.ImageView(c));
+        TextView label = pixelText(c, "", 8, FAINT);
+        label.setLineSpacing(0, 1f);
+        label.setPadding(dp(c, 6), 0, 0, 0);
+        row.addView(label);
+        row.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        return row;
+    }
+
+    static void showBattery(View indicator, BatteryStatus status) {
+        if (!(indicator instanceof LinearLayout) || ((LinearLayout) indicator).getChildCount() < 3) return;
+        LinearLayout row = (LinearLayout) indicator;
+        Context c = row.getContext();
+        row.setVisibility(status.known() ? View.VISIBLE : View.INVISIBLE);
+        row.getChildAt(0).setVisibility(status.charging ? View.VISIBLE : View.GONE);
+        ((android.widget.ImageView) row.getChildAt(1)).setImageBitmap(batteryGlyph(c, status));
+        ((TextView) row.getChildAt(2)).setText(status.label());
+        row.setContentDescription(status.description());
+    }
+
+    /** 13 x 7 cells: outline, a one-cell gap, BATTERY_CELLS fill columns, and the terminal nub. */
+    private static android.graphics.Bitmap batteryGlyph(Context c, BatteryStatus status) {
+        int filled = status.filledCells(BATTERY_CELLS);
+        String[] rows = new String[7];
+        for (int y = 0; y < 7; y++) {
+            StringBuilder r = new StringBuilder();
+            for (int x = 0; x < 13; x++) {
+                boolean outline = x <= 11 && (y == 0 || y == 6 || x == 0 || x == 11);
+                boolean nub = x == 12 && y >= 2 && y <= 4;
+                boolean fill = y >= 2 && y <= 4 && x >= 2 && x < 2 + filled;
+                r.append(outline || nub || fill ? '#' : '.');
+            }
+            rows[y] = r.toString();
+        }
+        return pixelArt(rows, dp(c, 1) + 1, status.low() ? INK : FAINT);
     }
 
     static int dp(Context c, int v) {
