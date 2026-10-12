@@ -108,6 +108,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private boolean bootUnlockEligible = true;
     private boolean silentUnlockAttempt;
+    /** One automatic PIN re-prompt per backup open when the seed-key window lapsed mid-open. */
+    private boolean backupRetried;
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -1501,6 +1503,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     String[] words = mnemonic.split(" ");
                     runOnUiThread(() -> {
                         if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
+                        backupRetried = false;
                         backupWords = words;
                         backupIdentity = walletAddress;
                         backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
@@ -1510,8 +1513,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     });
                 } catch (Exception e) {
                     runOnUiThread(() -> {
-                        if (sensitiveValid(token, s))
-                            showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
+                        if (!sensitiveValid(token, s)) return;
+                        // The chip's PIN window can close between the check and the decrypt (a
+                        // few-second race, seen once on phone 2): ask for the PIN again once
+                        // rather than reporting a storage problem.
+                        if (authLapsed(e) && !backupRetried) {
+                            backupRetried = true;
+                            lastCredentialConfirm = 0;
+                            confirmDevicePin("Confirm your PIN to open your backup",
+                                    () -> startBackupAccess(checkOnly), this::hideBackup);
+                            return;
+                        }
+                        backupRetried = false;
+                        android.util.Log.w("Vault", "backup open failed: " + chain(e));
+                        showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
                     });
                 }
             });
