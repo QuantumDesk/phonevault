@@ -11,12 +11,32 @@ use tauri::{AppHandle, Manager, Wry};
 struct Items { balance: MenuItem<Wry>, address: MenuItem<Wry> }
 static ITEMS: OnceLock<Items> = OnceLock::new();
 
-/// The phone's 8×10 pixel padlock (same bitmap as the boot logo), as a macOS template image.
+/// Menu-bar padlock: the brand's pixel padlock redrawn at 14×16 for the menu bar — stepped round
+/// shackle, rounded body, cut-out keyhole — drawn 2 device pixels per art pixel on a 36×36 canvas
+/// (18 pt at Retina, the menu-bar icon size), so edges stay crisp. A macOS template image: alpha
+/// only, tinted by the system for light/dark menu bars and the highlighted state.
 fn padlock_icon() -> Image<'static> {
-    const ROWS: [&str; 10] = ["..####..", ".#....#.", ".#....#.", "########", "########", "###..###", "##....##", "###..###", "########", "########"];
-    const S: usize = 4; // 8×10 → 32×40 inside a 44×44 canvas
-    const W: usize = 44;
-    let (ox, oy) = ((W - 8 * S) / 2, (W - 10 * S) / 2);
+    const ROWS: [&str; 16] = [
+        "....######....",
+        "...########...",
+        "..###....###..",
+        "..##......##..",
+        "..##......##..",
+        "..##......##..",
+        ".############.",
+        "##############",
+        "##############",
+        "#####....#####",
+        "#####....#####",
+        "######..######",
+        "######..######",
+        "##############",
+        "##############",
+        ".############.",
+    ];
+    const S: usize = 2; // device pixels per art pixel
+    const W: usize = 36;
+    let (ox, oy) = ((W - 14 * S) / 2, (W - 16 * S) / 2);
     let mut rgba = vec![0u8; W * W * 4];
     for (y, row) in ROWS.iter().enumerate() {
         for (x, c) in row.bytes().enumerate() {
