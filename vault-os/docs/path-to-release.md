@@ -60,6 +60,20 @@ on a real phone. The detailed checklists below (sections 1–5) feed these miles
 - Closed beta with capped amounts → public release.
 - Exit: audit report published with no open high-severity findings.
 
+## Feature round 2026-10-12 ("safety you can see" + everyday use)
+
+Built, merged, and run on phone 2 (Pixel 3 XL, rung 4b) unless noted:
+address-poisoning protection + phone address book; NFT approval warnings, EIP-7702 refusal,
+Uniswap swap decoding, unexplained calls refused (`safetytest.sh`); Mac simulation with the phone
+showing the Mac's claim + contradiction warnings (`simtest.sh`); multiple accounts + passphrase
+wallet (`accountstest.sh`); SeedQR + backup reminder (`seedqrtest.sh`) and a printable backup card;
+battery indicator, screen timeout, haptics, large text everywhere (`polishtest.sh`); a seed-key
+window fix (keystore vs Titan M clocks). Companion only (automated tests + browser mock, not yet
+tried with a real phone/dApp by a person): speed up / cancel, incoming history with hashes, NFTs,
+USD totals, menu bar + background notifications, guided onboarding, browser extension (EIP-6963
+over native messaging), per-request USB queue. All five new scripts plus usbsign/credential pass
+in one run on phone 2.
+
 ## 1. Trust people can check (blocks any real-funds claim)
 
 - [x] **Honest entropy claims.** Website said the seed uses the security chip's randomness; it did
