@@ -67,7 +67,23 @@ export function quoteAmount(q: Quote, nativeText: string): string {
 }
 
 /** The token rows under Balances for the selected network. */
-export function tokenSection(chainId: number, networkName: string): HTMLElement | null {
+/** How a listed token is valued (same table as price.rs token_basis): USD stablecoins at $1 by
+ *  definition, wrapped ETH at the ETH price, wrapped BTC at the BTC price; anything else: none. */
+export function usdBasis(symbol: string): "USD" | "ETH" | "BTC" | null {
+  if (["USDC", "USDT", "USDT0", "DAI"].includes(symbol)) return "USD";
+  if (symbol === "WETH") return "ETH";
+  if (symbol === "WBTC" || symbol === "cbBTC") return "BTC";
+  return null;
+}
+/** USD value of a token amount (display only), or null without a price. */
+export function tokenUsd(symbol: string, amount: string, prices: Record<string, number | null>): number | null {
+  const basis = usdBasis(symbol);
+  const p = basis === "USD" ? 1 : basis ? prices[basis] ?? null : null;
+  const v = Number(amount) * (p ?? NaN);
+  return Number.isFinite(v) ? v : null;
+}
+
+export function tokenSection(chainId: number, networkName: string, usd?: (symbol: string, amount: string) => string | null): HTMLElement | null {
   const list = tokensOn(chainId);
   if (!list.length) return listError ? h("p", { class: "inline-error" }, `Token list unavailable: ${listError}`) : null;
   const bals = tokenBalancesFor(chainId);
@@ -82,8 +98,10 @@ export function tokenSection(chainId: number, networkName: string): HTMLElement 
         h("span", { class: "token-sym" }, t.symbol),
         h("span", { class: "grow muted small" }, t.name, h("span", { class: "mono tag" }, short(t.address))),
         h("span", { class: "mono num", title: b?.error ?? err ?? "" }, amount),
+        usd ? h("span", { class: "usd-col" }, b?.amount != null && !zero ? usd(t.symbol, b.amount) ?? "" : "") : null,
       ));
     })),
-    h("p", { class: "muted small" }, "From the token list built into the phone app. Other tokens are not shown; the phone reviews them as unknown contracts."),
+    h("p", { class: "muted small" }, "From the token list built into the phone app. Other tokens are not shown; the phone reviews them as unknown contracts.",
+      usd ? " Dollar values: USDC, USDT and DAI at $1 by definition, WETH at the ETH price, WBTC/cbBTC at the BTC price (Coinbase)." : ""),
   );
 }

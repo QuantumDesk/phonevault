@@ -16,6 +16,10 @@ mod price;
 mod send;
 // speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
 mod replace;
+// background: balances, incoming transfers, pending settlement, notifications; menu-bar item; NFTs
+mod nft;
+mod tray;
+mod watcher;
 // ERC-20: the phone's built-in token list, balances, token sends
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
@@ -195,12 +199,32 @@ pub fn run() {
         .manage(send::SendState::default())
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
             send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
-            history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd,
+            history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
+            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
             signing::sign_message, signing::sign_typed_data,
             attest::attest_phone, attest::attestation_cached,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare])
-        .run(tauri::generate_context!())
-        .expect("error while running Phone Vault Companion");
+        .setup(|app| {
+            // menu-bar item + the background watcher (balances, incoming transfers, notifications)
+            tray::setup(app.handle())?;
+            watcher::start(app.handle().clone());
+            Ok(())
+        })
+        // Closing the window hides it: the app keeps running in the menu bar (Quit is in its menu).
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building Phone Vault Companion")
+        .run(|app, event| {
+            // clicking the Dock icon brings the window back
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen { .. } = event { tray::show_main(app); }
+            let _ = (app, event);
+        });
 }

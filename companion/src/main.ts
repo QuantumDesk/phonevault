@@ -2,15 +2,16 @@
 // Phone Vault Companion UI. One main view (account, balances, Send, Receive, activity), a send
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
-import { api, onProgress, openExternal, appVersion, notify, errText, isTauri } from "./api";
-import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation } from "./api";
+import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri } from "./api";
+import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy } from "./ui";
 import { qrSvg } from "./qr";
-import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
+import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
+import { nftSection, type NftHost } from "./nfts";
 import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
@@ -30,7 +31,7 @@ function loadPrefs(): Prefs {
   } catch { return d; }
 }
 const prefs = loadPrefs();
-function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* preferences are a convenience */ } }
+function savePrefs() { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* preferences are a convenience */ } pushWatchConfig(); }
 const rpcFor = (id: number) => prefs.rpc[id] || byId(id).rpc;
 const net = () => byId(prefs.chainId);
 function applyTheme() {
@@ -71,9 +72,7 @@ async function refreshBalance(n: Network) {
     if (w.chain_id !== n.id) throw `this node is on chain ${w.chain_id}, not ${n.name}. Check the node in Settings.`;
     const wei = BigInt(w.balance_wei);
     const prev = balances.get(n.id);
-    balances.set(n.id, { eth: w.balance_eth, wei, at: Date.now() });
-    balErrors.delete(n.id);
-    if (prev && wei > prev.wei) await incoming(n, wei - prev.wei, w.balance_eth);
+    setBalance(n.id, wei, w.balance_eth, prev);
   } catch (e) { balErrors.set(n.id, errText(e)); }
   if (view === "home") renderSoon();
   if (view === "send" && flow.s === "form") updateFormBalance();
@@ -87,21 +86,23 @@ async function refreshBalance(n: Network) {
 }
 const refreshAllBalances = () => Promise.allSettled(NETWORKS.map(refreshBalance));
 
-function weiToEth(wei: bigint): string {
-  const whole = wei / 10n ** 18n; const frac = (wei % 10n ** 18n).toString().padStart(18, "0").replace(/0+$/, "");
-  return frac ? `${whole}.${frac}` : `${whole}`;
-}
-async function incoming(n: Network, delta: bigint, balanceEth: string) {
-  try { history = await api.historyAddIncoming(n.id, delta.toString()); } catch { /* history is best effort */ }
-  if (prefs.notify) await notify(`Received ${fmtAmount(weiToEth(delta), 8)} ${n.symbol} on ${n.name}. Balance ${fmtAmount(balanceEth, 8)} ${n.symbol}.`);
+/** Balance increases, for the setup's "waiting for your test deposit" step. Recording incoming
+ *  transfers and notifying is the background watcher's job (Rust), window open or not. */
+const increaseListeners = new Set<(chainId: number) => void>();
+function setBalance(chainId: number, wei: bigint, eth: string, prev = balances.get(chainId)) {
+  balances.set(chainId, { eth, wei, at: Date.now() });
+  balErrors.delete(chainId);
+  if (prev && wei > prev.wei) increaseListeners.forEach((l) => l(chainId));
 }
 
 async function refreshPrices() {
-  for (const sym of new Set(NETWORKS.map((n) => n.symbol))) {
-    try { prices[sym] = await api.spotUsd(sym); } catch { prices[sym] = prices[sym] ?? null; }
-  }
+  try { const p = await api.prices(); prices.ETH = p.ETH ?? prices.ETH ?? null; prices.POL = p.POL ?? prices.POL ?? null; prices.BTC = p.BTC ?? prices.BTC ?? null; }
+  catch { /* keep the last ones */ }
   if (view === "home") renderSoon();
 }
+
+/** The watcher runs in Rust with the UI's settings (custom nodes, notifications, selected network). */
+function pushWatchConfig() { if (isTauri) api.watchConfigure(prefs.rpc, prefs.notify, prefs.chainId).catch(() => {}); }
 
 async function refreshHistory() {
   try { history = await api.history(); } catch { /* keep what we have */ }
@@ -213,26 +214,69 @@ function homeView() {
       ),
     ),
     wcHomeSlot(),
+    homeTabs(),
+    prefs.tab === "nfts" ? nftSection(nftHost) : prefs.tab === "activity" ? activitySection(activityHost) : assetsTab(n),
+  );
+}
+
+function homeTabs() {
+  const pending = history.filter((e) => e.status === "pending").length;
+  const tab = (t: HomeTab, label: string, extra?: Node | null) => h("button", { class: prefs.tab === t ? "on" : "", onclick: () => { prefs.tab = t; savePrefs(); render(); } }, label, extra ?? null);
+  return h("nav", { class: "tabs", "aria-label": "Wallet" }, tab("assets", "Assets"), tab("nfts", "NFTs"), tab("activity", "Activity", pending ? h("span", { class: "count" }, `· ${pending}`) : null));
+}
+
+/** USD of everything loaded: native coins (Coinbase spot) and listed tokens (see tokens.ts usdBasis). */
+function usdTotal(chains: Network[]): { usd: number; partial: boolean } {
+  let usd = 0, partial = false;
+  for (const x of chains) {
+    if (x.testnet) continue;
+    const b = balances.get(x.id); const p = price(x);
+    if (!b || p === null) { partial = true; continue; }
+    usd += Number(b.eth) * p;
+    for (const t of tokenBalancesFor(x.id) ?? []) {
+      if (!t.amount || t.raw === "0") continue;
+      const v = tokenUsd(t.symbol, t.amount, prices);
+      if (v === null) partial = true; else usd += v;
+    }
+    if (tokensOn(x.id).length && !tokenBalancesFor(x.id)) partial = true;
+  }
+  return { usd, partial };
+}
+
+let tokensLoadedAt = 0;
+function assetsTab(n: Network) {
+  // token balances for every network, at most every two minutes, for the totals
+  if (Date.now() - tokensLoadedAt > 120_000 && status?.paired) {
+    tokensLoadedAt = Date.now();
+    for (const x of NETWORKS) if (x.id !== n.id) void refreshTokenBalances(x.id, rpcFor(x.id)).then(() => { if (view === "home") renderSoon(); });
+  }
+  const all = usdTotal(NETWORKS);
+  const here = usdTotal([n]);
+  const fmt = (v: number) => fmtUsd(v, 1) ?? "";
+  return h("div", { class: "stack" },
     h("section", { class: "section" },
-      h("h3", { class: "section-title" }, "Balances"),
+      h("div", { class: "total-line" },
+        h("h3", { class: "section-title" }, "Balances"),
+        all.usd > 0 ? h("span", { title: all.partial ? "Some balances or prices are not loaded yet" : "Native coins and listed tokens on all mainnets" }, h("span", { class: "muted small" }, "Total "), h("span", { class: "usd" }, `${all.partial ? "≈ " : ""}${fmt(all.usd)}`)) : null,
+      ),
       h("ul", { class: "list nets" }, NETWORKS.map((x) => {
         const bx = balances.get(x.id); const ex = balErrors.get(x.id);
         const zero = bx && bx.wei === 0n;
+        const t = usdTotal([x]);
         return h("li", null, h("button", { class: `net-row${x.id === n.id ? " on" : ""}${zero ? " zero" : ""}`, onclick: () => { prefs.chainId = x.id; savePrefs(); render(); refreshBalance(x); } },
           h("i", { class: `net-dot n${x.id}` }),
           h("span", { class: "grow" }, x.name, x.testnet ? h("span", { class: "tag" }, "testnet") : null),
           ex && !bx ? h("span", { class: "muted small", title: ex }, "unavailable") : h("span", { class: "mono num" }, bx ? `${fmtAmount(bx.eth, 5)} ${x.symbol}` : "…"),
-          h("span", { class: "muted small fiat-col" }, bx && !x.testnet ? fmtUsd(bx.eth, price(x)) ?? "" : ""),
+          h("span", { class: "muted small fiat-col", title: "Native coin plus listed tokens" }, bx && !x.testnet && price(x) !== null ? fmt(t.usd) : ""),
         ));
       })),
     ),
-    tokenSection(n.id, n.name),
-    h("section", { class: "section" },
-      h("h3", { class: "section-title" }, "Activity"),
-      activitySection(activityHost),
-    ),
+    tokenSection(n.id, n.name, (sym, amt) => { const v = tokenUsd(sym, amt, prices); return v === null || n.testnet ? null : fmtUsd(v, 1); }),
+    here.usd > 0 && !n.testnet ? h("p", { class: "muted small" }, `On ${n.name}: ${here.partial ? "≈ " : ""}${fmt(here.usd)} including listed tokens.`) : null,
   );
 }
+
+const nftHost: NftHost = { chainId: () => prefs.chainId, rpcFor, rerender: () => { if (view === "home" && prefs.tab === "nfts") renderSoon(); } };
 
 const activityHost: ActivityHost = {
   history: () => history,
@@ -1053,6 +1097,23 @@ function openDrawer() { drawerOpen = true; renderDrawer(); document.body.classLi
 function closeDrawer() { drawerOpen = false; document.body.classList.remove("drawer-open"); drawer.setAttribute("aria-hidden", "true"); }
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && drawerOpen) closeDrawer(); });
 
+/** Settings → Incoming transfers: how far back each node let the watcher search token transfers. */
+function scanStatusSection() {
+  const list = h("div", { class: "att-details" }, h("p", { class: "muted small" }, "…"));
+  api.scanStatus().then((rows) => {
+    list.replaceChildren(...NETWORKS.map((x) => {
+      const r = rows.find((s) => s.chain_id === x.id);
+      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : `blocks ${r.from_block.toLocaleString("en-US")}–${(r.to_block ?? 0).toLocaleString("en-US")}`;
+      return h("div", { class: "set-row" }, h("span", { class: "muted" }, x.name), h("span", { class: "att-val", title: r?.error ?? "" }, text, r?.error && r.from_block !== null ? " (partial)" : ""));
+    }));
+  }).catch(() => list.replaceChildren(h("p", { class: "muted small" }, "Unavailable.")));
+  return h("section", { class: "set" },
+    h("h4", null, "INCOMING TRANSFERS"),
+    h("p", { class: "muted small" }, "Token transfers into this wallet are found in Transfer logs on your node for each network, starting from a recent window and then continuously. Some public nodes only serve the last few minutes of logs; a node of your own shows more. Plain ETH transfers are matched from the blocks since the last balance check; anything else that raises the balance is listed without a hash."),
+    list,
+  );
+}
+
 let version = "";
 function renderDrawer() {
   const paired = status?.paired_checksum;
@@ -1103,8 +1164,9 @@ function renderDrawer() {
       h("h4", null, "NOTIFICATIONS"),
       h("label", { class: "toggle" }, h("span", null, "Tell me when funds arrive"),
         (() => { const t = h("input", { type: "checkbox", role: "switch", checked: prefs.notify }); t.addEventListener("change", () => { prefs.notify = t.checked; savePrefs(); if (t.checked) notify("Notifications are on."); }); return t; })(), h("i", { class: "knob" })),
-      h("p", { class: "muted small" }, "Checks balances while this app is open."),
+      h("p", { class: "muted small" }, isTauri ? "Checked in the background on your nodes, also when the window is closed: Phone Vault stays in the menu bar (Quit from its menu)." : "Checked in the background on your nodes."),
     ),
+    scanStatusSection(),
     h("section", { class: "set" },
       h("h4", null, "APPEARANCE"),
       h("div", { class: "segmented" }, seg("dark", "Dark"), seg("light", "Light"), seg("system", "System")),
@@ -1147,9 +1209,22 @@ mountWalletConnect({
   refreshHistory().then(pollPending);
   refreshPrices();
   setInterval(refreshStatus, 3000);
-  setInterval(() => { if (status?.paired) refreshBalance(net()); }, 15_000);
-  setInterval(() => { if (status?.paired) refreshAllBalances(); }, 60_000);
+  pushWatchConfig();
+  // The background watcher (Rust) reads balances, finds incoming transfers and settles pending
+  // transactions on its own schedule and tells the UI; the preview has no watcher, so it polls.
+  void onEvent<WatchBalance>("watch-balance", (b) => {
+    const n = byId(b.chain_id); if (n.id !== b.chain_id || !status?.paired) return;
+    setBalance(n.id, BigInt(b.balance_wei), b.balance_eth);
+    if (view === "home") renderSoon();
+    if (view === "send" && flow.s === "form") updateFormBalance();
+    if (n.id === prefs.chainId) void refreshTokenBalances(n.id, rpcFor(n.id)).then(() => { if (view === "home") renderSoon(); });
+  });
+  void onEvent("history-changed", () => { void refreshHistory(); });
+  if (!isTauri) {
+    setInterval(() => { if (status?.paired) refreshBalance(net()); }, 15_000);
+    setInterval(() => { if (status?.paired) refreshAllBalances(); }, 60_000);
+  }
   setInterval(refreshPrices, 60_000);
-  setInterval(pollPending, 15_000);
+  setInterval(pollPending, isTauri ? 60_000 : 15_000);
   setInterval(() => { if (view === "home") renderSoon(); }, 60_000); // relative times
 })();
