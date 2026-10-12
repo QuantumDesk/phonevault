@@ -31,9 +31,22 @@ final class TransactionReview {
     final String lockedSummary;
     /** The listed token for a token call, or null (native transfer or unknown contract). */
     final TokenList.Token token;
+    /** The counterparties this transaction sends to or approves: recorded in {@link RecipientHistory} after signing. */
+    final List<Party> parties;
 
-    private TransactionReview(String title, List<MessageReview.Row> summary, List<MessageReview.Row> details,
-                              String reviewPrompt, String signLabel, String lockedSummary, TokenList.Token token) {
+    /** One counterparty of a reviewed transaction. */
+    static final class Party {
+        final String address; // lower-case
+        final RecipientHistory.Role role;
+
+        Party(String address, RecipientHistory.Role role) {
+            this.address = address.toLowerCase(Locale.ROOT);
+            this.role = role;
+        }
+    }
+
+    TransactionReview(String title, List<MessageReview.Row> summary, List<MessageReview.Row> details,
+                      String reviewPrompt, String signLabel, String lockedSummary, TokenList.Token token, List<Party> parties) {
         this.kicker = KICKER;
         this.title = title;
         this.subtitle = SUBTITLE;
@@ -43,11 +56,27 @@ final class TransactionReview {
         this.signLabel = signLabel;
         this.lockedSummary = lockedSummary;
         this.token = token;
+        this.parties = Collections.unmodifiableList(new ArrayList<>(parties));
     }
 
     /** @param signerAddress the reviewed signing address (any case); may be null for the locked summary */
     static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens) {
+        return build(r, signerAddress, tokens, null);
+    }
+
+    /**
+     * @param safety the phone's address book and recipient history, or null (no history rows; the
+     *               locked-screen summary and unit tests of the plain review)
+     */
+    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
         if (tokens == null) tokens = TokenList.empty();
+        if (r.kind == Eip1559Request.Kind.SWAP) return SwapReview.build(r, signerAddress, tokens, safety);
+        if (r.kind == Eip1559Request.Kind.NFT_CALL) return NftReview.build(r, signerAddress, tokens, safety);
+        if (r.tokenCall != null && NftCollections.lookup(r.chainId, r.to) != null
+                && (r.tokenCall.function == Erc20Call.Function.APPROVE || r.tokenCall.function == Erc20Call.Function.TRANSFER_FROM)) {
+            // approve/transferFrom on a listed NFT collection: the ERC-721 meaning, never "tokens"
+            return NftReview.buildErc721(r, signerAddress, tokens, safety);
+        }
         List<MessageReview.Row> rows = new ArrayList<>();
         List<MessageReview.Row> details = new ArrayList<>();
         String signer = signerAddress == null ? null : signerAddress.toLowerCase(Locale.ROOT);
@@ -57,15 +86,25 @@ final class TransactionReview {
             rows.add(row("Action", r.transactionTypeLabel()));
             rows.add(row("Send", r.valueEth()));
             rows.add(row("Recipient", r.displayedRecipientLabel()));
+            if (safety != null) rows.addAll(safety.rows(signer, r.to, RecipientHistory.Role.SEND));
+            String known = knownContract(r.chainId, r.to, tokens);
+            if (known != null) {
+                rows.add(row(WARNING, "This address is " + known + ". Native coin sent straight to it, without a function "
+                        + "call, is usually lost. Check that you meant to send " + r.nativeSymbol() + " here."));
+            } else {
+                rows.add(row("Contract check", "The offline phone can't tell whether this address is a wallet or a contract."));
+            }
             addCommon(rows, r, signer);
             rows.add(row("Maximum fee", r.maximumFeeEth()));
             addFeeDetails(details, r);
             details.add(row("Contract data", "None"));
             String locked = r.transactionTypeLabel() + " · " + r.valueEth() + " to " + shortAddress(r.displayedRecipientLabel())
                     + " · " + network + ". Unlock to review every field before anything is signed.";
+            List<Party> parties = new ArrayList<>();
+            parties.add(new Party(r.to, RecipientHistory.Role.SEND));
             return new TransactionReview("Review transfer", rows, details,
                     "I verified the signing address, network, recipient, amount, and maximum fee shown above.",
-                    "Approve & sign", locked, null);
+                    "Approve & sign", locked, null, parties);
         }
 
         Erc20Call call = r.tokenCall;
@@ -124,12 +163,23 @@ final class TransactionReview {
         rows.add(row(amountTitle, amountValue));
 
         // parties
+        RecipientHistory.Role role = call.function.grantsAllowance() ? RecipientHistory.Role.APPROVE : RecipientHistory.Role.SEND;
         if (call.function == Erc20Call.Function.TRANSFER_FROM) {
             String from = Keys.toChecksumAddress(call.from);
             rows.add(row("Take from (token owner)", call.from.equals(signer) ? from + " (this wallet)" : from));
             rows.add(row("Recipient", party));
         } else {
             rows.add(row(call.function.grantsAllowance() ? "Spender (gets permission)" : "Recipient", party));
+        }
+        if (safety != null) rows.addAll(safety.rows(signer, call.party, role));
+        if (token == null && (call.function == Erc20Call.Function.APPROVE || call.function == Erc20Call.Function.TRANSFER_FROM)) {
+            // ERC-721 shares these two selectors. An unlisted contract could be either; both meanings are shown.
+            rows.add(row(WARNING, "Two possible meanings: this contract is in neither the token list nor the NFT list built "
+                    + "into this phone, and ERC-721 NFTs use the same function. If it is an NFT collection, this call "
+                    + (call.function == Erc20Call.Function.APPROVE
+                    ? "lets " + party + " take NFT #" + call.amount + " from this wallet."
+                    : "moves NFT #" + call.amount + " from " + Keys.toChecksumAddress(call.from) + " to " + party + ".")
+                    + " Sign only if you know which kind of contract this is."));
         }
 
         // token identity
@@ -165,7 +215,19 @@ final class TransactionReview {
         details.add(row("Contract data", r.data));
 
         String locked = action + " · " + network + ". Unlock to review every field before anything is signed.";
-        return new TransactionReview(title, rows, details, prompt, signLabel, locked, token);
+        List<Party> parties = new ArrayList<>();
+        if (!(call.function.grantsAllowance() && call.amount.signum() == 0)) parties.add(new Party(call.party, role));
+        return new TransactionReview(title, rows, details, prompt, signLabel, locked, token, parties);
+    }
+
+    /** "the USDC token contract", "a Uniswap router contract" …, or null when the phone knows nothing about the address. */
+    static String knownContract(long chainId, String address, TokenList tokens) {
+        TokenList.Token t = tokens == null ? null : tokens.lookup(chainId, address);
+        if (t != null) return "the " + t.symbol + " token contract";
+        NftCollections.Collection c = NftCollections.lookup(chainId, address);
+        if (c != null) return "the " + c.name + " NFT contract";
+        if (UniswapRouters.lookup(chainId, address) != null) return "a Uniswap router contract";
+        return null;
     }
 
     private static String unknownTokenWarning(Erc20Call call, String contract) {
@@ -206,12 +268,12 @@ final class TransactionReview {
         }
     }
 
-    private static void addCommon(List<MessageReview.Row> rows, Eip1559Request r, String signer) {
+    static void addCommon(List<MessageReview.Row> rows, Eip1559Request r, String signer) {
         rows.add(row("Network", r.networkLabel()));
         if (signer != null) rows.add(row("From · Account 1", Keys.toChecksumAddress(signer)));
     }
 
-    private static void addFeeDetails(List<MessageReview.Row> details, Eip1559Request r) {
+    static void addFeeDetails(List<MessageReview.Row> details, Eip1559Request r) {
         details.add(row("Maximum fee in wei", r.maximumFeeWeiLabel()));
         details.add(row("What the fee covers", r.feeCoverageLabel()));
         details.add(row("Gas limit", r.gasLimitLabel()));
@@ -220,11 +282,11 @@ final class TransactionReview {
         details.add(row("Nonce", r.nonce.toString()));
     }
 
-    private static String shortAddress(String address) {
+    static String shortAddress(String address) {
         return address.length() > 14 ? address.substring(0, 8) + "…" + address.substring(address.length() - 6) : address;
     }
 
-    private static MessageReview.Row row(String label, String value) { return new MessageReview.Row(label, value); }
+    static MessageReview.Row row(String label, String value) { return new MessageReview.Row(label, value); }
 
     /** Every row, summary then details, one per line (tests and logs of the review model, never keys). */
     String text() {

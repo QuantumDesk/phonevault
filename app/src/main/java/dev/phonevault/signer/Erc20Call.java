@@ -59,6 +59,12 @@ final class Erc20Call {
         this.amount = amount;
     }
 
+    /** True for the four ERC-20 selectors this decoder accepts. */
+    static boolean handles(String selector) {
+        for (Function f : Function.values()) if (f.selector.equals(selector)) return true;
+        return false;
+    }
+
     static Erc20Call decode(String data) throws JSONException {
         if (data == null || !data.matches("0x[0-9a-fA-F]*") || ((data.length() - 2) & 1) != 0)
             throw new JSONException("data must be even-length 0x-prefixed hex");

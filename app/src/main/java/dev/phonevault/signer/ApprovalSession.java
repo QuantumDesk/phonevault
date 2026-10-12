@@ -20,14 +20,24 @@ final class ApprovalSession {
     }
 
     ApprovalSession(Eip1559Request request, Credentials credentials, TokenList tokens) {
+        this(request, credentials, tokens, null);
+    }
+
+    /**
+     * @param safety the phone's address book and recipient history (contact names, first-time and
+     *               look-alike checks); display only, never part of what is signed. May be null.
+     */
+    ApprovalSession(Eip1559Request request, Credentials credentials, TokenList tokens, AddressSafety safety) {
         if (request == null || credentials == null) {
             throw new IllegalArgumentException("Approval requires a request and signing identity");
         }
         this.request = request;
         this.reviewedCredentials = credentials;
         this.reviewedAddress = credentials.getAddress().toLowerCase(java.util.Locale.ROOT);
-        this.review = TransactionReview.build(request, reviewedAddress, tokens);
+        this.review = TransactionReview.build(request, reviewedAddress, tokens, safety);
     }
+
+    String reviewedAddress() { return reviewedAddress; }
 
     String signerAddressLabel() {
         return Keys.toChecksumAddress(reviewedAddress);

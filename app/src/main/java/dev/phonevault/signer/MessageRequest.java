@@ -72,13 +72,18 @@ final class MessageRequest {
             for (int i = 0; i < bytes.length; i++) {
                 bytes[i] = (byte) Integer.parseInt(hex.substring(2 + 2 * i, 4 + 2 * i), 16);
             }
+            if (Eip7702.isAuthorizationTuple(bytes)) throw RequestRefusal.delegation("message is a 0x05 authorization tuple");
             return new MessageRequest(id, chainId, Kind.PERSONAL, PersonalMessage.of(bytes), null);
         }
+        Eip712.TypedData typed;
         try {
-            return new MessageRequest(id, chainId, Kind.TYPED_DATA, null, Eip712.parse(json.getString("typedData")));
+            typed = Eip712.parse(json.getString("typedData"));
         } catch (Eip712.InvalidTypedData e) {
             throw new JSONException(e.getMessage());
         }
+        String delegation = Eip7702.typedDataDelegation(typed);
+        if (delegation != null) throw RequestRefusal.delegation(delegation);
+        return new MessageRequest(id, chainId, Kind.TYPED_DATA, null, typed);
     }
 
     /** The 32 bytes that will be signed, derived only from the parsed message object. */
