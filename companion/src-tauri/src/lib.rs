@@ -14,6 +14,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// simulate every transaction on the user's node before it goes to the phone (shown as the Mac's claim)
+mod sim;
 // speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
 mod replace;
 // background: balances, incoming transfers, pending settlement, notifications; menu-bar item; NFTs
@@ -204,7 +206,7 @@ pub fn run() {
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, wallet, quote, sign, broadcast, receipt, default_rpc,
-            send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
+            send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
             watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,

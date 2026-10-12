@@ -76,3 +76,20 @@
 .segmented.two { grid-template-columns: repeat(2, 1fr); }
 .backup-card { display: grid; gap: 8px; }
 .backup-card .row.gap { margin-top: 2px; }
+
+/* ---------------------------------------------------------------- simulation (simulation.ts) */
+.sim-box { margin: 14px 0 4px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--surface-2); display: grid; gap: 6px; }
+.sim-box p { margin: 0; }
+.sim-box .sim-head { display: flex; align-items: center; gap: 7px; font-weight: 600; flex-wrap: wrap; }
+.sim-box.ok { border-color: var(--accent-line); background: var(--accent-soft); }
+.sim-box.ok .sim-head { color: var(--accent); }
+.sim-box.warn { border-color: color-mix(in srgb, var(--warn) 45%, transparent); background: color-mix(in srgb, var(--warn) 7%, transparent); }
+.sim-box.warn .sim-head { color: var(--warn); }
+.sim-box.bad { border-color: color-mix(in srgb, var(--danger) 55%, transparent); background: var(--danger-soft); }
+.sim-box.bad .sim-head { color: var(--danger); }
+.sim-box .sim-reason { font-family: var(--mono); font-weight: 500; overflow-wrap: anywhere; }
+.sim-box .link { justify-self: start; }
+.sim-changes { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; font-size: 15px; }
+.sim-changes li { overflow-wrap: anywhere; }
+.sim-changes li.pos .mono { color: var(--accent); }
+button.warn-btn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 8%, var(--surface-2)); }

@@ -15,6 +15,7 @@ import { backupCardSection } from "./backup-card";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
 import { nftSection, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
+import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
@@ -691,6 +692,7 @@ function flowBody(): Node {
     case "review": {
       const quote = flow.quote;
       if (quote.replaces) return replacementReview(quote);
+      const sim = reviewSimulation(quote);
       return h("section", { class: "card" },
         h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
         quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
@@ -705,11 +707,12 @@ function flowBody(): Node {
             : fact("Total at most", h("span", null, `${fmtAmount(quote.total_eth, 8)} ${n.symbol}`, usd(quote.total_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.total_eth)}`) : null)),
           fact("Nonce", h("span", { class: "mono" }, String(parseInt(quote.nonce, 16)))),
         ),
+        simPanel(sim, () => { resimulate(rpcFor(n.id), quote, rerenderReview(quote)); render(); }),
         n.l2 ? h("p", { class: "note" }, `${n.name} also charges a small L1 data fee that neither this Mac nor the phone can bound in advance. It is usually a fraction of a cent.`) : null,
         quote.token ? h("p", { class: "note" }, `Your phone names the token from its own built-in list: it should read "Send ${fmtExact(quote.token.amount)} ${quote.token.symbol} to" this recipient. If it says "Unknown token contract", reject it there.`) : null,
         h("p", { class: "note" }, "Your phone shows these same details. Approve there only if they match. Nothing reaches the network until you press Broadcast afterwards."),
         h("div", { class: "actions" },
-          h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("phone", 18), "Send to phone"),
+          gatedSendButton(sim, "Send to phone", () => sendToPhone(quote)),
           h("button", { class: "big", onclick: () => setFlow({ s: "form" }) }, "Edit"),
         ),
       );
@@ -853,6 +856,7 @@ function replacementReview(quote: Quote) {
   const r = quote.replaces!;
   const cancel = r.kind === "cancel";
   const usd = (eth: string) => fmtUsd(eth, price(n));
+  const sim = reviewSimulation(quote);
   return h("section", { class: "card replace-card" },
     h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(r.hash).toUpperCase()}`),
     h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
@@ -868,15 +872,20 @@ function replacementReview(quote: Quote) {
       fact("Priority fee", h("span", null, `${gwei(quote.max_priority_fee_per_gas)} gwei`, h("span", { class: "muted" }, ` · was ${gwei(r.previous_max_priority_fee_per_gas)}`))),
       fact("Network fee", h("span", null, `at most ${fmtAmount(quote.max_fee_eth, 8)} ${n.symbol}`, usd(quote.max_fee_eth) ? h("span", { class: "muted" }, ` · ${usd(quote.max_fee_eth)}`) : null)),
     ),
+    simPanel(sim, () => { resimulate(rpcFor(n.id), quote, rerenderReview(quote)); render(); }),
     h("p", { class: "note" }, cancel
       ? `Your phone shows it as a normal transaction: send 0 ${n.symbol} to your own address. Approve there only if that is what it says.`
       : "Your phone shows it as a normal transaction with these same details. Approve there only if they match."),
     h("div", { class: "actions" },
-      h("button", { class: "big primary", onclick: () => sendToPhone(quote) }, icon("phone", 18), "Send to phone"),
+      gatedSendButton(sim, "Send to phone", () => sendToPhone(quote)),
       h("button", { class: "big", onclick: () => go("home") }, "Not now"),
     ),
   );
 }
+
+/** Simulate the quote under review on the user's node (simulation.ts); re-renders when it's done. */
+const rerenderReview = (quote: Quote) => () => { if (view === "send" && flow.s === "review" && flow.quote === quote) render(); };
+function reviewSimulation(quote: Quote) { return simulationFor(rpcFor(flowNet.id), quote, rerenderReview(quote)); }
 
 function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 let toChecksum: string | null = null;
@@ -1048,6 +1057,7 @@ function explain(err: SendError): Explained {
     case "verify": return { title: "Signature failed verification", danger: true, body: "What came back does not match what you entered, or was not signed by your paired phone. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
     case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast. Reconnect the cable and try again." };
     case "not_paired": return { title: "Not paired", body: "Pair this Mac with your phone first (Settings → Phone)." };
+    case "reverts": return { title: "It would revert", body: `Simulated on your node, this transaction fails (${err.message}). A failed transaction still costs its fee, so it was not sent to your phone. Edit it, or fix the cause and try again.`, hideDetail: true };
     case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware holding your paired wallet, so nothing was sent to it. Open Settings → Device for the details." };
     default: return { title: "Something went wrong", body: "The request didn't complete. Nothing was broadcast. Try again." };
   }

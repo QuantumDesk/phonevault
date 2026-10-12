@@ -89,12 +89,20 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
         };
         // A speed-up/cancel must really replace a pending transaction from here (replace.rs).
         crate::replace::check(&quote, &pinned).map_err(|m| fail("internal", format!("replacement rejected: {m}"), false))?;
-        // Exactly the request the original `sign` command builds.
-        let request = json!({
+        // A transaction whose latest simulation in this session reverts never reaches the phone (sim.rs).
+        let simulation = crate::sim::recall(&quote);
+        if let Some(s) = simulation.as_ref().filter(|s| s.status == "reverts") {
+            return Err(fail("reverts", s.reason.clone().unwrap_or_else(|| "the simulation reverted".into()), false));
+        }
+        // Exactly the request the original `sign` command builds, plus the Mac's simulation claim
+        // (`hostSimulation`) when there is a complete one: display-only on the phone, never signed,
+        // never read by verify.rs.
+        let mut request = json!({
             "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
             "chainId": quote.chain_id, "nonce": quote.nonce, "maxPriorityFeePerGas": quote.max_priority_fee_per_gas,
             "maxFeePerGas": quote.max_fee_per_gas, "gasLimit": quote.gas_limit, "to": quote.to, "value": quote.value, "data": quote.data,
         });
+        if let Some(claim) = simulation.as_ref().and_then(crate::sim::host_claim) { request["hostSimulation"] = claim; }
         emit("connecting");
         let mut session = aoa::Session::connect().map_err(|e| match e {
             aoa::AoaError::NoDevice => fail("no_phone", e.to_string(), false),

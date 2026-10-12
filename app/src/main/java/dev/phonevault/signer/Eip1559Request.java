@@ -19,6 +19,10 @@ final class Eip1559Request {
     private static final Set<String> REQUEST_FIELDS = new HashSet<>(Arrays.asList(
             "id", "method", "chainId", "nonce", "maxPriorityFeePerGas",
             "maxFeePerGas", "gasLimit", "to", "value", "data"));
+    /** The same fields plus the Mac's optional, untrusted simulation claim ({@link HostSimulation}). */
+    private static final Set<String> REQUEST_FIELDS_WITH_SIMULATION = new HashSet<>(Arrays.asList(
+            "id", "method", "chainId", "nonce", "maxPriorityFeePerGas",
+            "maxFeePerGas", "gasLimit", "to", "value", "data", HostSimulation.FIELD));
 
     enum Kind {
         NATIVE_TRANSFER, TOKEN_TRANSFER, TOKEN_APPROVAL, TOKEN_TRANSFER_FROM, TOKEN_INCREASE_ALLOWANCE,
@@ -46,12 +50,17 @@ final class Eip1559Request {
     final NftCall nftCall;
     /** The decoded router call for {@link Kind#SWAP}; otherwise null. */
     final SwapPlan swap;
+    /**
+     * The Mac's simulation claim, or null. Display only: never signed ({@link EvmSigner} does not
+     * read it) and never used to decode the transaction.
+     */
+    final HostSimulation hostSimulation;
 
     private Eip1559Request(String id, long chainId, BigInteger nonce,
                            BigInteger maxPriorityFeePerGas, BigInteger maxFeePerGas,
                            BigInteger gasLimit, String to, BigInteger value, String data,
                            Kind kind, String displayedRecipient, BigInteger displayedAmount, Erc20Call tokenCall,
-                           NftCall nftCall, SwapPlan swap) {
+                           NftCall nftCall, SwapPlan swap, HostSimulation hostSimulation) {
         this.id = id;
         this.chainId = chainId;
         this.nonce = nonce;
@@ -67,6 +76,7 @@ final class Eip1559Request {
         this.tokenCall = tokenCall;
         this.nftCall = nftCall;
         this.swap = swap;
+        this.hostSimulation = hostSimulation;
     }
 
     static Eip1559Request parse(JSONObject json) throws JSONException {
@@ -77,7 +87,7 @@ final class Eip1559Request {
                 || "4".equals(json.optString("type"))) {
             throw RequestRefusal.delegation("type-4 set-code transaction");
         }
-        requireExactFields(json, REQUEST_FIELDS);
+        requireExactFields(json, json.has(HostSimulation.FIELD) ? REQUEST_FIELDS_WITH_SIMULATION : REQUEST_FIELDS);
         if (!"signEip1559".equals(json.getString("method"))) {
             throw new JSONException("Unsupported method");
         }
@@ -95,6 +105,7 @@ final class Eip1559Request {
         String to = json.getString("to");
         BigInteger value = quantity(json.getString("value"));
         String data = json.getString("data");
+        HostSimulation hostSimulation = json.has(HostSimulation.FIELD) ? HostSimulation.parse(json.get(HostSimulation.FIELD)) : null;
 
         if (chainId <= 0) throw new JSONException("chainId must be positive");
         if (!supportedChain(chainId)) throw new JSONException("Unsupported network: no reviewed chain profile for " + chainId);
@@ -147,7 +158,7 @@ final class Eip1559Request {
             displayedAmount = call.amount;
         }
         return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
-                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call, nft, swap);
+                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call, nft, swap, hostSimulation);
     }
 
     static String validatedId(String id) throws JSONException {

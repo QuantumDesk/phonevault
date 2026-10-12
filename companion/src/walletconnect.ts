@@ -16,6 +16,7 @@ import { NETWORKS, byId } from "./networks";
 import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
+import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import "./walletconnect.css";
 
 // ------------------------------------------------------------------ host hooks (from main.ts)
@@ -330,6 +331,7 @@ function txFailure(it: Item, err: SendError) {
     case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", "Signature failed verification", "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
     case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, "The phone refused this", plainPhone(err.message), "warn", err.message);
     case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", "Not paired", "Pair this Mac with your phone first.", "warn");
+    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, "It would revert", `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
   }
   const title = err.kind === "no_phone" ? "Phone not found" : err.kind === "usb_busy" ? "USB is in use" : err.kind === "timeout" ? "No answer from the phone" : err.kind === "disconnected" ? "The USB connection dropped" : "The phone didn't take the request";
   const body = err.kind === "usb_busy" ? "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server`, then try again."
@@ -649,7 +651,9 @@ function itemView(it: Item): Node {
         err ? h("p", { class: "inline-error" }, icon("alert", 15), err) : null,
         prep?.kind !== "switch_chain" ? h("p", { class: "note" }, "Your phone shows this again in full. Approve there only if it matches. Reject here and nothing reaches the phone.") : null,
         h("div", { class: "actions" },
-          h("button", { class: "big primary", onclick: () => approve(it) }, prep?.kind === "switch_chain" ? null : icon("phone", 18), approveLabel),
+          // a transaction's send button follows its simulation: blocked on a revert, "Send anyway" when it couldn't run
+          prep?.kind === "transaction" ? gatedSendButton(txSimulation(prep.quote, chain), approveLabel, () => approve(it))
+            : h("button", { class: "big primary", onclick: () => approve(it) }, prep?.kind === "switch_chain" ? null : icon("phone", 18), approveLabel),
           h("button", { class: "big", onclick: () => reject(it) }, "Reject")), later);
     }
     case "connecting":
@@ -724,6 +728,7 @@ function reviewBody(it: Item, chain: number): Node[] {
           fact("Nonce", h("span", { class: "mono" }, String(parseInt(q.nonce, 16)))),
         ),
         notesList(prep.notes),
+        simPanel(txSimulation(q, chain), () => { resimulate(host.rpcFor(chain), q, render); render(); }),
       ].filter(Boolean) as Node[];
     }
     case "personal_sign":
@@ -752,6 +757,9 @@ function reviewBody(it: Item, chain: number): Node[] {
       return [];
   }
 }
+
+/** The dApp transaction simulated on the user's node for its chain (simulation.ts). */
+function txSimulation(q: Quote, chain: number) { return simulationFor(host.rpcFor(chain), q, render); }
 
 function prettyJson(t: string) { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return t; } }
 
