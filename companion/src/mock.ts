@@ -146,6 +146,7 @@ export function createMock(): Mock {
         paired = addr.toLowerCase(); return "" as T;
       }
       case "forget_pairing": paired = null; accounts.length = 0; return undefined as T;
+      case "open_backup_card": return undefined as T;
       case "wallet": {
         await sleep(300 + Math.random() * 500);
         if (!paired) throw "not paired yet";
@@ -167,6 +168,26 @@ export function createMock(): Mock {
         if (!amt || Number(amt) <= 0) throw "amount must be more than zero";
         const c = chainOf(a.rpcUrl);
         return { chain_id: "0x" + c.toString(16), nonce: "0x4", max_priority_fee_per_gas: "0xf4240", max_fee_per_gas: "0xc3500", gas_limit: "0x5208", to: String(a.to).toLowerCase(), value: "0x1", data: "0x", amount_eth: amt, max_fee_eth: "0.0000042", total_eth: (Number(amt) + 0.0000042).toFixed(8), balance_eth: BAL[c] ?? "0", network: c === 8453 ? "Base" : "Ethereum Mainnet" } as T;
+      }
+      case "simulate": {
+        // ?sim=ok (default) | reverts | nochanges | unavailable
+        await sleep(900);
+        const q = a.quote as Quote;
+        const c = parseInt(q.chain_id, 16);
+        const node = new URL(String(a.rpcUrl)).host;
+        const sym = c === 137 ? "POL" : "ETH";
+        const kind = params.get("sim") ?? "ok";
+        const base = { method: "eth_simulateV1", changes: [], fee_wei: null, gas_used: null, reason: null, note: null, node, block: 20511298, for_phone: false };
+        if (kind === "reverts") return { ...base, status: "reverts", gas_used: "35241", reason: q.token ? "ERC20: transfer amount exceeds balance" : "Too little received" } as T;
+        if (kind === "nochanges") return { ...base, status: "no_changes", method: "eth_call", gas_used: "52310", note: "Balance changes unavailable on this node (it does not support eth_simulateV1). eth_call says it does not revert." } as T;
+        if (kind === "unavailable") return { ...base, status: "unavailable", method: "none", reason: "the node could not run it: header not found" } as T;
+        const fee = 0.0000231;
+        const changes = q.token
+          ? [{ asset: "native", token_id: null, delta: "-23100000000000", symbol: sym, decimals: 18, display: `−${fee} ${sym}` },
+             { asset: q.token.contract.toLowerCase(), token_id: null, delta: "-" + q.token.amount_raw, symbol: q.token.symbol, decimals: q.token.decimals, display: `−${q.token.amount} ${q.token.symbol}` }]
+          : [{ asset: "native", token_id: null, delta: "-1", symbol: sym, decimals: 18, display: `−${(Number(q.amount_eth) + fee).toFixed(8).replace(/0+$/, "")} ${sym}` }];
+        return { ...base, status: "ok", changes, fee_wei: "23100000000000", gas_used: q.token ? "62248" : "21000", for_phone: true,
+          note: [8453, 10, 42161].includes(c) ? "Plus a small L1 data fee the simulation does not include." : null } as T;
       }
       case "sign_start": {
         const t = String(a.ticket); cancelled = false;

@@ -327,3 +327,50 @@ account number, plus the ACTIVE address the Mac shows). Every request is pinned 
 active when it starts: it carries `from`, the attestation must name it, and the recovered signer
 must equal it. The single-address file of earlier versions migrates to "Account 1" (its history
 moves to `history-<address>.json`); history, NFTs and the watcher's scan state are per address.
+
+## Stronger backups (2026-10-11)
+
+**Printable backup card** (`tools/backup-card/make_card.py` → `tools/backup-card/out/*.pdf`, A4 and
+US Letter, with a 25 × 25 or 29 × 29 SeedQR grid). The PDFs are generated deterministically by a
+dependency-free script (`--check` fails when the checked-in files are stale) and are the same for
+every user: 24 numbered word lines, date, an "Account 1 address first 4 / last 4" line (public, to
+tell cards apart), copy 1/2, the grid with the fixed QR function patterns pre-printed, and short
+instructions (never photograph or type it, two copies in separate places, a passphrase is not on
+the card). The companion only opens the bundled file in the system viewer (`open_backup_card`,
+fixed names, no path from the UI). No recovery word, SeedQR or other secret ever reaches the Mac;
+a filled-in card is as sensitive as the phrase itself.
+
+**SeedQR on the phone** (`SeedQr`, `SeedQrView`). SeedSigner's specification
+(https://github.com/SeedSigner/seedsigner/blob/dev/docs/seed_qr/README.md): CompactSeedQR = the
+BIP-39 entropy (32 bytes for 24 words, checksum bits dropped) in byte mode without ECI, error
+correction L, version 2 (25 × 25); Standard SeedQR = 4-digit word indices (96 digits), numeric mode,
+L, version 3 (29 × 29). The symbol comes from ZXing (already used for the receive QR); its mode,
+version and level are checked after encoding and the screen refuses rather than show anything
+else. Tests decode the generated matrices with ZXing's decoder against all nine published vectors
+and check that the card's pre-printed modules match. The SeedQR is the phrase in another form, so
+it lives only inside the existing sensitive flow: same PIN gate and seed-key path as "Show recovery
+phrase", no USB session (attaches are parked), FLAG_SECURE in release, the seed idle/session timer,
+no ☰ menu, Hide/Back/lock clear it, the modules are wiped on hide, the view is excluded from
+accessibility, and the development UI dump skips it. It is not offered for an un-activated
+replacement wallet. The Java `String` passed to ZXing and ZXing's internal buffers cannot be wiped;
+this is the same managed-memory limitation as the mnemonic string itself.
+
+**"Check your backup" reminder** (`BackupReminder`). Non-secret metadata in the app's preferences:
+the day of the last successful check (written in the same commit as `BackupCheck.record`, so a
+spot check, replacement or restore restarts it), the interval (off / 30 / 90 / 180 days, default
+90) and a 14-day snooze. Home shows a card only for a verified wallet with no USB session, request
+or approval in progress; it runs the existing spot check (no phrase shown unless a word is wrong
+and the user chooses "Review"). The offline clock is not trusted for anything else: a clock that
+goes backwards never shows the card, one that jumps ahead can only show it early. It never blocks
+receiving or signing.
+
+**The Mac's simulation (see `simulation.md`).** The companion simulates every transaction on the
+user's node (`eth_simulateV1`, eth_call fallback) and blocks sending one that reverts. It may
+attach the result as the optional `hostSimulation` request field. The phone shows it in a separate
+box labelled "NOT VERIFIED BY THIS PHONE", below its own review, and flags in red a claim that
+contradicts what the phone decoded. The field is never signed, never feeds the phone's decoding and
+is ignored by host-side verification: a lying Mac or node can show fake numbers, but cannot change
+what the phone decodes or signs. With several accounts, "the
+wallet" in the simulation is the ACTIVE paired account: the companion simulates from it (the same
+address the request names in `from`), remembers the result per account (a result for one account
+never stands in for another), and the phone checks the claim against the account it signs with.

@@ -288,5 +288,34 @@ class AttestResponseValidationTest(unittest.TestCase):
             aoa_client.validate_attest_response(self.REQUEST, self.ok(), "0x1111111111111111111111111111111111111111")
 
 
+class RequestOptionsTest(unittest.TestCase):
+    """--from (multi-account phones) and --host-simulation (the Mac's claim) work together."""
+
+    def sign_args(self, **extra):
+        import argparse
+        base = dict(command="sign", chain_id="0x1", nonce="0x0", priority_fee="0x1", max_fee="0x2",
+                    gas_limit="0x5208", to="0x" + "aa" * 20, value="0x1", data="0x",
+                    sender=None, host_simulation=None)
+        base.update(extra)
+        return argparse.Namespace(**base)
+
+    def test_plain_request_has_neither_optional_field(self):
+        request = aoa_client.request_for(self.sign_args())
+        self.assertNotIn("from", request)
+        self.assertNotIn("hostSimulation", request)
+
+    def test_from_and_host_simulation_together(self):
+        import tempfile
+        claim = {"changes": [{"asset": "native", "delta": "-1"}], "node": "n", "block": "0x1"}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            json.dump(claim, f)
+        self.addCleanup(Path(f.name).unlink)
+        sender = "0x" + "AB" * 20
+        request = aoa_client.request_for(self.sign_args(sender=sender, host_simulation=f.name))
+        self.assertEqual(request["from"], sender.lower())
+        self.assertEqual(request["hostSimulation"], claim)
+        self.assertEqual(request["method"], "signEip1559")
+
+
 if __name__ == "__main__":
     unittest.main()

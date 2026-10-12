@@ -52,6 +52,18 @@ final class ApplianceProvisioning {
         }
         if (SystemCredential.isSet(context)) SystemCredential.applyLockPolicy(context);
 
+        // Display & auto-lock -> Screen timeout (default 60 s), re-applied on every pass so a boot
+        // or re-provisioning restores the user's choice. A device owner may set SCREEN_OFF_TIMEOUT
+        // through setSystemSetting; no WRITE_SETTINGS (or any other) permission is involved.
+        try {
+            DisplaySettings display = new DisplaySettings(
+                    context.getSharedPreferences(DisplaySettings.PREFS_FILE, Context.MODE_PRIVATE));
+            policy.setSystemSetting(admin, android.provider.Settings.System.SCREEN_OFF_TIMEOUT,
+                    String.valueOf(display.screenTimeoutMs()));
+        } catch (RuntimeException e) {
+            Log.w(TAG, "screen timeout not applied: " + e.getMessage());
+        }
+
         // Hide any setup wizard the image still carries (rung ladder strips them from the
         // image; this keeps a factory boot deterministic either way).
         PackageManager pm = context.getPackageManager();

@@ -541,6 +541,31 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
         assert!(check_erc20_transfer(&v, "0xdac17f958d2ee523a2206206994597c13d831ec7", RECIPIENT, 50_000_000).unwrap_err().0.contains("token contract"));
     }
 
+    /// The Mac's simulation claim (`hostSimulation`, sim.rs) rides along in the request but is never
+    /// signed and never read here: a lying claim changes nothing, and a matching claim rescues nothing.
+    #[test]
+    fn the_host_simulation_field_never_affects_verification() {
+        let data = crate::tokens::transfer_calldata(RECIPIENT, 50_000_000).unwrap();
+        let plain = token_request(&data);
+        let resp = sign_like_the_phone(&plain);
+        let signer = resp["address"].as_str().unwrap().to_string();
+        let mut with_claim = plain.clone();
+        with_claim["hostSimulation"] = serde_json::json!({"changes": [{"asset": USDC, "delta": "50000000", "symbol": "USDC", "decimals": 6},
+            {"asset": "native", "delta": "1000000000000000000"}], "node": "evil.example", "block": "0x1"});
+        let a = validate_signature(&plain, &resp, &signer).unwrap();
+        let b = validate_signature(&with_claim, &resp, &signer).unwrap();
+        assert_eq!((a.raw_hex, a.tx_hash), (b.raw_hex.clone(), b.tx_hash.clone()));
+        check_erc20_transfer(&b, USDC, RECIPIENT, 50_000_000).unwrap();
+        // the phone signs the transaction fields only, with or without the claim
+        assert_eq!(sign_like_the_phone(&with_claim)["signedTransaction"], resp["signedTransaction"]);
+        // a phone that signed something else is refused whatever the claim says
+        let mut other = plain.clone(); other["data"] = Value::from(crate::tokens::transfer_calldata(RECIPIENT, 5_000_000_000).unwrap());
+        let bad = sign_like_the_phone(&other);
+        let mut claim_matching_bad = with_claim.clone();
+        claim_matching_bad["hostSimulation"]["changes"][0]["delta"] = Value::from("-5000000000");
+        assert!(validate_signature(&claim_matching_bad, &bad, &signer).unwrap_err().0.contains("data"));
+    }
+
     #[test]
     fn a_phone_that_signs_different_calldata_is_refused() {
         let asked = token_request(&crate::tokens::transfer_calldata(RECIPIENT, 50_000_000).unwrap());

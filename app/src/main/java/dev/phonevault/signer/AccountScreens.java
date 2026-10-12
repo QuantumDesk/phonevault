@@ -289,13 +289,14 @@ final class AccountScreens {
             boolean letter = key.length() == 1 && Character.isLetter(key.charAt(0));
             String shown = letter && shift ? key.toUpperCase(java.util.Locale.ROOT) : "⇧".equals(key) && shift ? "⇧ON" : key;
             TextView b = VaultTheme.pixelButton(host.context(), shown, false);
-            b.setTextSize(key.length() > 2 ? 13 : 18);
+            VaultTheme.size(b, key.length() > 2 ? 13 : 18);
             b.setPadding(0, 0, 0, 0);
             b.setGravity(Gravity.CENTER);
             b.setContentDescription("space".equals(key) ? "space" : shown);
             host.harden(b);
             b.setOnClickListener(v -> {
                 if (!host.ready()) return;
+                Haptics.tick(v);
                 error = null;
                 switch (key) {
                     case "⌫": if (typed.length() > 0) { typed.setCharAt(typed.length() - 1, '\0'); typed.setLength(typed.length() - 1); } break;

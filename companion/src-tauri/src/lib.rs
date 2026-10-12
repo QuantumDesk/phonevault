@@ -14,6 +14,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// simulate every transaction on the user's node before it goes to the phone (shown as the Mac's claim)
+mod sim;
 // speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
 mod replace;
 // background: balances, incoming transfers, pending settlement, notifications; menu-bar item; NFTs
@@ -26,6 +28,8 @@ mod tokens;
 mod wc;
 // Browser extension: another dApp transport over native messaging; policy reuses wc.rs
 pub mod bridge;
+// Settings / setup: open the bundled blank backup card (no secrets on this Mac)
+mod backup_card;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -264,7 +268,7 @@ pub fn run() {
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
         .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, sign, broadcast, receipt, default_rpc,
-            send::sign_start, send::sign_cancel, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
+            send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
             watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
@@ -273,7 +277,8 @@ pub fn run() {
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
-            bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall])
+            bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall,
+            backup_card::open_backup_card])
         .setup(move |app| {
             // browser-extension bridge (native-messaging relay socket)
             bridge::start(app.handle(), &browser_bridge);

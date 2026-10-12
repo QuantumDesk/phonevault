@@ -339,4 +339,64 @@ public final class AccountsTest {
             throw new AssertionError(e);
         }
     }
+
+    // ------------------------------------------------------------------ accounts + the Mac's simulation
+
+    private static JSONObject simClaim(String asset, String delta) throws JSONException {
+        return new JSONObject().put("changes", new org.json.JSONArray().put(new JSONObject().put("asset", asset).put("delta", delta)))
+                .put("node", "ethereum-rpc.publicnode.com").put("block", "0x18f603b");
+    }
+
+    /** Both optional fields together keep the exact field set: anything else is still refused. */
+    @Test public void fromAndHostSimulationTogether() throws Exception {
+        String a2 = SeedVault.deriveEvm(JUNK, "", 1).getAddress();
+        JSONObject both = tx().put("from", a2).put("hostSimulation", simClaim("native", "-1"));
+        Eip1559Request parsed = Eip1559Request.parse(AccessoryTransport.parseStrictRequest(both.toString()));
+        assertEquals(a2, parsed.from);
+        assertTrue(parsed.hostSimulation != null);
+        assertNull(Eip1559Request.parse(tx().put("from", a2)).hostSimulation);
+        assertNull(Eip1559Request.parse(tx().put("hostSimulation", simClaim("native", "-1"))).from);
+        try { Eip1559Request.parse(new JSONObject(both.toString()).put("extra", 1)); fail("unknown fields stay refused"); }
+        catch (JSONException expected) { assertTrue(expected.getMessage().contains("unknown=[extra]")); }
+        try { Eip1559Request.parse(new JSONObject(both.toString()).put("from", "0x12")); fail(); } catch (JSONException expected) { }
+    }
+
+    /** The simulation's "the wallet" is the ACTIVE account: a transferFrom out of Account 2 is its loss, not Account 1's. */
+    @Test public void simulationIsCheckedAgainstTheActiveAccount() throws Exception {
+        Credentials account1 = SeedVault.deriveEvm(JUNK, "", 0);
+        Credentials account2 = SeedVault.deriveEvm(JUNK, "", 1);
+        String usdc = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+        String other = "0x7f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b93";
+        String data = "0x23b872dd" + Numeric.toHexStringNoPrefixZeroPadded(Numeric.toBigInt(account2.getAddress()), 64)
+                + Numeric.toHexStringNoPrefixZeroPadded(Numeric.toBigInt(other), 64)
+                + Numeric.toHexStringNoPrefixZeroPadded(BigInteger.valueOf(1_000_000), 64);
+        JSONObject json = tx().put("to", usdc).put("value", "0x0").put("data", data)
+                .put("from", account2.getAddress()).put("hostSimulation", simClaim(usdc, "-1000000"));
+        Eip1559Request request = Eip1559Request.parse(json);
+        RequestRefusal.requireFrom(request.from, "Account 2", account2.getAddress());
+        ApprovalSession active = new ApprovalSession(request, account2, TokenListTest.bundled());
+        assertFalse(active.hostSimulation.text(), active.hostSimulation.contradicts);
+        ApprovalSession wrong = new ApprovalSession(request, account1, TokenListTest.bundled());
+        assertTrue(wrong.hostSimulation.text(), wrong.hostSimulation.contradicts);
+    }
+
+    /** A send to your own other account is named; a look-alike of it is DANGER. */
+    @Test public void ownAccountsCountAsOwnInTheReview() throws Exception {
+        Credentials account1 = SeedVault.deriveEvm(JUNK, "", 0);
+        String a2 = SeedVault.deriveEvm(JUNK, "", 1).getAddress().toLowerCase(java.util.Locale.ROOT);
+        AddressSafety safety = new AddressSafety(new AddressBook(new AddressSafetyTest.MemoryStore()),
+                new RecipientHistory(new AddressSafetyTest.MemoryStore()));
+        java.util.Map<String, String> own = new java.util.LinkedHashMap<>();
+        own.put(account1.getAddress(), "Account 1");
+        own.put(a2, "Savings");
+        safety.setOwnAccounts(own);
+        String toOwn = new ApprovalSession(Eip1559Request.parse(tx().put("to", a2)), account1, TokenList.empty(), safety).review.text();
+        assertTrue(toOwn, toOwn.contains("Savings on this phone"));
+        // same first 6 and last 4 hex characters, different middle
+        String poison = a2.substring(0, 8) + "f".repeat(28) + a2.substring(36);
+        if (poison.equals(a2)) poison = a2.substring(0, 8) + "e".repeat(28) + a2.substring(36);
+        String toPoison = new ApprovalSession(Eip1559Request.parse(tx().put("to", poison)), account1, TokenList.empty(), safety).review.text();
+        assertTrue(toPoison, toPoison.contains("your Savings on this phone"));
+        assertTrue(toPoison, toPoison.contains("DIFFERENT address"));
+    }
 }

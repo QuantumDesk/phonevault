@@ -163,7 +163,7 @@ final class SafetyScreens {
         for (String key : keys) {
             String shown = key.length() == 1 && Character.isLetter(key.charAt(0)) && shift ? key.toUpperCase(java.util.Locale.ROOT) : key;
             TextView b = VaultTheme.pixelButton(host.context(), shown, false);
-            b.setTextSize(key.length() > 2 ? 14 : 18);
+            VaultTheme.size(b, key.length() > 2 ? 14 : 18);
             b.setPadding(0, 0, 0, 0);
             b.setGravity(Gravity.CENTER);
             host.harden(b);

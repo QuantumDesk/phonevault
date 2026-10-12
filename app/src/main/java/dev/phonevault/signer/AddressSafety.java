@@ -6,9 +6,12 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -24,8 +27,14 @@ final class AddressSafety {
     static final int MAX_LOOKALIKES = 2;
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("yyyy-MM-dd", Locale.ROOT).withZone(ZoneOffset.UTC);
 
+    static final String OWN_ACCOUNT = "Your account";
     final AddressBook book;
     final RecipientHistory history;
+    /**
+     * The other accounts of the open wallet(s) on this phone (lowercase address → name), so a send
+     * between your own accounts is named and a look-alike of any of them is caught. Display only.
+     */
+    private volatile Map<String, String> ownAccounts = Collections.emptyMap();
 
     AddressSafety(AddressBook book, RecipientHistory history) {
         this.book = book;
@@ -33,6 +42,15 @@ final class AddressSafety {
     }
 
     String contactName(String address) { return book == null ? null : book.name(address); }
+
+    /** Replace the phone's own account list (address → name); null clears it. */
+    void setOwnAccounts(Map<String, String> accounts) {
+        Map<String, String> copy = new LinkedHashMap<>();
+        if (accounts != null) for (Map.Entry<String, String> e : accounts.entrySet()) {
+            if (e.getKey() != null) copy.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+        }
+        ownAccounts = Collections.unmodifiableMap(copy);
+    }
 
     /**
      * Rows for one counterparty: contact name, look-alike DANGER with the comparison grid, then the
@@ -43,11 +61,16 @@ final class AddressSafety {
         String a = address.toLowerCase(Locale.ROOT);
         String name = contactName(a);
         if (name != null) rows.add(new MessageReview.Row(CONTACT, name + " (named on this phone)"));
-
-        // look-alikes: every address this wallet signed for, and every contact
-        Set<String> known = new LinkedHashSet<>();
+        Map<String, String> own = ownAccounts;
         String self = signer == null ? null : signer.toLowerCase(Locale.ROOT);
+        if (own.containsKey(a) && !a.equals(self)) {
+            rows.add(new MessageReview.Row(OWN_ACCOUNT, own.get(a) + " on this phone"));
+        }
+
+        // look-alikes: this wallet's own accounts, every address this wallet signed for, and every contact
+        Set<String> known = new LinkedHashSet<>();
         if (self != null) known.add(self); // poisoners also imitate your own address ("send to my other account")
+        known.addAll(own.keySet());
         if (history != null && signer != null) for (RecipientHistory.Entry e : history.entries(signer)) known.add(e.address);
         if (book != null) for (AddressBook.Contact c : book.list()) known.add(c.address);
         int shown = 0;
@@ -57,6 +80,7 @@ final class AddressSafety {
             String kName = contactName(k);
             RecipientHistory.Entry ke = history == null || signer == null ? null : history.lookup(signer, k);
             String how = k.equals(self) ? "(this wallet's own address)"
+                    : own.containsKey(k) ? "(your " + own.get(k) + " on this phone)"
                     : ke != null && ke.sends > 0 ? "you sent to before" : ke != null ? "you approved before"
                     : "saved in your address book";
             rows.add(new MessageReview.Row(TransactionReview.DANGER, "Looks like " + LookAlike.shortForm(k)

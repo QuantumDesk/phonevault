@@ -192,8 +192,15 @@ final class AccessoryTransport implements Closeable {
             String field = tokens.nextString('"');
             if (!fields.add(field)) throw new JSONException("Duplicate USB request field: " + field);
             if (tokens.nextClean() != ':') throw new JSONException("Missing colon after USB request field");
-            if (tokens.nextClean() != '"') throw new JSONException("USB request values must be strings");
-            request.put(field, tokens.nextString('"'));
+            char open = tokens.nextClean();
+            if (open == '{' && HostSimulation.FIELD.equals(field)) {
+                // The one nested value: the Mac's simulation claim (display-only, HostSimulation
+                // validates it). Parsed with StrictJson: duplicate keys refused, numbers exact.
+                request.put(field, nestedObject(tokens));
+            } else {
+                if (open != '"') throw new JSONException("USB request values must be strings");
+                request.put(field, tokens.nextString('"'));
+            }
 
             next = tokens.nextClean();
             if (next == '}') break;
@@ -202,6 +209,60 @@ final class AccessoryTransport implements Closeable {
         }
         if (tokens.nextClean() != 0) throw new JSONException("Trailing data after USB request");
         return request;
+    }
+
+    /** Reads one balanced JSON object (its '{' already consumed) and parses it strictly. */
+    private static JSONObject nestedObject(JSONTokener tokens) throws JSONException {
+        StringBuilder raw = new StringBuilder("{");
+        int depth = 1;
+        boolean inString = false, escaped = false;
+        while (depth > 0) {
+            char c = tokens.next();
+            if (c == 0) throw new JSONException("Unterminated nested USB request value");
+            raw.append(c);
+            if (inString) {
+                if (escaped) escaped = false;
+                else if (c == '\\') escaped = true;
+                else if (c == '"') inString = false;
+            } else if (c == '"') {
+                inString = true;
+            } else if (c == '{' || c == '[') {
+                if (++depth > StrictJson.MAX_DEPTH) throw new JSONException("Nested USB request value too deep");
+            } else if (c == '}' || c == ']') {
+                depth--;
+            }
+        }
+        Object parsed;
+        try {
+            parsed = StrictJson.parse(raw.toString());
+        } catch (StrictJson.ParseException e) {
+            throw new JSONException(HostSimulation.FIELD + ": " + e.getMessage());
+        }
+        return (JSONObject) toOrgJson(parsed);
+    }
+
+    private static Object toOrgJson(Object v) throws JSONException {
+        if (v instanceof java.util.Map) {
+            JSONObject o = new JSONObject();
+            for (java.util.Map.Entry<?, ?> e : ((java.util.Map<?, ?>) v).entrySet()) o.put((String) e.getKey(), toOrgJson(e.getValue()));
+            return o;
+        }
+        if (v instanceof java.util.List) {
+            org.json.JSONArray a = new org.json.JSONArray();
+            for (Object item : (java.util.List<?>) v) a.put(toOrgJson(item));
+            return a;
+        }
+        if (v instanceof StrictJson.Num) {
+            String literal = ((StrictJson.Num) v).literal;
+            // Integers stay integers (exactly); anything with a fraction or exponent becomes a
+            // Double, which the schema refuses where it wants an integer.
+            if (literal.matches("-?[0-9]{1,18}")) {
+                long n = Long.parseLong(literal);
+                return n >= Integer.MIN_VALUE && n <= Integer.MAX_VALUE ? (Object) (int) n : (Object) n;
+            }
+            try { return Double.valueOf(literal); } catch (NumberFormatException e) { throw new JSONException("Invalid number"); }
+        }
+        return v; // String or Boolean
     }
 
     /**

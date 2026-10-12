@@ -132,7 +132,7 @@ public class VaultPinTest {
         @Override public int getInt(String k, int d) { Object v = map.get(k); return v == null ? d : (Integer) v; }
         @Override public long getLong(String k, long d) { return d; }
         @Override public float getFloat(String k, float d) { return d; }
-        @Override public boolean getBoolean(String k, boolean d) { return d; }
+        @Override public boolean getBoolean(String k, boolean d) { Object v = map.get(k); return v == null ? d : (Boolean) v; }
         @Override public boolean contains(String k) { return map.containsKey(k); }
         @Override public Editor edit() { return new FakeEditor(); }
         @Override public void registerOnSharedPreferenceChangeListener(OnSharedPreferenceChangeListener l) {}
@@ -147,7 +147,7 @@ public class VaultPinTest {
             @Override public Editor putInt(String k, int v) { puts.put(k, v); return this; }
             @Override public Editor putLong(String k, long v) { return this; }
             @Override public Editor putFloat(String k, float v) { return this; }
-            @Override public Editor putBoolean(String k, boolean v) { return this; }
+            @Override public Editor putBoolean(String k, boolean v) { puts.put(k, v); return this; }
             @Override public Editor remove(String k) { removes.add(k); return this; }
             @Override public Editor clear() { clearAll = true; return this; }
             @Override public boolean commit() {

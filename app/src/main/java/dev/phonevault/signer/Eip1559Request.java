@@ -51,13 +51,18 @@ final class Eip1559Request {
      * signed: a request naming another account than the phone's active one is refused
      * ({@link RequestRefusal#requireFrom}).
      */
-    String from;
+    final String from;
+    /**
+     * The Mac's simulation claim, or null. Display only: never signed ({@link EvmSigner} does not
+     * read it) and never used to decode the transaction.
+     */
+    final HostSimulation hostSimulation;
 
     private Eip1559Request(String id, long chainId, BigInteger nonce,
                            BigInteger maxPriorityFeePerGas, BigInteger maxFeePerGas,
                            BigInteger gasLimit, String to, BigInteger value, String data,
                            Kind kind, String displayedRecipient, BigInteger displayedAmount, Erc20Call tokenCall,
-                           NftCall nftCall, SwapPlan swap) {
+                           NftCall nftCall, SwapPlan swap, String from, HostSimulation hostSimulation) {
         this.id = id;
         this.chainId = chainId;
         this.nonce = nonce;
@@ -73,6 +78,8 @@ final class Eip1559Request {
         this.tokenCall = tokenCall;
         this.nftCall = nftCall;
         this.swap = swap;
+        this.from = from;
+        this.hostSimulation = hostSimulation;
     }
 
     static Eip1559Request parse(JSONObject json) throws JSONException {
@@ -83,9 +90,12 @@ final class Eip1559Request {
                 || "4".equals(json.optString("type"))) {
             throw RequestRefusal.delegation("type-4 set-code transaction");
         }
+        // Exact field set: the required fields plus only the optional ones actually present
+        // (from: the account the host expects; hostSimulation: the Mac's untrusted claim).
         String from = optionalFrom(json);
-        Set<String> fields = REQUEST_FIELDS;
-        if (from != null) { fields = new HashSet<>(REQUEST_FIELDS); fields.add("from"); }
+        Set<String> fields = new HashSet<>(REQUEST_FIELDS);
+        if (from != null) fields.add("from");
+        if (json.has(HostSimulation.FIELD)) fields.add(HostSimulation.FIELD);
         requireExactFields(json, fields);
         if (!"signEip1559".equals(json.getString("method"))) {
             throw new JSONException("Unsupported method");
@@ -104,6 +114,7 @@ final class Eip1559Request {
         String to = json.getString("to");
         BigInteger value = quantity(json.getString("value"));
         String data = json.getString("data");
+        HostSimulation hostSimulation = json.has(HostSimulation.FIELD) ? HostSimulation.parse(json.get(HostSimulation.FIELD)) : null;
 
         if (chainId <= 0) throw new JSONException("chainId must be positive");
         if (!supportedChain(chainId)) throw new JSONException("Unsupported network: no reviewed chain profile for " + chainId);
@@ -155,10 +166,9 @@ final class Eip1559Request {
             recipient = call.party;
             displayedAmount = call.amount;
         }
-        Eip1559Request parsed = new Eip1559Request(id, chainId, nonce, priority, fee, gas,
-                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount, call, nft, swap);
-        parsed.from = from;
-        return parsed;
+        return new Eip1559Request(id, chainId, nonce, priority, fee, gas,
+                normalizedTo, value, data.toLowerCase(java.util.Locale.ROOT), kind, recipient, displayedAmount,
+                call, nft, swap, from, hostSimulation);
     }
 
     /**

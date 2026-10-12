@@ -12,6 +12,11 @@ import org.web3j.crypto.Keys;
 final class ApprovalSession {
     final Eip1559Request request;
     final TransactionReview review;
+    /**
+     * The Mac's simulation claim checked against this phone's decoding, or null when the request
+     * carries none. Shown in its own box below the review; never part of what is signed.
+     */
+    final SimulationCheck.Result hostSimulation;
     private final Credentials reviewedCredentials;
     private final String reviewedAddress;
     /** Which account (of which wallet) the reviewed key is, for the "Signing with" row. Display only. */
@@ -37,6 +42,7 @@ final class ApprovalSession {
         this.reviewedCredentials = credentials;
         this.reviewedAddress = credentials.getAddress().toLowerCase(java.util.Locale.ROOT);
         this.review = TransactionReview.build(request, reviewedAddress, tokens, safety);
+        this.hostSimulation = SimulationCheck.review(request, reviewedAddress, tokens);
     }
 
     String reviewedAddress() { return reviewedAddress; }

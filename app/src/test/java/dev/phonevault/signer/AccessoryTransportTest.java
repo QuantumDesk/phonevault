@@ -64,4 +64,44 @@ public final class AccessoryTransportTest {
         assertEquals("getAddress", AccessoryTransport.parseStrictRequest(
                 "{\"id\":\"one\",\"method\":\"getAddress\"}").getString("method"));
     }
+
+    // ------------------------------------------------------------------ the one nested field
+
+    private static final String TX = "\"id\":\"t\",\"method\":\"signEip1559\",\"chainId\":\"0x1\",\"nonce\":\"0x0\","
+            + "\"maxPriorityFeePerGas\":\"0x1\",\"maxFeePerGas\":\"0x2\",\"gasLimit\":\"0x5208\","
+            + "\"to\":\"0x00000000000000000000000000000000000000aa\",\"value\":\"0x1\",\"data\":\"0x\"";
+    private static final String CLAIM = "{\"changes\":[{\"asset\":\"0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48\",\"delta\":\"-1\","
+            + "\"symbol\":\"USDC\",\"decimals\":6},{\"asset\":\"native\",\"delta\":\"-21000\"}],\"node\":\"n\",\"block\":\"0x1\"}";
+
+    /** What the companion sends: flat strings plus `from` and the nested `hostSimulation` object. */
+    @Test public void acceptsTheHostSimulationObjectAndFrom() throws Exception {
+        org.json.JSONObject r = AccessoryTransport.parseStrictRequest("{" + TX
+                + ",\"from\":\"0x00000000000000000000000000000000000000bb\",\"hostSimulation\":" + CLAIM + "}");
+        Eip1559Request parsed = Eip1559Request.parse(r);
+        assertEquals("0x00000000000000000000000000000000000000bb", parsed.from);
+        assertEquals(2, parsed.hostSimulation.changes.size());
+        assertEquals(Integer.valueOf(6), parsed.hostSimulation.changes.get(0).decimals);
+    }
+
+    @Test(expected = org.json.JSONException.class)
+    public void rejectsADuplicateKeyInsideTheClaim() throws Exception {
+        AccessoryTransport.parseStrictRequest("{" + TX + ",\"hostSimulation\":{\"node\":\"a\",\"node\":\"b\",\"changes\":[],\"block\":\"0x1\"}}");
+    }
+
+    @Test(expected = org.json.JSONException.class)
+    public void rejectsNestedValuesInAnyOtherField() throws Exception {
+        AccessoryTransport.parseStrictRequest("{" + TX.replace("\"data\":\"0x\"", "\"data\":{\"x\":\"0x\"}") + "}");
+    }
+
+    @Test(expected = org.json.JSONException.class)
+    public void rejectsAnUnterminatedClaim() throws Exception {
+        AccessoryTransport.parseStrictRequest("{" + TX + ",\"hostSimulation\":{\"changes\":[}");
+    }
+
+    @Test public void aFractionalDecimalsIsStillRefusedBySchema() throws Exception {
+        org.json.JSONObject r = AccessoryTransport.parseStrictRequest("{" + TX + ",\"hostSimulation\":"
+                + CLAIM.replace("\"decimals\":6", "\"decimals\":6.0") + "}");
+        try { Eip1559Request.parse(r); org.junit.Assert.fail("6.0 accepted as decimals"); }
+        catch (org.json.JSONException expected) { org.junit.Assert.assertTrue(expected.getMessage().contains("decimals")); }
+    }
 }
