@@ -12,6 +12,7 @@ import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, 
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
 import { nftSection, type NftHost } from "./nfts";
+import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
 import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
@@ -61,7 +62,7 @@ async function refreshStatus() {
     else if (appeared) identifyPhone();
     renderHeader();
     if (pairedChanged) { balances.clear(); balErrors.clear(); if (s.paired) { refreshAllBalances(); } render(); }
-    else if (phoneChanged && (view === "pair" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
+    else if (phoneChanged && (view === "pair" || view === "setup" || drawerOpen)) { render(); if (drawerOpen) renderDrawer(); }
   } catch (e) { statusError = errText(e); renderHeader(); }
 }
 
@@ -88,11 +89,11 @@ const refreshAllBalances = () => Promise.allSettled(NETWORKS.map(refreshBalance)
 
 /** Balance increases, for the setup's "waiting for your test deposit" step. Recording incoming
  *  transfers and notifying is the background watcher's job (Rust), window open or not. */
-const increaseListeners = new Set<(chainId: number) => void>();
+const increaseListeners = new Set<(chainId: number, prevWei: bigint) => void>();
 function setBalance(chainId: number, wei: bigint, eth: string, prev = balances.get(chainId)) {
   balances.set(chainId, { eth, wei, at: Date.now() });
   balErrors.delete(chainId);
-  if (prev && wei > prev.wei) increaseListeners.forEach((l) => l(chainId));
+  if (prev && wei > prev.wei) increaseListeners.forEach((l) => l(chainId, prev.wei));
 }
 
 async function refreshPrices() {
@@ -107,6 +108,7 @@ function pushWatchConfig() { if (isTauri) api.watchConfigure(prefs.rpc, prefs.no
 async function refreshHistory() {
   try { history = await api.history(); } catch { /* keep what we have */ }
   if (view === "home") renderSoon();
+  if (view === "setup") setupNoticeFunds(setupHost, null);
 }
 
 /** Receipt check for anything this companion sent that is still pending: mined ones get their
@@ -126,7 +128,7 @@ async function pollPending() {
 
 // ------------------------------------------------------------------ shell
 
-type View = "home" | "send" | "receive" | "pair" | "tool";
+type View = "home" | "send" | "receive" | "pair" | "tool" | "setup";
 let view: View = "home";
 let drawerOpen = false;
 const app = document.getElementById("app")!;
@@ -174,8 +176,9 @@ function renderSoon() {
 
 function render() {
   if (!status) { main.replaceChildren(h("div", { class: "boot" }, h("div", { class: "spinner" }))); return; }
-  if (!status.paired && view !== "tool") view = "pair";
-  const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : toolView();
+  // no pairing yet: the guided setup (it pairs as step 3)
+  if (!status.paired && view !== "tool" && view !== "setup") { setupStart(setupHost); view = "setup"; }
+  const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : view === "setup" ? setupView(setupHost) : toolView();
   main.replaceChildren(el);
 }
 
@@ -275,6 +278,29 @@ function assetsTab(n: Network) {
     here.usd > 0 && !n.testnet ? h("p", { class: "muted small" }, `On ${n.name}: ${here.partial ? "≈ " : ""}${fmt(here.usd)} including listed tokens.`) : null,
   );
 }
+
+// ------------------------------------------------------------------ guided setup (onboarding.ts)
+
+const setupHost: SetupHost = {
+  status: () => status,
+  device: () => device,
+  devMode: () => prefs.devMode,
+  setDevMode: (on) => { prefs.devMode = on; savePrefs(); identifyPhone(); render(); },
+  recheck: () => { void identifyPhone(); },
+  confirmPairing: async (address) => { await api.confirmPairing(address); identity = { s: "match" }; await refreshStatus(); },
+  chainId: () => prefs.chainId,
+  setChain: (id) => { prefs.chainId = id; savePrefs(); },
+  balanceOf: (id) => balances.get(id)?.wei ?? null,
+  refreshBalance: (id) => { void refreshBalance(byId(id)); },
+  history: () => history,
+  finish: (then) => {
+    prefs.setupDone = true; savePrefs();
+    if (then === "home") go("home");
+    else { draft.to = then.sendTo ?? ""; draft.amount = ""; draft.asset = ""; startSend(); }
+  },
+  rerender: () => { if (view === "setup") render(); },
+};
+increaseListeners.add((chainId, prevWei) => { if (view === "setup") setupNoticeFunds(setupHost, chainId, prevWei); });
 
 const nftHost: NftHost = { chainId: () => prefs.chainId, rpcFor, rerender: () => { if (view === "home" && prefs.tab === "nfts") renderSoon(); } };
 
@@ -395,7 +421,7 @@ async function identifyPhone() {
     const report = await checkDevice();
     const address = report.address;
     if (!address) { identity = { s: "unknown" }; } // refused without naming a wallet (e.g. an app too old to attest); the badge says why
-    else if (!status?.paired) { identity = { s: "unknown" }; pair = { s: "compare", address }; go("pair"); }
+    else if (!status?.paired) { identity = { s: "unknown" }; if (view === "setup") render(); else { pair = { s: "compare", address }; go("pair"); } }
     else if (address.toLowerCase() === status.paired.toLowerCase()) identity = { s: "match" };
     else identity = { s: "different", address, dismissed: false };
   } catch (e) { identity = { s: "unreadable", error: errText(e) }; }
@@ -407,7 +433,7 @@ async function identifyPhone() {
 let noticeEl: HTMLElement | null = null;
 function renderPhoneNotice() {
   noticeEl?.remove(); noticeEl = null;
-  if (device.report?.verdict === "fail" && !failDismissed && view !== "pair") {
+  if (device.report?.verdict === "fail" && !failDismissed && view !== "pair" && view !== "setup") {
     const close = () => { failDismissed = true; renderPhoneNotice(); };
     noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
       h("div", { class: "modal", role: "dialog", "aria-modal": "true" },
@@ -420,7 +446,7 @@ function renderPhoneNotice() {
     document.body.append(noticeEl);
     return;
   }
-  if (identity.s !== "different" || identity.dismissed || view === "pair") return;
+  if (identity.s !== "different" || identity.dismissed || view === "pair" || view === "setup") return;
   const found = identity.address;
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
   noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
@@ -464,7 +490,7 @@ async function checkDevice(): Promise<Attestation> {
     device = { ...device, checking: false, error: explainPlain(errText(e)) };
     throw e;
   } finally {
-    renderHeader(); if (drawerOpen) renderDrawer(); if (view === "pair") render(); else if (view === "home") renderSoon();
+    renderHeader(); if (drawerOpen) renderDrawer(); if (view === "pair" || view === "setup") render(); else if (view === "home") renderSoon();
     renderPhoneNotice();
   }
 }
@@ -1137,6 +1163,7 @@ function renderDrawer() {
       h("div", { class: "set-row" }, h("span", null, "Paired address"), paired ? h("button", { class: "link mono", title: paired, onclick: () => copy(paired) }, short(paired), icon("copy", 14)) : h("span", { class: "muted" }, "Not paired")),
       h("div", { class: "row gap" },
         h("button", { onclick: () => { closeDrawer(); pair = { s: "idle" }; go("pair"); } }, paired ? "Pair again" : "Pair phone"),
+        h("button", { onclick: () => { closeDrawer(); setupStart(setupHost); go("setup"); } }, icon("refresh", 15), "Run setup again"),
         paired ? h("button", { class: "danger-ghost", onclick: async (ev: Event) => {
           const b = ev.currentTarget as HTMLButtonElement;
           if (b.dataset.armed !== "1") { b.dataset.armed = "1"; b.textContent = "Click again to forget"; return; }

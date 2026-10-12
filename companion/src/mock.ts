@@ -3,6 +3,11 @@
 //
 // URL knobs: ?paired=0  ?phone=none|android|accessory  ?outcome=approve|reject|timeout|verify|nophone|broadcastfail
 //            ?attest=development|genuine|fail|oldapp   (device check; "development" = today's dev phones: FAIL until Developer mode is on)
+//            ?phonebusy=1   Send queues behind another request on the phone ("Waiting for your phone")
+//            ?deposit=N     a deposit arrives N seconds after load (setup step 4, notifications)
+//            ?history=0     empty activity (default: a stuck pending send, a speed-up pair, incoming ETH/USDC)
+// With ?paired=0 the guided setup opens. NFTs: three on Base; on Ethereum the scan is refused like on
+// public nodes. The stuck transaction stays pending, so Speed up / Cancel can be walked through.
 
 import type { Attestation, AttestationDetails, HistoryEntry, Stage, Quote, TxParams, Nft } from "./api";
 
@@ -89,7 +94,7 @@ export function createMock(): Mock {
     base({ kind: "out", hash: "0x9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", chain_id: 1, counterparty: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount_eth: "0.01", fee_max_eth: "0.00042", nonce: 11, time: now - 86400 * 9, status: "failed", block: 20111000 }),
   ];
   // ?deposit=1: the onboarding "waiting for a deposit" step sees funds arrive after a few seconds
-  if (params.get("deposit")) setTimeout(() => { BAL[8453] = "0.05213377"; fire("watch-balance", { chain_id: 8453, balance_wei: toWei(BAL[8453]), balance_eth: BAL[8453], block: 20511300 }); }, 6000);
+  if (params.get("deposit")) setTimeout(() => { BAL[8453] = "0.05213377"; fire("watch-balance", { chain_id: 8453, balance_wei: toWei(BAL[8453]), balance_eth: BAL[8453], block: 20511300 }); }, Number(params.get("deposit")) * 1000 || 6000);
   let pending: { hash: string; to: string; amount: string; chain: number; polls: number; quote: Quote } | null = null;
   let lastAttestation: Attestation | null = null;
   let nfts: Nft[] = [
