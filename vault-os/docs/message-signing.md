@@ -156,3 +156,12 @@ all read this one file.
   the generic review with the whole field tree.
 - Unassigned-code-point detection follows the device's Unicode tables, which can differ from the
   JVM's; this affects only the readable/unreadable classification, never the digest.
+
+## EIP-7702 refusal (2026-10-11)
+
+`MessageRequest.parse` refuses, with "Account delegation (EIP-7702) is not supported: it can hand
+control of this wallet to a contract", a `personal_sign` whose bytes are an EIP-7702
+authorization tuple (`0x05 ‖ rlp([chain_id, address, nonce])`) and typed data whose primary type
+is a 7702-style authorization (a name containing "7702", or "…Authorization" with a nonce and an
+address field) or an ERC-7710 `Delegation`. The refusal is answered as an error and shown on the
+phone (`Eip7702`, `Eip7702Test`). The shared vectors are unaffected.
