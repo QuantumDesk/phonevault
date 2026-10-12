@@ -36,6 +36,30 @@ impl Rpc {
         resp.get("result").cloned().ok_or_else(|| err(format!("node returned no result for {method}")))
     }
 
+    /// The whole JSON-RPC response (`result` or `error` with its code and revert `data`), for the
+    /// simulation, which needs a node's refusal in detail rather than as text. Errs only when the
+    /// node cannot be reached or does not answer JSON-RPC.
+    pub fn call_raw(&self, method: &str, params: Value) -> Result<Value, EthError> {
+        let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
+        let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?;
+        let code = http.status();
+        let resp: Value = match http.json() {
+            Ok(v) => v,
+            Err(_) if !code.is_success() => return Err(err(format!("node refused {method}: HTTP {code}"))),
+            Err(e2) => return Err(err(format!("node returned non-JSON: {e2}"))),
+        };
+        if resp.get("result").is_none() && resp.get("error").is_none() { return Err(err(format!("node returned no result for {method}"))); }
+        Ok(resp)
+    }
+
+    /// (number, baseFeePerGas) of the latest block, read together.
+    pub fn latest_header(&self) -> Result<(u128, u128), EthError> {
+        let b = self.call("eth_getBlockByNumber", json!(["latest", false]))?;
+        let number = Self::hex_u128(b.get("number").unwrap_or(&Value::Null), "number")?;
+        let base = match b.get("baseFeePerGas") { Some(v) if !v.is_null() => Self::hex_u128(v, "baseFeePerGas")?, _ => 0 };
+        Ok((number, base))
+    }
+
     fn hex_u128(v: &Value, what: &str) -> Result<u128, EthError> {
         let s = v.as_str().ok_or_else(|| err(format!("{what}: expected hex string")))?;
         u128::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|_| err(format!("{what}: bad hex {s}")))

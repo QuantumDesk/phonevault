@@ -58,6 +58,18 @@ export interface Attestation {
   verdict: Verdict; headline: string; problems: string[]; cautions: string[]; notes: string[];
   details: AttestationDetails | null; address: string | null; checked_at: number; dev_mode: boolean;
 }
+/** One balance change of the paired wallet in a simulation (sim.rs). */
+export interface SimChange { asset: string; token_id: string | null; delta: string; symbol: string | null; decimals: number | null; display: string }
+/** Simulation on the user's node before anything goes to the phone (sim.rs, vault-os/docs/simulation.md). */
+export interface Simulation {
+  /** ok: changes known · reverts: blocked · no_changes: eth_call fallback (no revert, changes unknown) · unavailable: could not simulate */
+  status: "ok" | "reverts" | "no_changes" | "unavailable";
+  method: "eth_simulateV1" | "eth_call" | "none";
+  changes: SimChange[]; fee_wei: string | null; gas_used: string | null;
+  reason: string | null; note: string | null; node: string; block: number | null;
+  /** the phone is shown these numbers as the Mac's (unverified) claim */
+  for_phone: boolean;
+}
 /** Typed failure from sign_start. */
 export interface SendError { kind: string; message: string; delivered: boolean }
 export type Stage = "waiting" | "connecting" | "delivered" | "verifying";
@@ -80,6 +92,8 @@ export const api = {
   forgetPairing: () => call<void>("forget_pairing"),
   wallet: (rpcUrl: string) => call<Wallet>("wallet", { rpcUrl }),
   quote: (rpcUrl: string, to: string, amountEth: string) => call<Quote>("quote", { rpcUrl, to, amountEth }),
+  /** Simulate on the user's node; sign_start refuses a quote whose latest simulation reverted. */
+  simulate: (rpcUrl: string, quote: Quote) => call<Simulation>("simulate", { rpcUrl, quote }),
   signStart: (ticket: string, quote: Quote) => call<Signed>("sign_start", { ticket, quote }),
   /** Cancel one request by ticket, or every request in flight. */
   signCancel: (ticket?: string) => call<void>("sign_cancel", { ticket: ticket ?? null }),
