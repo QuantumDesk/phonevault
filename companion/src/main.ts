@@ -11,6 +11,7 @@ import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
 import { extSettingsSection } from "./extension";
+import { backupCardSection } from "./backup-card";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
 import { nftSection, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
@@ -1191,6 +1192,7 @@ function renderDrawer() {
       status?.pairing_path ? h("p", { class: "muted small" }, "Stored in ", h("span", { class: "mono" }, status.pairing_path)) : null,
     ),
     deviceSection(device, prefs.devMode, phone !== "none", () => identifyPhone(), (on) => { prefs.devMode = on; savePrefs(); renderDrawer(); identifyPhone(); }),
+    backupCardSection(),
     h("section", { class: "set" },
       h("h4", null, "NETWORK"),
       h("div", { class: "radio-list" }, NETWORKS.map((x) => h("button", { class: `radio${x.id === prefs.chainId ? " on" : ""}`, onclick: () => { prefs.chainId = x.id; savePrefs(); refreshBalance(x); renderDrawer(); if (view === "home" || view === "receive") render(); } },

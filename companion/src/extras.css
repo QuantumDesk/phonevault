@@ -71,3 +71,8 @@
 .confetti { position: absolute; inset: -20px 0 auto; height: 0; pointer-events: none; }
 .confetti i { position: absolute; top: 0; width: 6px; height: 10px; border-radius: 2px; opacity: 0; animation: fall 1.6s cubic-bezier(0.2, 0.6, 0.4, 1) forwards; }
 @keyframes fall { 0% { opacity: 1; transform: translateY(0) rotate(0); } 100% { opacity: 0; transform: translateY(170px) rotate(540deg); } }
+
+/* backup card picker (Settings → Backup, end of setup) */
+.segmented.two { grid-template-columns: repeat(2, 1fr); }
+.backup-card { display: grid; gap: 8px; }
+.backup-card .row.gap { margin-top: 2px; }

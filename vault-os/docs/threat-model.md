@@ -275,3 +275,39 @@ is not wiped by the in-app 10-wrong-PIN erase of the wallet (in credential mode,
 the whole phone); it is a local convenience record, not an integrity-protected log, and a rooted
 attacker could edit it to suppress a first-time warning — which is why every review still shows
 the full address.
+
+## Stronger backups (2026-10-11)
+
+**Printable backup card** (`tools/backup-card/make_card.py` → `tools/backup-card/out/*.pdf`, A4 and
+US Letter, with a 25 × 25 or 29 × 29 SeedQR grid). The PDFs are generated deterministically by a
+dependency-free script (`--check` fails when the checked-in files are stale) and are the same for
+every user: 24 numbered word lines, date, an "Account 1 address first 4 / last 4" line (public, to
+tell cards apart), copy 1/2, the grid with the fixed QR function patterns pre-printed, and short
+instructions (never photograph or type it, two copies in separate places, a passphrase is not on
+the card). The companion only opens the bundled file in the system viewer (`open_backup_card`,
+fixed names, no path from the UI). No recovery word, SeedQR or other secret ever reaches the Mac;
+a filled-in card is as sensitive as the phrase itself.
+
+**SeedQR on the phone** (`SeedQr`, `SeedQrView`). SeedSigner's specification
+(https://github.com/SeedSigner/seedsigner/blob/dev/docs/seed_qr/README.md): CompactSeedQR = the
+BIP-39 entropy (32 bytes for 24 words, checksum bits dropped) in byte mode without ECI, error
+correction L, version 2 (25 × 25); Standard SeedQR = 4-digit word indices (96 digits), numeric mode,
+L, version 3 (29 × 29). The symbol comes from ZXing (already used for the receive QR); its mode,
+version and level are checked after encoding and the screen refuses rather than show anything
+else. Tests decode the generated matrices with ZXing's decoder against all nine published vectors
+and check that the card's pre-printed modules match. The SeedQR is the phrase in another form, so
+it lives only inside the existing sensitive flow: same PIN gate and seed-key path as "Show recovery
+phrase", no USB session (attaches are parked), FLAG_SECURE in release, the seed idle/session timer,
+no ☰ menu, Hide/Back/lock clear it, the modules are wiped on hide, the view is excluded from
+accessibility, and the development UI dump skips it. It is not offered for an un-activated
+replacement wallet. The Java `String` passed to ZXing and ZXing's internal buffers cannot be wiped;
+this is the same managed-memory limitation as the mnemonic string itself.
+
+**"Check your backup" reminder** (`BackupReminder`). Non-secret metadata in the app's preferences:
+the day of the last successful check (written in the same commit as `BackupCheck.record`, so a
+spot check, replacement or restore restarts it), the interval (off / 30 / 90 / 180 days, default
+90) and a 14-day snooze. Home shows a card only for a verified wallet with no USB session, request
+or approval in progress; it runs the existing spot check (no phrase shown unless a word is wrong
+and the user chooses "Review"). The offline clock is not trusted for anything else: a clock that
+goes backwards never shows the card, one that jumps ahead can only show it early. It never blocks
+receiving or signing.

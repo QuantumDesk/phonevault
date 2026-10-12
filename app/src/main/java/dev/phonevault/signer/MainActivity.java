@@ -73,6 +73,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private volatile String walletAddress;
     private volatile android.graphics.Bitmap walletQr;
     private BackupCheck backupCheck;
+    private BackupReminder backupReminder;
     private boolean largeText;
     private long idleTimeoutMs = IDLE_LOCK_MS;
     private String screenName = "loading";
@@ -224,6 +225,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             vault = new VaultKeyStore(this);
             pin = new VaultPin(this);
             backupCheck = new BackupCheck(getSharedPreferences("vault", MODE_PRIVATE));
+            backupReminder = new BackupReminder(getSharedPreferences("vault", MODE_PRIVATE));
             operational = true;
             if (managed) applyIdlePolicy(policy);
             // The key is only loaded (and USB only answered) once the PIN gate has been passed.
@@ -586,6 +588,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         backupIdentity = null;
         replacementCandidate = null;
         seedTimer = null;
+        wipeSeedQr();
+        seedQrRequested = false;
         clearRestoreEntry(); // typed recovery words never outlive the unlocked session
         clearDice();
         firstRunPinFresh = false;
@@ -899,6 +903,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             box.addView(addressView);
             root.addView(box, matchWrap(dp(22)));
             card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
+            addBackupReminderCard(root);
         } else {
             card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
             action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
@@ -921,6 +926,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 : "Not checked yet. Receiving and signing stay paused until it is.");
         action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
         action(root, "Show recovery phrase", false, this::confirmRevealBackup);
+        action(root, "Show as SeedQR", false, this::confirmRevealSeedQr);
+        action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, this::showBackupReminderSettings);
         card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
         action(root, "Replace with a new wallet", false, this::confirmReplace);
         action(root, "Restore a different wallet", false, this::confirmRestoreOver);
@@ -1496,7 +1503,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         gate.setSubmitRequired(remaining == 1 && !pin.eraseOutstanding());
     }
 
-    private void confirmRevealBackup() { startBackupAccess(false); }
+    private void confirmRevealBackup() { seedQrRequested = false; startBackupAccess(false); }
 
     private void startBackupAccess(boolean checkOnly) {
         beginSensitive(checkOnly ? "check your backup" : "view your recovery phrase", () -> {
@@ -1515,6 +1522,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
                         startSeedTimer();
                         if (checkOnly) startWordCheck();
+                        else if (seedQrRequested) showSeedQr();
                         else showPhrasePage();
                     });
                 } catch (Exception e) {
@@ -1537,6 +1545,94 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
             });
         });
+    }
+
+    // ------------------------------------------------------------------ SeedQR + backup reminder
+    // (logic lives in SeedQr / SeedQrView / BackupReminder; these are only the screens)
+
+    /** True when the PIN-gated reveal should open on the SeedQR instead of the words. */
+    private boolean seedQrRequested;
+    private SeedQr.Format seedQrFormat = SeedQr.Format.COMPACT;
+    private SeedQrView seedQrView;
+
+    private void confirmRevealSeedQr() { seedQrRequested = true; startBackupAccess(false); }
+
+    /**
+     * The recovery phrase as a SeedQR, for copying onto the backup card's grid. Same protections as
+     * the phrase pages: inside the sensitive flow (PIN, no USB session), FLAG_SECURE window, the seed
+     * timer, and Hide / Back / lock clear it.
+     */
+    private void showSeedQr() {
+        if (!sensitive.active() || backupWords == null || replacementCandidate != null) return;
+        wipeSeedQr();
+        SeedQr.Modules modules;
+        try {
+            modules = SeedQr.encode(backupWords, seedQrFormat);
+        } catch (RuntimeException e) {
+            android.util.Log.w("Vault", "SeedQR unavailable: " + e.getClass().getSimpleName());
+            showInfo("SeedQR unavailable", "This recovery phrase could not be shown as a SeedQR. Your written words are the backup; nothing changed.", this::hideBackup);
+            return;
+        }
+        boolean compact = seedQrFormat == SeedQr.Format.COMPACT;
+        LinearLayout root = page("RECOVERY PHRASE · SEEDQR",
+                compact ? "CompactSeedQR · 25 × 25" : "Standard SeedQR · 29 × 29",
+                "Copy each black square onto the matching grid of your backup card: row and column numbers match. Never photograph or scan this screen.");
+        seedQrView = new SeedQrView(this, modules);
+        root.addView(seedQrView, matchWrap(dp(4)));
+        card(root, "Same secret as your 24 words", compact
+                ? "SeedSigner CompactSeedQR (binary). Use the card with the 25 × 25 grid. Wallets that support SeedQR restore it; ordinary camera apps cannot read it."
+                : "SeedSigner Standard SeedQR (digits). Use the card with the 29 × 29 grid. More squares to copy, and any QR reader can decode it.");
+        action(root, "Hide", true, this::hideBackup);
+        action(root, compact ? "Use Standard SeedQR (29 × 29)" : "Use CompactSeedQR (25 × 25)", false, () -> {
+            seedQrFormat = compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT;
+            showSeedQr();
+        });
+        action(root, "Show as words", false, () -> { wipeSeedQr(); backupPage = 0; showPhrasePage(); });
+        addSeedTimer(root);
+        present(root, "backup-seedqr");
+    }
+
+    private void wipeSeedQr() {
+        if (seedQrView != null) seedQrView.wipe();
+        seedQrView = null;
+    }
+
+    /** Home, verified wallet, no request in progress: a gentle periodic "check your backup". */
+    private void addBackupReminderCard(LinearLayout root) {
+        if (!backupVerified || transport != null || approvalDecision != null || requestPending.get()) return;
+        long now = System.currentTimeMillis();
+        if (!backupReminder.due(now)) return;
+        LinearLayout box = VaultTheme.box(this);
+        box.addView(VaultTheme.bodyText(this, "BACKUP CHECK", 13, VaultTheme.FAINT));
+        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), bodySize(), VaultTheme.INK);
+        headline.setPadding(0, dp(6), 0, 0);
+        box.addView(headline);
+        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", bodySize() - 2, VaultTheme.DIM);
+        body.setPadding(0, dp(6), 0, 0);
+        box.addView(body);
+        action(box, "Check my backup now", false, () -> startBackupAccess(true));
+        action(box, "Remind me in 2 weeks", false, () -> {
+            if (!backupReminder.snooze(System.currentTimeMillis())) statusMessage = "Reminder snooze not saved";
+            showHome();
+        });
+        root.addView(box, matchWrap(dp(12)));
+    }
+
+    private void showBackupReminderSettings() {
+        LinearLayout root = page("SECURITY / BACKUP REMINDER", "Check your backup",
+                "Now and then Home suggests a two-minute check: pick 3 words from your written backup. Your phrase is not shown, and the reminder never interrupts a request.");
+        int last = backupReminder.lastCheckDay();
+        card(root, "Last checked", last < 0 ? "Not recorded on this phone yet"
+                : java.time.LocalDate.ofEpochDay(last) + " (by this phone's clock)");
+        int current = backupReminder.intervalDays();
+        for (int days : BackupReminder.CHOICES) {
+            action(root, BackupReminder.label(days), days == current, () -> {
+                if (backupReminder.setIntervalDays(days)) showBackupReminderSettings();
+                else showInfo("Setting not saved", "Your previous reminder setting is still active.", this::showBackupReminderSettings);
+            });
+        }
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "reminder-settings");
     }
 
     private void startSeedTimer() {
@@ -1589,6 +1685,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (backupPage < 5) action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
         else action(root, "I've written them down · spot-check", true, this::startWordCheck);
         if (backupPage > 0) action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
+        if (replacementCandidate == null) action(root, "Show as SeedQR", false, this::showSeedQr);
         action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
         addSeedTimer(root);
         present(root, "phrase");
