@@ -10,6 +10,7 @@ import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, ago, cl
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
+import { extSettingsSection } from "./extension";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
@@ -994,6 +995,7 @@ function renderDrawer() {
       h("div", { class: "segmented" }, seg("dark", "Dark"), seg("light", "Light"), seg("system", "System")),
     ),
     wcSettingsSection(),
+    extSettingsSection(),
     signingLoader ? h("section", { class: "set" },
       h("h4", null, "TOOLS"),
       h("button", { class: "radio", onclick: () => { closeDrawer(); go("tool"); } }, icon("pen", 16), h("span", { class: "grow" }, "Sign a message"), icon("back", 14)),

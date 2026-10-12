@@ -7,7 +7,11 @@
 
 export interface Meta { name: string; description?: string; url: string; icons: string[] }
 export type Validation = "VALID" | "INVALID" | "UNKNOWN";
-export interface VerifyIn { validation: Validation; origin: string; isScam: boolean }
+export interface VerifyIn {
+  validation: Validation; origin: string; isScam: boolean;
+  /** "browser": the Phone Vault extension; `origin` is what the browser reported for the tab. */
+  source?: "browser"; local?: boolean;
+}
 export interface ProposalIn { id: number; meta: Meta; required: unknown; optional: unknown; verify: VerifyIn | null; expiry: number }
 export interface Namespace { chains?: string[]; accounts: string[]; methods: string[]; events: string[] }
 export interface SessionIn { topic: string; meta: Meta; namespaces: Record<string, Namespace>; expiry: number }

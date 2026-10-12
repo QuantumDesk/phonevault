@@ -15,6 +15,7 @@ import type { Quote, SendError } from "./api";
 import { NETWORKS, byId } from "./networks";
 import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
+import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
 import "./walletconnect.css";
 
 // ------------------------------------------------------------------ host hooks (from main.ts)
@@ -140,19 +141,24 @@ const events: Events = {
   },
 };
 
+// The browser extension (extension.ts) shares these cards; it needs no project ID.
+let ext: ReturnType<typeof createExtBackend> | null = null;
+
 async function start() {
+  ext ??= createExtBackend(events, (c) => host.rpcFor(c));
+  backend = combine(null, ext);
   if (!isTauri) {
     const m = await mock();
-    if (m.mockNoProjectId()) { engine = { s: "off" }; render(); return; }
+    if (m.mockNoProjectId()) { engine = { s: "off" }; sync(); return; }
     projectId = projectId || "preview";
-    backend = m.createMockBackend(events);
+    backend = combine(m.createMockBackend(events), ext);
     engine = { s: "ready" }; sync(); return;
   }
-  if (!projectId) { engine = { s: "off" }; render(); return; }
+  if (!projectId) { engine = { s: "off" }; sync(); return; }
   engine = { s: "starting" }; render();
   try {
     const { createSdkBackend } = await import("./wc-backend");
-    backend = await createSdkBackend(projectId, events);
+    backend = combine(await createSdkBackend(projectId, events), ext);
     engine = { s: "ready" };
     await checkSessions();
     sync();
@@ -490,6 +496,9 @@ function dappIcon(url: string | undefined, size = 36) {
 
 /** Verify API result, prominent when it is anything but a verified match. */
 function verifyBadge(v: VerifyIn | null, claimed: string) {
+  if (v?.source === "browser") return v.local
+    ? h("div", { class: "wc-verify unverified" }, icon("alert", 16), h("span", null, h("strong", null, "LOCAL PAGE. "), `${hostOf(v.origin)} is served from this Mac (development). Only continue if you started it yourself.`))
+    : h("span", { class: "wc-verified" }, icon("check", 13), "Address from your browser");
   if (v?.isScam) return h("div", { class: "wc-verify threat" }, icon("alert", 16), h("span", null, h("strong", null, "THREAT. "), `WalletConnect flags ${hostOf(v.origin || claimed)} as malicious. Reject this.`));
   if (v?.validation === "INVALID") return h("div", { class: "wc-verify mismatch" }, icon("alert", 16), h("span", null, h("strong", null, "DOMAIN MISMATCH. "), `The request comes from ${hostOf(v.origin) || "another site"}, not ${hostOf(claimed)} as it claims.`));
   if (v?.validation === "VALID") return h("span", { class: "wc-verified" }, icon("check", 13), "Verified domain");
@@ -502,10 +511,11 @@ function dappHeader(meta: { name: string; url: string; icons: string[] }, v: Ver
     h("div", { class: "grow" },
       h("div", { class: "wc-dapp-name" }, meta.name),
       h("div", { class: "muted small mono" }, hostOf(meta.url) || "no URL given")),
-    v?.validation === "VALID" && !v.isScam ? verifyBadge(v, meta.url) : null,
+    v?.validation === "VALID" && !v.isScam && !v.local ? verifyBadge(v, meta.url) : null,
   );
 }
 function verifyWarning(meta: { url: string }, v: VerifyIn | null) {
+  if (v?.source === "browser") return v.local ? verifyBadge(v, meta.url) : null;
   return v?.validation === "VALID" && !v.isScam ? null : verifyBadge(v, meta.url);
 }
 
@@ -583,7 +593,7 @@ function proposalCard() {
   }) : [h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Checking what it asks for…")];
   const approveOk = !!plan && !plan.blocker && pr.selected.size > 0 && !!paired && !pr.busy;
   return h("section", { class: `card modal wc-modal${danger ? " danger-card" : ""}`, role: "dialog", "aria-modal": "true" },
-    h("p", { class: `kicker${danger ? " danger" : ""}` }, "CONNECTION REQUEST"),
+    h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "BROWSER CONNECTION REQUEST" : "CONNECTION REQUEST"),
     dappHeader(meta, verify),
     verifyWarning(meta, verify),
     meta.description ? h("p", { class: "muted small wc-desc" }, meta.description) : null,
@@ -770,7 +780,7 @@ export function wcSettingsSection(): HTMLElement {
     const v = input.value.trim();
     if (v && !PROJECT_ID_RE.test(v)) { msg.textContent = "A project ID is 32 hexadecimal characters."; msg.className = "field-msg bad"; return; }
     if (v === projectId) { msg.textContent = "Saved."; msg.className = "field-msg ok"; return; }
-    const had = !!backend && isTauri;
+    const had = engine.s === "ready" && isTauri;
     saveProjectId(v); projectId = v;
     if (had) { msg.textContent = "Saved. Restart the app to use the new project ID."; msg.className = "field-msg warn"; return; }
     msg.textContent = v ? "Saved. Starting WalletConnect…" : "Removed."; msg.className = "field-msg ok";
@@ -790,7 +800,7 @@ export function wcSettingsSection(): HTMLElement {
       h("button", { class: "ghost", onclick: () => openExternal("https://cloud.reown.com") }, "Get a project ID", icon("external", 14))),
     !projectId ? h("p", { class: "muted small" }, "WalletConnect is off until you add a project ID. Create a free project at cloud.reown.com and paste its ID here. It is stored only on this Mac; WalletConnect's relay sees it with each connection.") : null,
     h("div", { class: "set-row" }, h("span", null, "Connected dApps"), h("button", { class: "chip-btn", onclick: openConnect }, "Connect a dApp")),
-    sessions.length ? h("ul", { class: "wc-sessions" }, sessions.map((s) => h("li", null,
+    wcOnly().length ? h("ul", { class: "wc-sessions" }, wcOnly().map((s) => h("li", null,
       dappIcon(s.meta.icons[0], 28),
       h("div", { class: "grow" },
         h("div", { class: "wc-dapp-name small" }, s.meta.name),
@@ -802,8 +812,12 @@ export function wcSettingsSection(): HTMLElement {
   );
 }
 
+/** WalletConnect sessions only (browser extension sites have their own Settings section). */
+const wcOnly = () => sessions.filter((s) => !isExtTopic(s.topic));
+
 export function mountWalletConnect(h0: WcHost) {
   host = h0;
+  onExtChange(() => host.changed());
   projectId = loadProjectId();
   start();
   // pairing changes (forget / re-pair) end sessions offered with the old address
