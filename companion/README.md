@@ -32,11 +32,63 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    and after signing the calldata decoded from the signed bytes must match the recipient and
    amount you entered. The fee is still paid in ETH. The phone names the token from its own copy
    of the list; anything else it shows as "Unknown token contract".
-4. **Activity and notifications.** Transactions broadcast from here, and balance increases seen
-   while the app is open, are kept in `~/Library/Application Support/PhoneVault/history.json`
-   (0600; public-chain facts only). A notification is shown when funds arrive (toggle in Settings).
+4. **Activity and notifications.** Kept in `~/Library/Application Support/PhoneVault/history.json`
+   (0600; public-chain facts only), with filters (All / Sent / Received / Pending, this network or
+   all). A background watcher in Rust (`src-tauri/src/watcher.rs`) runs whether the window is open
+   or closed to the menu bar, on your own nodes only (no explorer, no third party):
+   * native balances on every network (the selected one every 20 s, the rest every 90 s);
+   * **incoming ETH with real hashes:** after a balance increase it reads the block bodies since the
+     previous reading (at most 40 blocks) for plain transfers to your address. If the gap is wider,
+     or the ETH came from inside a contract call (an exchange's batch payout, a bridge, a contract
+     withdrawal: no block body shows those without trace APIs), it records a "balance increase"
+     without a hash, as before. A deposit and a send in the same window can cancel out and go
+     unnoticed. No keyless explorer API was used: the reliable ones need keys, and any of them would
+     learn your address.
+   * **incoming ERC-20 with real hashes:** `Transfer` logs to your address from the built-in token
+     list (eth_getLogs filtered by those contracts), over a recent window at first (≈ a day on
+     Ethereum, 12 h on Base, 5 h on Optimism) and then continuously from where it stopped. Public
+     nodes limit this differently (publicnode serves Polygon/Arbitrum logs only for the last minutes
+     and refuses searches without a contract; mainnet.base.org rate-limits); Settings → Incoming
+     transfers shows what each node allowed. Zero-value transfers (address poisoning) and unlisted
+     tokens are ignored.
+   * pending transactions sent from here are settled (see Speed up / cancel below);
+   * a notification per incoming transfer (toggle in Settings). State: `watch-state.json` (0600).
+5. **Speed up / cancel.** A pending transaction sent from this Mac shows Speed up and Cancel in
+   Activity. Both are complete new transactions with the same nonce, quoted in Rust
+   (`src-tauri/src/replace.rs`) from the signed fields kept in history: Speed up resends the same
+   to/value/data/gas limit, Cancel is a 0-value transfer to your own address (21,000 gas). Both
+   maxFeePerGas and maxPriorityFeePerGas are at least 12.5 % above the highest already sent for that
+   nonce, or the current network fee if higher. `sign_start` re-checks the relationship against
+   history, then the replacement goes through the same pipeline as any Send: the phone reviews it
+   as a normal transaction, `verify.rs` checks the signature, Broadcast is a separate click. The Mac
+   labels it "Replacement for tx 0x…". Whichever transaction of the nonce gets mined wins; history
+   marks it confirmed/failed and the others dropped ("Replaced" / "Cancelled"); a nonce used by a
+   transaction from elsewhere marks ours dropped. Transactions recorded before this version can only
+   be cancelled (their data wasn't kept).
+6. **Assets, NFTs, USD.** Home has Assets / NFTs / Activity tabs. Totals in USD: native coins at
+   Coinbase spot, USDC/USDT/USDT0/DAI at $1 by definition (a depeg is not shown), WETH at the ETH
+   price, WBTC/cbBTC at the BTC price. NFTs (`src-tauri/src/nft.rs`): ERC-721 tokens found from
+   `Transfer` logs to your address in the recent window, confirmed with `ownerOf`, named with
+   `name()`/`symbol()`. Nodes that refuse searches without a contract (most public ones) can't
+   discover NFTs: add a collection by its contract (ERC-721 Enumerable, or that contract's logs).
+   ERC-1155 is not shown. Metadata and images are fetched only when you click Load image, by Rust:
+   https only (ipfs:// via the ipfs.io gateway), no redirects, no localhost/private IP literals,
+   256 KiB JSON / 2 MiB image (PNG, JPEG, GIF, WebP, SVG), returned as a data: URL. The server
+   hosting the image sees that request.
+7. **Menu bar.** A padlock in the menu bar: balance on the selected network (with USD), Open,
+   Copy receive address, Quit. Closing the window keeps the app (and notifications) running there;
+   the Dock icon reopens it.
+8. **Guided setup.** With nothing paired the app opens a full-screen stepper: plug in (live USB
+   detection) → is it genuine (device check, big Genuine / Development / Not genuine; Not genuine
+   stops with guidance; development phones only with Developer mode) → pair (compare the address on
+   the phone) → receive (QR, waits for a small test deposit) → first send (optional) → done.
+   Settings → Run setup again. Skippable once paired.
+9. **One request on the phone at a time.** Every USB exchange (identify, device check, Send,
+   WalletConnect, message signing) takes a turn (`aoa::take_turn`). A Send started while the phone
+   is answering something else shows "Waiting for your phone" and continues by itself, instead of
+   failing with "USB busy"; it can be cancelled while queued.
 
-5. **WalletConnect (dApps).** Settings → WalletConnect → Project ID (free, from
+10. **WalletConnect (dApps).** Settings → WalletConnect → Project ID (free, from
    [cloud.reown.com](https://cloud.reown.com); stored only in this Mac's webview storage). Then
    "Connect a dApp" on the main view and paste the dApp's `wc:` link. The connection card shows
    the dApp, its URL and the WalletConnect Verify result (UNVERIFIED / DOMAIN MISMATCH / THREAT
@@ -55,7 +107,8 @@ Preview the UI without Tauri or a phone: `npm run dev` and open http://localhost
 Tauri runtime the app uses fake data (marked PREVIEW DATA); `?paired=0`, `?phone=none` and
 `?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states. A pretend dApp
 drives WalletConnect: `?wc=proposal|session|requests|noid`, `?wcverify=VALID|UNKNOWN|INVALID|SCAM`,
-`?wctx=native|approve|swap` (see `src/wc-mock.ts`).
+`?wctx=native|approve|swap` (see `src/wc-mock.ts`). `?paired=0` opens the guided setup;
+`?deposit=N`, `?phonebusy=1`, `?history=0` are described in `src/mock.ts`.
 
 ## Running it
 
