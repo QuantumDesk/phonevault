@@ -88,3 +88,11 @@ at the submodule commits those tags pin — `444c526b` for 2.0.0, `3231810e` for
 2026-10-11 with `eth_getBlockByNumber` from public RPC nodes, each with its explorer link
 (etherscan.io / basescan.org); 21 decode, 2 are refused on purpose (`WRAP_ETH` to a third address;
 a SwapRouter02 price-limited partial fill).
+
+The same file also holds 5 SYNTHETIC entries (`"tx": "synthetic-…"`, each with a `"synthetic"`
+description and no explorer link): hand-built attack and edge cases that real traffic does not
+supply — a zero-minimum swap output paid back in the coin the wallet also gave (SwapRouter02
+`unwrapWETH9`, Universal Router `UNWRAP_WETH` and `SWEEP`), which must show the No-minimum DANGER
+rather than "unused input"; a 5% `PAY_PORTION` (shown as OTHER ADDRESS); a fee to the zero address
+(refused). Their calldata comes from an independent Python ABI encoder and `SwapReviewTest`
+re-encodes it with web3j and compares.

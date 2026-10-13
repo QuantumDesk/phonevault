@@ -2,6 +2,7 @@ package dev.phonevault.signer;
 
 import org.web3j.crypto.Keys;
 
+import java.math.BigInteger;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -61,21 +62,32 @@ final class TransactionReview {
 
     /** @param signerAddress the reviewed signing address (any case); may be null for the locked summary */
     static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens) {
-        return build(r, signerAddress, tokens, null);
+        return build(r, signerAddress, tokens, null, null);
+    }
+
+    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
+        return build(r, signerAddress, tokens, safety, null);
     }
 
     /**
      * @param safety the phone's address book and recipient history, or null (no history rows; the
      *               locked-screen summary and unit tests of the plain review)
+     * @param account which account of which wallet {@code signerAddress} is (the "From · Account 3"
+     *                row), or null when unknown: the row then says only "From", never a guessed account
      */
-    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
+    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety,
+                                   SigningAccount account) {
         if (tokens == null) tokens = TokenList.empty();
-        if (r.kind == Eip1559Request.Kind.SWAP) return SwapReview.build(r, signerAddress, tokens, safety);
-        if (r.kind == Eip1559Request.Kind.NFT_CALL) return NftReview.build(r, signerAddress, tokens, safety);
+        if (account != null && (signerAddress == null || !account.address.equalsIgnoreCase(signerAddress))) {
+            throw new IllegalArgumentException("The account description does not match the signing address");
+        }
+        String fromRow = fromLabel(account);
+        if (r.kind == Eip1559Request.Kind.SWAP) return SwapReview.build(r, signerAddress, tokens, safety, fromRow);
+        if (r.kind == Eip1559Request.Kind.NFT_CALL) return NftReview.build(r, signerAddress, tokens, safety, fromRow);
         if (r.tokenCall != null && NftCollections.lookup(r.chainId, r.to) != null
                 && (r.tokenCall.function == Erc20Call.Function.APPROVE || r.tokenCall.function == Erc20Call.Function.TRANSFER_FROM)) {
             // approve/transferFrom on a listed NFT collection: the ERC-721 meaning, never "tokens"
-            return NftReview.buildErc721(r, signerAddress, tokens, safety);
+            return NftReview.buildErc721(r, signerAddress, tokens, safety, fromRow);
         }
         List<MessageReview.Row> rows = new ArrayList<>();
         List<MessageReview.Row> details = new ArrayList<>();
@@ -94,8 +106,8 @@ final class TransactionReview {
             } else {
                 rows.add(row("Contract check", "The offline phone can't tell whether this address is a wallet or a contract."));
             }
-            addCommon(rows, r, signer);
-            rows.add(row("Maximum fee", r.maximumFeeEth()));
+            addCommon(rows, r, signer, fromRow);
+            addMaximumFee(rows, r);
             addFeeDetails(details, r);
             details.add(row("Contract data", "None"));
             String locked = r.transactionTypeLabel() + " · " + r.valueEth() + " to " + shortAddress(r.displayedRecipientLabel())
@@ -206,8 +218,8 @@ final class TransactionReview {
             rows.add(row(WARNING, "The recipient is the token contract itself. Tokens sent there are usually lost."));
         }
 
-        addCommon(rows, r, signer);
-        rows.add(row("Maximum fee", r.maximumFeeEth()));
+        addCommon(rows, r, signer, fromRow);
+        addMaximumFee(rows, r);
 
         details.add(row("Function", call.function.signature + " · selector 0x" + call.function.selector));
         details.add(row(amountTitle + " in base units", call.amount.toString() + " (uint256)"));
@@ -268,9 +280,65 @@ final class TransactionReview {
         }
     }
 
-    static void addCommon(List<MessageReview.Row> rows, Eip1559Request r, String signer) {
+    /**
+     * The signer row's label: "From · Account 3", "From · Savings (passphrase wallet)", or just
+     * "From" when the caller does not say which account it is.
+     */
+    static String fromLabel(SigningAccount account) {
+        return account == null ? "From" : "From · " + account.headline();
+    }
+
+    static void addCommon(List<MessageReview.Row> rows, Eip1559Request r, String signer, String fromLabel) {
         rows.add(row("Network", r.networkLabel()));
-        if (signer != null) rows.add(row("From · Account 1", Keys.toChecksumAddress(signer)));
+        if (signer != null) rows.add(row(fromLabel == null ? "From" : fromLabel, Keys.toChecksumAddress(signer)));
+    }
+
+    // ------------------------------------------------------------------ fee alarm
+
+    private static final BigInteger WEI_PER_COIN = BigInteger.TEN.pow(18);
+    /**
+     * DANGER above this maximum fee (gas limit × max fee per gas), in wei of the native coin:
+     * 0.05 ETH on Ethereum, Sepolia and the ETH L2s (Base, Optimism, Arbitrum) — a plain transfer
+     * at 100 gwei costs 0.0021 ETH and a busy-day swap well under 0.02 ETH, so 0.05 ETH is only
+     * reached by a wrong gas limit or fee per gas; 50 POL on Polygon (gas there is priced in POL,
+     * which is worth a few hundred times less than ETH, so the same mistake reads ~1000x larger).
+     */
+    static BigInteger feeDangerCap(long chainId) {
+        if (chainId == 137) return BigInteger.valueOf(50).multiply(WEI_PER_COIN);
+        return WEI_PER_COIN.divide(BigInteger.valueOf(20)); // 0.05
+    }
+
+    /** Below this maximum fee (a tenth of the cap) a fee larger than a tiny transfer is not flagged. */
+    static BigInteger feeComparisonFloor(long chainId) {
+        return feeDangerCap(chainId).divide(BigInteger.TEN);
+    }
+
+    /** "Maximum fee" plus a DANGER row when the fee is absurd for this chain or for what is sent. */
+    static void addMaximumFee(List<MessageReview.Row> rows, Eip1559Request r) {
+        rows.add(row("Maximum fee", r.maximumFeeEth()));
+        MessageReview.Row alarm = feeAlarm(r);
+        if (alarm != null) rows.add(alarm);
+    }
+
+    static MessageReview.Row feeAlarm(Eip1559Request r) {
+        BigInteger max = r.gasLimit.multiply(r.maxFeePerGas);
+        BigInteger cap = feeDangerCap(r.chainId);
+        String fee = r.maximumFeeEth().replaceFirst("^up to ", "");
+        if (max.compareTo(cap) > 0) {
+            return row(DANGER, "The maximum fee is " + fee + ", far more than a normal fee on "
+                    + r.networkLabel().replaceFirst(" \\(chain ID .*\\)$", "") + " (this phone warns above "
+                    + coins(cap) + " " + r.nativeSymbol() + "). The host chose the gas limit and fee per gas; "
+                    + "do not sign unless you meant to pay this much.");
+        }
+        if (r.value.signum() > 0 && max.compareTo(r.value) > 0 && max.compareTo(feeComparisonFloor(r.chainId)) > 0) {
+            return row(DANGER, "The maximum fee (" + fee + ") is more than the " + r.valueEth()
+                    + " being sent. Check the gas settings on your host; do not sign unless you meant to pay this much.");
+        }
+        return null;
+    }
+
+    private static String coins(BigInteger wei) {
+        return new java.math.BigDecimal(wei).movePointLeft(18).stripTrailingZeros().toPlainString();
     }
 
     static void addFeeDetails(List<MessageReview.Row> details, Eip1559Request r) {

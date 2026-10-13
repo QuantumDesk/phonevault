@@ -3,7 +3,8 @@
 (embit, https://github.com/diybitcoinhardware/embit, pure Python / libsecp256k1).
 
 For the throwaway "abandon … about" test mnemonic it builds unsigned PSBTv0s (P2WPKH, P2TR, a
-testnet mix with OP_RETURN, and change to the wallet), then signs every input with embit:
+testnet mix with OP_RETURN, and change to the wallet; every P2WPKH input carries its previous
+transaction as non_witness_utxo, which the phone requires), then signs every input with embit:
 ECDSA with RFC 6979 and NO low-R grinding (as the phone signs), BIP-340 with all-zero auxiliary
 randomness (the phone's test seam). It records each expected signature and the finalized raw
 transaction. BtcEndToEndTest signs the same unsigned PSBTs on the JVM and must produce the same
@@ -111,6 +112,16 @@ def build(name, network, inputs, outputs, version=2, locktime=0, sequence=0xFFFF
     for i, w in enumerate(witnesses):
         stx.vin[i].witness = w
     net = NETWORKS["main" if network == "bitcoin" else "test"]
+
+    def is_change(own_path):
+        # The phone's rule: the change chain (/1/) of an account AND script type that this PSBT
+        # spends from (index window not exercised here). Other own keys are shown with a WARNING.
+        if not own_path:
+            return False
+        p = own_path.split("/")
+        spent = {(ip.split("/")[1], ip.split("/")[3]) for (_k, ip, _v, _n) in inputs}
+        return p[4] == "1" and (p[1], p[3]) in spent
+
     return {
         "name": name,
         "network": network,
@@ -120,7 +131,8 @@ def build(name, network, inputs, outputs, version=2, locktime=0, sequence=0xFFFF
         "txid": stx.txid().hex(),
         "fee": sum(vals) - sum(v for (_s, v, _p, _k) in outputs),
         "vsizeSigned": stx.vsize if hasattr(stx, "vsize") else None,
-        "outputs": [{"address": (s.address(net) if s.data[:1] != b"\x6a" else None), "value": v, "own": p} for (s, v, p, _k) in outputs],
+        "outputs": [{"address": (s.address(net) if s.data[:1] != b"\x6a" else None), "value": v, "own": p, "change": is_change(p)}
+                    for (s, v, p, _k) in outputs],
     }
 
 
@@ -139,18 +151,18 @@ def own(kind, path):
 
 cases = [
     build("p2wpkh-send-with-change", "bitcoin",
-          [("wpkh", "m/84h/0h/0h/0/0", 1_000_000, True), ("wpkh", "m/84h/0h/0h/0/1", 500_000, False)],
+          [("wpkh", "m/84h/0h/0h/0/0", 1_000_000, True), ("wpkh", "m/84h/0h/0h/0/1", 500_000, True)],
           [(ext_wpkh(7), 1_234_567, None, "wpkh"), (own("wpkh", "m/84h/0h/0h/1/0"), 263_000, "m/84h/0h/0h/1/0", "wpkh")]),
     build("p2tr-send-with-change", "bitcoin",
           [("tr", "m/86h/0h/0h/0/0", 2_000_000, False)],
           [(ext_tr(9), 1_500_000, None, "tr"), (own("tr", "m/86h/0h/0h/1/0"), 499_000, "m/86h/0h/0h/1/0", "tr")]),
     build("testnet-mixed-opreturn", "testnet",
-          [("wpkh", "m/84h/1h/0h/0/3", 300_000, False), ("tr", "m/86h/1h/1h/0/2", 400_000, False)],
+          [("wpkh", "m/84h/1h/0h/0/3", 300_000, True), ("tr", "m/86h/1h/1h/0/2", 400_000, False)],
           [(ext_tr(11), 600_000, None, "tr"),
            (script.Script(bytes.fromhex("6a0b68656c6c6f20776f726c64")), 0, None, "data"),
            (own("wpkh", "m/84h/1h/0h/1/7"), 99_000, "m/84h/1h/0h/1/7", "wpkh")]),
     build("p2wpkh-account-2-legacy-recipients", "bitcoin",
-          [("wpkh", "m/84h/0h/1h/0/5", 800_000, False)],
+          [("wpkh", "m/84h/0h/1h/0/5", 800_000, True)],
           [(script.p2pkh(ec.PrivateKey(bytes([3] * 32)).get_public_key()), 100_000, None, "pkh"),
            (script.p2sh(ext_wpkh(4)), 200_000, None, "sh"),
            (script.Script(b"\x00\x20" + bytes([5] * 32)), 300_000, None, "wsh"),

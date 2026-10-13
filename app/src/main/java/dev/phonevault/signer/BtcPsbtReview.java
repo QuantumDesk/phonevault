@@ -20,7 +20,8 @@ import java.util.Set;
  *   <li>any input that is not this wallet's own Native SegWit (m/84'/coin'/a'/c/i) or Taproot
  *       key-path (m/86'/coin'/a'/c/i, BIP-86, no script tree) coin, proven by deriving the key from
  *       the account xpub and matching the UTXO's script (coinjoin / payjoin / multisig are not supported);</li>
- *   <li>an input without a witness UTXO, or whose non-witness UTXO disagrees with it;</li>
+ *   <li>an input without a witness UTXO, or whose non-witness UTXO disagrees with it; a Native SegWit
+ *       input without its non-witness UTXO (the previous transaction proves the amount);</li>
  *   <li>sighash types other than ALL (SegWit v0) or DEFAULT/ALL (Taproot);</li>
  *   <li>input fields the phone does not understand (scripts, finalized data, script-path Taproot,
  *       MuSig2, hash preimages, proprietary or unknown types): they could change what a signature means;</li>
@@ -82,17 +83,54 @@ final class BtcPsbtReview {
         final boolean change;
         /** This wallet's own receive address (…/0/i), verified by derivation. */
         final boolean ownReceive;
+        /**
+         * This wallet's key (verified by derivation) but not where the wallet app looks: change for
+         * another account or script type than the coins spent, or an index far past the ones in use.
+         * Shown as a normal output with a WARNING and its full path.
+         */
+        final boolean ownElsewhere;
         final String path;     // for own outputs
+        /** "Account 2 · Taproot" for own outputs, else null. */
+        final String ownAccount;
 
         Out(int index, long value, BtcScript.Kind kind, String address, boolean change, boolean ownReceive, String path) {
+            this(index, value, kind, address, change, ownReceive, false, path, null);
+        }
+
+        Out(int index, long value, BtcScript.Kind kind, String address, boolean change, boolean ownReceive,
+            boolean ownElsewhere, String path, String ownAccount) {
             this.index = index;
             this.value = value;
             this.kind = kind;
             this.address = address;
             this.change = change;
             this.ownReceive = ownReceive;
+            this.ownElsewhere = ownElsewhere;
             this.path = path;
+            this.ownAccount = ownAccount;
         }
+    }
+
+    /** Address indexes up to this are always within the wallet app's view (it scans ahead from 0). */
+    static final int OWN_INDEX_WINDOW = 1000;
+
+    /**
+     * Highest address index (receive or change chain) at which an output still counts as this
+     * wallet's change / own receive address: {@link #OWN_INDEX_WINDOW} past the highest index of the
+     * coins this PSBT spends from the same account and script type, and never below
+     * {@link #OWN_INDEX_WINDOW}. Beyond that the wallet app (gap-limit scanning) may never see the coins.
+     */
+    static int ownIndexLimit(List<SignInput> inputs, BtcWallet.Type type, int account) {
+        int limit = OWN_INDEX_WINDOW;
+        for (SignInput in : inputs) {
+            if (in.type == type && in.account == account) limit = Math.max(limit, in.addressIndex + OWN_INDEX_WINDOW);
+        }
+        return limit;
+    }
+
+    private static boolean spendsFrom(List<SignInput> inputs, BtcWallet.Type type, int account) {
+        for (SignInput in : inputs) if (in.type == type && in.account == account) return true;
+        return false;
     }
 
     final BtcNetwork network;
@@ -165,18 +203,31 @@ final class BtcPsbtReview {
             Psbt.Entry wu = Psbt.find(map, Psbt.IN_WITNESS_UTXO);
             if (wu == null) throw refuse("Input " + (i + 1) + " has no witness UTXO (amount and script of the coin), so the phone can't check it.");
             BtcTx.Output utxo = Psbt.witnessUtxo(wu.value);
-            Psbt.Entry nwu = Psbt.find(map, Psbt.IN_NON_WITNESS_UTXO);
-            if (nwu != null) {
-                BtcTx prev = BtcTx.parse(nwu.value, BtcTx.MAX_PREV_IO);
-                BtcTx.Output o = prev.outputs.get((int) txIn.vout);
-                if (o.value != utxo.value || !Arrays.equals(o.script, utxo.script)) {
-                    throw refuse("Input " + (i + 1) + ": the previous transaction and the witness UTXO disagree about the coin.");
-                }
-            }
             BtcScript.Kind kind = BtcScript.kind(utxo.script);
             BtcWallet.Type type = kind == BtcScript.Kind.P2WPKH ? BtcWallet.Type.P2WPKH : kind == BtcScript.Kind.P2TR ? BtcWallet.Type.P2TR : null;
             if (type == null) {
                 throw refuse("Input " + (i + 1) + " spends a " + BtcScript.kindLabel(kind) + " coin. The phone signs only its own Native SegWit (BIP-84) and Taproot (BIP-86) coins.");
+            }
+            Psbt.Entry nwu = Psbt.find(map, Psbt.IN_NON_WITNESS_UTXO);
+            if (nwu == null && type == BtcWallet.Type.P2WPKH) {
+                // A SegWit v0 signature commits only to ITS OWN input's amount, so the host's word for
+                // the others is all the review has: two signing sessions, each lying about a different
+                // input, combine into a transaction with a much larger real fee. The previous
+                // transaction (hashed to the outpoint's txid) proves the amount. Taproot signatures
+                // commit to every input's amount and script, so Taproot inputs may omit it.
+                throw refuse("Input " + (i + 1) + " is a Native SegWit coin without its previous transaction (non-witness UTXO), "
+                        + "so the phone can't prove the coin's amount and the fee shown could be false. Update the Mac app and try again.");
+            }
+            if (nwu != null) {
+                BtcTx prev = BtcTx.parse(nwu.value, BtcTx.MAX_PREV_IO);
+                // Psbt.parse already checked these; repeated here because the fee shown depends on them.
+                if (!Arrays.equals(prev.txid(), txIn.prevTxid) || txIn.vout >= prev.outputs.size()) {
+                    throw refuse("Input " + (i + 1) + ": the previous transaction is not the one this input spends.");
+                }
+                BtcTx.Output o = prev.outputs.get((int) txIn.vout);
+                if (o.value != utxo.value || !Arrays.equals(o.script, utxo.script)) {
+                    throw refuse("Input " + (i + 1) + ": the previous transaction and the witness UTXO disagree about the coin.");
+                }
             }
             Owned own = ownedBy(map, type, true, fp, network, wallet, utxo.script, "Input " + (i + 1));
             if (own == null) {
@@ -225,10 +276,16 @@ final class BtcPsbtReview {
             BtcWallet.Type type = kind == BtcScript.Kind.P2WPKH ? BtcWallet.Type.P2WPKH : kind == BtcScript.Kind.P2TR ? BtcWallet.Type.P2TR : null;
             Owned own = type == null ? null : ownedBy(map, type, false, fp, network, wallet, o.script, "Output " + (i + 1));
             if (type == null) noOwnClaim(map, fp, i);
-            boolean isChange = own != null && own.change == 1;
-            boolean isOwnReceive = own != null && own.change == 0;
+            // Change ✓ only on the change chain of an account AND script type this PSBT spends from,
+            // within the index window; an own receive address ✓ only within the window. Any other key
+            // of this wallet is a normal output with a WARNING naming its full path.
+            boolean inWindow = own != null && own.index <= ownIndexLimit(ins, type, own.account);
+            boolean isChange = own != null && own.change == 1 && inWindow && spendsFrom(ins, type, own.account);
+            boolean isOwnReceive = own != null && own.change == 0 && inWindow;
+            boolean elsewhere = own != null && !isChange && !isOwnReceive;
             String path = own == null ? null : wallet.addressPathString(type, own.account, own.change, own.index);
-            outs.add(new Out(i, o.value, kind, address, isChange, isOwnReceive, path));
+            outs.add(new Out(i, o.value, kind, address, isChange, isOwnReceive, elsewhere, path,
+                    own == null ? null : BtcWallet.accountLabel(type, own.account)));
             if (isChange) change = addMoney(change, o.value);
             else sent = addMoney(sent, o.value);
         }
@@ -370,6 +427,11 @@ final class BtcPsbtReview {
             rows.add(row("Send", btc(o.value, network) + " to\n" + BtcScript.grouped(o.address, 5)));
             if (o.ownReceive) {
                 rows.add(row("Your own address ✓", "This wallet's receiving address " + o.path + " (checked by the phone)."));
+            } else if (o.ownElsewhere) {
+                rows.add(row(WARNING, "To your wallet: " + o.ownAccount + ", path " + o.path + ", which your wallet app may not show"
+                        + (o.path.matches(".*/1/\\d+$") ? " (it is change for a different account or address type than the coins spent, or far past the addresses in use)"
+                        : " (it is far past the addresses in use)")
+                        + ". The coins stay yours, but you may have to look for them. Sign only if you meant to send them there."));
             } else if (safety != null) {
                 rows.addAll(safety.rows(walletKey, AddressKeys.btc(network, o.address), RecipientHistory.Role.SEND));
                 parties.add(new TransactionReview.Party(AddressKeys.btc(network, o.address), RecipientHistory.Role.SEND));
@@ -394,6 +456,8 @@ final class BtcPsbtReview {
             rows.add(row(WARNING, "The fee rate is " + feeRate + " sat/vB, below the usual 1 sat/vB minimum: the network may not relay this transaction."));
         }
         if (sent == 0) rows.add(row("Recipients", "None outside this wallet: every output comes back to you."));
+        String lock = lockTimeWarning(psbt.tx, network, System.currentTimeMillis() / 1000);
+        if (lock != null) rows.add(row(WARNING, lock));
 
         // technical details
         for (SignInput in : inputs) {
@@ -403,7 +467,7 @@ final class BtcPsbtReview {
         }
         for (Out o : outputs) {
             String what = o.kind == BtcScript.Kind.OP_RETURN ? "OP_RETURN data " + BtcCrypto.hex(psbt.tx.outputs.get(o.index).script)
-                    : o.address + "\n" + BtcScript.kindLabel(o.kind) + (o.change ? " · change " + o.path : o.ownReceive ? " · own " + o.path : "");
+                    : o.address + "\n" + BtcScript.kindLabel(o.kind) + (o.change ? " · change " + o.path : o.ownReceive || o.ownElsewhere ? " · own " + o.path : "");
             details.add(row("Output " + (o.index + 1), sats(o.value) + "\n" + what));
         }
         details.add(row("Totals", "In " + sats(totalIn) + " · out " + sats(totalOut) + " · fee " + sats(fee)));
@@ -414,6 +478,60 @@ final class BtcPsbtReview {
                 + (psbt.tx.locktime == 0 ? " (none)" : psbt.tx.locktime < 500_000_000L ? " (block height)" : " (unix time)")));
         details.add(row("Replace-by-fee", rbf ? "Yes: the Mac can replace it with a higher fee before it confirms" : "No"));
         details.add(row("Wallet fingerprint", wallet.fingerprintHex()));
+    }
+
+    // ------------------------------------------------------------------ lock time
+
+    /** nLockTime at or above this is a unix time, below it a block height (consensus rule). */
+    static final long LOCKTIME_THRESHOLD = 500_000_000L;
+    /** WARNING when a time lock is more than this far past the phone's clock (7 days). */
+    static final long LOCK_WARN_SECONDS = 7L * 24 * 3600;
+    /** WARNING when a height lock is more than this many blocks (one week) past the ESTIMATED tip. */
+    static final long LOCK_WARN_BLOCKS = 1008;
+    /**
+     * Seconds per block used to estimate the tip. Deliberately a little FASTER than the real
+     * average (about 586 s since the 2024 halving, as hash rate grows), so the estimate runs ahead
+     * of the real tip rather than behind it: a wallet that sets nLockTime to the current height
+     * (anti fee sniping, e.g. Bitcoin Core, Sparrow) must not trigger the warning. The cost is that
+     * a lock a little over a week out may be missed; months or years out are always caught.
+     */
+    static final long MAIN_SECONDS_PER_BLOCK = 580, SIGNET_SECONDS_PER_BLOCK = 590;
+    /** The phone's clock is never taken to be earlier than this (2026-09-01; a reset clock reads 1970). */
+    static final long CLOCK_FLOOR = 1_788_220_800L;
+    /** Mainnet anchor: block 840,000 (the 2024 halving) at 1713571767. */
+    static final long MAIN_ANCHOR_HEIGHT = 840_000L, MAIN_ANCHOR_TIME = 1_713_571_767L;
+    /** Signet anchor: block 326,197 (this project's first signet transaction) at about 1791890000. */
+    static final long SIGNET_ANCHOR_HEIGHT = 326_197L, SIGNET_ANCHOR_TIME = 1_791_890_000L;
+
+    /**
+     * A WARNING for a lock time far in the future, or null. The offline phone knows neither the
+     * date nor the chain height for sure: it uses its own clock (never earlier than
+     * {@link #CLOCK_FLOOR}) and, for block heights, estimates the tip from an anchor block
+     * ({@link #MAIN_SECONDS_PER_BLOCK}; Bitcoin and signet only — testnet heights are not estimated
+     * because testnet3 and testnet4 share the network name). A lock time only matters when some
+     * input's nSequence is not final (0xffffffff).
+     */
+    static String lockTimeWarning(BtcTx tx, BtcNetwork network, long nowSeconds) {
+        long lock = tx.locktime;
+        if (lock == 0) return null;
+        boolean enforced = false;
+        for (BtcTx.Input in : tx.inputs) if (in.sequence != 0xffffffffL) enforced = true;
+        if (!enforced) return null;
+        long now = Math.max(nowSeconds, CLOCK_FLOOR);
+        if (lock >= LOCKTIME_THRESHOLD) {
+            if (lock - now <= LOCK_WARN_SECONDS) return null;
+            return "This transaction is locked until " + MessageReview.timeLabel(java.math.BigInteger.valueOf(lock))
+                    + " (its lock time), more than a week from now by this phone's clock. It can't be mined before then. "
+                    + "Sign only if you meant to delay it.";
+        }
+        long tip;
+        if (network == BtcNetwork.BITCOIN) tip = MAIN_ANCHOR_HEIGHT + Math.max(0, now - MAIN_ANCHOR_TIME) / MAIN_SECONDS_PER_BLOCK;
+        else if (network == BtcNetwork.SIGNET) tip = SIGNET_ANCHOR_HEIGHT + Math.max(0, now - SIGNET_ANCHOR_TIME) / SIGNET_SECONDS_PER_BLOCK;
+        else return null;
+        if (lock - tip <= LOCK_WARN_BLOCKS) return null;
+        return String.format(Locale.ROOT, "This transaction is locked until block %,d (its lock time). This phone estimates "
+                + "the chain is near block %,d, so that is about %,d days away. It can't be mined before then. "
+                + "Sign only if you meant to delay it.", lock, tip, (lock - tip) / 144);
     }
 
     /** One line for the lock screen; needs no keys (nothing is classified as change yet). */

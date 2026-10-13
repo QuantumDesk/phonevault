@@ -188,7 +188,8 @@ public final class BtcPsbtTest {
             for (int i = 0; i < outs.length(); i++) {
                 JSONObject o = outs.getJSONObject(i);
                 BtcPsbtReview.Out out = r.outputs.get(i);
-                assertEquals(name + " output " + i, !o.isNull("own"), out.change);
+                assertEquals(name + " output " + i, o.getBoolean("change"), out.change);
+                assertEquals(name + " output " + i, !o.isNull("own") && !o.getBoolean("change"), out.ownElsewhere || out.ownReceive);
                 if (!o.isNull("address")) assertEquals(o.getString("address"), out.address);
                 else assertEquals(BtcScript.Kind.OP_RETURN, out.kind);
             }
@@ -309,8 +310,153 @@ public final class BtcPsbtTest {
         assertEquals(3, r.parties.size());
         assertTrue(has(r, "Send", "16yH 2E12"));
         assertTrue(has(r, "Send", "38Sq vnn4"));
-        assertTrue(r.outputs.get(3).change);
+        // Taproot "change" for coins spent from Native SegWit: this wallet's key (checked), but not
+        // where the wallet app looks for change. A normal output with a WARNING and its full path.
+        assertFalse(r.outputs.get(3).change);
+        assertTrue(r.outputs.get(3).ownElsewhere);
         assertEquals("m/86'/0'/1'/1/0", r.outputs.get(3).path);
+        assertNull(value(r, "Change back to your wallet ✓"));
+        assertTrue(has(r, MessageReview.WARNING, "To your wallet: Account 2 · Taproot, path m/86'/0'/1'/1/0, which your wallet app may not show"));
+        assertEquals("Send 0.00799000 BTC", r.title);
+    }
+
+    /** A copy of {@code p} whose output {@code index} pays this wallet's key at account/change/i, with its derivation. */
+    static Psbt ownOutput(Psbt p, int index, BtcWallet.Type type, int account, int change, int i) {
+        BtcWallet w = BtcKeysTest.wallet(BtcNetwork.BITCOIN);
+        byte[] pub = w.publicKey(type, account, change, i);
+        Maps m = new Maps(p);
+        List<BtcTx.Output> outs = new ArrayList<>(p.tx.outputs);
+        outs.set(index, new BtcTx.Output(p.tx.outputs.get(index).value, BtcWallet.scriptFor(type, pub)));
+        m.tx(new BtcTx(p.tx.version, new ArrayList<>(p.tx.inputs), outs, p.tx.locktime, false));
+        m.out.get(index).clear();
+        m.out.get(index).add(Psbt.entry(Psbt.OUT_BIP32_DERIVATION, pub, origin(w.fingerprint(), 84 | H, H, account | H, change, i)));
+        return m.parse();
+    }
+
+    @Test public void changeMustBeTheSpentAccountAndTypeWithinTheIndexWindow() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change")); // spends m/84'/0'/0'/0/0 and /0/1
+        // the fixture's own change (account 1, /1/0) and the window edge: highest input index 1 + 1000
+        assertTrue(review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 0), BtcNetwork.BITCOIN).outputs.get(1).change);
+        BtcPsbtReview edge = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 1001), BtcNetwork.BITCOIN);
+        assertTrue(edge.outputs.get(1).change);
+        assertNotNull(value(edge, "Change back to your wallet ✓"));
+        // one past the window: own, but shown as a normal output with a WARNING
+        BtcPsbtReview far = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 1002), BtcNetwork.BITCOIN);
+        assertFalse(far.outputs.get(1).change);
+        assertTrue(far.outputs.get(1).ownElsewhere);
+        assertNull(value(far, "Change back to your wallet ✓"));
+        assertTrue(has(far, MessageReview.WARNING, "To your wallet: Account 1 · Native SegWit, path m/84'/0'/0'/1/1002, which your wallet app may not show"));
+        assertEquals("Send 0.01497567 BTC", far.title);
+        // the old rule's extreme: index 999,999 of account 20
+        BtcPsbtReview extreme = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 19, 1, 999_999), BtcNetwork.BITCOIN);
+        assertFalse(extreme.outputs.get(1).change);
+        assertTrue(has(extreme, MessageReview.WARNING, "Account 20 · Native SegWit, path m/84'/0'/19'/1/999999"));
+        // change chain of ANOTHER account (not spent from), low index
+        BtcPsbtReview other = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 1, 0), BtcNetwork.BITCOIN);
+        assertFalse(other.outputs.get(1).change);
+        assertTrue(has(other, MessageReview.WARNING, "Account 2 · Native SegWit, path m/84'/0'/1'/1/0"));
+        // an own RECEIVE address of another account stays "Your own address ✓" within the window
+        BtcPsbtReview receive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 5), BtcNetwork.BITCOIN);
+        assertTrue(receive.outputs.get(1).ownReceive);
+        assertTrue(has(receive, "Your own address ✓", "m/84'/0'/1'/0/5"));
+        // ... but not far past it
+        BtcPsbtReview farReceive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 1001), BtcNetwork.BITCOIN);
+        assertFalse(farReceive.outputs.get(1).ownReceive);
+        assertTrue(has(farReceive, MessageReview.WARNING, "path m/84'/0'/1'/0/1001"));
+        assertEquals(1000, BtcPsbtReview.OWN_INDEX_WINDOW);
+    }
+
+    /** Replaces input {@code index}'s coin by output 0 of a fresh previous transaction paying {@code script}. */
+    static Psbt withCoin(Psbt p, int index, long value, byte[] script, boolean nonWitness) {
+        Maps m = new Maps(p);
+        List<BtcTx.Input> fake = new ArrayList<>();
+        fake.add(new BtcTx.Input(new byte[32], 7, new byte[0], 0xffffffffL));
+        List<BtcTx.Output> outs = new ArrayList<>();
+        outs.add(new BtcTx.Output(value, script));
+        BtcTx prev = new BtcTx(2, fake, outs, 0, false);
+        List<BtcTx.Input> ins = new ArrayList<>(p.tx.inputs);
+        BtcTx.Input old = ins.get(index);
+        ins.set(index, new BtcTx.Input(prev.txid(), 0, old.scriptSig, old.sequence));
+        m.tx(new BtcTx(p.tx.version, ins, new ArrayList<>(p.tx.outputs), p.tx.locktime, false));
+        m.replace(m.in.get(index), Psbt.IN_WITNESS_UTXO, Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(value, script)));
+        m.remove(m.in.get(index), Psbt.IN_NON_WITNESS_UTXO);
+        if (nonWitness) m.in.get(index).add(Psbt.entry(Psbt.IN_NON_WITNESS_UTXO, new byte[0], prev.serializeLegacy()));
+        return m.parse();
+    }
+
+    @Test public void segwitV0InputsMustCarryTheirPreviousTransaction() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change"));
+        for (int i = 0; i < 2; i++) assertNotNull(Psbt.find(p.inputs.get(i), Psbt.IN_NON_WITNESS_UTXO));
+        review(p, BtcNetwork.BITCOIN);
+        // either input without it: refused
+        for (int i = 0; i < 2; i++) {
+            Maps m = new Maps(p);
+            m.remove(m.in.get(i), Psbt.IN_NON_WITNESS_UTXO);
+            assertRefused(m.parse(), BtcNetwork.BITCOIN, "Input " + (i + 1) + " is a Native SegWit coin without its previous transaction");
+        }
+        // a previous transaction that is not the one spent (wrong txid) never parses
+        Maps wrong = new Maps(p);
+        wrong.replace(wrong.in.get(1), Psbt.IN_NON_WITNESS_UTXO, Psbt.find(p.inputs.get(0), Psbt.IN_NON_WITNESS_UTXO));
+        try { wrong.parse(); fail(); } catch (Psbt.InvalidPsbt e) { assertTrue(e.getMessage(), e.getMessage().contains("does not match its outpoint")); }
+        // the witness UTXO must match the previous transaction's output (amount AND script)
+        BtcTx.Output real = Psbt.witnessUtxo(Psbt.find(p.inputs.get(1), Psbt.IN_WITNESS_UTXO).value);
+        Maps lie = new Maps(p);
+        lie.replace(lie.in.get(1), Psbt.IN_WITNESS_UTXO, Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(real.value + 100_000, real.script)));
+        assertRefused(lie.parse(), BtcNetwork.BITCOIN, "Input 2: the previous transaction and the witness UTXO disagree about the coin");
+        // a consistent coin built here is accepted
+        BtcPsbtReview ok = review(withCoin(p, 1, 600_000, real.script, true), BtcNetwork.BITCOIN);
+        assertEquals(1_600_000, ok.totalIn);
+        assertRefused(withCoin(p, 1, 600_000, real.script, false), BtcNetwork.BITCOIN, "without its previous transaction");
+        // Taproot: every signature commits to all amounts, so no previous transaction is needed
+        Psbt tr = psbt(fixture("p2tr-send-with-change"));
+        assertNull(Psbt.find(tr.inputs.get(0), Psbt.IN_NON_WITNESS_UTXO));
+        review(tr, BtcNetwork.BITCOIN);
+        // the testnet fixture mixes a P2WPKH input (with it) and a Taproot input (without)
+        Psbt mixed = psbt(fixture("testnet-mixed-opreturn"));
+        assertNotNull(Psbt.find(mixed.inputs.get(0), Psbt.IN_NON_WITNESS_UTXO));
+        assertNull(Psbt.find(mixed.inputs.get(1), Psbt.IN_NON_WITNESS_UTXO));
+        review(mixed, BtcNetwork.TESTNET);
+        Maps stripped = new Maps(mixed);
+        stripped.remove(stripped.in.get(0), Psbt.IN_NON_WITNESS_UTXO);
+        assertRefused(stripped.parse(), BtcNetwork.TESTNET, "Input 1 is a Native SegWit coin without its previous transaction");
+    }
+
+    static Psbt withLockTime(Psbt p, long locktime, long sequence) {
+        Maps m = new Maps(p);
+        List<BtcTx.Input> ins = new ArrayList<>();
+        for (BtcTx.Input in : p.tx.inputs) ins.add(new BtcTx.Input(in.prevTxid, in.vout, in.scriptSig, sequence));
+        m.tx(new BtcTx(p.tx.version, ins, new ArrayList<>(p.tx.outputs), locktime, false));
+        return m.parse();
+    }
+
+    @Test public void farFutureLockTimeIsWarned() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change"));
+        long oct2026 = 1_791_900_000L; // 2026-10-13
+        long tip = BtcPsbtReview.MAIN_ANCHOR_HEIGHT + (oct2026 - BtcPsbtReview.MAIN_ANCHOR_TIME) / BtcPsbtReview.MAIN_SECONDS_PER_BLOCK;
+        // none, current height (anti fee sniping), a few days out: no warning
+        for (long lock : new long[] {0, tip - 3000, tip, tip + 1008}) {
+            assertNull(Long.toString(lock), BtcPsbtReview.lockTimeWarning(withLockTime(p, lock, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026));
+        }
+        String w = BtcPsbtReview.lockTimeWarning(withLockTime(p, tip + 1009, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026);
+        assertNotNull(w);
+        assertTrue(w, w.contains("locked until block") && w.contains("about 7 days away"));
+        // not enforced when every input is final
+        assertNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, 5_000_000L, 0xffffffffL).tx, BtcNetwork.BITCOIN, oct2026));
+        // times: a week is fine, more is not
+        assertNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, oct2026 + 7 * 86400, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026));
+        String t = BtcPsbtReview.lockTimeWarning(withLockTime(p, oct2026 + 7 * 86400 + 1, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026);
+        assertTrue(t, t.contains("more than a week from now"));
+        assertNull("a time in the past", BtcPsbtReview.lockTimeWarning(withLockTime(p, 1_600_000_000L, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026));
+        // a phone clock reset to 1970 is not trusted below the floor: a 2026 time lock is not "far future"
+        assertNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, BtcPsbtReview.CLOCK_FLOOR + 86400, 0xfffffffdL).tx, BtcNetwork.BITCOIN, 0));
+        // testnet heights are not estimated; signet uses its own anchor
+        assertNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, 5_000_000L, 0xfffffffdL).tx, BtcNetwork.TESTNET, oct2026));
+        assertNotNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, 400_000L, 0xfffffffdL).tx, BtcNetwork.SIGNET, oct2026));
+        assertNull(BtcPsbtReview.lockTimeWarning(withLockTime(p, 326_500L, 0xfffffffdL).tx, BtcNetwork.SIGNET, oct2026));
+        // and it reaches the review (a lock in the year 2100 is far ahead of any clock)
+        BtcPsbtReview r = review(withLockTime(p, 4_102_444_800L, 0xfffffffdL), BtcNetwork.BITCOIN);
+        assertTrue(has(r, MessageReview.WARNING, "locked until 2100-01-01"));
+        assertTrue(has(review(withLockTime(p, 50_000_000L, 0xfffffffdL), BtcNetwork.BITCOIN), MessageReview.WARNING, "locked until block 50,000,000"));
     }
 
     @Test public void feeWarnings() throws Exception {
@@ -376,10 +522,8 @@ public final class BtcPsbtTest {
         assertRefused(wrongKey.parse(), BtcNetwork.BITCOIN, "a different key");
 
         // right key and path, but the coin's script pays someone else
-        Maps wrongScript = new Maps(p);
-        wrongScript.remove(wrongScript.in.get(1), Psbt.IN_WITNESS_UTXO);
-        wrongScript.in.get(1).add(Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(500_000, BtcScript.p2wpkh(new byte[20]))));
-        assertRefused(wrongScript.parse(), BtcNetwork.BITCOIN, "script does not belong to that key");
+        // (a consistent previous transaction for that other script, so the coin data itself agrees)
+        assertRefused(withCoin(p, 1, 500_000, BtcScript.p2wpkh(new byte[20]), true), BtcNetwork.BITCOIN, "script does not belong to that key");
 
         // a legacy coin
         Maps legacy = new Maps(p);
@@ -401,10 +545,8 @@ public final class BtcPsbtTest {
         assertRefused(lie.parse(), BtcNetwork.BITCOIN, "disagree about the coin");
 
         // outputs worth more than the inputs
-        Maps negative = new Maps(p);
         BtcTx.Output small = Psbt.witnessUtxo(Psbt.find(p.inputs.get(1), Psbt.IN_WITNESS_UTXO).value);
-        negative.replace(negative.in.get(1), Psbt.IN_WITNESS_UTXO, Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(1_000, small.script)));
-        assertRefused(negative.parse(), BtcNetwork.BITCOIN, "are worth more than the coins spent");
+        assertRefused(withCoin(p, 1, 1_000, small.script, true), BtcNetwork.BITCOIN, "are worth more than the coins spent");
     }
 
     @Test public void onlySighashAllOrDefault() throws Exception {

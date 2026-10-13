@@ -32,7 +32,7 @@ final class NftReview {
     }
 
     /** setApprovalForAll / safeTransferFrom / safeBatchTransferFrom. */
-    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
+    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety, String fromLabel) {
         NftCall call = r.nftCall;
         String signer = signerAddress == null ? null : signerAddress.toLowerCase(Locale.ROOT);
         List<MessageReview.Row> rows = new ArrayList<>();
@@ -105,8 +105,8 @@ final class NftReview {
                     + "an NFT collection. An NFT call to it is unexpected."));
         }
         rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer);
-        rows.add(row("Maximum fee", r.maximumFeeEth()));
+        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addMaximumFee(rows, r);
 
         details.add(0, row("Function", call.function.signature + " · selector 0x" + call.function.selector));
         TransactionReview.addFeeDetails(details, r);
@@ -122,7 +122,7 @@ final class NftReview {
     }
 
     /** approve(to, tokenId) / transferFrom(from, to, tokenId) on a collection in {@link NftCollections}. */
-    static TransactionReview buildErc721(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
+    static TransactionReview buildErc721(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety, String fromLabel) {
         Erc20Call call = r.tokenCall;
         String signer = signerAddress == null ? null : signerAddress.toLowerCase(Locale.ROOT);
         List<MessageReview.Row> rows = new ArrayList<>();
@@ -165,8 +165,8 @@ final class NftReview {
         rows.add(row("Collection", collectionLabel(r.chainId, r.to)));
         rows.add(row("Collection contract", Keys.toChecksumAddress(r.to)));
         rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer);
-        rows.add(row("Maximum fee", r.maximumFeeEth()));
+        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addMaximumFee(rows, r);
         details.add(row("Function", call.function.signature + " · selector 0x" + call.function.selector + " (ERC-721 meaning: this contract is a listed NFT collection)"));
         TransactionReview.addFeeDetails(details, r);
         details.add(row("Contract data", r.data));

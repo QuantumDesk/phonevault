@@ -14,7 +14,8 @@ import java.util.Map;
  * about a different input, and combine the two valid halves into a transaction whose real fee is
  * far larger than either review showed (the 2020 "SegWit fee attack"). Taproot (BIP-341) closes
  * this by committing every signature to all spent amounts and scripts. For SegWit v0 coins the
- * phone verifies a non-witness UTXO when the host sends one, and this memory catches the second
+ * phone REQUIRES the non-witness UTXO (BtcPsbtReview refuses an input without it) and checks it
+ * against the outpoint and the witness UTXO; this memory is a second line that catches the second
  * session of the attack while the app runs.
  */
 final class BtcAmountMemory {

@@ -23,7 +23,7 @@ final class SwapReview {
 
     static final String THIS_WALLET = "This wallet ✓";
 
-    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety) {
+    static TransactionReview build(Eip1559Request r, String signerAddress, TokenList tokens, AddressSafety safety, String fromLabel) {
         SwapPlan plan = r.swap;
         String signer = signerAddress == null ? null : signerAddress.toLowerCase(Locale.ROOT);
         SwapPlan.TokenNames names = new SwapPlan.TokenNames(r.chainId, tokens, plan.router, r.nativeSymbol());
@@ -39,12 +39,14 @@ final class SwapReview {
             if (!p.fee() && signer != null && p.recipient.equals(signer)) merge(merged, p.amount);
             else others.add(p);
         }
-        // A no-minimum payout of something this wallet paid in (native and its wrapped token count as
-        // one) is the unused input coming back (exact-output swaps), not a swap output.
+        // A no-minimum payout counts as "unused input coming back" (exact-output swaps, native value
+        // the swap did not need) only when the decoder traced every part of it to this wallet's own
+        // input that no swap touched. A payout that includes ANY swap output with no minimum stays a
+        // "You get at least 0" with its No-minimum DANGER, even in a coin this wallet also paid in.
         List<SwapPlan.Amount> receives = new ArrayList<>();
         List<SwapPlan.Amount> refunds = new ArrayList<>();
         for (SwapPlan.Amount a : merged.values()) {
-            boolean refund = a.bound == SwapPlan.Bound.AT_LEAST && a.value.signum() == 0 && gave(plan, a.asset);
+            boolean refund = a.unusedInput && a.bound == SwapPlan.Bound.AT_LEAST && a.value.signum() == 0 && gave(plan, a.asset);
             (refund ? refunds : receives).add(a);
         }
         List<SwapPlan.Amount> gives = new ArrayList<>();
@@ -57,7 +59,7 @@ final class SwapReview {
         String give = join(gives, names, "You give ");
         String get = join(receives, names, "You get ");
         boolean otherRecipient = false;
-        for (SwapPlan.Payment p : others) if (!p.fee()) otherRecipient = true;
+        for (SwapPlan.Payment p : others) if (!p.fee() || bigFee(p)) otherRecipient = true;
 
         String headline = (give.isEmpty() ? "" : give) + (get.isEmpty() ? "" : (give.isEmpty() ? "" : " · ") + get)
                 + " · Recipient: " + (otherRecipient ? "OTHER ADDRESS ✗" : receives.isEmpty() ? "—" : "this wallet ✓")
@@ -82,13 +84,21 @@ final class SwapReview {
         }
         for (SwapPlan.Payment p : others) {
             String to = Keys.toChecksumAddress(p.recipient);
-            if (p.fee()) {
+            if (p.fee() && !bigFee(p)) {
                 String fee = "Fee: " + p.portion + " of the " + names.symbolOrContract(p.amount.asset) + " output"
                         + (p.amount.value.signum() > 0 ? " (at least " + names.amount(p.amount.asset, p.amount.value) + ")" : "")
                         + " goes to " + to;
-                BigInteger bips = portionBips(p.portion);
-                rows.add(row(bips != null && bips.compareTo(BigInteger.valueOf(100)) > 0 ? WARNING : "Fee", fee
-                        + (bips != null && bips.compareTo(BigInteger.valueOf(100)) > 0 ? ". That is more than 1%, unusually high." : "")));
+                boolean high = portionAbove(p.portion, WARNING_FEE_PERCENT);
+                rows.add(row(high ? WARNING : "Fee", fee + (high ? ". That is more than 1%, unusually high." : "")));
+            } else if (p.fee()) {
+                // A "fee" above 3% is not a fee: it is shown and counted like any other payout to another address.
+                rows.add(row(DANGER, "OTHER ADDRESS ✗ " + p.portion + " of the " + names.symbolOrContract(p.amount.asset)
+                        + " output" + (p.amount.value.signum() > 0 ? " (at least " + names.amount(p.amount.asset, p.amount.value) + ")" : "")
+                        + " goes to " + to + " as a \"fee\". That is more than 3%, far above any normal interface fee. "
+                        + "Do not sign unless you meant to give that much away."));
+                rows.add(row("Recipient", to));
+                if (safety != null) rows.addAll(safety.rows(signer, p.recipient, RecipientHistory.Role.SEND));
+                parties.add(new TransactionReview.Party(p.recipient, RecipientHistory.Role.SEND));
             } else {
                 rows.add(row(DANGER, "OTHER ADDRESS ✗ " + amount(p.amount, names) + " goes to " + to
                         + ", not to this wallet. Sign only if you meant to send the swapped tokens there."));
@@ -145,8 +155,8 @@ final class SwapReview {
                 + " (pinned in this phone)"));
         if (r.value.signum() > 0) rows.add(row("Native value sent", r.valueEth() + " (used by the swap)"));
         else rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer);
-        rows.add(row("Maximum fee", r.maximumFeeEth()));
+        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addMaximumFee(rows, r);
 
         details.add(row("Function", plan.function + " · selector 0x" + r.data.substring(2, 10)));
         for (int i = 0; i < plan.steps.size(); i++) details.add(row("Step " + (i + 1), readable(plan.steps.get(i), names)));
@@ -226,11 +236,21 @@ final class SwapReview {
         return full;
     }
 
-    private static BigInteger portionBips(String percent) {
+    /** A portion fee above this is WARNING ("unusually high"). */
+    static final java.math.BigDecimal WARNING_FEE_PERCENT = java.math.BigDecimal.ONE;
+    /** A portion fee above this is treated as a payout to another address (DANGER, "OTHER ADDRESS"). */
+    static final java.math.BigDecimal DANGER_FEE_PERCENT = java.math.BigDecimal.valueOf(3);
+
+    static boolean bigFee(SwapPlan.Payment p) {
+        return p.fee() && portionAbove(p.portion, DANGER_FEE_PERCENT);
+    }
+
+    /** True when the "0.25%"-style label exceeds {@code limit} percent; an unparseable label counts as above. */
+    private static boolean portionAbove(String percent, java.math.BigDecimal limit) {
         try {
-            return new java.math.BigDecimal(percent.replace("%", "")).multiply(java.math.BigDecimal.valueOf(100)).toBigInteger();
+            return new java.math.BigDecimal(percent.replace("%", "")).compareTo(limit) > 0;
         } catch (NumberFormatException e) {
-            return null;
+            return true;
         }
     }
 }

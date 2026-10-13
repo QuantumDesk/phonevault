@@ -136,11 +136,50 @@ public final class SwapReviewTest {
         assertEquals("0.031122 ETH", value(r, "You get at least"));
         assertTrue(value(r, "Summary").contains("Recipient: this wallet ✓"));
 
-        String big = Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(
+        String high = Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(
                 Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
-                Calldata.payPortion(WETH, FEE_COLLECTOR, 500),
+                Calldata.payPortion(WETH, FEE_COLLECTOR, 300),
                 Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
-        assertTrue(has(review("0x1", UR_ETH, "0x0", big), "WARNING", "more than 1%"));
+        TransactionReview three = review("0x1", UR_ETH, "0x0", high);
+        assertTrue(has(three, "WARNING", "more than 1%"));
+        assertEquals("exactly 3% is still a (high) fee", 0, count(three, "DANGER"));
+        assertTrue(value(three, "Summary").contains("Recipient: this wallet ✓"));
+    }
+
+    @Test public void feeAboveThreePercentIsAnOtherAddressDanger() throws Exception {
+        BigInteger min = new BigInteger("31200000000000000");
+        for (int command : new int[] {0x06, 0x07}) {
+            // PAY_PORTION in basis points; PAY_PORTION_FULL_PRECISION (2.1) in 1e18 units, same (address,address,uint256) layout
+            byte[] fee = command == 0x06 ? Calldata.payPortion(WETH, FEE_COLLECTOR, 301)
+                    : Calldata.transfer(WETH, FEE_COLLECTOR, new BigInteger("30100000000000000"));
+            String data = Calldata.execute(cmds(0x00, command, 0x0c), Arrays.asList(
+                    Calldata.v3Swap21(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
+                    fee, Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
+            TransactionReview r = review("0x1", UR21_ETH, "0x0", data);
+            assertTrue(Integer.toHexString(command), value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+            assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 3.01% of the WETH output"));
+            assertTrue(has(r, "DANGER", "more than 3%"));
+            assertNull("not shown as an ordinary fee", value(r, "Fee"));
+            assertEquals("Swap to OTHER ADDRESS", r.title);
+            assertEquals("Swap to other address & sign", r.signLabel);
+            assertEquals(1, r.parties.size());
+            assertEquals(FEE_COLLECTOR, r.parties.get(0).address);
+        }
+        // 100% (the decoder's upper bound) is the same DANGER, never a "Fee" row
+        String all = Calldata.execute(cmds(0x00, 0x06), Arrays.asList(
+                Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
+                Calldata.payPortion(WETH, FEE_COLLECTOR, 10_000)), BigInteger.valueOf(DEADLINE));
+        assertTrue(has(review("0x1", UR_ETH, "0x0", all), "DANGER", "OTHER ADDRESS ✗ 100% of the WETH output"));
+    }
+
+    @Test public void feeToTheZeroAddressIsRefused() {
+        BigInteger min = new BigInteger("31200000000000000");
+        String data = Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(
+                Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
+                Calldata.payPortion(WETH, ETH, 25),
+                Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
+        String why = refused("0x1", UR_ETH, "0x0", data);
+        assertTrue(why, why.startsWith(SwapPlan.CANNOT_EXPLAIN) && why.contains("a fee paid to the zero address"));
     }
 
     @Test public void outputToAnotherAddressIsDanger() throws Exception {
@@ -398,10 +437,141 @@ public final class SwapReviewTest {
         EXPECT.put("0x15d8cf08", new String[] {"You give 0.001969116378716215 ETH"});
     }
 
-    static JSONArray vectors() throws Exception {
+    /** The real on-chain transactions of swap-vectors.json (synthetic entries excluded). */
+    static JSONArray vectors() throws Exception { return vectors(false); }
+
+    /** The hand-built entries of swap-vectors.json ("tx": "synthetic-…"). */
+    static JSONArray syntheticVectors() throws Exception { return vectors(true); }
+
+    private static JSONArray vectors(boolean synthetic) throws Exception {
         File f = new File("src/test/resources/swap-vectors.json");
         if (!f.isFile()) f = new File("app/src/test/resources/swap-vectors.json");
-        return new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)).getJSONArray("vectors");
+        JSONArray all = new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8)).getJSONArray("vectors");
+        JSONArray out = new JSONArray();
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject v = all.getJSONObject(i);
+            boolean s = v.getString("tx").startsWith("synthetic-");
+            assertEquals(v.getString("tx"), s, v.has("synthetic"));
+            if (s == synthetic) out.put(v);
+        }
+        return out;
+    }
+
+    static JSONObject synthetic(String name) throws Exception {
+        JSONArray vs = syntheticVectors();
+        for (int i = 0; i < vs.length(); i++) if (vs.getJSONObject(i).getString("tx").equals("synthetic-" + name)) return vs.getJSONObject(i);
+        throw new AssertionError("no synthetic vector " + name);
+    }
+
+    static final String DAI = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
+    static final BigInteger HALF_ETH = new BigInteger("500000000000000000");
+
+    /** The synthetic vectors' calldata, re-encoded here with web3j: the JSON (independent Python encoder) must match. */
+    @Test public void syntheticVectorsMatchAnIndependentEncoder() throws Exception {
+        BigInteger dl = BigInteger.valueOf(DEADLINE);
+        BigInteger m = BigInteger.valueOf(1200).multiply(E18);
+        Map<String, String> expect = new HashMap<>();
+        expect.put("sr02-zero-min-weth-unwrapped-as-refund", Calldata.multicall(dl,
+                Calldata.exactInputSingle(WETH, DAI, 500, MSG_SENDER, HALF_ETH, m),
+                Calldata.exactInputSingle(USDC, WETH, 500, ADDRESS_THIS, BigInteger.valueOf(1000).multiply(E6), BigInteger.ZERO),
+                "0x49616997" + Numeric.toHexStringNoPrefixZeroPadded(BigInteger.ZERO, 64)));
+        byte[] swapIn = Calldata.v3Swap(MSG_SENDER, HALF_ETH, m, Calldata.v3Path(WETH, 500, DAI), false);
+        byte[] hidden = Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(1000).multiply(E6), BigInteger.ZERO, Calldata.v3Path(USDC, 500, WETH), true);
+        expect.put("ur-zero-min-weth-unwrapped-as-refund", Calldata.execute(cmds(0x0b, 0x00, 0x00, 0x0c), Arrays.asList(
+                Calldata.wrap(ADDRESS_THIS, HALF_ETH), swapIn, hidden, Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), dl));
+        expect.put("ur-zero-min-weth-swept-as-refund", Calldata.execute(cmds(0x0b, 0x00, 0x00, 0x04), Arrays.asList(
+                Calldata.wrap(ADDRESS_THIS, HALF_ETH), swapIn, hidden, Calldata.sweep(WETH, MSG_SENDER, BigInteger.ZERO)), dl));
+        byte[] usdcForWeth = Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), new BigInteger("31200000000000000"),
+                Calldata.v3Path(USDC, 500, WETH), true);
+        expect.put("ur-five-percent-fee", Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(usdcForWeth,
+                Calldata.payPortion(WETH, FEE_COLLECTOR, 500), Calldata.unwrap(MSG_SENDER, new BigInteger("29600000000000000"))), dl));
+        expect.put("ur-fee-to-zero-address", Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(usdcForWeth,
+                Calldata.payPortion(WETH, ETH, 25), Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), dl));
+        JSONArray vs = syntheticVectors();
+        assertEquals(expect.size(), vs.length());
+        for (int i = 0; i < vs.length(); i++) {
+            JSONObject v = vs.getJSONObject(i);
+            String data = expect.get(v.getString("tx").substring("synthetic-".length()));
+            assertNotNull(v.getString("tx"), data);
+            assertEquals(v.getString("tx"), data.toLowerCase(), v.getString("data"));
+        }
+    }
+
+    /**
+     * The zero-minimum output of a swap, paid out in a coin this wallet also gave (ETH ≡ WETH),
+     * must never pass for "unused input": SwapRouter02 and Universal Router (unwrap and sweep).
+     */
+    @Test public void zeroMinimumOutputIsNeverShownAsARefund() throws Exception {
+        for (String name : new String[] {"sr02-zero-min-weth-unwrapped-as-refund", "ur-zero-min-weth-unwrapped-as-refund",
+                "ur-zero-min-weth-swept-as-refund"}) {
+            JSONObject v = synthetic(name);
+            TransactionReview r = TransactionReview.build(Eip1559Request.parse(request(v.getString("chainId"), v.getString("to"),
+                    v.getString("value"), v.getString("data"))), v.getString("from"), TokenListTest.bundled());
+            assertNull(name, value(r, "Unused input"));
+            assertTrue(name + ": " + r.text(), has(r, "DANGER", "No minimum"));
+            assertTrue(name, has(r, "You get at least", name.contains("swept") ? "0 WETH" : "0 ETH"));
+            assertTrue(name, has(r, "You get at least", "1,200 DAI"));
+            assertTrue(name + ": " + value(r, "Summary"), value(r, "Summary").contains("You give 0.5 ETH + 1,000 USDC"));
+        }
+        // the honest exact-output refund (only the unused part of the ETH sent) is still a refund
+        String honest = Calldata.execute(cmds(0x0b, 0x01, 0x0c), Arrays.asList(
+                Calldata.wrap(ADDRESS_THIS, CONTRACT_BALANCE),
+                Calldata.v3Swap(MSG_SENDER, BigInteger.valueOf(100).multiply(E6), new BigInteger("50000000000000000"),
+                        Calldata.v3Path(USDC, 500, WETH), false),
+                Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
+        TransactionReview ok = review("0x1", UR_ETH, "0xb1a2bc2ec50000", honest);
+        assertNotNull(value(ok, "Unused input"));
+        assertEquals(0, count(ok, "DANGER"));
+        // ... but mixing a zero-minimum swap output into that refund makes the whole payout a DANGER
+        String mixed = Calldata.execute(cmds(0x0b, 0x01, 0x00, 0x0c), Arrays.asList(
+                Calldata.wrap(ADDRESS_THIS, CONTRACT_BALANCE),
+                Calldata.v3Swap(MSG_SENDER, BigInteger.valueOf(100).multiply(E6), new BigInteger("50000000000000000"),
+                        Calldata.v3Path(USDC, 500, WETH), false),
+                Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(1000).multiply(E6), BigInteger.ZERO, Calldata.v3Path(USDC, 500, WETH), true),
+                Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
+        TransactionReview bad = review("0x1", UR_ETH, "0xb1a2bc2ec50000", mixed);
+        assertNull(value(bad, "Unused input"));
+        assertTrue(has(bad, "DANGER", "No minimum"));
+        // SwapRouter02's own exact-output + refundETH stays a refund
+        String sr02 = Calldata.multicall(BigInteger.valueOf(DEADLINE),
+                Calldata.call("5023b4df", new org.web3j.abi.datatypes.StaticStruct(Calldata.a(WETH), Calldata.a(USDC),
+                        new org.web3j.abi.datatypes.generated.Uint24(BigInteger.valueOf(500)), Calldata.a(MSG_SENDER),
+                        Calldata.u(BigInteger.valueOf(100).multiply(E6)), Calldata.u(new BigInteger("50000000000000000")),
+                        new org.web3j.abi.datatypes.generated.Uint160(BigInteger.ZERO))),
+                "0x12210e8a");
+        TransactionReview sr = review("0x1", SR02_ETH, "0xb1a2bc2ec50000", sr02);
+        assertNotNull(sr.text(), value(sr, "Unused input"));
+        assertEquals(0, count(sr, "DANGER"));
+    }
+
+    @Test public void syntheticFeeVectors() throws Exception {
+        JSONObject five = synthetic("ur-five-percent-fee");
+        TransactionReview r = TransactionReview.build(Eip1559Request.parse(request(five.getString("chainId"), five.getString("to"),
+                five.getString("value"), five.getString("data"))), five.getString("from"), TokenListTest.bundled());
+        assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 5% of the WETH output"));
+        JSONObject zero = synthetic("ur-fee-to-zero-address");
+        assertTrue(refused(zero.getString("chainId"), zero.getString("to"), zero.getString("value"), zero.getString("data"))
+                .contains("a fee paid to the zero address"));
+    }
+
+    @Test public void v4TakePortionAboveThreePercentAndToZeroAddress() throws Exception {
+        BigInteger in = new BigInteger("500000000000000000");
+        for (String to : new String[] {FEE_COLLECTOR, ETH}) {
+            byte[] v4 = Calldata.v4(cmds(0x06, 0x0c, 0x10, 0x0f),
+                    Calldata.v4ExactInSingle(Calldata.poolKey(ETH, USDC, 500, 10, ETH), true, in, BigInteger.valueOf(1200).multiply(E6)),
+                    Calldata.currencyAmount(ETH, in),
+                    Calldata.take(USDC, to, BigInteger.valueOf(400)),
+                    Calldata.currencyAmount(USDC, BigInteger.ZERO));
+            String data = Calldata.execute(cmds(0x10), Collections.singletonList(v4), BigInteger.valueOf(DEADLINE));
+            if (to.equals(ETH)) {
+                assertTrue(refused("0x1", UR_ETH, "0x6f05b59d3b20000", data).contains("a fee paid to the zero address"));
+            } else {
+                TransactionReview r = review("0x1", UR_ETH, "0x6f05b59d3b20000", data);
+                assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 4% of the USDC output"));
+                assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+            }
+        }
     }
 
     @Test public void realRouterTransactionsDecodeAsExpected() throws Exception {
