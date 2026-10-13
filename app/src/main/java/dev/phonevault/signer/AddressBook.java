@@ -84,7 +84,7 @@ final class AddressBook {
     /** The saved name for {@code address}, or null. */
     synchronized String name(String address) {
         if (address == null) return null;
-        Contact c = contacts.get(address.toLowerCase(Locale.ROOT));
+        Contact c = contacts.get(AddressKeys.canon(address));
         return c == null ? null : c.name;
     }
 
@@ -160,8 +160,6 @@ final class AddressBook {
         return clean;
     }
 
-    static String normalize(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) throw new IllegalArgumentException("not an address");
-        return address.toLowerCase(Locale.ROOT);
-    }
+    /** An EVM address (lowercase 0x…) or a Bitcoin address key (btc:&lt;network&gt;:&lt;address&gt;); see {@link AddressKeys}. */
+    static String normalize(String address) { return AddressKeys.normalize(address); }
 }

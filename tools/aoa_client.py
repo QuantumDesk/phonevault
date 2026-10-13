@@ -2,6 +2,7 @@
 """Minimal Android Open Accessory host for the Phone Vault prototype."""
 
 import argparse
+import base64
 import json
 import os
 import re
@@ -21,6 +22,8 @@ GOOGLE_VENDOR_ID = 0x18D1
 # Audio-accessory composite product IDs are deliberately excluded.
 AOA_ACCESSORY_PRODUCTS = {0x2D00, 0x2D01}
 MAX_RESPONSE_BYTES = 65_536
+# btcSignPsbt answers with the whole PSBT (the phone accepts up to 200 KiB, ~267 KiB of base64).
+MAX_PSBT_RESPONSE_BYTES = 400 * 1024
 AOA_GET_PROTOCOL = 51
 AOA_SEND_IDENT = 52
 AOA_START = 53
@@ -492,7 +495,8 @@ def validate_attest_response(request, response, expected_signer=None):
         raise ValueError(f"attested address {response['address']} is not the pinned signer {expected_signer}")
 
 
-def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
+def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000, max_response_bytes=None):
+    limit = MAX_RESPONSE_BYTES if max_response_bytes is None else max_response_bytes
     request_id = request.get("id")
     if not isinstance(request_id, str) or not request_id:
         raise ValueError("USB request must contain a non-empty string id")
@@ -505,8 +509,8 @@ def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
             received.extend(endpoint_in.read(16_384, timeout=1_000))
         except usb.core.USBTimeoutError:
             continue
-        if len(received) > MAX_RESPONSE_BYTES:
-            raise ValueError("Phone response exceeds 64 KiB")
+        if len(received) > limit:
+            raise ValueError(f"Phone response exceeds {limit // 1024} KiB")
         if b"\n" in received:
             line, trailing = received.split(b"\n", 1)
             if trailing:
@@ -518,6 +522,73 @@ def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000):
                 raise ValueError("Phone response id does not match the request")
             return response
     raise TimeoutError("Timed out waiting for on-device approval")
+
+
+BTC_NETWORKS = ("bitcoin", "testnet", "signet")
+BTC_TYPES = ("p2wpkh", "p2tr")
+BTC_ACCOUNT_FIELDS = {"id", "status", "fingerprint", "path", "xpub", "descriptor"}
+
+
+def load_psbt_base64(path):
+    """A PSBT file as canonical base64: binary (starts with psbt\\xff) or base64 text."""
+    with open(path, "rb") as handle:
+        raw = handle.read()
+    if not raw.startswith(b"psbt\xff"):
+        raw = base64.b64decode(b"".join(raw.split()), validate=True)
+    if not raw.startswith(b"psbt\xff"):
+        raise ValueError(f"{path} is not a PSBT")
+    if len(raw) > 200 * 1024:
+        raise ValueError("PSBT is larger than the phone's 200 KiB limit")
+    return base64.b64encode(raw).decode("ascii")
+
+
+def validate_btc_response(request, response):
+    """Schema checks for the Bitcoin answers. The signed PSBT is NOT verified here: the companion
+    finalizes, verifies and broadcasts (btctest.sh prints it for an independent check)."""
+    if response.get("id") != request["id"]:
+        raise ValueError("Bitcoin answer is for a different request")
+    status = response.get("status")
+    if status == "error":
+        if set(response) != {"id", "status", "error"}:
+            raise ValueError("malformed error answer")
+        return
+    if status == "rejected":
+        if set(response) != {"id", "status"}:
+            raise ValueError("malformed rejection")
+        return
+    method = request["method"]
+    if method == "btcGetAccount":
+        if set(response) != BTC_ACCOUNT_FIELDS or status != "ok":
+            raise ValueError("btcGetAccount answer does not match the protocol")
+        if not re.fullmatch(r"[0-9a-f]{8}", response["fingerprint"]):
+            raise ValueError("fingerprint must be 8 lowercase hex")
+        purpose = "84" if request["type"] == "p2wpkh" else "86"
+        coin = "0" if request["network"] == "bitcoin" else "1"
+        account = int(request["account"]) - 1
+        if response["path"] != f"m/{purpose}'/{coin}'/{account}'":
+            raise ValueError(f"unexpected account path {response['path']}")
+        prefix = "xpub" if request["network"] == "bitcoin" else "tpub"
+        if not response["xpub"].startswith(prefix):
+            raise ValueError(f"extended key is not a {prefix}")
+        function = "wpkh" if request["type"] == "p2wpkh" else "tr"
+        expected = f"{function}([{response['fingerprint']}/{purpose}h/{coin}h/{account}h]{response['xpub']}/<0;1>/*)#"
+        if not response["descriptor"].startswith(expected) or len(response["descriptor"]) != len(expected) + 8:
+            raise ValueError("descriptor does not match the account")
+    elif method == "btcShowAddress":
+        if set(response) != {"id", "status", "address"} or status != "ok":
+            raise ValueError("btcShowAddress answer does not match the protocol")
+        hrp = "bc1" if request["network"] == "bitcoin" else "tb1"
+        version = "q" if request["type"] == "p2wpkh" else "p"
+        if not response["address"].startswith(hrp + version):
+            raise ValueError("address does not match the requested network and type")
+    else:
+        if set(response) != {"id", "status", "psbt"} or status != "approved":
+            raise ValueError("btcSignPsbt answer does not match the protocol")
+        signed = base64.b64decode(response["psbt"], validate=True)
+        if not signed.startswith(b"psbt\xff"):
+            raise ValueError("signed PSBT has no PSBT magic")
+        if len(signed) <= len(base64.b64decode(request["psbt"])):
+            raise ValueError("signed PSBT carries no added signature")
 
 
 def request_for(args):
@@ -533,6 +604,16 @@ def _request_for(args):
     request_id = str(uuid.uuid4())
     if args.command in ("address", "pair"):
         return {"id": request_id, "method": "getAddress"}
+    if args.command == "btc-account":
+        return {"id": request_id, "method": "btcGetAccount", "network": args.network,
+                "type": args.type, "account": args.account}
+    if args.command == "btc-show":
+        return {"id": request_id, "method": "btcShowAddress", "network": args.network,
+                "type": args.type, "account": args.account, "change": args.change, "index": args.index}
+    if args.command == "btc-sign":
+        # "psbt" LAST: the phone accepts a line over 32 KiB only if its first 32 KiB name btcSignPsbt
+        return {"id": request_id, "method": "btcSignPsbt", "network": args.network,
+                "psbt": load_psbt_base64(args.psbt)}
     if args.command == "attest":
         challenge = bytes.fromhex(args.challenge) if args.challenge else os.urandom(32)
         return {"id": request_id, "method": "attest", "challenge": challenge.hex()}
@@ -613,6 +694,20 @@ def main():
     attest.add_argument("--challenge", default=None, help="lowercase hex, 16..64 bytes (default: 32 random bytes)")
     attest.add_argument("--save", default=None, help="Directory to write request.json and response.json into")
     attest.add_argument("--expect-address", default=None)
+    for name, helptext in (("btc-account", "Ask for a Bitcoin account's watch-only xpub + descriptor (approve once on the phone)"),
+                           ("btc-show", "Have the phone display a Bitcoin address for comparison (tap Done on the phone)"),
+                           ("btc-sign", "Have the phone review and sign a PSBT (BIP-174 v0)")):
+        sub = subparsers.add_parser(name, help=helptext)
+        sub.add_argument("--network", choices=BTC_NETWORKS, default="testnet")
+        if name != "btc-sign":
+            sub.add_argument("--type", choices=BTC_TYPES, default="p2wpkh")
+            sub.add_argument("--account", default="1", help="1..20 (account 1 is m/84'/coin'/0')")
+        if name == "btc-show":
+            sub.add_argument("--change", choices=("0", "1"), default="0")
+            sub.add_argument("--index", default="0", help="0..9999")
+        if name == "btc-sign":
+            sub.add_argument("--psbt", required=True, help="PSBT file (binary or base64 text)")
+            sub.add_argument("--out", default=None, help="Write the signed PSBT (base64) here")
     args = parser.parse_args()
 
     try:
@@ -638,8 +733,14 @@ def main():
         device = switch_to_accessory(find_android_device())
         endpoint_in, endpoint_out = open_endpoints(device)
         request = request_for(args)
-        response = exchange(endpoint_in, endpoint_out, request)
-        if args.command == "sign-message":
+        response = exchange(endpoint_in, endpoint_out, request,
+                            max_response_bytes=MAX_PSBT_RESPONSE_BYTES if args.command == "btc-sign" else None)
+        if args.command.startswith("btc-"):
+            validate_btc_response(request, response)
+            if args.command == "btc-sign" and response.get("status") == "approved" and args.out:
+                with open(args.out, "w", encoding="ascii") as handle:
+                    handle.write(response["psbt"] + "\n")
+        elif args.command == "sign-message":
             if request["method"] == "personal_sign":
                 expected_digest = personal_message_digest(bytes.fromhex(request["message"][2:]))
                 if args.expect_digest and args.expect_digest.lower() != "0x" + expected_digest.hex():

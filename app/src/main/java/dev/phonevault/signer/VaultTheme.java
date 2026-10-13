@@ -25,6 +25,7 @@ final class VaultTheme {
     static final int ACCENT = Color.rgb(184, 239, 211);
     static final int LINE = Color.rgb(40, 42, 48);      // borders/dividers
     static final int DANGER_INK = Color.rgb(255, 90, 90); // reserved for DANGER only (safety-critical legibility)
+    static final int AMBER = Color.rgb(255, 184, 77);    // test-network banner (Bitcoin TESTNET / SIGNET)
 
     private static Typeface pixelFace;
     /**
