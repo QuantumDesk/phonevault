@@ -88,12 +88,41 @@ tap_text() {
 scroll_down() { "$A" shell input swipe 720 2300 720 700 350 </dev/null; }
 scroll_top()  { "$A" shell input swipe 720 700 720 2300 350 </dev/null; sleep 0.5; "$A" shell input swipe 720 700 720 2300 350 </dev/null; }
 
+# Bounds of the first visible UNticked checkbox (empty when none is visible).
+unticked_box() {
+  uidump | grep -o 'checkable="true" checked="false"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 \
+    | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true
+}
+# Ready a review for Approve: scroll to its END (Approve stays disabled until the bottom of the
+# review has been on screen), then tick every review checkbox — "I verified…" and, on a review with
+# a DANGER row, the second "I understand: …" box above it. Returns 1 if no box was ticked or one is
+# still unticked. The caller then taps the Approve button by its text.
+tick_review() {
+  local i b n=0
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do has_text "Reject request" && break; scroll_down; sleep 0.6; done
+  scroll_down; sleep 0.8   # the very bottom, below Reject
+  for i in 1 2 3; do
+    b="$(unticked_box)"; [[ -n "$b" ]] || break
+    tap_bounds "$b"; sleep 0.8; n=$((n + 1))
+  done
+  if [[ $n -lt 2 ]]; then  # the danger box may sit just above the fold on a small screen: look once higher
+    "$A" shell input swipe 720 1200 720 1700 300 </dev/null; sleep 0.8
+    b="$(unticked_box)"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 0.8; n=$((n + 1)); }
+    scroll_down; sleep 0.8
+  fi
+  [[ $n -gt 0 ]] || return 1
+  [[ -z "$(unticked_box)" ]]
+}
+# An EVM address as the phone shows it: "0x51dd 9Afd 5f32 …" (0x + groups of four, case kept).
+evm_grouped() { local a="${1#0x}"; printf '0x%s' "${a:0:4}"; local i; for (( i = 4; i < ${#a}; i += 4 )); do printf ' %s' "${a:$i:4}"; done; }
+
 # Digits are buttons whose text is the digit itself (PinScreen); `⌫` is backspace.
 tap_digits() { local i; for (( i = 0; i < ${#1}; i++ )); do tap_text "${1:$i:1}"; sleep 0.2; done; }
 clear_entry() { local i b; b="$(bounds_of "⌫")"; [[ -n "$b" ]] || return 0; for i in 1 2 3 4 5 6; do tap_bounds "$b"; sleep 0.15; done; }
 
-# The first 0x address on screen; the home card wraps it with a line break the dump encodes as &#10;.
-addr() { uidump | grep -o 'text="0x[0-9a-fA-F&#;]*' | head -1 | sed 's/^text="//; s/&#10;//g' || true; }
+# The first 0x address on screen, ungrouped: the phone shows "0x51dd 9Afd …" in groups of four and
+# the home card breaks it into two lines (the dump encodes the break as &#10;).
+addr() { uidump | grep -o 'text="0x[0-9a-fA-F &#;]*' | head -1 | sed 's/^text="//; s/&#10;//g; s/ //g' || true; }
 
 wake()   { "$A" shell svc power stayon usb; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 2; nudge; }  # nudge: a dim screen about to time out must not lock mid-start
 unwake() { "$A" shell svc power stayon false; }

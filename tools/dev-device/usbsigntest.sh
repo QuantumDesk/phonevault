@@ -39,13 +39,11 @@ found=0
 for _ in $(seq 1 25); do sleep 2; kill -0 $SIGN_PID 2>/dev/null || break; has_text "Review transfer" && { found=1; break; }; done
 [[ $found -eq 1 ]] || { kill $SIGN_PID 2>/dev/null || true; tail -3 "$OUT"; die "review screen never appeared: $(texts)"; }
 has_text "Ethereum Mainnet (chain ID 1)" || die "network not decoded: $(texts 12)"
-uidump | grep -q "text=\"${TO}\"" || die "recipient not shown exactly as sent"
+# every character of the recipient, in the phone's groups of four ("0x7F3A 9C04 …", case kept)
+uidump | grep -qF "text=\"$(evm_grouped "$TO")\"" || die "recipient not shown exactly as sent"
 pass "review screen shows action, amount, recipient, network, signer and fee"
-# The checkbox and the buttons sit below the fold.
-scroll_down; sleep 0.8; scroll_down; sleep 0.8
-box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true)"
-[[ -n "$box" ]] || { kill $SIGN_PID 2>/dev/null || true; die "review checkbox not visible"; }
-tap_bounds "$box"; sleep 1
+# The checkbox and the buttons sit below the fold; Approve enables only once the end was on screen.
+tick_review || { kill $SIGN_PID 2>/dev/null || true; die "review checkboxes not ticked: $(texts 10)"; }
 tap_text "Approve &amp; sign"; sleep 3
 wait $SIGN_PID; SIGN_RC=$?
 echo "--- host client output (tail):"; tail -8 "$OUT" | sed -E 's/("signedTransaction": ")0x[0-9a-f]{20}[0-9a-f]*/\10x…/'

@@ -107,8 +107,8 @@ send_eth() { start_request "$1" sign-test --chain-id 0x1 --nonce 0x0 --priority-
 echo "== 1. first send, save as contact"
 send_eth first "$ALICE"
 review first "Review transfer" "First time sending to this address"
-box="$(find_checkbox)" || die "first: checkbox not visible"
-tap_bounds "$box"; sleep 1; tap_text "Approve &amp; sign"; sleep 3
+tick_review || die "first: review checkboxes not ticked: $(texts 10)"
+tap_text "Approve &amp; sign"; sleep 3
 rc=0; wait $pid || rc=$?
 [[ $rc -eq 0 ]] && grep -q '"status": "approved"' "$OUT.first" || { tail -6 "$OUT.first"; die "first: not approved/verified (exit $rc)"; }
 expect_screen "Signature created"

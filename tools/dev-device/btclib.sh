@@ -102,17 +102,10 @@ btc_unshare() {
   go_home
 }
 
-# Tick the review checkbox (scrolling to it) and tap Approve & sign.
+# Scroll to the end of the review, tick its checkbox(es) — a fee DANGER adds "I understand: …" —
+# and tap Approve & sign (lib.sh tick_review).
 approve_review() {
-  local box="" i
-  for i in 1 2 3 4 5 6 7 8; do
-    box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true)"
-    [[ -n "$box" ]] && break
-    scroll_down; sleep 0.6
-  done
-  [[ -n "$box" ]] || { kill "$CLIENT_PID" 2>/dev/null || true; die "review checkbox not visible: $(texts 10)"; }
-  tap_bounds "$box"; sleep 1
-  uidump | grep -q 'checked="true"' || { kill "$CLIENT_PID" 2>/dev/null || true; die "review checkbox did not tick"; }
+  tick_review || { kill "$CLIENT_PID" 2>/dev/null || true; die "review checkboxes not ticked: $(texts 10)"; }
   try_tap "Approve &amp; sign" || tap_text "Approve & sign"; sleep 2
 }
 

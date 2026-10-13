@@ -188,6 +188,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private String heldSummary;
     private String gateNotice;
     private int shiftPhase;
+    /** Release builds: watches Settings.Global.ADB_ENABLED (see adbRefused). */
+    private android.database.ContentObserver adbObserver;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -197,6 +199,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         buildUi();
         activateIfPolicyReady();
         ui.postDelayed(pixelShift, PIXEL_SHIFT_MS);
+        // Release: USB debugging switched on while the vault is open stops it at once (adbRefused).
+        if (!devBuild()) {
+            adbObserver = new android.database.ContentObserver(ui) {
+                @Override public void onChange(boolean selfChange) { activateIfPolicyReady(); }
+            };
+            getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver);
+        }
     }
 
     @Override protected void onStart() {
@@ -292,6 +301,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         if (managed && !enterVaultMode(policy)) {
             deactivate("FATAL POLICY ERROR: lock-task policy could not be enforced");
+            return;
+        }
+        if (adbRefused()) {
+            if (operational || !"adb-refused".equals(screenName)) refuseWhileAdbOn();
             return;
         }
         if (!operational) {
@@ -784,29 +797,43 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
     }
 
+    /**
+     * A development build (debug / dev-appliance). Both markers must agree: the release source set's
+     * DevTools has SCREENSHOTS=false, so a release APK is never treated as dev even if a BuildConfig
+     * field were mis-set.
+     */
+    static boolean devBuild() {
+        return BuildConfig.VAULT_DEV_BUILD && DevTools.SCREENSHOTS;
+    }
+
+    /** Settings.Global.ADB_ENABLED (0 when absent). */
+    private int adbEnabled() {
+        return Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
+    }
+
+    /** Release build with USB debugging on: nothing is shown or approved (ApplianceLockdown). */
+    private boolean adbRefused() {
+        return ApplianceLockdown.refuseForAdb(devBuild(), adbEnabled());
+    }
+
     private void enforceApplianceRestrictions(DevicePolicyManager policy) {
-        List<String> restrictions = new java.util.ArrayList<>(java.util.Arrays.asList(
-                UserManager.DISALLOW_ADD_USER,
-                UserManager.DISALLOW_MODIFY_ACCOUNTS,
-                UserManager.DISALLOW_INSTALL_UNKNOWN_SOURCES,
-                UserManager.DISALLOW_SAFE_BOOT,
-                UserManager.DISALLOW_USB_FILE_TRANSFER,
-                UserManager.DISALLOW_CONFIG_WIFI,
-                UserManager.DISALLOW_CONFIG_BLUETOOTH,
-                UserManager.DISALLOW_BLUETOOTH,
-                UserManager.DISALLOW_BLUETOOTH_SHARING,
-                UserManager.DISALLOW_CONFIG_MOBILE_NETWORKS,
-                UserManager.DISALLOW_CONFIG_TETHERING,
-                UserManager.DISALLOW_CONFIG_VPN,
-                UserManager.DISALLOW_SHARE_LOCATION));
-        if (!BuildConfig.VAULT_ALLOW_APP_UPDATES) {
-            // Release: the app set is frozen. Dev builds leave these off so `adb install -r`
-            // works; no network + kiosk still prevent sideloading in dev.
-            restrictions.add(UserManager.DISALLOW_INSTALL_APPS);
-            restrictions.add(UserManager.DISALLOW_UNINSTALL_APPS);
+        ComponentName admin = VaultDeviceAdminReceiver.component(this);
+        boolean dev = devBuild();
+        // ApplianceLockdown: the base set, the frozen app set (release), and in a release build
+        // also debugging features, date/time, physical media and system error dialogs.
+        for (String restriction : ApplianceLockdown.userRestrictions(dev, BuildConfig.VAULT_ALLOW_APP_UPDATES)) {
+            policy.addUserRestriction(admin, restriction);
         }
-        for (String restriction : restrictions) {
-            policy.addUserRestriction(VaultDeviceAdminReceiver.component(this), restriction);
+        if (ApplianceLockdown.restrictsCameraAndInput(dev)) {
+            policy.setCameraDisabled(admin, true);
+            // System services/keyboards are always permitted by Android; these lists refuse the rest.
+            if (!policy.setPermittedAccessibilityServices(admin, java.util.Collections.emptyList())) {
+                throw new IllegalStateException("Accessibility services could not be restricted");
+            }
+            String ime = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+            if (!policy.setPermittedInputMethods(admin, new java.util.ArrayList<>(ApplianceLockdown.permittedInputMethods(ime)))) {
+                throw new IllegalStateException("Input methods could not be restricted");
+            }
         }
         // Only the power menu (long-press Power: power off / restart) works inside the kiosk.
         // Without it the sole way off is a forced hardware restart. The OS image trims the menu
@@ -821,6 +848,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void deactivate(String reason) {
+        deactivate("DEVICE NOT READY", "Policy check failed", reason, "Signing is disabled",
+                "Have the image provisioning checked. No wallet identity is displayed.", "policy-error");
+    }
+
+    /**
+     * Release build, USB debugging on: the vault stops (locked, USB session closed, any approval
+     * cancelled) and shows only this. Turning debugging off brings back the PIN gate.
+     */
+    private void refuseWhileAdbOn() {
+        deactivate("DEVICE NOT SAFE", ApplianceLockdown.ADB_REFUSAL_TITLE, ApplianceLockdown.ADB_REFUSAL,
+                "Nothing will be shown or signed",
+                "A computer connected over USB could read or control this phone. Turn USB debugging off "
+                        + "(it should never be on in a release vault) and have the phone checked. No wallet identity is displayed.",
+                "adb-refused");
+    }
+
+    private void deactivate(String eyebrow, String title, String reason, String cardLabel, String cardText, String screen) {
         synchronized (stateLock) {
             session.incrementAndGet();
             operational = false;
@@ -839,9 +883,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         clearSensitiveUi();
         clearPinEntry();
         vault = null;
-        LinearLayout root = page("DEVICE NOT READY", "Policy check failed", reason);
-        card(root, "Signing is disabled", "Have the image provisioning checked. No wallet identity is displayed.");
-        present(root, "policy-error");
+        LinearLayout root = page(eyebrow, title, reason);
+        card(root, cardLabel, cardText);
+        present(root, screen);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -891,7 +935,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
         root.addView(heading);
         if (description != null && !description.isEmpty()) {
-            TextView caption = VaultTheme.bodyText(this, description, bodySize(), VaultTheme.DIM);
+            String shown = ReviewStyle.groupEvmIn(description); // e.g. a refusal naming the requested account
+            TextView caption = VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.DIM);
+            if (!shown.equals(description)) keepGroupsWhole(caption);
             caption.setPadding(0, dp(12), 0, dp(12));
             root.addView(caption);
         }
@@ -908,6 +954,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         scroll.setBackgroundColor(VaultTheme.BG);
         scroll.addView(root);
         setContentView(scroll);
+        watchScrollEnd(scroll, root);
         devDumpUi();
     }
 
@@ -923,7 +970,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void card(LinearLayout parent, String label, String value) {
         LinearLayout box = VaultTheme.box(this);
         box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
-        TextView text = VaultTheme.bodyText(this, value, bodySize(), VaultTheme.INK);
+        // Whole EVM addresses in groups of four; a card that IS an address is monospace.
+        String shown = ReviewStyle.groupEvmIn(value);
+        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, bodySize(), VaultTheme.INK)
+                : VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.INK);
+        if (!shown.equals(value)) keepGroupsWhole(text);
         text.setPadding(0, dp(6), 0, 0);
         box.addView(text);
         parent.addView(box, matchWrap(dp(12)));
@@ -1024,6 +1075,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     + (passphraseWallet ? " · PASSPHRASE" : "") + " · RECEIVE", 13, VaultTheme.FAINT));
             addressView = VaultTheme.monoText(this, formatAddress(
                     org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
+            keepGroupsWhole(addressView);
             addressView.setPadding(0, dp(12), 0, dp(8));
             box.addView(addressView);
             root.addView(box, matchWrap(dp(22)));
@@ -2398,31 +2450,22 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
+        List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details,
+                approval.hostSimulation != null ? approval.hostSimulation.rows : null);
+        addDangerSummary(root, dangers);
         if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
-        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
-        LinearLayout raw = new LinearLayout(this);
-        raw.setOrientation(LinearLayout.VERTICAL);
-        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
-        raw.setVisibility(View.GONE);
-        TextView details = VaultTheme.pixelButton(this, "Show technical details", false);
-        hardenTouch(details);
-        details.setOnClickListener(v -> {
-            boolean visible = raw.getVisibility() == View.VISIBLE;
-            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
-            details.setText(visible ? "Show technical details" : "Hide technical details");
-        });
-        root.addView(details, matchWrap(dp(8)));
-        root.addView(raw);
+        for (MessageReview.Row row : review.summary) root.addView(detail(row));
+        addDetailsToggle(root, review.details, "technical details");
         if (approval.hostSimulation != null) {
             // The Mac's claim, in its own box BELOW the phone's own review; display only, never signed.
             SimulationCheck.Result sim = approval.hostSimulation;
             LinearLayout box = VaultTheme.box(this);
             box.addView(VaultTheme.bodyText(this, sim.title, 13, sim.contradicts ? VaultTheme.DANGER_INK : VaultTheme.FAINT));
             box.addView(VaultTheme.rule(this, dp(8), dp(10)));
-            for (MessageReview.Row row : sim.rows) box.addView(detail(row.label, row.value));
+            for (MessageReview.Row row : sim.rows) box.addView(detail(row));
             root.addView(box, matchWrap(dp(16)));
         }
-        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
+        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel, dangers,
                 approval::signIfIdentityUnchanged,
                 "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
                 "Transaction hash", "transactionHash", true, () -> {
@@ -2469,11 +2512,46 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * message reviews: one decision, check → sign → send as one step under stateLock.
      */
     private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
-                                     String requestId, String prompt, String signText, ReviewedSigner signer,
+                                     String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
+                                     ReviewedSigner signer,
                                      String doneMessage, String receiptLabel, String receiptField, boolean transaction,
                                      Runnable afterSigned) {
-        addDecisionControls(root, source, decision, s, requestId, prompt, signText, signer, null, null,
+        addDecisionControls(root, source, decision, s, requestId, prompt, signText, dangers, signer, null, null,
                 doneMessage, receiptLabel, response -> response.optString(receiptField), transaction, afterSigned);
+    }
+
+    /** The review's secondary rows behind a Show/Hide button; open from the start if one is a DANGER. */
+    private void addDetailsToggle(LinearLayout root, List<MessageReview.Row> rows, String what) {
+        LinearLayout raw = new LinearLayout(this);
+        raw.setOrientation(LinearLayout.VERTICAL);
+        for (MessageReview.Row row : rows) raw.addView(detail(row));
+        boolean open = !ReviewStyle.dangers(rows).isEmpty(); // a DANGER is never folded away
+        raw.setVisibility(open ? View.VISIBLE : View.GONE);
+        TextView details = VaultTheme.pixelButton(this, (open ? "Hide " : "Show ") + what, false);
+        hardenTouch(details);
+        details.setOnClickListener(v -> {
+            boolean visible = raw.getVisibility() == View.VISIBLE;
+            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
+            details.setText((visible ? "Show " : "Hide ") + what);
+        });
+        root.addView(details, matchWrap(dp(8)));
+        root.addView(raw);
+    }
+
+    /** Set on a page's root before {@link #present}: called once the end of the page has been on screen. */
+    private interface ScrollEndWatcher { void reachedEnd(); }
+
+    /** Wires a {@link ScrollEndWatcher} tag on the page root to its ScrollView (scrolls and layouts). */
+    private void watchScrollEnd(ScrollView scroll, LinearLayout root) {
+        if (!(root.getTag() instanceof ScrollEndWatcher)) return;
+        ScrollEndWatcher watcher = (ScrollEndWatcher) root.getTag();
+        Runnable check = () -> {
+            if (scroll.getHeight() == 0) return;
+            if (ApprovalGate.atEnd(root.getHeight(), scroll.getScrollY(), scroll.getHeight(), dp(24))) watcher.reachedEnd();
+        };
+        scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> check.run());
+        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> check.run());
+        scroll.post(check);
     }
 
     /**
@@ -2482,11 +2560,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      *                   dismissed PIN prompt answers "rejected" and signs nothing
      */
     private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
-                                     String requestId, String prompt, String signText, ReviewedSigner signer,
+                                     String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
+                                     ReviewedSigner signer,
                                      SeedSigner seedSigner, String seedWhy,
                                      String doneMessage, String receiptLabel,
                                      java.util.function.Function<JSONObject, String> receiptValue, boolean transaction,
                                      Runnable afterSigned) {
+        // Approve needs: the end of the review on screen once, "I verified…", and for a review with
+        // a DANGER row a second box that states that danger in words (ApprovalGate).
+        ApprovalGate gate = new ApprovalGate(dangers != null && !dangers.isEmpty());
+        CheckBox dangerAck = null;
+        if (gate.dangerRequired) {
+            dangerAck = new CheckBox(this);
+            dangerAck.setText(ReviewStyle.dangerAcknowledgement(dangers));
+            VaultTheme.size(dangerAck, bodySize());
+            dangerAck.setTextColor(VaultTheme.DANGER_INK);
+            dangerAck.setButtonTintList(android.content.res.ColorStateList.valueOf(VaultTheme.DANGER_INK));
+            dangerAck.setMinHeight(dp(56));
+            dangerAck.setPadding(dp(4), dp(18), dp(4), dp(18));
+            hardenTouch(dangerAck);
+            root.addView(dangerAck, matchWrap(dp(12)));
+        }
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
         VaultTheme.size(reviewed, bodySize());
@@ -2494,13 +2588,24 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         reviewed.setMinHeight(dp(56));
         reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
         hardenTouch(reviewed);
-        root.addView(reviewed, matchWrap(dp(12)));
+        root.addView(reviewed, matchWrap(dp(gate.dangerRequired ? 4 : 12)));
+        TextView readToEnd = VaultTheme.bodyText(this, "Approve unlocks once you have scrolled to the end of this review.", 13, VaultTheme.FAINT);
+        root.addView(readToEnd, matchWrap(dp(4)));
         TextView sign = VaultTheme.pixelButton(this, signText, true);
         TextView reject = VaultTheme.pixelButton(this, "Reject request", false);
         hardenTouch(sign);
         hardenTouch(reject);
         sign.setEnabled(false);
-        reviewed.setOnCheckedChangeListener((v, checked) -> sign.setEnabled(checked && decision.state() == ApprovalDecision.State.REVIEW));
+        Runnable refresh = () -> sign.setEnabled(gate.mayApprove() && decision.state() == ApprovalDecision.State.REVIEW);
+        reviewed.setOnCheckedChangeListener((v, checked) -> { gate.setReviewed(checked); refresh.run(); });
+        if (dangerAck != null) dangerAck.setOnCheckedChangeListener((v, checked) -> { gate.setDangerAcknowledged(checked); refresh.run(); });
+        root.setTag((ScrollEndWatcher) () -> {
+            if (gate.hasReachedEnd()) return;
+            gate.reachedEnd();
+            readToEnd.setVisibility(View.GONE);
+            refresh.run();
+        });
+        final CheckBox dangerBox = dangerAck;
         reject.setOnClickListener(v -> {
             if (!decision.reject()) return;
             Haptics.reject(v);
@@ -2512,13 +2617,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         sign.setOnClickListener(v -> {
             synchronized (stateLock) {
                 if (source != transport || s != session.get() || !unlocked
-                        || approvalDecision != decision || !reviewed.isChecked() || !decision.beginSigning()) return;
+                        || approvalDecision != decision || !reviewed.isChecked() || !gate.mayApprove()
+                        || (dangerBox != null && !dangerBox.isChecked()) || !decision.beginSigning()) return;
             }
             // The decision is now irreversible through Reject. Lock still invalidates queued work.
             Haptics.confirm(v);
             sign.setEnabled(false);
             reject.setEnabled(false);
             reviewed.setEnabled(false);
+            if (dangerBox != null) dangerBox.setEnabled(false);
             sign.setText("Signing…");
             statusMessage = "Signing approved request";
             Runnable work = () -> cryptoExecutor.execute(() -> {
@@ -2597,7 +2704,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Under stateLock: this request still owns the signing decision in the live, reviewed session. */
     private boolean signingStillOwned(AccessoryTransport source, int s, ApprovalDecision decision) {
         return operational && unlocked && s == session.get() && !sensitive.active() && backupVerified
-                && source == transport && !source.isClosed() && approvalDecision == decision && decision.maySign();
+                && source == transport && !source.isClosed() && approvalDecision == decision && decision.maySign()
+                && !adbRefused(); // release: never sign while USB debugging is on
     }
 
     /** Review for personal_sign / eth_signTypedData_v4, rendered from the parsed request only. */
@@ -2613,22 +2721,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
                 review.title, review.subtitle);
+        List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
+        addDangerSummary(root, dangers);
         if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
-        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
-        LinearLayout raw = new LinearLayout(this);
-        raw.setOrientation(LinearLayout.VERTICAL);
-        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
-        raw.setVisibility(View.GONE);
-        TextView details = VaultTheme.pixelButton(this, "Show details", false);
-        hardenTouch(details);
-        details.setOnClickListener(v -> {
-            boolean visible = raw.getVisibility() == View.VISIBLE;
-            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
-            details.setText(visible ? "Show details" : "Hide details");
-        });
-        root.addView(details, matchWrap(dp(8)));
-        root.addView(raw);
-        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel,
+        for (MessageReview.Row row : review.summary) root.addView(detail(row));
+        addDetailsToggle(root, review.details, "details");
+        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel, dangers,
                 approval::signIfIdentityUnchanged,
                 "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
                 "Signed digest", "digest", false, null);
@@ -2653,20 +2751,88 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private View detail(String label, String value) {
+        return detail(new MessageReview.Row(label, value));
+    }
+
+    /**
+     * One review row. DANGER: red, stop glyph, "DANGER · TOPIC", on a red-outlined panel. WARNING:
+     * amber, "!" glyph, "CHECK · TOPIC". Whole EVM addresses in the text are shown in groups of
+     * four ("0x51dd 9Afd …"), so a line only wraps between groups.
+     */
+    private View detail(MessageReview.Row r) {
+        String label = r.label, value = r.value;
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
-        boolean danger = "DANGER".equalsIgnoreCase(label) || "WARNING".equalsIgnoreCase(label);
+        ReviewStyle.Level level = ReviewStyle.level(r);
         boolean amber = BtcPsbtReview.TEST_NETWORK.equals(label);
-        TextView labelView = VaultTheme.bodyText(this, label.toUpperCase(java.util.Locale.ROOT), 13,
-                danger ? VaultTheme.DANGER_INK : amber ? VaultTheme.AMBER : VaultTheme.FAINT);
-        TextView valueView = VaultTheme.monoText(this, value, amber ? bodySize() + 2 : bodySize(),
-                danger ? VaultTheme.DANGER_INK : amber ? VaultTheme.AMBER : VaultTheme.INK);
+        int ink = level == ReviewStyle.Level.DANGER ? VaultTheme.DANGER_INK
+                : level == ReviewStyle.Level.CHECK ? VaultTheme.WARNING_INK : amber ? VaultTheme.AMBER : 0;
+        TextView labelView = VaultTheme.bodyText(this, ReviewStyle.heading(r), 13, ink != 0 ? ink : VaultTheme.FAINT);
+        String shown = ReviewStyle.displayValue(label, value);
+        TextView valueView = VaultTheme.monoText(this, shown, amber ? bodySize() + 2 : bodySize(), ink != 0 ? ink : VaultTheme.INK);
+        if (!shown.equals(value)) keepGroupsWhole(valueView);
         valueView.setTextIsSelectable(false);
         valueView.setPadding(0, dp(6), 0, dp(15));
-        row.addView(labelView);
+        if (level != ReviewStyle.Level.NONE) {
+            labelView.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+            LinearLayout heading = new LinearLayout(this);
+            heading.setOrientation(LinearLayout.HORIZONTAL);
+            heading.setGravity(Gravity.CENTER_VERTICAL);
+            LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            glp.rightMargin = dp(8);
+            heading.addView(VaultTheme.levelGlyph(this, level), glp);
+            heading.addView(labelView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+            row.addView(heading);
+        } else {
+            row.addView(labelView);
+        }
         row.addView(valueView);
         SafetyScreens.style(this, row, label, valueView, value);
         return row;
+    }
+
+    /** Grouped addresses: break lines only at the spaces between groups (no hyphenation inside one). */
+    private static void keepGroupsWhole(TextView t) {
+        t.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);
+        t.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);
+    }
+
+    /**
+     * Top of a review with DANGER rows: "N dangers below — read before signing" and each one's
+     * topic, on the same red-outlined panel the rows use.
+     */
+    private void addDangerSummary(LinearLayout root, List<MessageReview.Row> dangers) {
+        if (dangers.isEmpty()) return;
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setColor(0x33FF5A5A);
+        bg.setStroke(dp(2), VaultTheme.DANGER_INK);
+        bg.setCornerRadius(dp(6));
+        panel.setBackground(bg);
+        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
+        LinearLayout heading = new LinearLayout(this);
+        heading.setOrientation(LinearLayout.HORIZONTAL);
+        heading.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        glp.rightMargin = dp(10);
+        heading.addView(VaultTheme.levelGlyph(this, ReviewStyle.Level.DANGER), glp);
+        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), bodySize(), VaultTheme.DANGER_INK);
+        title.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+        panel.addView(heading);
+        StringBuilder topics = new StringBuilder();
+        for (MessageReview.Row d : dangers) {
+            String t = ReviewStyle.topic(d);
+            if (topics.length() > 0) topics.append('\n');
+            topics.append("• ").append(t != null ? t : ReviewStyle.shortenEvm(ReviewStyle.firstSentence(d.value)));
+        }
+        TextView list = VaultTheme.bodyText(this, topics.toString(), 13, VaultTheme.DANGER_INK);
+        list.setPadding(0, dp(8), 0, 0);
+        panel.addView(list);
+        root.addView(panel, matchWrap(dp(4)));
     }
 
     // ------------------------------------------------------------------ Bitcoin
@@ -3013,22 +3179,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker, review.title, review.subtitle);
-        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
-        LinearLayout raw = new LinearLayout(this);
-        raw.setOrientation(LinearLayout.VERTICAL);
-        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
-        raw.setVisibility(View.GONE);
-        TextView details = VaultTheme.pixelButton(this, "Show technical details", false);
-        hardenTouch(details);
-        details.setOnClickListener(v -> {
-            boolean visible = raw.getVisibility() == View.VISIBLE;
-            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
-            details.setText(visible ? "Show technical details" : "Hide technical details");
-        });
-        root.addView(details, matchWrap(dp(8)));
-        root.addView(raw);
+        List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
+        addDangerSummary(root, dangers);
+        for (MessageReview.Row row : review.summary) root.addView(detail(row));
+        addDetailsToggle(root, review.details, "technical details");
         final String txid = BtcCrypto.hex(BtcCrypto.reversed(review.psbt.tx.txid()));
-        addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, null,
+        addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, dangers, null,
                 seed -> {
                     byte[] signed = BtcPsbtSigner.sign(review, seed, random);
                     // Remember what each coin was signed as (SegWit fee-attack guard), before it can leave.
@@ -3424,6 +3580,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
+        if (adbObserver != null) getContentResolver().unregisterContentObserver(adbObserver);
         synchronized (stateLock) {
             session.incrementAndGet();
             unlocked = false;
@@ -3470,8 +3627,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
+    /** Home receive address: "0x51dd 9Afd 5f32 …" in two lines of five groups (the QR stays ungrouped). */
     private String formatAddress(String address) {
-        return address.length() > 22 ? address.substring(0, 22) + "\n" + address.substring(22) : address;
+        return ReviewStyle.groupEvmTwoLines(address);
     }
 
     private JSONObject json(Object... pairs) {

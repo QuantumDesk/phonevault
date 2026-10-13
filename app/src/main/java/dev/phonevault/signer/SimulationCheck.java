@@ -148,13 +148,13 @@ final class SimulationCheck {
         if (!contradictions.isEmpty()) {
             StringBuilder why = new StringBuilder(MISMATCH);
             for (String c : contradictions) why.append("\n• ").append(c);
-            rows.add(new MessageReview.Row(MessageReview.DANGER, why.toString()));
+            rows.add(new MessageReview.Row(MessageReview.DANGER, why.toString(), "MAC SIMULATION MISMATCH"));
         }
         if (!unexplained.isEmpty()) {
             StringBuilder why = new StringBuilder("The Mac also reports changes that the phone's decoding of this call does not explain. "
                     + "A contract can move tokens through an earlier approval; if you did not expect this, reject.");
             for (String u : unexplained) why.append("\n• ").append(u);
-            rows.add(new MessageReview.Row(MessageReview.WARNING, why.toString()));
+            rows.add(new MessageReview.Row(MessageReview.WARNING, why.toString(), "UNEXPLAINED CHANGES"));
         }
         return new Result(rows, contradictions, unexplained);
     }

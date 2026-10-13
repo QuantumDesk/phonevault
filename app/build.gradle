@@ -23,11 +23,15 @@ android {
             // Dev builds must stay installable over adb; release freezes the app set with
             // DISALLOW_INSTALL_APPS / DISALLOW_UNINSTALL_APPS (see enforceApplianceRestrictions).
             buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'true'
+            // Development build: adb and the test harness keep working. Release turns on the full
+            // device-owner lockdown and refuses to sign while USB debugging is on (ApplianceLockdown).
+            buildConfigField 'boolean', 'VAULT_DEV_BUILD', 'true'
             manifestPlaceholders = [vaultVariant: 'dev']
         }
         release {
             buildConfigField 'boolean', 'VAULT_REQUIRE_SECURE_HARDWARE', 'true'
             buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'false'
+            buildConfigField 'boolean', 'VAULT_DEV_BUILD', 'false'
             manifestPlaceholders = [vaultVariant: 'release']
             minifyEnabled true
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
@@ -41,6 +45,7 @@ android {
             versionNameSuffix '-dev-appliance'
             matchingFallbacks = ['release']
             buildConfigField 'boolean', 'VAULT_ALLOW_APP_UPDATES', 'true'
+            buildConfigField 'boolean', 'VAULT_DEV_BUILD', 'true'
             manifestPlaceholders = [vaultVariant: 'dev-appliance']
         }
     }
