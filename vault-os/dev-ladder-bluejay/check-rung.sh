@@ -53,7 +53,12 @@ crashes="$(sh_ logcat -b crash -d | grep -c -E 'FATAL EXCEPTION|Fatal signal')"
 # ---- b2: kernel ----
 if at_least b2; then
   ad="$(sh_ cat /sys/module/usbcore/parameters/authorized_default)"
-  [[ "${ad}" == 0 ]] && pass "usbcore.authorized_default=0" || fail "usbcore authorized_default=${ad:-unreadable}"
+  # SELinux keeps the shell user out of /sys/module/usbcore/parameters; without adb root
+  # (never used), the kernel command line the bootloader handed over is the evidence.
+  if [[ "${ad}" != 0 && "${ad}" != 1 && "${ad}" != -1 ]]; then
+    sh_ cat /proc/cmdline | tr ' ' '\n' | grep -qx 'usbcore.authorized_default=0' && ad="0 (from /proc/cmdline)"
+  fi
+  [[ "${ad}" == 0* ]] && pass "usbcore.authorized_default=${ad}" || fail "usbcore authorized_default=${ad:-unreadable}"
   # removed modules (from this rung's BoardConfigVault.mk): not loaded, not on vendor_dlkm
   mods="$(awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print }' "${RUNG_DIR}/BoardConfigVault.mk" \
           | grep -E '^PHONEVAULT_KMODS_REMOVED[[:space:]]*(:=|\+=)' | sed -E 's/^[^=]*=//' | tr -s ' ' '\n' | grep '\.ko$')"
@@ -81,7 +86,9 @@ if at_least b3; then
   feats="$(sh_ pm list features)"
   echo "${feats}" | grep -q 'feature:android.hardware.usb.host$' && fail "android.hardware.usb.host declared" || pass "no usb.host feature"
   echo "${feats}" | grep -q 'feature:android.hardware.usb.accessory$' && pass "usb.accessory feature kept" || fail "usb.accessory feature missing"
-  [[ "$(prop ro.vendor.phonevault.offline)" == true ]] && pass "ro.vendor.phonevault.offline=true" || fail "ro.vendor.phonevault.offline unset"
+  # Parity marker only: the prebuilt gs101 USB HALs never read it (README, b3). Its absence on
+  # the device is a follow-up, not a lock-down failure; the checks below prove the policy.
+  [[ "$(prop ro.vendor.phonevault.offline)" == true ]] && pass "ro.vendor.phonevault.offline=true" || warn "ro.vendor.phonevault.offline unset (marker only; nothing reads it on bluejay)"
   pt="$(sh_ cat /sys/class/typec/port0/port_type)"
   if [[ -n "${pt}" ]]; then [[ "${pt}" == *"[sink]"* ]] && pass "port_type ${pt}" || fail "port_type ${pt} (want [sink])"
   else warn "port_type unreadable from shell (dumpsys usb below)"; fi
@@ -130,6 +137,12 @@ if at_least b4a; then
     st="$(prop init.svc.${s})"
     [[ -z "${st}" ]] && pass "service ${s} not defined" || fail "service ${s}: ${st}"
   done
+  # Wi-Fi Calling packet router: with the modem gone it crash-loops (124 exits in 5 min on the
+  # b4a image). Removed from b4c; b4a/b4b images predate the fix and only get a warning.
+  st="$(prop init.svc.pktrouter)"
+  if [[ -z "${st}" ]]; then pass "service pktrouter not defined"
+  elif [[ "${RUNG}" == b4c ]]; then fail "service pktrouter: ${st}"
+  else warn "service pktrouter: ${st} (removed from b4c)"; fi
   svcs="$(sh_ service list)"
   for s in bluetooth_manager nfc; do
     echo "${svcs}" | grep -q -E "^[0-9]+[[:space:]]+${s}:" && fail "system service ${s} registered" || pass "no ${s} system service"

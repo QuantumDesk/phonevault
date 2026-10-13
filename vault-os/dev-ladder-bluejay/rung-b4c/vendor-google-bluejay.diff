@@ -1,5 +1,5 @@
 diff --git a/bluejay-vendor.mk b/bluejay-vendor.mk
-index 32ca9b7..536c92e 100644
+index 32ca9b7..6c5daac 100644
 --- a/bluejay-vendor.mk
 +++ b/bluejay-vendor.mk
 @@ -929,7 +929,6 @@ PRODUCT_COPY_FILES += \
@@ -36,14 +36,23 @@ index 32ca9b7..536c92e 100644
      vendor/google/bluejay/proprietary/vendor/etc/init/init.sscoredump.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.sscoredump.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/init.storage.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.storage.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/init.usf.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/init.usf.rc \
-@@ -990,7 +985,6 @@ PRODUCT_COPY_FILES += \
+@@ -988,9 +983,7 @@ PRODUCT_COPY_FILES += \
+     vendor/google/bluejay/proprietary/vendor/etc/init/memtrack.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/memtrack.rc \
+     vendor/google/bluejay/proprietary/vendor/etc/init/pixel-thermal-symlinks.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/pixel-thermal-symlinks.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/pixelstats-vendor.gs101.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/pixelstats-vendor.gs101.rc \
-     vendor/google/bluejay/proprietary/vendor/etc/init/pktrouter.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/pktrouter.rc \
+-    vendor/google/bluejay/proprietary/vendor/etc/init/pktrouter.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/pktrouter.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/pkvm_experiment.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/pkvm_experiment.rc \
 -    vendor/google/bluejay/proprietary/vendor/etc/init/rfsd.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/rfsd.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/rild_exynos.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/rild_exynos.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/samsung.hardware.media.c2@1.2-service.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/samsung.hardware.media.c2@1.2-service.rc \
      vendor/google/bluejay/proprietary/vendor/etc/init/storage.bluejay.rc:$(TARGET_COPY_OUT_VENDOR)/etc/init/storage.bluejay.rc \
+@@ -2271,5 +2264,4 @@ PRODUCT_PACKAGES += \
+     twoshay \
+     ufs_firmware_update \
+     usb_accessory_utils \
+-    usf_stats \
+-    wfc-pkt-router
++    usf_stats
 diff --git a/proprietary/vendor/etc/init/hw/init.gs101.usb.rc b/proprietary/vendor/etc/init/hw/init.gs101.usb.rc
 index 72a3b31..e241501 100644
 --- a/proprietary/vendor/etc/init/hw/init.gs101.usb.rc
