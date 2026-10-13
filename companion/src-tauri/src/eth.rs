@@ -13,25 +13,49 @@ fn err(m: impl Into<String>) -> EthError { EthError(m.into()) }
 pub struct Rpc { url: String, client: reqwest::blocking::Client }
 
 pub const DEFAULT_RPC: &str = "https://ethereum-rpc.publicnode.com";
+/// The most this reads of one node answer (a full block with its transactions fits easily).
+pub const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
+
+/// Read a body, refusing one longer than `max` bytes instead of buffering all of it.
+pub fn read_capped(r: impl std::io::Read, max: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    r.take(max + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > max { return Err(format!("the answer is larger than {} bytes, refused", max)); }
+    Ok(bytes)
+}
+
+/// HTTP client for nodes: bounded time, and no redirects (the node is the URL the user set, not
+/// wherever it points to).
+fn node_client() -> Result<reqwest::blocking::Client, EthError> {
+    reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none())
+        .build().map_err(|e| err(e.to_string()))
+}
 
 impl Rpc {
     pub fn new(url: &str) -> Result<Rpc, EthError> {
         if !url.starts_with("https://") { return Err(err("the node URL must use https://")); }
-        let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).build().map_err(|e| err(e.to_string()))?;
-        Ok(Rpc { url: url.to_string(), client })
+        Ok(Rpc { url: url.to_string(), client: node_client()? })
     }
 
-    fn call(&self, method: &str, params: Value) -> Result<Value, EthError> {
+    /// POST one JSON-RPC request and parse the answer, reading at most MAX_RESPONSE bytes.
+    /// `Err` when the node cannot be reached, answers too much, or does not answer JSON.
+    fn post(&self, method: &str, params: Value) -> Result<Value, EthError> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?;
         let code = http.status();
+        let bytes = read_capped(http, MAX_RESPONSE).map_err(|e| err(format!("node answer to {method}: {e}")))?;
         // Public nodes answer refusals (rate limits, "archive requests need a token") with an HTTP
         // error and a JSON-RPC error body: keep the node's own words.
-        let resp: Value = match http.json() {
-            Ok(v) => v,
-            Err(_) if !code.is_success() => return Err(err(format!("node refused {method}: HTTP {code}"))),
-            Err(e2) => return Err(err(format!("node returned non-JSON: {e2}"))),
-        };
+        match serde_json::from_slice::<Value>(&bytes) {
+            Ok(v) => Ok(v),
+            Err(_) if !code.is_success() => Err(err(format!("node refused {method}: HTTP {code}"))),
+            Err(e2) => Err(err(format!("node returned non-JSON: {e2}"))),
+        }
+    }
+
+    fn call(&self, method: &str, params: Value) -> Result<Value, EthError> {
+        let resp = self.post(method, params)?;
         if let Some(e) = resp.get("error") { return Err(err(format!("node error for {method}: {}", e.get("message").and_then(Value::as_str).unwrap_or("unknown")))); }
         resp.get("result").cloned().ok_or_else(|| err(format!("node returned no result for {method}")))
     }
@@ -40,14 +64,7 @@ impl Rpc {
     /// simulation, which needs a node's refusal in detail rather than as text. Errs only when the
     /// node cannot be reached or does not answer JSON-RPC.
     pub fn call_raw(&self, method: &str, params: Value) -> Result<Value, EthError> {
-        let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?;
-        let code = http.status();
-        let resp: Value = match http.json() {
-            Ok(v) => v,
-            Err(_) if !code.is_success() => return Err(err(format!("node refused {method}: HTTP {code}"))),
-            Err(e2) => return Err(err(format!("node returned non-JSON: {e2}"))),
-        };
+        let resp = self.post(method, params)?;
         if resp.get("result").is_none() && resp.get("error").is_none() { return Err(err(format!("node returned no result for {method}"))); }
         Ok(resp)
     }
@@ -179,6 +196,48 @@ pub fn parse_eth(text: &str) -> Result<u128, EthError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_answers_are_capped() {
+        assert_eq!(read_capped(&b"{}"[..], 2).unwrap(), b"{}");
+        assert!(read_capped(&b"{} "[..], 2).is_err());
+        assert!(read_capped(std::io::repeat(b' '), 1024).is_err(), "an endless body stops at the cap");
+    }
+
+    /// One-shot local HTTP server answering every request with `reply`.
+    fn serve(reply: String) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for s in listener.incoming().take(3) {
+                let mut s = s.unwrap();
+                let mut buf = [0u8; 8192];
+                let _ = s.read(&mut buf);
+                let _ = s.write_all(reply.replace("{port}", &port.to_string()).as_bytes());
+            }
+        });
+        format!("http://127.0.0.1:{port}/")
+    }
+
+    #[test]
+    fn redirects_are_not_followed_and_big_answers_refused() {
+        // Rpc::new insists on https; the transport under test is the same client.
+        let url = serve("HTTP/1.1 307 Temporary Redirect\r\nLocation: http://127.0.0.1:{port}/elsewhere\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into());
+        let rpc = Rpc { url, client: node_client().unwrap() };
+        let e = rpc.chain_id().unwrap_err().0;
+        assert!(e.contains("307"), "followed the redirect? {e}");
+
+        let big = format!("{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x{}\"}}", "0".repeat(MAX_RESPONSE as usize));
+        let url = serve(format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{big}", big.len()));
+        let rpc = Rpc { url, client: node_client().unwrap() };
+        let e = rpc.chain_id().unwrap_err().0;
+        assert!(e.contains("larger than"), "{e}");
+
+        let url = serve("HTTP/1.1 200 OK\r\nContent-Length: 40\r\nConnection: close\r\n\r\n{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\"0x1\"} ".into());
+        assert_eq!(Rpc { url, client: node_client().unwrap() }.chain_id().unwrap(), 1);
+    }
+
     #[test]
     fn eth_round_trip() {
         assert_eq!(parse_eth("0.5").unwrap(), 500_000_000_000_000_000);

@@ -706,7 +706,7 @@ pub fn same_file(a: &Path, b: &Path) -> bool {
 /// object (with the node's revert `data` when small, so dApps can decode it).
 fn proxy_call(url: &str, chain: u64, known_chain: Option<u64>, method: &str, params: &Value) -> Result<(Value, Option<u64>), Value> {
     let fail = |m: String| json!({"code": wc::INTERNAL, "message": m});
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).build().map_err(|e| fail(e.to_string()))?;
+    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| fail(e.to_string()))?;
     let post = |method: &str, params: &Value| -> Result<Value, Value> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         let resp = client.post(url).json(&body).send().map_err(|e| fail(format!("node unreachable: {e}")))?;
