@@ -32,7 +32,22 @@ function originOf(sender) {
 }
 
 function failAll(code, message) {
-  for (const [id, p] of pending) { try { p.port.postMessage({ type: "response", id: p.pageId, error: { code, message } }); } catch { /* tab gone */ } pending.delete(id); }
+  for (const [id, p] of pending) { if (p.reply) { pending.delete(id); p.reply({ error: { code, message } }); continue; } try { p.port.postMessage({ type: "response", id: p.pageId, error: { code, message } }); } catch { /* tab gone */ } pending.delete(id); }
+  for (const tab of [...waitingTabs()]) updateBadge(tab);
+}
+
+// Requests the companion queued for the user (connect, sign, send): badge the tab's toolbar icon
+// so a page that "just spins" says where to look.
+function waitingCount(tabId) { let n = 0; for (const p of pending.values()) if (p.waiting && p.tabId === tabId) n++; return n; }
+function waitingTabs() { const t = new Set(); for (const p of pending.values()) if (p.tabId != null) t.add(p.tabId); return t; }
+function updateBadge(tabId) {
+  if (tabId == null) return;
+  const n = waitingCount(tabId);
+  try {
+    chrome.action.setBadgeText({ tabId, text: n ? String(n) : "" });
+    if (n) chrome.action.setBadgeBackgroundColor({ tabId, color: "#d97706" });
+    chrome.action.setTitle({ tabId, title: n ? "Phone Vault: approve this in Phone Vault Companion on your Mac" : "Phone Vault" });
+  } catch { /* tab gone */ }
 }
 
 function connectNative() {
@@ -64,10 +79,16 @@ function onNative(m) {
     else { nativeState = m.error === "companion_not_running" ? "not_running" : "error"; nativeMessage = String(m.message ?? m.error ?? ""); }
     return;
   }
+  if (m.type === "queued") {
+    const p = pending.get(m.id);
+    if (p && !p.reply) { p.waiting = true; updateBadge(p.tabId); }
+    return;
+  }
   if (m.type === "response") {
     const p = pending.get(m.id);
     if (!p) return;
     pending.delete(m.id);
+    if (p.waiting) updateBadge(p.tabId);
     if (p.reply) { p.reply(m); return; }
     try { p.port.postMessage({ type: "response", id: p.pageId, result: m.result, error: m.error }); } catch { /* tab gone */ }
     return;
@@ -107,7 +128,7 @@ chrome.runtime.onConnect.addListener((port) => {
     try { size = JSON.stringify(m.params).length; } catch { return answer({ code: -32602, message: "params must be JSON" }); }
     if (size > MAX_REQUEST_CHARS) return answer({ code: -32602, message: "request too large" });
     const id = nextId++;
-    pending.set(id, { source: port, port, pageId: m.id, origin });
+    pending.set(id, { source: port, port, pageId: m.id, origin, tabId: s.tab.id });
     try { connectNative().postMessage({ type: "request", id, origin, method: m.method, params: m.params }); }
     catch (e) { pending.delete(id); answer({ code: 4900, message: `Phone Vault Companion is not reachable: ${e?.message ?? e}` }); }
   });
@@ -116,6 +137,7 @@ chrome.runtime.onConnect.addListener((port) => {
     ports.delete(port);
     // The tab closed or navigated: withdraw what it left waiting so the companion drops its cards.
     for (const [id, p] of [...pending]) if (p.source === port) { pending.delete(id); try { native?.postMessage({ type: "cancel", id }); } catch { /* gone */ } }
+    updateBadge(s.tab.id);
     if (!ports.size && !pending.size) {
       clearTimeout(idleTimer);
       idleTimer = setTimeout(() => { if (!ports.size && native) { native.disconnect(); native = null; nativeState = "unknown"; } }, 30_000);
@@ -142,7 +164,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   try { n = connectNative(); } catch (e) { sendResponse({ state: "error", message: String(e?.message ?? e), origin }); return false; }
   const id = nextId++;
   const timer = setTimeout(() => { pending.delete(id); sendResponse({ state: nativeState, message: nativeMessage, origin, site: null }); }, 1500);
-  pending.set(id, { reply: (m) => { clearTimeout(timer); sendResponse({ state: nativeState, message: nativeMessage, origin, site: m.result ?? null }); } });
+  const waiting = Number.isSafeInteger(msg.tabId) ? waitingCount(msg.tabId) : 0;
+  pending.set(id, { reply: (m) => { clearTimeout(timer); sendResponse({ state: nativeState, message: nativeMessage, origin, site: m.result ?? null, waiting }); } });
   if (origin) n.postMessage({ type: "site_status", id, origin });
   else { clearTimeout(timer); pending.delete(id); setTimeout(() => sendResponse({ state: nativeState, message: nativeMessage, origin: null, site: null }), 300); }
   return true;

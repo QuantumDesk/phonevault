@@ -13,7 +13,7 @@ const STATES = {
 async function refresh() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   const url = tab?.url ?? "";
-  chrome.runtime.sendMessage({ type: "status", url }, (r) => {
+  chrome.runtime.sendMessage({ type: "status", url, tabId: tab?.id }, (r) => {
     if (!r) return;
     const [tone, text] = STATES[r.state] ?? STATES.unknown;
     $("dot").className = `dot ${tone}`;
@@ -25,6 +25,8 @@ async function refresh() {
     const s = r.site;
     $("siteState").textContent = !s ? "" : s.connected ? `Connected · ${NAMES[s.chain] ?? `chain ${s.chain}`}` : s.paired ? "Not connected" : "Phone Vault isn't paired with a phone yet";
     $("disconnect").hidden = !s?.connected;
+    $("waiting").hidden = !r.waiting;
+    $("waiting").textContent = r.waiting === 1 ? "This site is waiting for you. Approve or reject it in Phone Vault Companion on your Mac." : `${r.waiting} requests from this site are waiting in Phone Vault Companion on your Mac.`;
     $("disconnect").onclick = () => chrome.runtime.sendMessage({ type: "disconnect_site", url }, () => refresh());
   });
 }

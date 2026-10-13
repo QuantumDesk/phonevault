@@ -436,9 +436,13 @@ impl Bridge {
                     return self.reply_err(conn, ext_id, rpc(LIMITED, "Too many requests are waiting in Phone Vault. Answer or reject them first."));
                 }
                 let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-                g.pending.push(Pending { id, conn, ext_id, origin, method: method.to_string(), params, chain, kind, created: now_secs() });
+                g.pending.push(Pending { id, conn, ext_id, origin: origin.clone(), method: method.to_string(), params, chain, kind, created: now_secs() });
+                let writer = g.conns.get(&conn).map(|c| c.writer.clone());
                 drop(g);
+                // Tell the extension this one waits for the user (badge), and bring the app forward.
+                if let Some(w) = writer { Self::send_to(&w, &json!({"type": "queued", "id": ext_id})); }
                 (self.notify)();
+                on_queued(&origin, kind == PendingKind::Connect, method);
             }
             Decision::Proxy { chain } => {
                 let url = self.lock().nodes.get(&chain).cloned();
@@ -886,6 +890,25 @@ pub fn create() -> Arc<Bridge> {
     )
 }
 
+/// A site's request now waits for the user: show the window, and post a notification in case
+/// the window can't come forward (another Space, full screen). Nothing from the site's request
+/// beyond its origin and method name goes into the notification.
+fn on_queued(origin: &str, connect: bool, method: &str) {
+    let Some(app) = APP.get() else { return };
+    use tauri_plugin_notification::NotificationExt;
+    crate::tray::show_main(app);
+    let host = origin.strip_prefix("https://").unwrap_or(origin);
+    let what = if connect { "wants to connect".to_string() } else {
+        match method {
+            "eth_sendTransaction" => "wants you to send a transaction".into(),
+            "wallet_switchEthereumChain" | "wallet_addEthereumChain" => "wants to switch network".into(),
+            m if m.contains("sign") || m.contains("Sign") => "wants a signature".into(),
+            _ => "is waiting for you".into(),
+        }
+    };
+    let _ = app.notification().builder().title("Phone Vault").body(format!("{host} {what}. Review it in Phone Vault Companion.")).show();
+}
+
 /// Called from setup: remember the handle for events and start listening.
 pub fn start(app: &tauri::AppHandle, bridge: &Arc<Bridge>) {
     let _ = APP.set(app.clone());
@@ -1170,7 +1193,9 @@ mod tests {
             Client { s }
         }
         fn send(&mut self, v: Value) { write_frame(&mut self.s, v.to_string().as_bytes(), MAX_IN_FRAME).unwrap(); }
-        fn recv(&mut self) -> Value { serde_json::from_slice(&read_frame(&mut self.s, MAX_OUT_FRAME).unwrap().unwrap()).unwrap() }
+        fn raw(&mut self) -> Value { serde_json::from_slice(&read_frame(&mut self.s, MAX_OUT_FRAME).unwrap().unwrap()).unwrap() }
+        /// Next frame, skipping "queued" notices (checked on their own below).
+        fn recv(&mut self) -> Value { loop { let v = self.raw(); if v["type"] != "queued" { return v; } } }
         /// Next response (skipping events).
         fn response(&mut self) -> Value { loop { let v = self.recv(); if v["type"] == "response" { return v; } } }
         fn req(&mut self, id: u64, origin: &str, method: &str, params: Value) -> Value {
@@ -1208,6 +1233,7 @@ mod tests {
         // connect: queued for the user; a second connect from the same site is refused meanwhile
         c.send(json!({"type": "request", "id": 5, "origin": o, "method": "eth_requestAccounts", "params": []}));
         wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(c.raw(), json!({"type": "queued", "id": 5}), "the extension is told the request waits for the user");
         assert_eq!(c.req(6, o, "eth_requestAccounts", json!([]))["error"]["code"], ALREADY_PENDING);
         let p = bridge.pending()[0].clone();
         assert_eq!((p.kind, p.host.as_str()), (PendingKind::Connect, "app.example.org"));
