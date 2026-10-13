@@ -44,7 +44,10 @@ pass "phrase after the window: PIN asked, then shown"
 
 "$A" reboot; sleep 25; wait_boot; sleep 12; "$A" shell input keyevent KEYCODE_WAKEUP; sleep 2
 [[ "$("$A" shell dumpsys user | grep -oE 'State: [A-Z_]+' | head -1)" == "State: RUNNING_LOCKED" ]] || die "storage was not locked after reboot"
-"$A" shell input swipe 720 2400 720 900 250; sleep 2
+# Swipe up to the PIN pad, sized to this screen (3 XL 1440x2960, 6a 1080x2400; Android 17's
+# keyguard needs the swipe to start above the gesture-nav strip).
+read -r W H < <("$A" shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | tr x ' ')
+"$A" shell input swipe $((W / 2)) $((H * 4 / 5)) $((W / 2)) $((H * 3 / 10)) 250; sleep 2
 "$A" shell input text "$PV_TEST_PIN"; "$A" shell input keyevent KEYCODE_ENTER; sleep 14
 system_prompt_up && die "vault asked for the PIN a second time after the boot unlock"
 go_home; [[ "$(addr)" == "$BEFORE" ]] || die "identity changed across reboot"
