@@ -163,7 +163,7 @@ pub fn search_logs(rpc: &eth::Rpc, from: u128, to: u128, address: Option<Value>,
             Err(e) => return (logs, covered, Some(e.0)),
         }
     }
-    let incomplete = covered.map_or(true, |c| c > from);
+    let incomplete = covered.is_none_or(|c| c > from);
     (logs, covered, incomplete.then(|| "searched as far back as the node allows".to_string()))
 }
 

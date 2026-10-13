@@ -285,7 +285,7 @@ pub fn normalize_tx(params: &Value, paired: &str, chain: u64) -> Result<TxDraft,
         (Some(a), None) | (None, Some(a)) => Some(dapp_quantity(a, "gas")?),
         (None, None) => None,
     };
-    if let Some(g) = gas { if g < 21_000 || g > MAX_GAS { return Err(bad(format!("gas limit {g} is outside 21000…{MAX_GAS}"))); } }
+    if let Some(g) = gas { if !(21_000..=MAX_GAS).contains(&g) { return Err(bad(format!("gas limit {g} is outside 21000…{MAX_GAS}"))); } }
     let max_fee = field("maxFeePerGas").map(|v| dapp_quantity(v, "maxFeePerGas")).transpose()?;
     let max_priority = field("maxPriorityFeePerGas").map(|v| dapp_quantity(v, "maxPriorityFeePerGas")).transpose()?;
     if let (Some(f), Some(p)) = (max_fee, max_priority) { if p > f { return Err(bad("maxPriorityFeePerGas exceeds maxFeePerGas")); } }
@@ -387,6 +387,7 @@ pub fn typed_data_params(params: &Value, paired: &str) -> Result<(String, TypedS
 /// What the UI should do with a request. Anything not listed becomes an `RpcError`.
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // one short-lived value per request, serialized at once
 pub enum Prepared {
     /// Answer at once, no phone involved (eth_chainId, eth_accounts).
     Answer { result: Value },
@@ -460,7 +461,7 @@ fn node_call(url: &str, method: &str, params: Value) -> Result<Value, String> {
 
 /// Gas limit for a call: the node's estimate, +20 % headroom for anything but a plain transfer.
 pub fn gas_with_headroom(estimate: u128, plain_transfer: bool) -> u128 {
-    if plain_transfer && estimate == 21_000 { 21_000 } else { (estimate.saturating_mul(6) + 4) / 5 }
+    if plain_transfer && estimate == 21_000 { 21_000 } else { estimate.saturating_mul(6).div_ceil(5) }
 }
 
 fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str) -> Result<Prepared, RpcError> {

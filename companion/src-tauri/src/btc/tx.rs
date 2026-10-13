@@ -179,20 +179,21 @@ pub fn select(kind: Kind, coins: &[(u64, bool)], amount: Option<u64>, recipient_
 /// within the try budget wins).
 fn bnb(pool: &[usize], coins: &[(u64, bool)], amount: u64, in_fee: u64, window: u64, base_fee: impl Fn(usize) -> u64) -> Option<Vec<usize>> {
     let mut eff: Vec<(usize, u64)> = pool.iter().map(|&i| (i, coins[i].0 - in_fee)).collect();
-    eff.sort_by(|a, b| b.1.cmp(&a.1));
+    eff.sort_by_key(|e| std::cmp::Reverse(e.1));
     if eff.is_empty() || eff.len() > 64 { return None; }
     let target = amount + base_fee(1); // the fixed part of the fee (version, counts, outputs)
     let mut best: Option<(u64, Vec<usize>)> = None;
     let mut tries = 0u32;
     let mut remaining: Vec<u64> = vec![0; eff.len() + 1];
     for i in (0..eff.len()).rev() { remaining[i] = remaining[i + 1] + eff[i].1; }
+    #[allow(clippy::too_many_arguments)]
     fn go(i: usize, sum: u64, chosen: &mut Vec<usize>, eff: &[(usize, u64)], remaining: &[u64], target: u64, window: u64, best: &mut Option<(u64, Vec<usize>)>, tries: &mut u32) {
         *tries += 1;
         if *tries > 100_000 { return; }
         if sum > target + window { return; }
         if sum >= target {
             let excess = sum - target;
-            if best.as_ref().map_or(true, |b| excess < b.0) { *best = Some((excess, chosen.clone())); }
+            if best.as_ref().is_none_or(|b| excess < b.0) { *best = Some((excess, chosen.clone())); }
             return;
         }
         if i == eff.len() || sum + remaining[i] < target { return; }
@@ -219,6 +220,7 @@ pub fn shuffle<T>(v: &mut [T]) {
 }
 
 /// Assemble the unsigned PSBT for a selection. `shuffle_order` is false only in tests.
+#[allow(clippy::too_many_arguments)]
 pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u64, change: Option<(Derived, u64)>, fee: u64, rate_kvb: u64, vsize_est: u64, shuffle_order: bool) -> Result<Built, String> {
     if inputs.is_empty() { return Err("no inputs".into()); }
     if inputs.len() > MAX_INPUTS { return Err(format!("this would spend {} coins; the phone takes at most {MAX_INPUTS} per transaction. Send a smaller amount first", inputs.len())); }

@@ -160,7 +160,7 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
 #[tauri::command]
 pub(crate) fn sign_cancel(state: State<'_, SendState>, ticket: Option<String>) {
     if let Ok(m) = state.cancels.lock() {
-        for (t, c) in m.iter() { if ticket.as_deref().map_or(true, |x| x == t) { c.store(true, Ordering::SeqCst); } }
+        for (t, c) in m.iter() { if ticket.as_deref().is_none_or(|x| x == t) { c.store(true, Ordering::SeqCst); } }
     }
 }
 

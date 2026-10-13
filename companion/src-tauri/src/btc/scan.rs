@@ -42,7 +42,7 @@ pub fn scan(account: &Account, src: &dyn Source, cache: &mut Cache, full: bool, 
         let s = state(chain, index, &info);
         let used = s.chain_txs + s.mempool_txs > 0;
         let prev = cache.addrs.get(&a);
-        if used && prev.map_or(true, |p| p.chain_txs != s.chain_txs || p.mempool_txs != s.mempool_txs) { changed.insert(a.clone()); }
+        if used && prev.is_none_or(|p| p.chain_txs != s.chain_txs || p.mempool_txs != s.mempool_txs) { changed.insert(a.clone()); }
         if !used && prev.is_some() { changed.insert(a.clone()); } // an unconfirmed payment vanished
         if used { seen.insert(a, s); }
         Ok(used)

@@ -222,4 +222,4 @@ pub fn patch_level_text(v: u64) -> String {
 }
 
 /// YYYYMM from a YYYYMM or YYYYMMDD value (for comparisons).
-pub fn patch_month(v: u64) -> u64 { if v > 9_999_99 { v / 100 } else { v } }
+pub fn patch_month(v: u64) -> u64 { if v > 999_999 { v / 100 } else { v } }

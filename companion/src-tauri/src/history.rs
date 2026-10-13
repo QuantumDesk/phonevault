@@ -104,7 +104,7 @@ fn update_for(owner: &str, f: impl FnOnce(&mut Vec<Entry>)) -> Result<Vec<Entry>
     let _g = LOCK.lock().map_err(|_| "history lock poisoned".to_string())?;
     let mut entries = load(owner)?;
     f(&mut entries);
-    entries.sort_by(|a, b| b.time.cmp(&a.time));
+    entries.sort_by_key(|e| std::cmp::Reverse(e.time));
     entries.truncate(MAX_ENTRIES);
     save(owner, &entries)?;
     Ok(entries)

@@ -259,7 +259,7 @@ pub fn update_cache<T>(id: &str, f: impl FnOnce(&mut Cache) -> T) -> Result<(T, 
     let d = dir()?;
     let mut c: Cache = check_file(&d.join(cache_name(id)))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let r = f(&mut c);
-    c.history.sort_by(|a, b| b.time.cmp(&a.time));
+    c.history.sort_by_key(|e| std::cmp::Reverse(e.time));
     c.history.truncate(1000);
     if c.sent.len() > 200 { let n = c.sent.len() - 200; c.sent.drain(..n); }
     write_private(&d, &cache_name(id), &serde_json::to_vec_pretty(&c).map_err(|e| e.to_string())?)?;

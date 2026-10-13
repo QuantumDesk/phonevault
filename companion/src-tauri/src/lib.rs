@@ -41,9 +41,7 @@ use std::time::Duration;
 
 type CmdResult<T> = Result<T, String>;
 
-fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> impl std::future::Future<Output = CmdResult<T>> {
-    async move { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())? }
-}
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())? }
 
 /// One paired account as the UI shows it.
 #[derive(Serialize)]

@@ -94,7 +94,7 @@ impl U256 {
         }
         U256(out)
     }
-    pub fn to_decimal(&self) -> String {
+    pub fn to_decimal(self) -> String {
         if self.is_zero() { return "0".into(); }
         let mut limbs = self.0;
         let mut digits = Vec::new();
@@ -110,7 +110,7 @@ impl U256 {
         digits.reverse();
         String::from_utf8(digits).unwrap_or_default()
     }
-    fn to_u128(&self) -> Option<u128> { if self.0[0] == 0 && self.0[1] == 0 { Some(((self.0[2] as u128) << 64) | self.0[3] as u128) } else { None } }
+    fn to_u128(self) -> Option<u128> { if self.0[0] == 0 && self.0[1] == 0 { Some(((self.0[2] as u128) << 64) | self.0[3] as u128) } else { None } }
 }
 
 /// Decimal text of `raw` with `decimals` places, trailing zeros trimmed (exact, any size).
@@ -473,7 +473,7 @@ pub fn node_label(url: &str) -> String {
     let host = host.rsplit_once('@').map(|(_, h)| h).unwrap_or(host).to_ascii_lowercase();
     let (name, port) = match host.rsplit_once(':') { Some((n, p)) => (n.to_string(), Some(p.to_string())), None => (host.clone(), None) };
     let name_ok = !name.is_empty() && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-');
-    let port_ok = port.as_ref().map_or(true, |p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()));
+    let port_ok = port.as_ref().is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|b| b.is_ascii_digit()));
     if name_ok && port_ok && host.len() <= 100 { host } else { "custom-node".into() }
 }
 

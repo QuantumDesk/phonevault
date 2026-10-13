@@ -775,13 +775,8 @@ impl Bridge {
         let id = self.next_conn.fetch_add(1, Ordering::SeqCst);
         self.lock().conns.insert(id, Conn { writer: Arc::new(Mutex::new(stream)) });
         (self.notify)();
-        loop {
-            match read_frame(&mut reader, MAX_IN_FRAME) {
-                Ok(Some(body)) => {
-                    if let Ok(v) = serde_json::from_slice::<Value>(&body) { self.on_message(id, &v); }
-                }
-                _ => break,
-            }
+        while let Ok(Some(body)) = read_frame(&mut reader, MAX_IN_FRAME) {
+            if let Ok(v) = serde_json::from_slice::<Value>(&body) { self.on_message(id, &v); }
         }
         { let mut g = self.lock(); g.conns.remove(&id); g.pending.retain(|p| p.conn != id); }
         (self.notify)();

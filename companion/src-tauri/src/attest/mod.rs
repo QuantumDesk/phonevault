@@ -154,6 +154,7 @@ fn transient(msg: &str) -> bool {
 
 /// Verify one exchange. `Err` only for a transient refusal (locked/not ready/busy); every other
 /// problem is a FAIL report. `revocation` is called only once the chain itself verified.
+#[allow(clippy::too_many_arguments)]
 pub fn assess(
     policy: &Policy, roots: &[chain::TrustedRoot], now: i64, challenge: &[u8],
     request: &Value, response: &Value, revocation: impl FnOnce() -> revocation::Status, allow_dev: bool,
