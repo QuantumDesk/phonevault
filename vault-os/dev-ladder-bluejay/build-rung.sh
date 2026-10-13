@@ -35,6 +35,14 @@ for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-ap
     echo "   scrub overridden app dir: ${d}"; rm -rf "${d}"
   fi
 done
+# Same problem for kernel modules leaving the vendor_boot ramdisk (b4a, 2026-10-13): the dlkm
+# fragment's staging dirs are filled by per-file copy rules and never pruned, so a module dropped
+# from BOARD_VENDOR_RAMDISK_KERNEL_MODULES stayed in vendor_boot (no load list named it, but the
+# .ko was there). Both dirs are regenerated from the current module list on every build.
+for d in "${PV_PRODUCT_OUT}"/obj/PACKAGING/vendor_ramdisk_fragment-stage-*_intermediates \
+         "${PV_PRODUCT_OUT}"/obj/PACKAGING/depmod_vendor_ramdisk*_intermediates; do
+  [[ -d "${d}" ]] && { echo "   scrub ramdisk module staging: ${d}"; rm -rf "${d}"; }
+done
 export DISABLE_DEXPREOPT_CHECK=true
 # Lineage: without this, userdebug gets ro.adb.secure=1 and ro.debuggable=0 (dev rungs need adb).
 export WITH_ADB_INSECURE=true

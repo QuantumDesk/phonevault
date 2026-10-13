@@ -54,7 +54,11 @@ absent VENDOR/etc/permissions/android.hardware.nfc.ese.xml
 absent VENDOR/etc/permissions/com.nxp.mifare.xml
 absent VENDOR/etc/permissions/android.hardware.se.omapi.ese.xml
 absent VENDOR/etc/permissions/android.hardware.se.omapi.uicc.xml
-nogrep VENDOR/etc/permissions/handheld_core_hardware.xml android\.hardware\.(bluetooth|nfc|location\.gps)
+# handheld_core_hardware.xml declares android.hardware.bluetooth itself: withdrawn by sysconfig.
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.bluetooth" />
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.nfc" />
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.location\.gps" />
+nogrep VENDOR/etc/permissions/handheld_core_hardware.xml <feature name="android\.hardware\.(nfc|location\.gps)
 # VINTF: nothing declared that no longer registers; the radio HAL (rild) stays declared.
 nogrep VENDOR/etc/vintf/manifest.xml <name>(android\.hardware\.bluetooth|vendor\.google\.bluetooth_ext|android\.hardware\.nfc|android\.hardware\.gnss|vendor\.samsung_slsi\.telephony\.hardware\.oemservice|com\.google\.pixel\.shared_modem_platform)
 nogrep VENDOR/etc/vintf/manifest.xml ISecureElement/eSE1

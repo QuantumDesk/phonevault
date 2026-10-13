@@ -1,4 +1,4 @@
-# RUNG b4a (bluejay): this file = b3. b4a's changes (radios: drivers, services, features) are in
+# RUNG b4a (bluejay): this file = b3 + the radio-feature sysconfig (end). b4a's changes (radios: drivers, services, features) are in
 # BoardConfigVault.mk, Android.bp and the device/vendor/kernel-list diffs.
 # RUNG b3 (bluejay): b2 + USB lock-down (vendor-google-bluejay.diff: gadget function instances
 # limited to AOA (+ adb while debuggable), Type-C port pinned sink/UFP with root-only role nodes;
@@ -49,3 +49,8 @@ PRODUCT_COPY_FILES += \
 # frameworks/base 0003 also unstops the configured owner itself; this is the product-level half.
 PRODUCT_COPY_FILES += \
     vendor/phonevault/prebuilt/sysconfig/phonevault-initial-package-state.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/phonevault-initial-package-state.xml
+
+# Rung b4a: the Bluetooth/NFC/OMAPI/GPS features are withdrawn (handheld_core_hardware.xml
+# itself declares android.hardware.bluetooth, so dropping the feature files is not enough).
+PRODUCT_COPY_FILES += \
+    device/phonevault/bluejay/sysconfig/phonevault-no-radios.xml:$(TARGET_COPY_OUT_PRODUCT)/etc/sysconfig/phonevault-no-radios.xml
