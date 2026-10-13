@@ -495,7 +495,9 @@ def validate_attest_response(request, response, expected_signer=None):
         raise ValueError(f"attested address {response['address']} is not the pinned signer {expected_signer}")
 
 
-def exchange(endpoint_in, endpoint_out, request, timeout_ms=120_000, max_response_bytes=None):
+# 300 s: the companion's own wait for on-device approval (signing.rs), so a long review that a
+# person (or the harness) scrolls through before approving does not time out here first.
+def exchange(endpoint_in, endpoint_out, request, timeout_ms=300_000, max_response_bytes=None):
     limit = MAX_RESPONSE_BYTES if max_response_bytes is None else max_response_bytes
     request_id = request.get("id")
     if not isinstance(request_id, str) or not request_id:
