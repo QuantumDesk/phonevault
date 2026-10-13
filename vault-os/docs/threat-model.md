@@ -452,7 +452,9 @@ past and future (it cannot spend). The first request per (network, type, account
 Bitcoin account with the Mac?" with exactly that explanation; the decision is remembered in the
 `bitcoin` preferences, bound to the wallet's account-0 address (`BtcSharing`; holds no keys). A
 remembered account is answered without a screen. Editing that file can only skip or repeat the
-question. `btcShowAddress` answers only after the user tapped "Done: it matches" on the phone.
+question. ☰ → Bitcoin sharing (also under Security) lists the remembered accounts and revokes them
+one by one or all at once; revoking makes the phone ask again and cannot recall what the Mac
+already received. `btcShowAddress` answers only after the user tapped "Done: it matches" on the phone.
 
 **What is signed (btcSignPsbt, `BtcPsbtReview`).** A strict structural BIP-174 parse (v0 only;
 v2 fields refused; ≤ 200 KiB; ≤ 100 inputs and outputs; canonical sizes; no duplicate keys; key

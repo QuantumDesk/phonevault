@@ -622,4 +622,20 @@ public final class BtcPsbtTest {
         assertFalse("another wallet", BtcSharing.load(saved, "0x" + "11".repeat(20)).isShared(BtcNetwork.BITCOIN, BtcWallet.Type.P2WPKH, 0));
         assertFalse("corrupt", BtcSharing.load("{", wallet).isShared(BtcNetwork.BITCOIN, BtcWallet.Type.P2WPKH, 0));
     }
+
+    @Test public void sharingCanBeRevoked() {
+        String wallet = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
+        BtcSharing s = BtcSharing.load(null, wallet);
+        s.share(BtcNetwork.TESTNET, BtcWallet.Type.P2WPKH, 0);
+        s.share(BtcNetwork.SIGNET, BtcWallet.Type.P2TR, 4);
+        assertEquals(java.util.Arrays.asList("signet/p2tr/5", "testnet/p2wpkh/1"), s.keys());
+        assertEquals("Bitcoin TESTNET · Account 1 · Native SegWit", BtcSharing.label("testnet/p2wpkh/1"));
+        assertTrue(s.revoke("testnet/p2wpkh/1"));
+        assertFalse(s.revoke("testnet/p2wpkh/1"));
+        BtcSharing reloaded = BtcSharing.load(s.encode(), wallet);
+        assertFalse(reloaded.isShared(BtcNetwork.TESTNET, BtcWallet.Type.P2WPKH, 0));
+        assertTrue(reloaded.isShared(BtcNetwork.SIGNET, BtcWallet.Type.P2TR, 4));
+        reloaded.revokeAll();
+        assertTrue(BtcSharing.load(reloaded.encode(), wallet).keys().isEmpty());
+    }
 }

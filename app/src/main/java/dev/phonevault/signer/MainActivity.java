@@ -954,6 +954,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
         action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
         action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
+        action(root, "Bitcoin sharing", "btc-sharing".equals(current), () -> { if (menuAvailable()) showBtcSharing(); });
         action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
         action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
         action(root, "Lock now", false, this::lock);
@@ -1055,6 +1056,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         action(root, "Passphrase wallet", false, this::showPassphraseWallet);
         action(root, "Show as SeedQR", false, this::confirmRevealSeedQr);
         action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, this::showBackupReminderSettings);
+        action(root, "Bitcoin sharing", false, this::showBtcSharing);
         card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
         action(root, "Replace with a new wallet", false, this::confirmReplace);
         action(root, "Restore a different wallet", false, this::confirmRestoreOver);
@@ -2902,6 +2904,48 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.addView(share, matchWrap(dp(16)));
         root.addView(decline, matchWrap(dp(10)));
         present(root, "btc-share");
+    }
+
+    /**
+     * ☰ → Bitcoin sharing: the accounts btcGetAccount answers without asking, each revocable. A
+     * privacy control only: revoking makes the phone ask again; it cannot recall what the Mac
+     * already received, and it never changes what is signed.
+     */
+    private void showBtcSharing() {
+        java.util.List<String> keys;
+        synchronized (stateLock) { keys = walletId != null ? btcSharing().keys() : java.util.Collections.emptyList(); }
+        LinearLayout root = page("SECURITY / PRIVACY", "Bitcoin sharing",
+                "Bitcoin accounts whose watch-only key the Mac receives without asking. Stop sharing to make the phone ask again.");
+        if (keys.isEmpty()) {
+            card(root, "Nothing shared", "No Bitcoin account is shared. The phone asks before the Mac can see any account.");
+        } else {
+            card(root, "Already received", "Stopping does not erase what the Mac already received: it can still watch those addresses. "
+                    + "It only stops new requests from being answered silently.");
+            for (String key : keys) {
+                action(root, "Stop sharing · " + BtcSharing.label(key), false, () -> {
+                    synchronized (stateLock) {
+                        if (walletId == null) return;
+                        BtcSharing sharing = btcSharing();
+                        sharing.revoke(key);
+                        saveBtcSharing(sharing);
+                    }
+                    statusMessage = "Bitcoin account no longer shared · the phone will ask again";
+                    showBtcSharing();
+                });
+            }
+            if (keys.size() > 1) action(root, "Stop sharing all", false, () -> {
+                synchronized (stateLock) {
+                    if (walletId == null) return;
+                    BtcSharing sharing = btcSharing();
+                    sharing.revokeAll();
+                    saveBtcSharing(sharing);
+                }
+                statusMessage = "No Bitcoin account is shared · the phone will ask again";
+                showBtcSharing();
+            });
+        }
+        action(root, "Back to Security", false, this::showSecurity);
+        present(root, "btc-sharing");
     }
 
     /** btcShowAddress: the address big, for comparison with the Mac; answered only after Done. */

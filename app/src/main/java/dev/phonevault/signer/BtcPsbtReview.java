@@ -200,7 +200,7 @@ final class BtcPsbtReview {
             for (SignInput in : ins) {
                 String conflict = amounts.conflict(tx.inputs.get(in.index).outpoint(), in.amount, in.script);
                 if (conflict != null) throw refuse("Input " + (in.index + 1) + " (" + conflict + "). A host that lies about coin "
-                        + "amounts can trick a wallet into paying a huge fee. Nothing was signed.");
+                        + "amounts can trick a wallet into paying a huge fee.");
             }
         }
 

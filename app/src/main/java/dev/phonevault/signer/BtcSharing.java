@@ -47,6 +47,20 @@ final class BtcSharing {
 
     void share(BtcNetwork network, BtcWallet.Type type, int account) { shared.add(key(network, type, account)); }
 
+    /** The shared accounts, as stored keys ("network/type/account", account 1-based), sorted. */
+    java.util.List<String> keys() { return new java.util.ArrayList<>(shared); }
+
+    /** Stop answering btcGetAccount for this key without asking (the phone asks again next time). */
+    boolean revoke(String key) { return shared.remove(key); }
+
+    void revokeAll() { shared.clear(); }
+
+    /** "Bitcoin TESTNET · Account 1 · Native SegWit" for a stored key. */
+    static String label(String key) {
+        String[] p = key.split("/");
+        return BtcNetwork.fromWire(p[0]).label + " · " + BtcWallet.accountLabel(BtcWallet.Type.fromWire(p[1]), Integer.parseInt(p[2]) - 1);
+    }
+
     String encode() {
         try {
             JSONArray list = new JSONArray();

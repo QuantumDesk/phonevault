@@ -15,6 +15,7 @@ Needs: pip install embit==0.8.0 (dev host only).
 """
 import argparse
 import base64
+import hashlib
 import json
 import sys
 
@@ -45,7 +46,11 @@ def make(args):
 
     amount, send = 100_000, 60_000
     fee = args.fee
-    vin = [TransactionInput(bytes.fromhex("ab" * 32), 0, sequence=0xFFFFFFFD)]
+    # One fabricated outpoint per spent script: the phone remembers each coin it signed for
+    # (outpoint → amount + script, the SegWit fee-attack guard) and refuses the same outpoint
+    # later claimed with another script, so P2WPKH and P2TR must not share one.
+    outpoint = hashlib.sha256(b"phone-vault fabricated coin " + spk(recv).data).digest()
+    vin = [TransactionInput(outpoint, 0, sequence=0xFFFFFFFD)]
     external = script.p2wpkh(ec.PrivateKey(bytes([42] * 32)).get_public_key())
     vout = [TransactionOutput(send, external), TransactionOutput(amount - send - fee, spk(change))]
     psbt = PSBT(Transaction(version=2, vin=vin, vout=vout, locktime=0))
