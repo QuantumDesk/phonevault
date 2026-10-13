@@ -39,7 +39,10 @@ final class MessageReview {
     static final class Row {
         final String label;
         final String value;
-        Row(String label, String value) { this.label = label; this.value = value; }
+        /** What a DANGER / WARNING row is about ("NEW RECIPIENT"); null: read from the text (ReviewStyle.topicOf). */
+        final String topic;
+        Row(String label, String value) { this(label, value, null); }
+        Row(String label, String value, String topic) { this.label = label; this.value = value; this.topic = topic; }
         boolean danger() { return DANGER.equals(label) || WARNING.equals(label); }
         @Override public String toString() { return label + ": " + value; }
     }

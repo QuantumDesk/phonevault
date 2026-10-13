@@ -100,8 +100,8 @@ echo "== 1. honest claim: shown as the Mac's, matches; approve"
 start_request honest "$OUT.honest.json"
 review honest "Send 100 USDC" "NOT VERIFIED BY THIS PHONE" "The Mac says your balance changes by" "−100 USDC" "cannot check"
 lacks honest "does not match what this transaction does"
-box="$(find_checkbox)" || die "honest: checkbox not visible"
-tap_bounds "$box"; sleep 1; tap_text "Approve &amp; sign"; sleep 3
+tick_review || die "honest: review checkboxes not ticked: $(texts 10)"
+tap_text "Approve &amp; sign"; sleep 3
 rc=0; wait $pid || rc=$?
 [[ $rc -eq 0 ]] && grep -q '"status": "approved"' "$OUT.honest" || { tail -6 "$OUT.honest"; die "honest: not approved/verified (exit $rc)"; }
 expect_screen "Signature created"

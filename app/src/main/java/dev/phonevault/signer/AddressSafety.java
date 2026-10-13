@@ -84,7 +84,7 @@ final class AddressSafety {
             rows.add(new MessageReview.Row(TransactionReview.DANGER, "Looks like " + LookAlike.shortForm(k)
                     + (kName != null ? " (\"" + kName + "\")" : "") + " " + how + ", but it is a DIFFERENT address ("
                     + LookAlike.differingChunks(k, a) + " of " + LookAlike.chunkCount(k, a) + " chunks differ). This is how address-poisoning scams work: "
-                    + "check every character below. Do not sign unless you are sure."));
+                    + "check every character below. Do not sign unless you are sure.", "LOOK-ALIKE ADDRESS"));
             rows.add(new MessageReview.Row(COMPARE, LookAlike.grid(k, a)));
             rows.add(new MessageReview.Row("Known address", AddressKeys.display(k)));
             rows.add(new MessageReview.Row("This address", AddressKeys.display(a)));
@@ -94,7 +94,7 @@ final class AddressSafety {
         if (history == null || signer == null) return rows;
         if (history.problem() != null) {
             rows.add(new MessageReview.Row(TransactionReview.WARNING, "The address history on this phone could not be read, "
-                    + "so first-time and look-alike checks against past sends are not available (" + history.problem() + ")."));
+                    + "so first-time and look-alike checks against past sends are not available (" + history.problem() + ").", "HISTORY UNAVAILABLE"));
             return rows;
         }
         RecipientHistory.Entry e = history.lookup(signer, a);
@@ -102,13 +102,13 @@ final class AddressSafety {
             if (e == null || e.sends == 0) {
                 rows.add(new MessageReview.Row(TransactionReview.WARNING, "First time sending to this address from this wallet."
                         + (e != null && e.approvals > 0 ? " (You approved it as a spender before.)" : "")
-                        + " Check the whole address with the recipient."));
+                        + " Check the whole address with the recipient.", "NEW RECIPIENT"));
             } else {
                 rows.add(new MessageReview.Row("History", "Sent here " + times(e.sends) + " before (first on " + day(e.firstSeen) + ")"));
             }
         } else {
             if (e == null || e.approvals == 0) {
-                rows.add(new MessageReview.Row(TransactionReview.WARNING, "First time approving this spender from this wallet."));
+                rows.add(new MessageReview.Row(TransactionReview.WARNING, "First time approving this spender from this wallet.", "NEW SPENDER"));
             } else {
                 rows.add(new MessageReview.Row("History", "Approved this spender " + times(e.approvals) + " before (first on " + day(e.firstSeen) + ")"));
             }

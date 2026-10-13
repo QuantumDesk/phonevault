@@ -24,7 +24,9 @@ final class VaultTheme {
     static final int FAINT = Color.rgb(164, 168, 176); // readable secondary labels
     static final int ACCENT = Color.rgb(184, 239, 211);
     static final int LINE = Color.rgb(40, 42, 48);      // borders/dividers
-    static final int DANGER_INK = Color.rgb(255, 90, 90); // reserved for DANGER only (safety-critical legibility)
+    static final int DANGER_INK = ReviewStyle.DANGER_INK; // reserved for DANGER only (6.6:1 on BG)
+    /** CHECK (WARNING) review rows: amber, 12:1 on BG; always with the "!" glyph, never color alone. */
+    static final int WARNING_INK = ReviewStyle.WARNING_INK;
     static final int AMBER = Color.rgb(255, 184, 77);    // test-network banner (Bitcoin TESTNET / SIGNET)
 
     private static Typeface pixelFace;
@@ -239,20 +241,72 @@ final class VaultTheme {
 
     /** '#' cells of the pattern filled with color; everything else transparent. */
     private static android.graphics.Bitmap pixelArt(String[] rows, int cell, int color) {
+        return pixelArt(rows, cell, color, 0);
+    }
+
+    /** '#' cells in {@code color}, 'o' cells in {@code second}; everything else transparent. */
+    private static android.graphics.Bitmap pixelArt(String[] rows, int cell, int color, int second) {
         int w = rows[0].length(), h = rows.length;
         android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(
                 w * cell, h * cell, android.graphics.Bitmap.Config.ARGB_8888);
         android.graphics.Canvas cv = new android.graphics.Canvas(bmp);
         android.graphics.Paint p = new android.graphics.Paint();
+        android.graphics.Paint q = new android.graphics.Paint();
         p.setColor(color);
+        q.setColor(second);
         for (int y = 0; y < h; y++) {
             for (int x = 0; x < w; x++) {
-                if (rows[y].charAt(x) == '#') {
-                    cv.drawRect(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell, p);
+                char ch = rows[y].charAt(x);
+                if (ch == '#' || ch == 'o') {
+                    cv.drawRect(x * cell, y * cell, (x + 1) * cell, (y + 1) * cell, ch == '#' ? p : q);
                 }
             }
         }
         return bmp;
+    }
+
+    // ------------------------------------------------------------------ review level glyphs
+
+    /**
+     * Drawn, not typed: the device font has no reliable "⛔" / "⚠" emoji. DANGER is a red stop
+     * disc with a white bar (no entry); CHECK is an amber triangle with a "!" cut out. Shape and
+     * word carry the level as well as the color.
+     */
+    private static final String[] STOP = {
+            "...#####...",
+            ".#########.",
+            ".#########.",
+            "###########",
+            "#ooooooooo#",
+            "#ooooooooo#",
+            "#ooooooooo#",
+            "###########",
+            ".#########.",
+            ".#########.",
+            "...#####...",
+    };
+    private static final String[] CAUTION = {
+            ".....#.....",
+            "....###....",
+            "....###....",
+            "...##o##...",
+            "...##o##...",
+            "..###o###..",
+            "..###o###..",
+            ".#########.",
+            ".####o####.",
+            "###########",
+            "###########",
+    };
+
+    /** The level glyph for a review row heading (12 dp-ish, pixel-crisp), with a spoken name. */
+    static android.widget.ImageView levelGlyph(Context c, ReviewStyle.Level level) {
+        android.widget.ImageView iv = new android.widget.ImageView(c);
+        int cell = Math.max(2, Math.round(c.getResources().getDisplayMetrics().density * textScale * 1.5f));
+        boolean danger = level == ReviewStyle.Level.DANGER;
+        iv.setImageBitmap(pixelArt(danger ? STOP : CAUTION, cell, danger ? DANGER_INK : WARNING_INK, danger ? INK : BG));
+        iv.setContentDescription(danger ? "Danger" : "Check");
+        return iv;
     }
 
     // ------------------------------------------------------------------ battery indicator

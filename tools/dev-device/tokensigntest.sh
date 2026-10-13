@@ -56,8 +56,8 @@ run_case() {
   [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$must': $(texts 14)"; }
   pass "$name: review shows '$title' and '$must'"
   if [[ "$decision" == approve ]]; then
-    local box; box="$(find_checkbox)" || { kill $pid 2>/dev/null || true; die "$name: review checkbox not visible"; }
-    tap_bounds "$box"; sleep 1
+    # to the end of the review, then "I verified…" (+ "I understand: …" when the review has a DANGER)
+    tick_review || { kill $pid 2>/dev/null || true; die "$name: review checkboxes not ticked: $(texts 10)"; }
     tap_text "$button"; sleep 3
     rc=0; wait $pid || rc=$?
     tail -6 "$OUT.$name" | sed -E 's/("signedTransaction": ")0x[0-9a-f]{20}[0-9a-f]*/\10x…/'
@@ -77,11 +77,11 @@ run_case() {
   tap_text "Back to Wallet" 2>/dev/null || true
 }
 
-run_case usdc-transfer "Send 50 USDC" approve "Approve &amp; sign" "Send 50 USDC to 0x7F3A9C04" -- \
+run_case usdc-transfer "Send 50 USDC" approve "Approve &amp; sign" "Send 50 USDC to 0x7F3A 9C04" -- \
   --chain-id 0x1 --to "$USDC_ETH" --data "0xa9059cbb${PAD}${TO}${AMT_50}"
 run_case unlimited-approve "UNLIMITED permission" reject "" "UNLIMITED allowance" -- \
   --chain-id 0x1 --to "$USDC_ETH" --data "0x095ea7b3${PAD}${SPENDER}${MAX}"
-run_case unknown-token "Unknown token transfer" reject "" "Unknown token contract $UNKNOWN" -- \
+run_case unknown-token "Unknown token transfer" reject "" "Unknown token contract $(evm_grouped "$UNKNOWN")" -- \
   --chain-id 0x1 --to "$UNKNOWN" --data "0xa9059cbb${PAD}${TO}${AMT_50}"
 run_case base-increase "Review permission" approve "Approve permission &amp; sign" "allowance by 2.5 USDC" -- \
   --chain-id 0x2105 --to "$USDC_BASE" --data "0x39509351${PAD}${SPENDER}${AMT_2_5}"

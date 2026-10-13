@@ -57,8 +57,8 @@ run_case() {
   [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$must': $(texts 14)"; }
   pass "$name: review shows '$title' and '$must'"
   if [[ "$decision" == approve ]]; then
-    local box; box="$(find_checkbox)" || { kill $pid 2>/dev/null || true; die "$name: review checkbox not visible"; }
-    tap_bounds "$box"; sleep 1
+    # to the end of the review, then "I verified…" (+ "I understand: …" when the review has a DANGER)
+    tick_review || { kill $pid 2>/dev/null || true; die "$name: review checkboxes not ticked: $(texts 10)"; }
     tap_text "$button"; sleep 3
     rc=0; wait $pid || rc=$?
     tail -6 "$OUT.$name" | sed -E 's/("signature": ")0x[0-9a-f]{16}[0-9a-f]*/\10x…/'

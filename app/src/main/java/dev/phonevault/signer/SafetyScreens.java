@@ -197,7 +197,7 @@ final class SafetyScreens {
         box.addView(VaultTheme.bodyText(host.context(), label, 13, VaultTheme.FAINT));
         String c = AddressKeys.display(address);
         String shown = AddressKeys.isBtc(address) ? BtcScript.grouped(c, 5) + AddressKeys.networkSuffix(address).replace(" · ", "\n")
-                : c.substring(0, 22) + "\n" + c.substring(22);
+                : ReviewStyle.groupEvmTwoLines(c);
         TextView t = VaultTheme.monoText(host.context(), shown, host.bodySize(), VaultTheme.INK);
         t.setPadding(0, host.dp(6), 0, 0);
         box.addView(t);
