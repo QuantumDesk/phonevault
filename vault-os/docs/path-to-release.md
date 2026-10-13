@@ -74,6 +74,17 @@ USD totals, menu bar + background notifications, guided onboarding, browser exte
 over native messaging), per-request USB queue. All five new scripts plus usbsign/credential pass
 in one run on phone 2.
 
+## Bitcoin (2026-10-13)
+
+Native SegWit (BIP-84) and Taproot (BIP-86, key path) from the same 24 words; PSBT signing on the
+phone with plain-language review (recipients, change ✓, fee + sat/vB, fee DANGER > 10% / 0.01 BTC);
+watch-only Bitcoin wallet in the companion (Esplora, coin selection, RBF, Bitcoin Core script
+check before broadcast, Sparrow export); ☰ → Bitcoin sharing (revoke). `btctest.sh` passes twice
+in a row on phone 2. **First real signet transaction signed on phone 2 and confirmed**:
+385df458f712f7f40cf75e36b0f0d5b0590e93a2c50d2fa7727ac7399645a82a (block 326197). Open: the Mac
+app's Bitcoin screens not yet used by a person; passphrase wallets refuse Bitcoin for now; mainnet
+only after signet use by the owner.
+
 ## 1. Trust people can check (blocks any real-funds claim)
 
 - [x] **Honest entropy claims.** Website said the seed uses the security chip's randomness; it did
