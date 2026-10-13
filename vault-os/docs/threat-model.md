@@ -394,7 +394,8 @@ signature must belong to it).
 **Server (Esplora) is untrusted.** It supplies balances, coins, fee estimates and relays the
 broadcast. Every coin is accepted only if the server's previous transaction hashes to the coin's
 txid and pays exactly that value to exactly the derived script; P2TR sighashes commit to all spent
-amounts, P2WPKH inputs carry `non_witness_utxo` when they fit. A lying server can hide funds, lie
+amounts, every P2WPKH input carries its `non_witness_utxo` (the phone requires it; a send that cannot
+include them all is refused). A lying server can hide funds, lie
 about history/fees, or censor a broadcast; it cannot redirect funds. It **learns every address of
 the account and the user's IP** (~40 address queries for the first scan, then a few per refresh);
 custom servers (own node; http only to localhost/LAN) are used alone, without fallback.

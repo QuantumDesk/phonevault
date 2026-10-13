@@ -126,7 +126,7 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    server's estimates (or custom sat/vB); every coin is checked against its previous transaction
    (hashed to its txid) before use; branch-and-bound / largest-first selection without dust change;
    PSBT v0 with nVersion 2, nSequence 0xfffffffd (RBF), witness_utxo, BIP-32 origins for inputs and
-   change (non_witness_utxo for P2WPKH inputs within the phone's 32 KiB request limit) →
+   change, non_witness_utxo for every P2WPKH input (required by the phone; PSBT ≤ 180 KiB, ≤ 100 inputs) →
    `btcSignPsbt` → `src-tauri/src/btc/verify.rs` (same unsigned transaction byte for byte, fee from
    this Mac's own amounts, one valid ECDSA/Schnorr signature per input by the key derived here,
    SIGHASH_ALL/DEFAULT only, witnesses assembled here, every input run through libbitcoinconsensus)

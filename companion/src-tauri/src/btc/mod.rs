@@ -42,8 +42,9 @@ use wallet::{Account, Kind, Net};
 
 /// The phone may wait for unlock and the user's review.
 const PHONE_TIMEOUT: Duration = Duration::from_secs(300);
-/// The phone reads requests up to 32 KiB (AccessoryTransport.MAX_REQUEST_BYTES).
-const MAX_REQUEST_BYTES: usize = 32_000;
+/// The phone reads a btcSignPsbt line of up to 288 KiB (AccessoryTransport.MAX_PSBT_REQUEST_BYTES,
+/// other requests 32 KiB); a little is kept for the newline.
+pub(crate) const MAX_REQUEST_BYTES: usize = 288 * 1024 - 16;
 
 struct Candidate { account: Account, shown_first: bool, at: Instant }
 

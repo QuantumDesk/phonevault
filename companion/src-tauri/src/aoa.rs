@@ -22,6 +22,13 @@ const IDENTITY: [&str; 6] = [
     "prototype",
 ];
 const MAX_RESPONSE_BYTES: usize = 65_536;
+/// btcSignPsbt answers carry the whole signed PSBT (btc::tx::MAX_PSBT_BYTES plus signatures, base64).
+pub const MAX_PSBT_RESPONSE_BYTES: usize = 272 * 1024;
+
+/// The response cap for one request: larger only for btcSignPsbt.
+fn response_cap(request: &Value) -> usize {
+    if request.get("method").and_then(Value::as_str) == Some("btcSignPsbt") { MAX_PSBT_RESPONSE_BYTES } else { MAX_RESPONSE_BYTES }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AoaError {
@@ -157,6 +164,7 @@ impl Session {
             }
         }
         let deadline = Instant::now() + timeout;
+        let cap = response_cap(request);
         let mut received: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; 16_384];
         while Instant::now() < deadline {
@@ -165,7 +173,7 @@ impl Session {
                 Err(rusb::Error::Timeout) => continue,
                 Err(e) => return Err(AoaError::Usb(e)),
             }
-            if received.len() > MAX_RESPONSE_BYTES { return Err(proto("phone response exceeds 64 KiB")); }
+            if received.len() > cap { return Err(proto(format!("phone response exceeds {} KiB", cap / 1024))); }
             if let Some(pos) = received.iter().position(|&b| b == b'\n') {
                 if received.len() > pos + 1 { return Err(proto("phone returned more than one framed response")); }
                 let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
@@ -283,6 +291,7 @@ impl Session {
         }
         on_delivered();
         let deadline = Instant::now() + timeout;
+        let cap = response_cap(request);
         let mut received: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; 16_384];
         while Instant::now() < deadline {
@@ -292,7 +301,7 @@ impl Session {
                 Err(rusb::Error::Timeout) => continue,
                 Err(e) => return Err(AoaError::Usb(e)),
             }
-            if received.len() > MAX_RESPONSE_BYTES { return Err(proto("phone response exceeds 64 KiB")); }
+            if received.len() > cap { return Err(proto(format!("phone response exceeds {} KiB", cap / 1024))); }
             if let Some(pos) = received.iter().position(|&b| b == b'\n') {
                 if received.len() > pos + 1 { return Err(proto("phone returned more than one framed response")); }
                 let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
