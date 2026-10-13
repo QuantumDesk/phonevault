@@ -156,6 +156,25 @@ async function main() {
     check((await evaluate(`call("eth_blockNumber", [])`)).error?.code === 4901, "read-only call goes to the node path (no node in the harness → 4901)");
     check((await evaluate(`call("eth_call", [{ to: "0x1111111111111111111111111111111111111111", data: "0x" + "00".repeat(300000) }, "latest"])`)).error?.code === -32602, "oversized request refused in the page (-32602)");
 
+    // 5b. A sign-in (EIP-4361) message for another site is refused before it reaches the user
+    const siwe = (domain) => `${domain} wants you to sign in with your Ethereum account:\n${ADDRESS}\n\nURI: https://${domain}\nVersion: 1\nChain ID: 1\nNonce: 32891756\nIssued At: 2021-09-30T16:25:24Z`;
+    const before = decisions.length;
+    const blocked = await evaluate(`call("personal_sign", [${JSON.stringify(siwe("opensea.io"))}, "${ADDRESS}"])`);
+    check(blocked.error?.code === 4100 && /^Blocked: 127\.0\.0\.1:\d+ asked you to sign in to opensea\.io/.test(blocked.error?.message ?? ""), "sign-in message for another site → 4100 Blocked", blocked);
+    await sleep(200);
+    check(decisions.length === before, "the blocked sign-in never reached the queue", decisions.slice(before));
+    const own = new URL(origin).host;
+    check((await evaluate(`call("personal_sign", [${JSON.stringify(siwe(own))}, "${ADDRESS}"])`)).error?.code === 4001, "sign-in message for this site → queued → rejected (4001)");
+
+    // 5c. The popup's "Open Phone Vault Companion" path: worker → native "show_window" → answered
+    {
+      const { targetInfos } = await cdp.send("Target.getTargets");
+      const sw = targetInfos.find((t) => t.type === "service_worker" && t.url.includes(EXT_ID));
+      const { sessionId: s2 } = await cdp.send("Target.attachToTarget", { targetId: sw.targetId, flatten: true });
+      const shown = (await cdp.send("Runtime.evaluate", { expression: `new Promise((r) => { const id = nextId++; pending.set(id, { reply: (m) => r(m.result) }); native.postMessage({ type: "show_window", id }); })`, awaitPromise: true, returnByValue: true }, s2)).result.value;
+      check(shown === true, "show_window is answered by the companion", shown);
+    }
+
     // 6. A page cannot claim another origin
     await evaluate(`window.postMessage({ target: "phonevault:page->cs", id: 9999, method: "personal_sign", params: ["0x01", "${ADDRESS}"], origin: "https://app.uniswap.org" }, location.origin), new Promise(r => setTimeout(r, 400))`);
     const seen = [...new Set(decisions.map((d) => d.origin))];

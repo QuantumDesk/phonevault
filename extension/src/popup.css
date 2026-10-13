@@ -15,6 +15,8 @@ header img { border-radius: 5px; }
 section { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .host { font-weight: 600; word-break: break-all; margin-bottom: 4px; }
 button { margin-top: 10px; font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--bad); cursor: pointer; }
+button.primary { color: var(--fg); border-color: var(--fg); }
+button.primary.attn { background: var(--warn); border-color: var(--warn); color: #111; }
 .foot { margin: 14px 0 0; font-size: 11.5px; color: var(--muted); }
 .waiting { margin: 8px 0 0; padding: 8px 10px; border-radius: 8px; background: #fef3c7; color: #78350f; font-size: 12px; line-height: 1.4; }
 @media (prefers-color-scheme: dark) { .waiting { background: #451a03; color: #fde68a; } }

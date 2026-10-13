@@ -148,6 +148,17 @@ chrome.runtime.onConnect.addListener((port) => {
 // Popup: companion status and whether the active tab's site is connected.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (sender.id !== chrome.runtime.id || sender.tab) return false; // the popup only, not content scripts
+  if (msg?.type === "show_window") {
+    // "Open Phone Vault Companion": native messaging cannot start an app, but the running
+    // companion can bring its window forward. Only when it is already connected.
+    if (nativeState !== "connected" || !native) { sendResponse({ ok: false, state: nativeState }); return false; }
+    const id = nextId++;
+    const timer = setTimeout(() => { if (pending.delete(id)) sendResponse({ ok: false, state: nativeState }); }, 1500);
+    pending.set(id, { reply: (m) => { clearTimeout(timer); sendResponse({ ok: m.result === true, state: nativeState }); } });
+    try { native.postMessage({ type: "show_window", id }); }
+    catch { clearTimeout(timer); pending.delete(id); sendResponse({ ok: false, state: nativeState }); return false; }
+    return true;
+  }
   if (msg?.type !== "status" && msg?.type !== "disconnect_site") return false;
   let origin = null;
   try { const o = new URL(msg.url).origin.toLowerCase(); origin = ORIGIN_RE.test(o) ? o : null; } catch { /* not a web page */ }

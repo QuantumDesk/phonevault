@@ -23,7 +23,10 @@ Chrome, Brave or Edge:
 
 Then, in Phone Vault Companion (run from `/Applications`): **Settings → Browser extension →
 Install browser connection**. Reload any open dApp tabs. The toolbar popup shows whether the
-companion is reachable and whether the current site is connected.
+companion is reachable and whether the current site is connected. A browser cannot start an app:
+when the companion isn't running the popup says how to open it; when it is, **Open Phone Vault
+Companion** asks it (native message `show_window`) to bring its window forward, highlighted while a
+request from the site is waiting.
 
 Firefox 128+: `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** →
 `extension/dist/firefox/manifest.json` (built from the same sources; not covered by the automated test).

@@ -18,7 +18,16 @@ async function refresh() {
     const [tone, text] = STATES[r.state] ?? STATES.unknown;
     $("dot").className = `dot ${tone}`;
     $("state").textContent = text;
-    $("msg").textContent = r.state === "not_running" ? "Open Phone Vault Companion on this Mac, then try again." : (r.message ?? "");
+    // The browser cannot start the app; when it runs, it can be asked to come forward.
+    $("msg").textContent = r.state === "not_running"
+      ? "Open Phone Vault Companion on this Mac (Applications, or Spotlight: ⌘ Space, then type Phone Vault), then try again."
+      : (r.message ?? "");
+    $("open").hidden = r.state !== "connected";
+    $("open").classList.toggle("attn", !!r.waiting);
+    $("open").onclick = () => chrome.runtime.sendMessage({ type: "show_window" }, (a) => {
+      if (!a?.ok && a?.state !== "connected") $("msg").textContent = "Phone Vault Companion isn't reachable. Open it on this Mac.";
+      else window.close();
+    });
     if (!r.origin) return;
     $("site").hidden = false;
     $("host").textContent = r.origin.replace(/^https:\/\//, "");
