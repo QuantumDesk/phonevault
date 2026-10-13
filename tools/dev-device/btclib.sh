@@ -45,8 +45,7 @@ start_client() {
 
 # wait_screen <title>: the request's screen appears (a PIN prompt for the seed key is answered)
 wait_screen() {
-  local i
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     sleep 2
     system_prompt_up && { enter_system_pin || true; }
     has_text "$1" && return 0
@@ -61,8 +60,8 @@ wait_screen() {
 # finish_client <name> <expected exit>: wait for the host client, answering a seed-key PIN prompt
 # (signing, or a session whose Bitcoin accounts are not derived yet) and keeping the idle lock away.
 finish_client() {
-  local i rc=0
-  for i in $(seq 1 45); do
+  local rc=0
+  for _ in $(seq 1 45); do
     kill -0 "$CLIENT_PID" 2>/dev/null || break
     if system_prompt_up; then enter_system_pin || true; else nudge; fi
     sleep 2
@@ -82,9 +81,9 @@ open_btc_sharing() {
   expect_screen "Bitcoin sharing"
 }
 btc_unshare() {
-  local pattern="${1:-}" i b
+  local pattern="${1:-}" b
   open_btc_sharing
-  for i in $(seq 1 12); do
+  for _ in $(seq 1 12); do
     if [[ -z "$pattern" ]]; then
       has_text "Nothing shared" && break
       b="$(bounds_of "Stop sharing all")"; [[ -n "$b" ]] || b="$(bounds_of 'Stop sharing · [^"]*')"
@@ -111,9 +110,9 @@ approve_review() {
 
 # share_if_asked: for a btc-account request that may be remembered already: tap "Share with the
 # Mac" if the phone asks, otherwise let the client finish. Sets SHARED_HOW=asked|remembered.
+# shellcheck disable=SC2034  # SHARED_HOW is read by the scripts that source this file
 share_if_asked() {
-  local i
-  for i in $(seq 1 30); do
+  for _ in $(seq 1 30); do
     sleep 2
     system_prompt_up && { enter_system_pin || true; }
     if has_text "Share Bitcoin account with the Mac?"; then

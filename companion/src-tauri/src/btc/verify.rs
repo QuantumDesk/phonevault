@@ -38,7 +38,8 @@ pub struct Verified {
     pub vsize: u64,
 }
 
-const MAX_RESPONSE_PSBT: usize = 48 * 1024;
+/// Base64 characters of the signed PSBT the phone returns (tx::MAX_PSBT_BYTES plus signatures).
+pub(crate) const MAX_RESPONSE_PSBT: usize = 260 * 1024;
 
 /// Strict parse of a btcSignPsbt answer → the base64 PSBT, or why there is none.
 pub fn parse_sign_response(request: &serde_json::Value, response: &serde_json::Value) -> Result<String, String> {

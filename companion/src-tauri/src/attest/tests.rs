@@ -313,8 +313,14 @@ fn unlocked_pixel3_is_development_and_says_so() {
     let mut info = chain::verify(&pem_chain(BLUELINE_SB), &roots(), NOW).unwrap();
     info.leaf_p256_point = Some(vec![4u8; 65]);
     let challenge = b"challenge".to_vec();
-    // release-signed app on an unlocked phone → DEVELOPMENT, with the plain headline
+    // release-signed app on an unlocked phone: FAIL without Developer mode (an unlocked bootloader
+    // is never accepted from a phone someone else set up) …
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    assert_eq!(a.verdict, Verdict::Fail, "{:?}", a);
+    assert!(a.problems.iter().any(|p| p == policy::UNLOCKED_PROBLEM), "{:?}", a.problems);
+    assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
+    // … and DEVELOPMENT with it, with the plain headline
+    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
     assert_eq!(a.headline, policy::UNLOCKED_HEADLINE);
     assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
@@ -323,11 +329,12 @@ fn unlocked_pixel3_is_development_and_says_so() {
     assert_eq!(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false).verdict, Verdict::Fail);
     let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
+    assert_eq!(a.headline, policy::UNLOCKED_HEADLINE, "today's dev phones (Pixel 3 XL: unlocked, dev-signed app) look exactly as before");
     assert!(a.cautions.iter().any(|c| c.contains("development key")));
     assert_eq!(a.details.unwrap().app_signer_kind, "development");
     // old patch level on a dev phone is a note, not a failure
     let mut p2 = policy_for(&info, true); p2.min_os_patch_level = 202_501;
-    let a = evaluate(&info, &p2, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    let a = evaluate(&info, &p2, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
     assert!(a.notes.iter().any(|n| n.contains("2019-08")), "{:?}", a.notes);
 }
@@ -336,7 +343,8 @@ fn unlocked_pixel3_is_development_and_says_so() {
 fn tee_attestation_is_never_genuine() {
     let info = chain::verify(&pem_chain(BLUELINE_TEE), &roots(), NOW).unwrap();
     let challenge = info.description.challenge.clone();
-    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), false);
+    // (the sample phone is unlocked: Developer mode on, so the TEE caution is what is tested)
+    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
     assert!(a.cautions.iter().any(|c| c.contains("TEE")));
     // and claiming StrongBox for a TEE chain fails
@@ -581,6 +589,45 @@ mod synthetic {
         let r = run(&b, &[0x43u8; 32], &resp, &test_policy(), &[b.root.clone()]);
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems.iter().any(|p| p.contains("different challenge")), "{:?}", r.assessment.problems);
+    }
+
+    /// root → `ints` intermediates (each tweaked by `tweak(index)`) → a plain leaf, as DER, leaf first.
+    fn ca_ladder(ints: usize, tweak: impl Fn(usize, &mut CertificateParams)) -> (Vec<Vec<u8>>, TrustedRoot) {
+        let root_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let root_params = ca("ladder root", None);
+        let root_cert = root_params.self_signed(&root_key).unwrap();
+        let root_spki = { let (_, c) = x509_parser::parse_x509_certificate(root_cert.der()).unwrap(); c.public_key().raw.to_vec() };
+        let mut issuer = Issuer::new(root_params, root_key);
+        let mut ders = vec![root_cert.der().to_vec()];
+        for i in 0..ints {
+            let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+            let mut p = ca(&format!("ladder int {i}"), Some("StrongBox"));
+            tweak(i, &mut p);
+            ders.insert(0, p.signed_by(&key, &issuer).unwrap().der().to_vec());
+            issuer = Issuer::new(p, key);
+        }
+        let leaf_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut leaf = CertificateParams::new(Vec::<String>::new()).unwrap();
+        leaf.distinguished_name = dn("Android Keystore Key", None);
+        ders.insert(0, leaf.signed_by(&leaf_key, &issuer).unwrap().der().to_vec());
+        (ders, TrustedRoot { name: "TEST ROOT", spki: root_spki })
+    }
+
+    #[test]
+    fn intermediates_must_be_cas_that_may_sign_certificates() {
+        let err = |ints: usize, tweak: &dyn Fn(usize, &mut CertificateParams)| {
+            let (ders, root) = ca_ladder(ints, tweak);
+            chain::verify(&ders, &[root], NOW).err().unwrap_or_default()
+        };
+        // control: a well-formed ladder gets past the CA checks (and stops at the missing extension)
+        assert!(err(2, &|_, _| {}).contains("no attestation extension"), "{}", err(2, &|_, _| {}));
+        assert!(err(1, &|_, p| p.is_ca = IsCa::ExplicitNoCa).contains("cA=FALSE"));
+        assert!(err(1, &|_, p| p.is_ca = IsCa::NoCa).contains("no basic constraints"));
+        assert!(err(1, &|_, p| p.key_usages = vec![KeyUsagePurpose::DigitalSignature]).contains("keyCertSign"));
+        assert!(err(1, &|_, p| p.key_usages = vec![]).contains("no key usage"));
+        // pathLen: the intermediate right under the root allows 0 CAs below it, the chain has 1
+        assert!(err(2, &|i, p| if i == 0 { p.is_ca = IsCa::Ca(BasicConstraints::Constrained(0)) }).contains("allows 0"));
+        assert!(err(2, &|i, p| if i == 0 { p.is_ca = IsCa::Ca(BasicConstraints::Constrained(1)) }).contains("no attestation extension"));
     }
 
     #[test]

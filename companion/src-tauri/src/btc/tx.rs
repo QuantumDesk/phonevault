@@ -24,9 +24,16 @@ pub const RECIPIENT_DUST: u64 = 546;
 /// Fee rates the Mac will build with (sat/kvB): 0.1 … 2000 sat/vB.
 pub const MIN_RATE_KVB: u64 = 100;
 pub const MAX_RATE_KVB: u64 = 2_000_000;
-/// The phone accepts requests up to 32 KiB; the base64 PSBT must leave room for the JSON around it.
-pub const MAX_PSBT_BYTES: usize = 22_000;
-pub const MAX_INPUTS: usize = 150;
+/// Largest PSBT this Mac sends. The phone takes a PSBT of up to 200 KiB (Psbt.MAX_BYTES) in a
+/// btcSignPsbt line of up to 288 KiB (AccessoryTransport.MAX_PSBT_REQUEST_BYTES; base64 of 180 KiB
+/// is 240 KiB) and sends it back with the signatures added (about 110 bytes per input), which must
+/// fit verify::MAX_RESPONSE_PSBT and the USB response cap for btcSignPsbt (aoa.rs).
+pub const MAX_PSBT_BYTES: usize = 180 * 1024;
+/// The phone signs transactions with at most 100 inputs and 100 outputs (BtcTx.MAX_IO).
+pub const MAX_INPUTS: usize = 100;
+/// The phone parses a previous transaction (non_witness_utxo) of at most 10 000 inputs/outputs
+/// (BtcTx.MAX_PREV_IO).
+pub const MAX_PREV_IO: usize = 10_000;
 
 /// A coin of this account, as the server listed it — value and script checked against the
 /// previous transaction (`prev_tx`, whose txid is hashed here) before it is used.
@@ -172,20 +179,21 @@ pub fn select(kind: Kind, coins: &[(u64, bool)], amount: Option<u64>, recipient_
 /// within the try budget wins).
 fn bnb(pool: &[usize], coins: &[(u64, bool)], amount: u64, in_fee: u64, window: u64, base_fee: impl Fn(usize) -> u64) -> Option<Vec<usize>> {
     let mut eff: Vec<(usize, u64)> = pool.iter().map(|&i| (i, coins[i].0 - in_fee)).collect();
-    eff.sort_by(|a, b| b.1.cmp(&a.1));
+    eff.sort_by_key(|e| std::cmp::Reverse(e.1));
     if eff.is_empty() || eff.len() > 64 { return None; }
     let target = amount + base_fee(1); // the fixed part of the fee (version, counts, outputs)
     let mut best: Option<(u64, Vec<usize>)> = None;
     let mut tries = 0u32;
     let mut remaining: Vec<u64> = vec![0; eff.len() + 1];
     for i in (0..eff.len()).rev() { remaining[i] = remaining[i + 1] + eff[i].1; }
+    #[allow(clippy::too_many_arguments)]
     fn go(i: usize, sum: u64, chosen: &mut Vec<usize>, eff: &[(usize, u64)], remaining: &[u64], target: u64, window: u64, best: &mut Option<(u64, Vec<usize>)>, tries: &mut u32) {
         *tries += 1;
         if *tries > 100_000 { return; }
         if sum > target + window { return; }
         if sum >= target {
             let excess = sum - target;
-            if best.as_ref().map_or(true, |b| excess < b.0) { *best = Some((excess, chosen.clone())); }
+            if best.as_ref().is_none_or(|b| excess < b.0) { *best = Some((excess, chosen.clone())); }
             return;
         }
         if i == eff.len() || sum + remaining[i] < target { return; }
@@ -212,6 +220,7 @@ pub fn shuffle<T>(v: &mut [T]) {
 }
 
 /// Assemble the unsigned PSBT for a selection. `shuffle_order` is false only in tests.
+#[allow(clippy::too_many_arguments)]
 pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u64, change: Option<(Derived, u64)>, fee: u64, rate_kvb: u64, vsize_est: u64, shuffle_order: bool) -> Result<Built, String> {
     if inputs.is_empty() { return Err("no inputs".into()); }
     if inputs.len() > MAX_INPUTS { return Err(format!("this would spend {} coins; the phone takes at most {MAX_INPUTS} per transaction. Send a smaller amount first", inputs.len())); }
@@ -254,15 +263,25 @@ pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u
             }
         }
     }
-    if psbt.serialize().len() > MAX_PSBT_BYTES { return Err("this transaction is too large for one request to the phone; send a smaller amount first".into()); }
-    // Full previous transactions for P2WPKH inputs (the phone can check the amounts against the
-    // txid it spends), as many as fit in one request.
+    // Full previous transactions for every P2WPKH input: the phone requires them (it checks each
+    // input's amount against the txid it spends, so a lying server cannot inflate the fee). They
+    // were fetched and hashed to their txids when the coins were listed (btc::checked_coin); they
+    // are checked again here, and a coin without one is refused rather than sent without it.
     if account.kind == Kind::P2wpkh {
         for (i, c) in inputs.iter().enumerate() {
-            let Some(prev) = &c.prev_tx else { continue };
+            let prev = c.prev_tx.as_ref().ok_or("internal: a coin's previous transaction is missing; refresh the wallet and try again")?;
+            if prev.compute_txid() != c.outpoint.txid { return Err("a coin's previous transaction does not hash to the txid it spends".into()); }
+            let out = prev.output.get(c.outpoint.vout as usize).ok_or("a coin's previous transaction does not have its output")?;
+            if out.value.to_sat() != c.value || out.script_pubkey != c.derived.script { return Err("a coin's previous transaction does not pay it the listed amount".into()); }
+            if prev.input.len() > MAX_PREV_IO || prev.output.len() > MAX_PREV_IO {
+                return Err(format!("the coin {}:{} comes from a transaction with more than {MAX_PREV_IO} inputs or outputs, which the phone cannot check; spend other coins (send a smaller amount)", c.outpoint.txid, c.outpoint.vout));
+            }
             psbt.inputs[i].non_witness_utxo = Some(prev.clone());
-            if psbt.serialize().len() > MAX_PSBT_BYTES { psbt.inputs[i].non_witness_utxo = None; }
         }
+    }
+    let size = psbt.serialize().len();
+    if size > MAX_PSBT_BYTES {
+        return Err(format!("this transaction is too large for one request to the phone ({} KiB with the previous transactions the phone needs, at most {} KiB); send a smaller amount first, so fewer coins are spent", size.div_ceil(1024), MAX_PSBT_BYTES / 1024));
     }
     Ok(Built { account: account.clone(), psbt, inputs, outputs, recipient, amount, fee, rate_kvb, vsize: vsize_est, replaces: None })
 }
@@ -421,19 +440,63 @@ pub mod tests {
         }
     }
 
+    /// `c` re-pointed at a previous transaction with `extra` more outputs before its own.
+    fn with_big_prev(mut c: Coin, extra: usize) -> Coin {
+        let mut prev = c.prev_tx.clone().unwrap();
+        let own = prev.output[c.outpoint.vout as usize].clone();
+        prev.output = (0..extra).map(|_| TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(vec![0x51; 22]) }).chain([own]).collect();
+        c.outpoint = OutPoint { txid: prev.compute_txid(), vout: extra as u32 };
+        c.prev_tx = Some(prev);
+        c
+    }
+
     #[test]
-    fn large_previous_transactions_are_left_out_to_fit_the_phone() {
+    fn every_p2wpkh_input_carries_its_previous_transaction() {
         let (a, _) = test_account(Net::Bitcoin, Kind::P2wpkh, 1);
         let d = a.derive(0, 0).unwrap();
-        let mut c = coin(&d, 200_000, 7);
-        let mut prev = c.prev_tx.clone().unwrap();
-        prev.output.splice(0..1, (0..900).map(|_| TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(vec![0x51; 22]) }));
-        c.outpoint = OutPoint { txid: prev.compute_txid(), vout: 900 };
-        c.prev_tx = Some(prev);
-        let to = d.address.clone();
-        let b = plan(&a, vec![c], to, Some(50_000), a.derive(1, 0).unwrap(), 1000, false).unwrap();
-        assert!(b.psbt.inputs[0].non_witness_utxo.is_none());
+        // a large previous transaction is included, not dropped
+        let c = with_big_prev(coin(&d, 200_000, 7), 900);
+        let b = plan(&a, vec![c.clone(), coin(&d, 30_000, 8)], d.address.clone(), Some(210_000), a.derive(1, 0).unwrap(), 1000, false).unwrap();
+        assert!(b.psbt.inputs.iter().all(|i| i.non_witness_utxo.is_some()));
+        for (i, inp) in b.psbt.inputs.iter().enumerate() {
+            assert_eq!(inp.non_witness_utxo.as_ref().unwrap().compute_txid(), b.psbt.unsigned_tx.input[i].previous_output.txid);
+        }
+        assert!(b.psbt.serialize().len() > 22_000, "bigger than the old cap, still sent");
         assert!(b.psbt.serialize().len() <= MAX_PSBT_BYTES);
+
+        let build1 = |c: Coin| plan(&a, vec![c], d.address.clone(), Some(50_000), a.derive(1, 0).unwrap(), 1000, false);
+        // missing, or not the transaction the coin spends, or not paying it: refused
+        let mut missing = coin(&d, 200_000, 7); missing.prev_tx = None;
+        assert!(build1(missing).unwrap_err().contains("missing"));
+        let mut other = coin(&d, 200_000, 7); other.prev_tx = coin(&d, 200_000, 9).prev_tx;
+        assert!(build1(other).unwrap_err().contains("does not hash"));
+        let mut lying = coin(&d, 200_000, 7); lying.value = 300_000;
+        assert!(plan(&a, vec![lying], d.address.clone(), Some(250_000), a.derive(1, 0).unwrap(), 1000, false).unwrap_err().contains("listed amount"));
+        // more than the phone parses in a previous transaction: refused with a reason
+        assert!(build1(with_big_prev(coin(&d, 200_000, 7), MAX_PREV_IO)).unwrap_err().contains("cannot check"));
+        // and a PSBT over the phone's request size: refused, never truncated
+        let huge: Vec<Coin> = (0..8u8).map(|n| with_big_prev(coin(&d, 100_000, n), 1_200)).collect();
+        let e = plan(&a, huge, d.address.clone(), Some(750_000), a.derive(1, 0).unwrap(), 1000, false).unwrap_err();
+        assert!(e.contains("too large for one request"), "{e}");
+        // Taproot inputs carry none (BIP-341 signs the amounts of all inputs)
+        let (t, _) = test_account(Net::Bitcoin, Kind::P2tr, 1);
+        let td = t.derive(0, 0).unwrap();
+        let mut tc = coin(&td, 200_000, 7); tc.prev_tx = None;
+        let b = plan(&t, vec![tc], td.address.clone(), Some(50_000), t.derive(1, 0).unwrap(), 1000, false).unwrap();
+        assert!(b.psbt.inputs[0].non_witness_utxo.is_none());
+    }
+
+    #[test]
+    fn size_limits_fit_the_phone_and_the_way_back() {
+        // phone: PSBT ≤ 200 KiB, btcSignPsbt line ≤ 288 KiB (AccessoryTransport / Psbt.java)
+        assert!(MAX_PSBT_BYTES <= 200 * 1024);
+        let line = r#"{"id":"00000000-0000-0000-0000-000000000000","method":"btcSignPsbt","network":"testnet4","psbt":""}"#.len() + MAX_PSBT_BYTES.div_ceil(3) * 4 + 1;
+        assert!(line <= 288 * 1024, "{line}");
+        assert!(line <= crate::btc::MAX_REQUEST_BYTES);
+        // back: the PSBT plus up to ~110 bytes of signature per input, as base64, in one USB response
+        let back = (MAX_PSBT_BYTES + MAX_INPUTS * 120).div_ceil(3) * 4;
+        assert!(back <= crate::btc::verify::MAX_RESPONSE_PSBT);
+        assert!(back + 200 <= crate::aoa::MAX_PSBT_RESPONSE_BYTES);
     }
 
     #[test]

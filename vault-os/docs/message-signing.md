@@ -35,6 +35,15 @@ strings, schema-exact (missing, unknown or duplicate fields are refused), ≤ 32
   its UTF-8 bytes.
 - `typedData`: the `eth_signTypedData_v4` JSON **as text** inside the string (JSON-escaped). It is
   parsed by the phone's own strict parser, not by `org.json`.
+- `origin` (optional, these two methods only; `signEip1559` refuses it): the site that asked, when
+  the companion knows it. `^https://[a-z0-9-]+(\.[a-z0-9-]+)*(:[1-9][0-9]{0,4})?$` or
+  `^http://(localhost|127\.0\.0\.1|\[::1\])(:[1-9][0-9]{0,4})?$`, port ≤ 65535, at most 255
+  characters (`https://app.uniswap.org`, `http://localhost:5173`; internationalized names in
+  punycode); anything else refuses the whole request, so the companion leaves out an origin it
+  cannot write this way. It is the browser-reported origin (extension) or WalletConnect Verify's
+  origin when Verify said VALID; it is absent for unverified WalletConnect requests and for
+  messages started on the Mac. Not signed. The companion has already refused a sign-in message
+  whose domain or URI host differs from it.
 
 Responses:
 

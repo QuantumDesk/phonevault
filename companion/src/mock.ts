@@ -2,7 +2,7 @@
 // can be designed and screenshotted without a phone. Nothing here is ever used by the app.
 //
 // URL knobs: ?paired=0  ?phone=none|android|accessory  ?outcome=approve|reject|timeout|verify|nophone|broadcastfail
-//            ?attest=development|genuine|fail|oldapp   (device check; "development" = today's dev phones: FAIL until Developer mode is on)
+//            ?attest=development|genuine|fail|oldapp   (device check; "development" = today's dev phones: FAIL until Developer mode is on; ?devmode=1 starts with it on)
 //            ?phonebusy=1   Send queues behind another request on the phone ("Waiting for your phone")
 //            ?deposit=N     a deposit arrives N seconds after load (setup step 4, notifications)
 //            ?history=0     empty activity (default: a stuck pending send, a speed-up pair, incoming ETH/USDC)
@@ -113,6 +113,7 @@ export function createMock(): Mock {
   if (params.get("deposit")) setTimeout(() => { BAL[8453] = "0.05213377"; fire("watch-balance", { chain_id: 8453, balance_wei: toWei(BAL[8453]), balance_eth: BAL[8453], block: 20511300 }); }, Number(params.get("deposit")) * 1000 || 6000);
   let pending: { hash: string; to: string; amount: string; chain: number; polls: number; quote: Quote } | null = null;
   let lastAttestation: Attestation | null = null;
+  let devMode = params.get("devmode") === "1";
   let nfts: Nft[] = [
     { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "4211", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
     { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "88", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
@@ -156,7 +157,12 @@ export function createMock(): Mock {
       }
       case "attest_phone": {
         await sleep(1500); if (phone === "none") throw "no Android device on USB";
-        lastAttestation = mockAttestation(params.get("attest") ?? "development", Boolean(a.allowDev)); return lastAttestation as T;
+        lastAttestation = mockAttestation(params.get("attest") ?? "development", devMode); return lastAttestation as T;
+      }
+      case "developer_mode": return devMode as T;
+      case "set_developer_mode": {
+        if (a.on && String(a.confirmation ?? "").trim() !== "I FLASHED THIS PHONE") throw "Type I FLASHED THIS PHONE to turn on Developer mode.";
+        devMode = Boolean(a.on); lastAttestation = null; return devMode as T;
       }
       case "attestation_cached": return lastAttestation as T;
       case "confirm_pairing": {

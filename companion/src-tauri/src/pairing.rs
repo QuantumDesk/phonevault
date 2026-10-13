@@ -189,7 +189,11 @@ pub fn add_in(dir: &Path, address: &str, label: Option<&str>, wallet: Option<&st
     modify(dir, |p| {
         let label = label.and_then(clean_label).unwrap_or_else(|| default_label(p, account, wallet.as_deref()));
         match p.accounts.iter_mut().find(|a| a.address == address) {
-            Some(existing) => { existing.label = label; if wallet.is_some() { existing.wallet = wallet; } if account.is_some() { existing.account = account; } }
+            Some(existing) => {
+                existing.label = label;
+                if wallet.is_some() { existing.wallet = wallet; }
+                if account.is_some() { existing.account = account; }
+            }
             None => {
                 if p.accounts.len() >= MAX_ACCOUNTS { return Err(err("too many paired accounts")); }
                 p.accounts.push(Paired { address: address.clone(), label, wallet, account, paired_at: now() });

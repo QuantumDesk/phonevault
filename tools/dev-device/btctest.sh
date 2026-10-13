@@ -140,5 +140,6 @@ find_text "Don&apos;t share" || true
 try_tap "Don&apos;t share" || tap_text "Don't share"; sleep 2
 finish_client revoke 2
 pass "revoked in ☰ → Bitcoin sharing: the phone asked again (declined)"
+# shellcheck disable=SC2034  # read by the EXIT trap in btclib.sh
 STEP="done"
 echo "ALL BITCOIN CHECKS PASSED"

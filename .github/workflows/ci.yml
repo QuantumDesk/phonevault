@@ -1,0 +1,136 @@
+# Phone Vault CI. Every third-party action is pinned to a full commit SHA (the tag it was taken
+# from is in the comment; resolved with `gh api repos/<owner>/<repo>/commits/<tag>` on 2026-10-13).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  companion:
+    name: Companion (Rust + TypeScript)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: companion/package-lock.json
+      - name: Rust toolchain (rust-toolchain.toml)
+        run: rustup toolchain install && rustc --version && cargo clippy --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: companion/src-tauri
+      - name: npm ci
+        working-directory: companion
+        run: npm ci
+      - name: TypeScript
+        working-directory: companion
+        run: npx tsc --noEmit
+      - name: Frontend build (tauri::generate_context! embeds ../dist)
+        working-directory: companion
+        run: npm run build
+      - name: Clippy
+        working-directory: companion/src-tauri
+        run: cargo clippy --locked -- -D warnings
+      - name: Tests
+        working-directory: companion/src-tauri
+        run: cargo test --locked
+
+  extension:
+    name: Browser extension (build + headless Chrome e2e)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - name: Rust toolchain (the e2e builds the real bridge as its native host)
+        run: rustup toolchain install && rustc --version && cargo clippy --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: companion/src-tauri
+      - name: Build and syntax-check
+        working-directory: extension
+        run: |
+          node build.mjs
+          node --check build.mjs
+          node --check test/e2e.mjs
+          for f in src/*.js; do node --check "$f"; done
+      # Chrome for Testing (branded Chrome no longer loads unpacked extensions from the command line).
+      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        id: chrome
+        with:
+          chrome-version: stable
+      - name: End-to-end (headless Chrome ↔ native messaging ↔ bridge)
+        working-directory: extension
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node test/e2e.mjs
+
+  android:
+    name: Android app unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+        with:
+          packages: platform-tools platforms;android-35 build-tools;35.0.0
+      # No wrapper in the repo: the same Gradle the build scripts use (tools/build.sh).
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: "8.10.2"
+      - name: Unit tests
+        run: gradle --no-daemon --console=plain :app:testDebugUnitTest
+
+  python:
+    name: Host tools (Python unittest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install (hash-pinned)
+        run: python -m pip install --require-hashes --no-deps -r tools/requirements.txt
+      - name: Tests
+        run: python -m unittest discover -s tools -p 'test_*.py' -v
+
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: ShellCheck (warnings and errors) on every tracked *.sh
+        run: |
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck -S warning

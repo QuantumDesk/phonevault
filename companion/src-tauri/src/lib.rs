@@ -26,6 +26,8 @@ mod watcher;
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
 mod wc;
+// Sign-In with Ethereum: refuse a sign-in message for another site than the one asking
+mod siwe;
 // Browser extension: another dApp transport over native messaging; policy reuses wc.rs
 pub mod bridge;
 // Bitcoin: watch-only xpub accounts, Esplora, PSBT build → phone → independent verification
@@ -39,9 +41,7 @@ use std::time::Duration;
 
 type CmdResult<T> = Result<T, String>;
 
-fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> impl std::future::Future<Output = CmdResult<T>> {
-    async move { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())? }
-}
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> CmdResult<T> + Send + 'static) -> CmdResult<T> { tauri::async_runtime::spawn_blocking(f).await.map_err(|e| e.to_string())? }
 
 /// One paired account as the UI shows it.
 #[derive(Serialize)]
@@ -218,36 +218,6 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
 }
 
 #[derive(Serialize)]
-struct SignedTx { raw: String, hash: String, signer: String }
-
-/// Hand the quote to the phone. The user reviews and approves ON THE PHONE; this waits up to 3 minutes.
-#[tauri::command]
-async fn sign(q: Quote) -> CmdResult<SignedTx> {
-    blocking(move || {
-        let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        attest::require_ok(&pinned)?;
-        let request = pinned_request(json!({
-            "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
-            "chainId": q.chain_id, "nonce": q.nonce, "maxPriorityFeePerGas": q.max_priority_fee_per_gas,
-            "maxFeePerGas": q.max_fee_per_gas, "gasLimit": q.gas_limit, "to": q.to, "value": q.value, "data": q.data,
-        }), &pinned);
-        let response = ask_phone(request.clone(), Duration::from_secs(300))?;
-        let v = verify::validate_signature(&request, &response, &pinned).map_err(|e| e.0)?;
-        Ok(SignedTx { raw: v.raw_hex, hash: v.tx_hash, signer: verify::checksum(&v.signer) })
-    }).await
-}
-
-#[tauri::command]
-async fn broadcast(rpc_url: String, raw: String, expected_hash: String) -> CmdResult<String> {
-    blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let hash = rpc.send_raw(&raw).map_err(|e| e.0)?;
-        if hash.to_ascii_lowercase() != expected_hash.to_ascii_lowercase() { return Err(format!("node returned hash {hash}, expected {expected_hash}")); }
-        Ok(hash)
-    }).await
-}
-
-#[derive(Serialize)]
 struct Receipt { mined: bool, success: bool, block: u128 }
 
 #[tauri::command]
@@ -269,13 +239,13 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, sign, broadcast, receipt, default_rpc,
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, receipt, default_rpc,
             send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
-            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
+            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata, nft::dapp_icon,
             signing::sign_message, signing::sign_typed_data,
-            attest::attest_phone, attest::attestation_cached,
+            attest::attest_phone, attest::attestation_cached, attest::developer_mode, attest::set_developer_mode,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
@@ -332,6 +302,28 @@ mod tests {
             json!({"id": "a-2", "status": "ok", "address": ADDR}),
             json!({"id": "a-1", "status": "ok", "address": "0x12"}),
         ] { assert!(parse_address_response(&req, &bad).is_err(), "accepted {bad}"); }
+    }
+
+    /// The command list in build.rs (the ACL: anything missing cannot be invoked), the
+    /// app-commands permission set, and generate_handler! must name the same commands.
+    #[test]
+    fn every_registered_command_is_permitted_and_nothing_else() {
+        fn quoted(s: &str) -> Vec<String> { s.split('"').skip(1).step_by(2).map(str::to_string).collect() }
+        let lib = include_str!("lib.rs");
+        let handler = lib.split("generate_handler![").nth(1).unwrap().split("])").next().unwrap();
+        let mut registered: Vec<String> = handler.split(',').map(|x| x.trim().rsplit("::").next().unwrap().to_string()).filter(|x| !x.is_empty()).collect();
+        let build = include_str!("../build.rs");
+        let mut listed = quoted(build.split("COMMANDS: &[&str] = &[").nth(1).unwrap().split("];").next().unwrap());
+        let set = include_str!("../permissions/app-commands.toml");
+        let mut permitted: Vec<String> = quoted(set.split("permissions = [").nth(1).unwrap())
+            .into_iter().map(|p| p.strip_prefix("allow-").expect("allow- only").replace('-', "_")).collect();
+        registered.sort(); listed.sort(); permitted.sort();
+        assert_eq!(registered, listed, "build.rs COMMANDS vs generate_handler!");
+        assert_eq!(registered, permitted, "permissions/app-commands.toml vs generate_handler!");
+        let cap: Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(cap["windows"], json!(["main"]));
+        assert!(cap["permissions"].as_array().unwrap().contains(&json!("app-commands")));
+        assert!(cap.get("remote").is_none(), "no remote origin may call commands");
     }
 
     #[test]

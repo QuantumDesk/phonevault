@@ -10,7 +10,7 @@
 //    goes to the phone for review and returns only what Rust verified against the pinned signer.
 //  * One request goes to the phone at a time; the rest wait in a visible queue.
 
-import { api, onProgress, openExternal, errText, isTauri } from "./api";
+import { api, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
 import type { Quote, SendError } from "./api";
 import { NETWORKS, byId } from "./networks";
 import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast } from "./ui";
@@ -62,6 +62,12 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);
 }
+
+/** The site that asked, only when it is trusted: the browser-reported origin (extension), or
+ *  WalletConnect Verify's origin when it says VALID and does not flag it. Rust checks sign-in
+ *  messages against it and passes it to the phone; anything else counts as unverified. */
+const trustedOrigin = (v: VerifyIn | null): string | null =>
+  v && v.origin && (v.source === "browser" || (v.validation === "VALID" && !v.isScam)) ? v.origin : null;
 
 const rpcErrorOf = (e: unknown): RpcError =>
   e && typeof e === "object" && "code" in e && "message" in e ? { code: Number((e as RpcError).code), message: String((e as RpcError).message) } : { code: INTERNAL, message: errText(e) };
@@ -232,6 +238,7 @@ async function prepare(it: Item) {
     const prep = await call<Prepared>("wc_prepare", {
       rpcUrl: NETWORKS.some((n) => n.id === chain) ? host.rpcFor(chain) : null,
       chain: it.req.chainId, sessionChains: session.namespaces.eip155?.chains ?? [], method: it.req.method, params: paramsFor(it.req),
+      origin: trustedOrigin(it.req.verify),
     });
     if (!items.has(it.req.id)) return;
     if (prep.kind === "answer") { await answer(it, prep.result); items.delete(it.req.id); sync(); return; }
@@ -246,7 +253,8 @@ async function prepare(it: Item) {
     } else {
       await answerError(it, err.code, err.message);
       items.delete(it.req.id);
-      notice(`Refused ${it.req.method} from ${session?.meta.name ?? "a dApp"}: ${err.message}`);
+      // "Blocked: <site> asked you to sign in to <domain>…" (a sign-in for another site) stands on its own
+      notice(err.message.startsWith("Blocked:") ? err.message : `Refused ${it.req.method} from ${session?.meta.name ?? "a dApp"}: ${err.message}`);
     }
   }
   render();
@@ -348,8 +356,8 @@ async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_s
   it.stage = { s: "on_phone", t0: Date.now() }; render();
   try {
     const r = prep.kind === "personal_sign"
-      ? await call<{ signature: string }>("sign_message", { message: prep.message_hex, isHex: true, chainId: prep.chain_id })
-      : await call<{ signature: string }>("sign_typed_data", { typedData: prep.typed_data, chainId: prep.chain_id });
+      ? await call<{ signature: string }>("sign_message", { message: prep.message_hex, isHex: true, chainId: prep.chain_id, origin: trustedOrigin(it.req.verify) })
+      : await call<{ signature: string }>("sign_typed_data", { typedData: prep.typed_data, chainId: prep.chain_id, origin: trustedOrigin(it.req.verify) });
     if (!backend!.isPending(it.req.id)) {
       it.answered = true;
       it.stage = { s: "failed", title: "The dApp stopped waiting", body: "Your phone signed it, but the dApp is no longer waiting, so the signature was not sent anywhere.", retry: false, tone: "warn" };
@@ -359,6 +367,7 @@ async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_s
     it.stage = { s: "done", title: "Signed", body: "Signed on your phone; this Mac recomputed the digest and checked the signer before sending the signature to the dApp." };
   } catch (e) {
     const m = errText(e);
+    if (m.startsWith("Blocked:")) return finalFail(it, 4100, m, "Blocked: sign-in for another site", m, "danger");
     if (/rejected on the phone/i.test(m)) return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
     if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused this", m.replace(/^phone error:\s*/i, ""), "warn");
     if (/no Android device|held by another program|did not answer|not reading USB|re-enumerate|USB|timed out/i.test(m))
@@ -486,13 +495,27 @@ function linkIcon(size = 18): SVGSVGElement {
 
 const dappName = (topic: string) => sessionOf(topic)?.meta.name ?? "A dApp";
 
+/** dApp icons come through Rust (nft.rs `dapp_icon`: https only, image types, 256 KiB) as data:
+ *  URLs; the page's CSP loads no remote images, so the dApp's server never sees this app fetch it.
+ *  url → data URL ("" = none), or the request in flight. */
+const iconCache = new Map<string, string | Promise<string>>();
+
 function dappIcon(url: string | undefined, size = 36) {
   const box = h("span", { class: "wc-icon", style: `width:${size}px;height:${size}px` });
-  if (url && /^(https:|data:image\/)/.test(url)) {
-    const img = h("img", { src: url, alt: "", width: size, height: size, referrerpolicy: "no-referrer", loading: "lazy" });
-    img.addEventListener("error", () => { img.remove(); box.append(linkIcon(size * 0.5)); });
-    box.append(img);
-  } else box.append(linkIcon(size * 0.5));
+  const show = (data: string) => {
+    box.replaceChildren(data ? h("img", { src: data, alt: "", width: size, height: size }) : linkIcon(size * 0.5));
+  };
+  if (!url || !/^(https:|data:image\/)/.test(url) || url.length > 2048) { show(""); return box; }
+  const hit = iconCache.get(url);
+  if (typeof hit === "string") { show(hit); return box; }
+  show("");
+  const p = hit ?? call<string>("dapp_icon", { url }).catch(() => "");
+  if (!hit) {
+    if (iconCache.size > 64) iconCache.clear();
+    iconCache.set(url, p);
+    void p.then((d) => iconCache.set(url, d));
+  }
+  void p.then(show);
   return box;
 }
 
@@ -826,6 +849,8 @@ const wcOnly = () => sessions.filter((s) => !isExtTopic(s.topic));
 export function mountWalletConnect(h0: WcHost) {
   host = h0;
   onExtChange(() => host.changed());
+  // The bridge refused a browser request before it reached a card (a sign-in for another site).
+  void onEvent<{ origin: string; message: string }>("bridge-blocked", (b) => { notice(b.message); render(); });
   projectId = loadProjectId();
   start();
   // pairing changes (forget / re-pair) end sessions offered with the old address

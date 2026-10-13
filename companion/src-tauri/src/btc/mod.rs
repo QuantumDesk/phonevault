@@ -42,8 +42,9 @@ use wallet::{Account, Kind, Net};
 
 /// The phone may wait for unlock and the user's review.
 const PHONE_TIMEOUT: Duration = Duration::from_secs(300);
-/// The phone reads requests up to 32 KiB (AccessoryTransport.MAX_REQUEST_BYTES).
-const MAX_REQUEST_BYTES: usize = 32_000;
+/// The phone reads a btcSignPsbt line of up to 288 KiB (AccessoryTransport.MAX_PSBT_REQUEST_BYTES,
+/// other requests 32 KiB); a little is kept for the newline.
+pub(crate) const MAX_REQUEST_BYTES: usize = 288 * 1024 - 16;
 
 struct Candidate { account: Account, shown_first: bool, at: Instant }
 
@@ -243,7 +244,7 @@ fn wallet_view(id: &str, a: &Account, server: Option<&str>, c: &store::Cache) ->
             counterparty: Some(s.recipient.clone()), explorer: esplora::explorer_tx(a.net, &s.txid), can_bump: s.change.is_some(), sent_here: true,
         });
     }
-    history.sort_by(|x, y| y.time.cmp(&x.time));
+    history.sort_by_key(|x| std::cmp::Reverse(x.time));
     Ok(WalletView {
         id: id.to_string(), network: a.net, unit: a.net.unit(), confirmed_sats: c.confirmed(), unconfirmed_sats: c.unconfirmed(),
         receive_address: a.derive(0, r)?.address.to_string(), receive_index: r, receive_verified: c.verified.contains(&r),
@@ -278,7 +279,7 @@ pub fn refresh(id: &str, full: bool) -> Result<(Vec<store::Entry>, store::Cache)
                 let next = stored.next;
                 *stored = cache;
                 stored.verified = verified; stored.sent = sent;
-                for i in 0..2 { stored.next[i] = stored.next[i].max(next[i]); }
+                for (s, n) in stored.next.iter_mut().zip(next) { *s = (*s).max(n); }
                 if let Some(t) = tip { stored.tip = Some(t); }
                 Ok(inc)
             }
@@ -540,7 +541,7 @@ pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: Str
 
 #[tauri::command]
 pub(crate) fn btc_sign_cancel(ticket: Option<String>) {
-    if let Ok(m) = CANCELS.lock() { for (t, c) in m.iter() { if ticket.as_deref().map_or(true, |x| x == t) { c.store(true, Ordering::SeqCst); } } }
+    if let Ok(m) = CANCELS.lock() { for (t, c) in m.iter() { if ticket.as_deref().is_none_or(|x| x == t) { c.store(true, Ordering::SeqCst); } } }
 }
 
 /// Broadcast a transaction verified in this session, by txid. Records it for history and speed-up.

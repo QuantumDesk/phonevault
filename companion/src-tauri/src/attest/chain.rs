@@ -15,6 +15,10 @@
 //!    algorithms agree, and the signature verifies under the next certificate's key, using only
 //!    RSA PKCS#1 v1.5 (SHA-256/384/512, 2048..8192 bits) or ECDSA P-256/P-384 (SHA-256/384).
 //!    SHA-1, PSS and anything else are refused.
+//!    Every certificate between the leaf and the root must carry basicConstraints cA=TRUE and a
+//!    keyUsage with keyCertSign, and its pathLenConstraint (if any) must cover the CA
+//!    certificates under it. (The root's own extensions, like its dates, are irrelevant: the
+//!    anchor is its key.)
 //! 4. Validity of every certificate between the leaf and the root at `now`: not-yet-valid fails;
 //!    expired fails, except for factory-provisioned chains, which Google's reference verifier
 //!    (github.com/android/keyattestation, KeyAttestationCertPathValidator) tolerates because
@@ -171,6 +175,22 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
         signature::UnparsedPublicKey::new(alg, &issuer.public_key().subject_public_key.data)
             .verify(cert.tbs_certificate.as_ref(), &cert.signature_value.data)
             .map_err(|_| format!("certificate {i}'s signature does not verify under certificate {}", i + 1))?;
+    }
+
+    // 3b. every certificate that signs another (below the pinned root) must be a CA allowed to
+    // sign certificates, and its path length constraint must cover the CAs under it
+    for (i, cert) in certs.iter().enumerate().take(last).skip(1) {
+        let bc = cert.basic_constraints().map_err(|e| format!("certificate {i}'s basic constraints are malformed: {e}"))?
+            .ok_or_else(|| format!("certificate {i} signs a certificate but is not marked as a CA (no basic constraints)"))?;
+        if !bc.value.ca { return Err(format!("certificate {i} signs a certificate but is not a CA (basic constraints cA=FALSE)")); }
+        // CA certificates between this one and the leaf
+        let below = (i - 1) as u32;
+        if let Some(max) = bc.value.path_len_constraint {
+            if below > max { return Err(format!("certificate {i} allows {max} CA certificates under it, the chain has {below}")); }
+        }
+        let ku = cert.key_usage().map_err(|e| format!("certificate {i}'s key usage is malformed: {e}"))?
+            .ok_or_else(|| format!("certificate {i} signs a certificate but has no key usage"))?;
+        if !ku.value.key_cert_sign() { return Err(format!("certificate {i} signs a certificate but its key usage lacks keyCertSign")); }
     }
 
     // provisioning (as the reference verifier decides it: the certificate right under the root)

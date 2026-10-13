@@ -133,7 +133,10 @@ export const api = {
   tokenBalances: (rpcUrl: string) => call<TokenBalances>("token_balances", { rpcUrl }),
   tokenQuote: (rpcUrl: string, token: string, to: string, amount: string) => call<Quote>("token_quote", { rpcUrl, token, to, amount }),
   /** Fresh device check over USB (the phone attests a new challenge). */
-  attest: (allowDev: boolean) => call<Attestation>("attest_phone", { allowDev }),
+  attest: () => call<Attestation>("attest_phone"),
+  /** Developer mode lives in Rust (a 0600 file on this Mac); turning it on needs the typed phrase. */
+  developerMode: () => call<boolean>("developer_mode"),
+  setDeveloperMode: (on: boolean, confirmation: string | null) => call<boolean>("set_developer_mode", { on, confirmation }),
   attestationCached: () => call<Attestation | null>("attestation_cached"),
 };
 

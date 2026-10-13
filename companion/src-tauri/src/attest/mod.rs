@@ -26,6 +26,7 @@
 
 pub mod chain;
 pub mod der;
+pub mod devmode;
 pub mod keydesc;
 pub mod policy;
 pub mod revocation;
@@ -153,6 +154,7 @@ fn transient(msg: &str) -> bool {
 
 /// Verify one exchange. `Err` only for a transient refusal (locked/not ready/busy); every other
 /// problem is a FAIL report. `revocation` is called only once the chain itself verified.
+#[allow(clippy::too_many_arguments)]
 pub fn assess(
     policy: &Policy, roots: &[chain::TrustedRoot], now: i64, challenge: &[u8],
     request: &Value, response: &Value, revocation: impl FnOnce() -> revocation::Status, allow_dev: bool,
@@ -180,8 +182,8 @@ pub fn assess(
 // ------------------------------------------------------------------ session cache + gates
 
 struct Cached { report: Report, at: Instant, epoch: u64 }
-struct State { cached: Option<Cached>, epoch: u64, allow_dev: bool }
-static STATE: Mutex<State> = Mutex::new(State { cached: None, epoch: 0, allow_dev: false });
+struct State { cached: Option<Cached>, epoch: u64 }
+static STATE: Mutex<State> = Mutex::new(State { cached: None, epoch: 0 });
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct RunGuard;
@@ -201,12 +203,13 @@ fn cached() -> Option<Report> {
 }
 
 /// Ask the phone on USB for a fresh attestation and verify it.
-pub fn run(allow_dev: bool) -> Result<Report, String> {
+pub fn run() -> Result<Report, String> {
+    let allow_dev = devmode::enabled();
     // Queue behind any other request on the phone (re-entrant when a send already holds the turn).
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     if RUNNING.swap(true, Ordering::SeqCst) { return Err("a device check is already running".into()); }
     let _guard = RunGuard;
-    let epoch = { let mut s = STATE.lock().map_err(|_| "state poisoned")?; s.allow_dev = allow_dev; s.epoch };
+    let epoch = STATE.lock().map_err(|_| "state poisoned")?.epoch;
     let mut challenge = [0u8; CHALLENGE_BYTES];
     ring::rand::SystemRandom::new().fill(&mut challenge).map_err(|_| "no randomness for the challenge")?;
     let req = request(&uuid::Uuid::new_v4().to_string(), &challenge);
@@ -226,13 +229,12 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
     // Hold the phone while deciding, so a check another caller started finishes first and its
     // verdict is used here instead of a second check.
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
-    let allow_dev = STATE.lock().map(|s| s.allow_dev).unwrap_or(false);
     let report = match cached() {
         // The phone may have switched accounts since the cached check (same USB connection):
         // a cached verdict for another address is asked again, once, before refusing.
-        Some(r) if r.verdict() != Verdict::Fail && !r.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(pinned)) => run(allow_dev)?,
+        Some(r) if r.verdict() != Verdict::Fail && !r.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(pinned)) => run()?,
         Some(r) => r,
-        None => run(allow_dev)?,
+        None => run()?,
     };
     if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
     match &report.address {
@@ -247,8 +249,7 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
 /// returned address or signature must belong to it).
 pub fn require_genuine() -> Result<Report, String> {
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
-    let allow_dev = STATE.lock().map(|s| s.allow_dev).unwrap_or(false);
-    let report = match cached() { Some(r) => r, None => run(allow_dev)? };
+    let report = match cached() { Some(r) => r, None => run()? };
     if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
     Ok(report)
 }
@@ -260,8 +261,29 @@ pub fn require_pairable(address: &str) -> Result<(), String> {
     match &report.address { Some(a) if a.eq_ignore_ascii_case(address) => Ok(()), _ => Err("This address is not the one the phone attested to.".into()) }
 }
 
+/// Forget the verdict for the phone on USB (Developer mode changed: it must be checked again).
+fn invalidate() {
+    if let Ok(mut s) = STATE.lock() { s.cached = None; s.epoch += 1; }
+}
+
+/// Fresh device check. Developer mode is read from this Mac's settings file, never from the webview.
 #[tauri::command]
-pub async fn attest_phone(allow_dev: bool) -> CmdResult<Report> { blocking(move || run(allow_dev)).await }
+pub async fn attest_phone() -> CmdResult<Report> { blocking(run).await }
+
+/// Whether Developer mode is on (Settings → Device).
+#[tauri::command]
+pub async fn developer_mode() -> CmdResult<bool> { Ok(devmode::enabled()) }
+
+/// Turn Developer mode on (only with the exact typed confirmation) or off. Either way the current
+/// verdict is dropped, so the next request runs a fresh check under the new setting.
+#[tauri::command]
+pub async fn set_developer_mode(on: bool, confirmation: Option<String>) -> CmdResult<bool> {
+    blocking(move || {
+        devmode::set(on, confirmation.as_deref())?;
+        invalidate();
+        Ok(devmode::enabled())
+    }).await
+}
 
 /// The verdict for the phone on USB right now, if one was taken in this connection.
 #[tauri::command]

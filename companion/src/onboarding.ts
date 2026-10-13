@@ -17,8 +17,6 @@ import { backupCardPicker } from "./backup-card";
 export interface SetupHost {
   status: () => Status | null;
   device: () => DeviceCheck;
-  devMode: () => boolean;
-  setDevMode: (on: boolean) => void;
   recheck: () => void;
   confirmPairing: (address: string) => Promise<void>;
   chainId: () => number;
@@ -132,11 +130,6 @@ function genuineStep(host: SetupHost) {
   const legend = h("div", { class: "compare-legend" },
     h("div", { class: "ok" }, h("strong", null, "Genuine"), "Locked Phone Vault firmware, the release-signed app, keys in the Titan M chip. Ready for real funds."),
     h("div", { class: "dev" }, h("strong", null, "Development"), "A phone someone flashed for testing (bootloader unlocked or development-signed app). Fine for small test amounts only."));
-  const devToggle = () => {
-    const t = h("input", { type: "checkbox", role: "switch", checked: host.devMode() });
-    t.addEventListener("change", () => host.setDevMode((t as HTMLInputElement).checked));
-    return h("label", { class: `toggle${host.devMode() ? " dev-on" : ""}` }, h("span", null, "I flashed this phone myself: accept development phones"), t, h("i", { class: "knob" }));
-  };
   const body: (Node | null)[] = [];
   if (!r) {
     body.push(h("p", { class: "muted" }, c.checking ? "The phone is proving, with a fresh challenge from this Mac, that its keys are in secure hardware and it runs Phone Vault firmware and app. Unlock the phone if it asks." : c.error ? c.error : "Waiting for the phone…"));
@@ -147,9 +140,9 @@ function genuineStep(host: SetupHost) {
       r.problems.length ? h("ul", { class: "att-reasons", style: "text-align:left" }, r.problems.map((p) => h("li", null, p))) : null,
       h("div", { class: "callout", style: "border-color:color-mix(in srgb, var(--danger) 45%, transparent)" },
         h("strong", null, "Stop here: don't put funds on this phone"),
-        h("span", null, "It could not prove it is Phone Vault hardware running Phone Vault's firmware and app, so a modified phone could show you one thing and sign another. Get a phone from a trusted source, or reflash it with the official image, then plug it in again.")),
+        h("span", null, "It could not prove it is Phone Vault hardware running Phone Vault's firmware and app, so a modified phone could show you one thing and sign another."),
+        h("span", null, "If someone sold you this phone already set up, don't use it. Flash it yourself from phonevault.org, then plug it in again.")),
       h("div", { class: "actions" }, h("button", { class: "big", onclick: host.recheck, disabled: c.checking }, icon("refresh", 18), c.checking ? "Checking…" : "Check again")),
-      devToggle(),
     );
   } else {
     body.push(

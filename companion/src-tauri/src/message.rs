@@ -405,8 +405,8 @@ fn integer(raw: &J, signed: bool, bits: usize, path: &str) -> Result<[u8; 32], M
     let bit_len = bit_length(mag);
     // unsigned: v < 2^bits. signed: -2^(bits-1) <= v < 2^(bits-1).
     let ok = if !signed { !negative && bit_len <= bits }
-        else if !negative { bit_len <= bits - 1 }
-        else { bit_len <= bits - 1 || (bit_len == bits && is_power_of_two(mag)) };
+        else if !negative { bit_len < bits }
+        else { bit_len < bits || (bit_len == bits && is_power_of_two(mag)) };
     if !ok { return Err(err(format!("{path} is out of range for {}{bits}", if signed { "int" } else { "uint" }))); }
     let mut w = [0u8; 32];
     w[32 - mag.len()..].copy_from_slice(mag);
