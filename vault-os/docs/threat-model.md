@@ -374,3 +374,43 @@ what the phone decodes or signs. With several accounts, "the
 wallet" in the simulation is the ACTIVE paired account: the companion simulates from it (the same
 address the request names in `from`), remembers the result per account (a result for one account
 never stands in for another), and the phone checks the claim against the account it signs with.
+
+## Bitcoin on the companion (2026-10-12)
+
+The Mac is a **watch-only** Bitcoin wallet for keys that stay on the phone (BIP-84 P2WPKH and
+BIP-86 P2TR, accounts 1–20). It holds the account xpub, fingerprint and descriptor
+(`btc-accounts.json`, 0600, every entry re-derived and re-checked on load), never a private key.
+
+**Pairing.** `btcGetAccount` answers are schema-exact; the path must be the one requested, the
+xpub must be the depth-3 key with that hardened account index and the network's version bytes, and
+the descriptor must equal the one rebuilt from (fingerprint, path, xpub) including its BIP-380
+checksum. Nothing is stored until the phone has displayed the first receive address
+(`btcShowAddress`) and the user confirmed it matches the Mac's derivation. Receive addresses can be
+re-shown on the phone at any time ("Verify on phone"); the UI urges this before first use. The
+device check (attestation) must pass in the USB connection before any Bitcoin request; it binds the
+EVM address, so Bitcoin requests are pinned by the xpub instead (every returned address and
+signature must belong to it).
+
+**Server (Esplora) is untrusted.** It supplies balances, coins, fee estimates and relays the
+broadcast. Every coin is accepted only if the server's previous transaction hashes to the coin's
+txid and pays exactly that value to exactly the derived script; P2TR sighashes commit to all spent
+amounts, P2WPKH inputs carry `non_witness_utxo` when they fit. A lying server can hide funds, lie
+about history/fees, or censor a broadcast; it cannot redirect funds. It **learns every address of
+the account and the user's IP** (~40 address queries for the first scan, then a few per refresh);
+custom servers (own node; http only to localhost/LAN) are used alone, without fallback.
+
+**Verification before broadcast** (`companion/src-tauri/src/btc/verify.rs`): the phone's signed
+PSBT must contain byte-for-byte the unsigned transaction this Mac built (so recipient, amount,
+change and fee are as reviewed; fee computed from the Mac's own input amounts); echoed
+`witness_utxo` must be unchanged; each input carries exactly one signature, by the key derived here
+for that input (P2WPKH: ECDSA over the BIP-143 sighash; P2TR: Schnorr over the BIP-341 key-spend
+sighash against the tweaked output key that also appears in the spent script), SIGHASH_ALL or
+DEFAULT only; witnesses are assembled on the Mac from the checked signatures and each input is run
+through Bitcoin Core's interpreter (libbitcoinconsensus 26, with all spent outputs). Only then is
+the transaction kept by txid; Broadcast is a separate click that cannot take bytes from the UI.
+Tests: tampered outputs/fees/locktime/sequence, foreign keys, moved signatures, non-ALL sighash,
+missing signatures and altered spent amounts are all refused.
+
+**Known limitations.** History shows the newest 25 confirmed transactions per address (Esplora
+paging); RBF speed-up only for transactions sent from this Mac that have change; no coin control,
+no Tor, no BIP-21 parameters, no script-path/multisig; testnet uses Testnet4 servers by default.

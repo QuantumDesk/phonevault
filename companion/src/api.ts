@@ -84,7 +84,7 @@ export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in
 let mockPromise: Promise<Mock> | null = null;
 const mock = () => (mockPromise ??= import("./mock").then((m) => m.createMock()));
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (!isTauri) return (await mock()).invoke<T>(cmd, args);
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);

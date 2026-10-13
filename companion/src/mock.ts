@@ -8,6 +8,8 @@
 //            ?history=0     empty activity (default: a stuck pending send, a speed-up pair, incoming ETH/USDC)
 //            ?accounts=3    three paired accounts (Account 1, Account 2, Account 1 · passphrase)
 //            ?phoneacct=2|pp|new  the phone is on Account 2 / the passphrase wallet / an unpaired account
+//            Bitcoin: ?open=btc shows it; ?btc=0 no Bitcoin account yet (pairing), ?btcverified=1 receive address
+//            already shown on the phone, ?btcshow=mismatch the phone shows another address, ?outcome= as above
 // With ?paired=0 the guided setup opens. NFTs: three on Base; on Ethereum the scan is refused like on
 // public nodes. The stuck transaction stays pending, so Speed up / Cancel can be walked through.
 
@@ -116,6 +118,24 @@ export function createMock(): Mock {
     { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "88", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
     { chain_id: 8453, contract: "0x9a8B7c6D5e4F3a2B1c0D9e8F7a6B5c4D3e2F1a0B", token_id: "3", name: "Onchain Summer Pass", symbol: "OSP", owned: true, checked_at: now },
   ];
+
+  // ---- Bitcoin (BIP-84 test vectors of the "abandon … about" wallet; preview only)
+  const XPUB = "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V";
+  const btcAcct = (n: number, label: string) => ({ id: `73c5da0a-bitcoin-p2wpkh-${n}`, network: "bitcoin", kind: "p2wpkh", kind_name: "Native SegWit", account: n, label, fingerprint: "73c5da0a",
+    path: `m/84h/0h/${n - 1}h`, xpub: XPUB, descriptor: `wpkh([73c5da0a/84h/0h/${n - 1}h]${XPUB}/<0;1>/*)#k6qmeeqa`, active: true, unit: "BTC", network_name: "Bitcoin" });
+  const btcAccounts = params.get("btc") === "0" ? [] : [btcAcct(1, "Bitcoin 1")];
+  let btcVerified = params.get("btcverified") === "1";
+  const RECV = "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g";
+  const btcHistory = [
+    { txid: "d1c2b3a4958677685940312a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e", net_sats: 50_000, fee_sats: null, status: "pending", confirmations: 0, time: now - 240, counterparty: "bc1q9vza2e8x573nczrlzms0wvx3gsqjx7vavgkx0l", can_bump: false, sent_here: false },
+    { txid: "7f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e", net_sats: -251_420, fee_sats: 1_420, status: "confirmed", confirmations: 18, time: now - 3600 * 6, counterparty: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", can_bump: false, sent_here: true },
+    { txid: "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9", net_sats: 1_000_000, fee_sats: null, status: "confirmed", confirmations: 1_204, time: now - 86400 * 9, counterparty: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh", can_bump: false, sent_here: false },
+    { txid: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", net_sats: 485_987, fee_sats: null, status: "confirmed", confirmations: 2_950, time: now - 86400 * 21, counterparty: "3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", can_bump: false, sent_here: false },
+  ].map((e) => ({ ...e, explorer: `https://mempool.space/tx/${e.txid}` }));
+  let btcConfirmed = 1_234_567;
+  let btcSigned: { txid: string; q: Record<string, unknown>; polls: number } | null = null;
+  const btcWallet = (id: string) => ({ id, network: "bitcoin", unit: "BTC", confirmed_sats: btcConfirmed, unconfirmed_sats: 50_000, receive_address: RECV, receive_index: 1, receive_verified: btcVerified,
+    history: btcHistory, scanned_at: now - 40, error: null, server: "mempool.space", used_addresses: 4 });
 
   async function invoke<T>(cmd: string, a: Record<string, unknown> = {}): Promise<T> {
     const chainOf = (url: unknown) => RPC_CHAIN[String(url)] ?? 8453;
@@ -287,6 +307,81 @@ export function createMock(): Mock {
           data: "0xa9059cbb", amount_eth: "0", max_fee_eth: "0.0000130", total_eth: "0.0000130", balance_eth: BAL[c] ?? "0", network: c === 8453 ? "Base" : "Ethereum Mainnet",
           token: { contract: t.address.toLowerCase(), symbol: t.symbol, name: t.name, decimals: t.decimals, recipient: String(a.to).toLowerCase(), amount_raw: raw, amount: String(a.amount).includes(".") ? String(a.amount).replace(/\.?0+$/, "") : String(a.amount) } } as T;
       }
+    }
+    switch (cmd) {
+      case "btc_accounts": return { accounts: btcAccounts, servers: {}, defaults: { bitcoin: ["https://mempool.space/api", "https://blockstream.info/api"], testnet: ["https://mempool.space/testnet4/api"], signet: ["https://mempool.space/signet/api"] } } as T;
+      case "btc_wallet": case "btc_refresh": await sleep(cmd === "btc_refresh" ? 900 : 100); return btcWallet(String(a.id)) as T;
+      case "btc_read_account": {
+        await sleep(1600); if (phone === "none") throw "no Android device on USB";
+        const n = Number(a.account); const tr = a.kind === "p2tr";
+        return { id: `73c5da0a-${a.network}-${a.kind}-${n}`, network: a.network, kind: a.kind, account: n, fingerprint: "73c5da0a", path: `m/${tr ? 86 : 84}h/0h/${n - 1}h`,
+          xpub: tr ? "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ" : XPUB, descriptor: "",
+          first_address: tr ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", already_paired: false, label: `Bitcoin ${n}${tr ? " · Taproot" : ""}` } as T;
+      }
+      case "btc_show_address": {
+        await sleep(1800); if (phone === "none") throw "no Android device on USB";
+        const expected = Number(a.index) === 0 ? (String(a.id).includes("p2tr") ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu") : RECV;
+        const bad = params.get("btcshow") === "mismatch";
+        const address = bad ? "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh" : expected;
+        if (!bad && Number(a.index) === 1) btcVerified = true;
+        return { address, expected, matches: !bad } as T;
+      }
+      case "btc_confirm_account": { const acc = btcAcct(btcAccounts.length + 1, String(a.label ?? `Bitcoin ${btcAccounts.length + 1}`)); btcAccounts.push(acc); return acc as T; }
+      case "btc_select": case "btc_rename": case "btc_set_server": return undefined as T;
+      case "btc_forget": { const i = btcAccounts.findIndex((x) => x.id === a.id); if (i >= 0) btcAccounts.splice(i, 1); return undefined as T; }
+      case "btc_fees": await sleep(300); return { fast: 12.4, normal: 6.1, slow: 2, server: "mempool.space" } as T;
+      case "btc_check_address": {
+        const v = String(a.address).trim().replace(/^bitcoin:/, "");
+        if (/^(bc1q[02-9ac-hj-np-z]{38}|bc1p[02-9ac-hj-np-z]{58}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$/i.test(v)) {
+          if (v.endsWith("x")) return { ok: false, error: "Checksum mismatch: a character is probably wrong", own: false, kind: null } as T;
+          return { ok: true, error: null, own: v === RECV, kind: v.startsWith("bc1p") ? "Taproot" : v.startsWith("bc1q") ? "Native SegWit" : v.startsWith("3") ? "Script (P2SH)" : "Legacy" } as T;
+        }
+        if (/^tb1/.test(v)) return { ok: false, error: "That is a test-network address, not a Bitcoin address", own: false, kind: null } as T;
+        return { ok: false, error: "Not a Bitcoin address", own: false, kind: null } as T;
+      }
+      case "btc_quote": case "btc_bump_quote": {
+        await sleep(900);
+        const rate = Number(a.feeRate);
+        const vsize = 141;
+        const fee = Math.ceil(vsize * rate) + (cmd === "btc_bump_quote" ? 300 : 0);
+        const amount = a.max ? btcConfirmed + 50_000 - fee : Math.round(Number(a.amount) * 1e8);
+        if (amount + fee > btcConfirmed + 50_000) throw `not enough bitcoin: ${a.amount} BTC plus the fee needed, 0.01284567 BTC spendable`;
+        const inputs = [{ outpoint: "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9:1", sats: 1_000_000, address: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", confirmed: true }];
+        const inTotal = 1_000_000;
+        const change = a.max ? 0 : inTotal - amount - fee;
+        const to = cmd === "btc_bump_quote" ? "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq" : String(a.to).trim();
+        const outputs = [{ address: to, sats: amount, change: false, path: null }, ...(change > 0 ? [{ address: "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el", sats: change, change: true, path: "m/84h/0h/0h/1/0" }] : [])];
+        return { quote_id: rndHash(), network: "bitcoin", unit: "BTC", recipient: to, amount_sats: amount, fee_sats: fee, vsize, rate: rate.toFixed(1), total_sats: amount + fee, change_sats: change,
+          inputs, outputs, replaces: cmd === "btc_bump_quote" ? String(a.txid) : null, own_recipient: to === RECV, unconfirmed_inputs: false, balance_sats: inTotal, sequence: "0xfffffffd (replaceable)" } as T;
+      }
+      case "btc_sign_start": {
+        const t = String(a.ticket); cancelled = false;
+        emit(t, "connecting"); await sleep(900);
+        if (outcome === "nophone") throw { kind: "no_phone", message: "no Android device on USB", delivered: false };
+        emit(t, "delivered");
+        for (let i = 0; i < 40; i++) { await sleep(100); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: true }; }
+        if (outcome === "reject") throw { kind: "rejected", message: "rejected on the phone", delivered: true };
+        if (outcome === "verify") throw { kind: "verify", message: "the phone returned a different transaction (output 1 amount (so the fee too) changed)", delivered: true };
+        emit(t, "verifying"); await sleep(500);
+        const txid = rndHash().slice(2);
+        btcSigned = { txid, q: a, polls: 0 };
+        return { txid, fee_sats: 857, vsize: 141, rate: "6.1", amount_sats: 250_000, recipient: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", explorer: `https://mempool.space/tx/${txid}`,
+          checks: ["Same transaction as reviewed: 1 input, 2 outputs, recipient and amount unchanged", "Fee exactly 857 sat (inputs − outputs, amounts from this Mac's records)",
+            "Every input signed by this wallet's key for that address (ECDSA, SIGHASH_ALL)", "Each input verified by Bitcoin Core's script interpreter (libbitcoinconsensus)"] } as T;
+      }
+      case "btc_sign_cancel": cancelled = true; return undefined as T;
+      case "btc_broadcast": {
+        await sleep(700);
+        if (outcome === "broadcastfail") throw "HTTP 400: sendrawtransaction RPC error: {\"code\":-26,\"message\":\"min relay fee not met, 141 < 282\"}";
+        if (!btcSigned || btcSigned.txid !== a.txid) throw "this transaction was not verified in this session, so it will not be broadcast";
+        btcConfirmed -= 250_857;
+        btcHistory.unshift({ txid: btcSigned.txid, net_sats: -250_857, fee_sats: 857, status: "pending", confirmations: 0, time: Math.floor(Date.now() / 1000), counterparty: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", can_bump: true, sent_here: true, explorer: `https://mempool.space/tx/${btcSigned.txid}` });
+        return btcSigned.txid as T;
+      }
+      case "btc_tx_status": { if (btcSigned) btcSigned.polls++; return { confirmed: !!btcSigned && btcSigned.polls > 1, confirmations: 1, height: 915_002 } as T; }
+      case "btc_export": return { descriptor: btcAccounts[0]?.descriptor ?? "", receive: `wpkh([73c5da0a/84h/0h/0h]${XPUB}/0/*)#4z5slzlv`, change: `wpkh([73c5da0a/84h/0h/0h]${XPUB}/1/*)#5sxa2p6a`,
+        fingerprint: "73c5da0a", path: "m/84h/0h/0h", xpub: XPUB, text: "" } as T;
+      case "btc_save_export": return "/Users/you/Downloads/phone-vault-Bitcoin-1-watch-only.txt" as T;
     }
     throw `preview: no mock for ${cmd}`;
   }

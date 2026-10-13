@@ -241,6 +241,18 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
     }
 }
 
+/// Gate for Bitcoin requests: the phone on USB must have passed the device check (GENUINE or
+/// DEVELOPMENT) in this connection; runs it if there is no current verdict. The attested EVM
+/// address is not compared here: Bitcoin requests are pinned by the account's xpub instead (the
+/// returned address or signature must belong to it).
+pub fn require_genuine() -> Result<Report, String> {
+    let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
+    let allow_dev = STATE.lock().map(|s| s.allow_dev).unwrap_or(false);
+    let report = match cached() { Some(r) => r, None => run(allow_dev)? };
+    if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
+    Ok(report)
+}
+
 /// Gate for pairing: the address being pinned must come from a phone that passed just now.
 pub fn require_pairable(address: &str) -> Result<(), String> {
     let report = cached().ok_or("Check the phone first: its device check has not run for this connection.")?;

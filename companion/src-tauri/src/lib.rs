@@ -28,6 +28,8 @@ mod tokens;
 mod wc;
 // Browser extension: another dApp transport over native messaging; policy reuses wc.rs
 pub mod bridge;
+// Bitcoin: watch-only xpub accounts, Esplora, PSBT build → phone → independent verification
+mod btc;
 // Settings / setup: open the bundled blank backup card (no secrets on this Mac)
 mod backup_card;
 
@@ -278,13 +280,17 @@ pub fn run() {
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
             bridge::bridge_update_site, bridge::bridge_revoke, bridge::bridge_set_nodes, bridge::bridge_install, bridge::bridge_uninstall,
-            backup_card::open_backup_card])
+            backup_card::open_backup_card,
+            btc::btc_accounts, btc::btc_read_account, btc::btc_show_address, btc::btc_confirm_account, btc::btc_select, btc::btc_rename, btc::btc_forget,
+            btc::btc_set_server, btc::btc_wallet, btc::btc_refresh, btc::btc_check_address, btc::btc_fees, btc::btc_quote, btc::btc_bump_quote,
+            btc::btc_sign_start, btc::btc_sign_cancel, btc::btc_broadcast, btc::btc_tx_status, btc::btc_export, btc::btc_save_export])
         .setup(move |app| {
             // browser-extension bridge (native-messaging relay socket)
             bridge::start(app.handle(), &browser_bridge);
             // menu-bar item + the background watcher (balances, incoming transfers, notifications)
             tray::setup(app.handle())?;
             watcher::start(app.handle().clone());
+            btc::watch::start(app.handle().clone());
             Ok(())
         })
         // Closing the window hides it: the app keeps running in the menu bar (Quit is in its menu).

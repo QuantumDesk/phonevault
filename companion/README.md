@@ -112,12 +112,37 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    `src-tauri/src/bridge.rs` (reusing `wc.rs`). Design and threat model:
    `vault-os/docs/browser-extension.md`.
 
+11. **Bitcoin (watch-only).** Pick Bitcoin in the network menu (Testnet/Signet: Settings → Bitcoin →
+   Developer toggle). *Add from phone* asks for Native SegWit (BIP-84, default) or Taproot (BIP-86) and
+   an account number; the phone asks you to approve sharing that account's xpub (`btcGetAccount`).
+   The answer is checked strictly (path, depth/child number, xpub network, and the descriptor must be
+   exactly the one rebuilt here from fingerprint + path + xpub, checksum included), then the phone
+   must show the first receive address (`btcShowAddress`) and you compare it before anything is
+   stored (`btc-accounts.json`, 0600; re-derived and re-checked on every load). Balances and history
+   come from an Esplora server (default mempool.space, blockstream.info as fallback; your own server
+   in Settings, used alone), with gap-limit-20 discovery on the receive and change chains. Receive
+   shows the next unused address with a QR and *Verify on phone*. Send: recipient (network and
+   checksum checked, own addresses flagged), amount in BTC / sats / USD or Max, fee presets from the
+   server's estimates (or custom sat/vB); every coin is checked against its previous transaction
+   (hashed to its txid) before use; branch-and-bound / largest-first selection without dust change;
+   PSBT v0 with nVersion 2, nSequence 0xfffffffd (RBF), witness_utxo, BIP-32 origins for inputs and
+   change (non_witness_utxo for P2WPKH inputs within the phone's 32 KiB request limit) →
+   `btcSignPsbt` → `src-tauri/src/btc/verify.rs` (same unsigned transaction byte for byte, fee from
+   this Mac's own amounts, one valid ECDSA/Schnorr signature per input by the key derived here,
+   SIGHASH_ALL/DEFAULT only, witnesses assembled here, every input run through libbitcoinconsensus)
+   → Broadcast (separate click, by txid) → confirmations. A pending send can be sped up (RBF, fee
+   from the change, reviewed on the phone again). The background watcher refreshes Bitcoin accounts
+   (2 min shown / 10 min others, full scan at most every 30 min), notifies incoming payments and puts
+   the balance in the menu bar. Settings → Bitcoin → *Export to Sparrow* shows the descriptor
+   (`wpkh([fp/84h/0h/0h]xpub/<0;1>/*)#…`), fingerprint and xpub; copy or save a .txt to Downloads.
+   Privacy: the server learns all your addresses and your IP; run your own (Settings says so).
+
 Preview the UI without Tauri or a phone: `npm run dev` and open http://localhost:1420. With no
 Tauri runtime the app uses fake data (marked PREVIEW DATA); `?paired=0`, `?phone=none` and
 `?outcome=reject|timeout|verify|nophone|broadcastfail` exercise other states. A pretend dApp
 drives WalletConnect: `?wc=proposal|session|requests|noid`, `?wcverify=VALID|UNKNOWN|INVALID|SCAM`,
 `?wctx=native|approve|swap` (see `src/wc-mock.ts`). `?paired=0` opens the guided setup;
-`?deposit=N`, `?phonebusy=1`, `?history=0` are described in `src/mock.ts`. The browser extension: `?ext=connect|requests|sites|off`.
+`?deposit=N`, `?phonebusy=1`, `?history=0` are described in `src/mock.ts`. The browser extension: `?ext=connect|requests|sites|off`. Bitcoin: `?open=btc` (`&btc=0` no account yet, `&btcshow=mismatch`, `&btcverified=1`), `?open=btcsettings`.
 
 ## Running it
 

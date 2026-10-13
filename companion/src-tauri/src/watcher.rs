@@ -118,6 +118,8 @@ pub fn rpc_for(chain: u64) -> Option<String> {
     let custom = with_state(|s| s.rpcs.get(&chain.to_string()).cloned()).ok().flatten();
     custom.or_else(|| network(chain).map(|n| n.3.to_string()))
 }
+/// Settings → Notifications (shared with the Bitcoin watcher).
+pub fn notify_enabled() -> bool { with_state(|s| s.notify).unwrap_or(true) }
 pub fn selected_chain() -> u64 { with_state(|s| s.chain_id).unwrap_or(8453) }
 
 /// The UI pushes its settings: custom nodes per chain, notifications on/off, selected network.

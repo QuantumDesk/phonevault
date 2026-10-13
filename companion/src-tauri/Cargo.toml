@@ -38,6 +38,11 @@ ring = "=0.17.14"
 base64 = "=0.22.1"
 # Browser extension bridge: socket peer checks (getpeereid, LOCAL_PEERPID, proc_pidpath); already in the tree
 libc = "0.2"
+# Bitcoin (src/btc): watch-only xpub derivation, PSBT build/finalize, signature checks. rust-bitcoin
+# and its libsecp256k1 binding are CC0-1.0; bitcoinconsensus (Apache-2.0/MIT, Bitcoin Core's script
+# interpreter) re-runs every input's script against the spent outputs before anything is broadcast.
+bitcoin = { version = "=0.32.11", default-features = false, features = ["std"] }
+bitcoinconsensus = { version = "=0.106.0", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 # Test-only certificate chains under a throwaway test root (generated in memory per test run).

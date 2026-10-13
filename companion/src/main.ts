@@ -16,22 +16,26 @@ import { activitySection, type ActivityHost, type ActivityFilter } from "./activ
 import { nftSection, resetNfts, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
 import { simulationFor, resimulate, simPanel, gatedSendButton, setSimulationAccount } from "./simulation";
+import { btcInit, btcMain, btcGoHome, btcBusy, btcSettingsSection, activeBtc, btcBalanceSats, refreshBtc, reloadAccounts, BTC_NETS, btcNet, fmtBtc, type BtcNet } from "./bitcoin";
 import "./extras.css";
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
 type Theme = "dark" | "light" | "system";
 type HomeTab = "assets" | "nfts" | "activity";
-interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean; activity: ActivityFilter; tab: HomeTab; setupDone: boolean }
+interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean; activity: ActivityFilter; tab: HomeTab; setupDone: boolean;
+  /** a Bitcoin network is shown instead of an EVM one (null: EVM) */
+  btc: BtcNet | null; btcTestnets: boolean }
 const PREFS_KEY = "phonevault.prefs.v1";
 function loadPrefs(): Prefs {
-  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false, activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false };
+  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false, activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false, btc: null, btcTestnets: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
     const a = p.activity && typeof p.activity === "object" ? p.activity : {};
     return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true,
       activity: { kind: ["all", "out", "in", "pending"].includes(a.kind) ? a.kind : "all", thisNetwork: a.thisNetwork === true },
-      tab: ["assets", "nfts", "activity"].includes(p.tab) ? p.tab : d.tab, setupDone: p.setupDone === true };
+      tab: ["assets", "nfts", "activity"].includes(p.tab) ? p.tab : d.tab, setupDone: p.setupDone === true,
+      btcTestnets: p.btcTestnets === true, btc: ["bitcoin", "testnet", "signet"].includes(p.btc) && (p.btc === "bitcoin" || p.btcTestnets === true) ? p.btc : null };
   } catch { return d; }
 }
 const prefs = loadPrefs();
@@ -148,7 +152,7 @@ const scrim = h("div", { class: "scrim", onclick: () => closeDrawer() });
 const drawer = h("aside", { class: "drawer", "aria-label": "Settings", "aria-hidden": "true" });
 app.append(header, main, scrim, drawer);
 
-function go(v: View) { view = v; main.scrollTop = 0; window.scrollTo(0, 0); render(); }
+function go(v: View) { if (v === "home") btcGoHome(); view = v; main.scrollTop = 0; window.scrollTo(0, 0); render(); }
 
 function renderHeader() {
   const phone = status?.phone ?? "none";
@@ -189,7 +193,7 @@ function render() {
   if (!status) { main.replaceChildren(h("div", { class: "boot" }, h("div", { class: "spinner" }))); return; }
   // no pairing yet: the guided setup (it pairs as step 3)
   if (!status.paired && view !== "tool" && view !== "setup") { setupStart(setupHost); view = "setup"; }
-  const el = view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : view === "setup" ? setupView(setupHost) : toolView();
+  const el = view === "home" && prefs.btc ? btcMain() : view === "home" ? homeView() : view === "send" ? sendView() : view === "receive" ? receiveView() : view === "pair" ? pairView() : view === "setup" ? setupView(setupHost) : toolView();
   // Background refreshes (balances, prices, watcher, the clock) redraw the same screen: don't replay
   // the entrance animation or jump the scroll position then — only animate a real screen change.
   const sameScreen = view === lastRendered;
@@ -204,10 +208,21 @@ let lastRendered: View | null = null;
 
 // ------------------------------------------------------------------ home
 
+const btcNets = () => BTC_NETS.filter((b) => !b.test || prefs.btcTestnets);
+function selectBtc(b: BtcNet | null) {
+  if (btcBusy()) return;
+  prefs.btc = b; savePrefs();
+  if (b) { const a = activeBtc(b); if (a) void refreshBtc(a.id); }
+}
 function networkSelect(onChange?: () => void, cls = "net-chip") {
-  const sel = h("select", { class: "net-select", "aria-label": "Network" },
-    NETWORKS.map((n) => h("option", { value: n.id, selected: n.id === prefs.chainId }, n.testnet ? `${n.name} (testnet)` : n.name)));
-  sel.addEventListener("change", () => { prefs.chainId = Number(sel.value); savePrefs(); refreshBalance(net()); onChange ? onChange() : render(); });
+  const sel = h("select", { class: "net-select", "aria-label": "Network", disabled: btcBusy() },
+    NETWORKS.map((n) => h("option", { value: n.id, selected: !prefs.btc && n.id === prefs.chainId }, n.testnet ? `${n.name} (testnet)` : n.name)),
+    btcNets().map((b) => h("option", { value: `btc:${b.id}`, selected: prefs.btc === b.id }, b.test ? `${b.name} (test)` : b.name)));
+  sel.addEventListener("change", () => {
+    if (sel.value.startsWith("btc:")) { selectBtc(sel.value.slice(4) as BtcNet); onChange ? onChange() : render(); return; }
+    prefs.btc = null; prefs.chainId = Number(sel.value); savePrefs(); refreshBalance(net()); onChange ? onChange() : render();
+  });
+  if (prefs.btc) return h("label", { class: cls }, h("i", { class: `net-dot nbtc-${prefs.btc}` }), h("span", null, btcNet(prefs.btc).name), icon("chevron", 14), sel);
   return h("label", { class: cls }, h("i", { class: `net-dot n${net().id}` }), h("span", null, net().name), icon("chevron", 14), sel);
 }
 
@@ -293,6 +308,8 @@ function assetsTab(n: Network) {
     for (const x of NETWORKS) if (x.id !== n.id) void refreshTokenBalances(x.id, rpcFor(x.id)).then(() => { if (view === "home") renderSoon(); });
   }
   const all = usdTotal(NETWORKS);
+  const btcMain_ = btcBalanceSats("bitcoin");
+  if (activeBtc("bitcoin")) { if (btcMain_ === null || prices.BTC == null) all.partial = true; else all.usd += (btcMain_ / 1e8) * prices.BTC; }
   const here = usdTotal([n]);
   const fmt = (v: number) => fmtUsd(v, 1) ?? "";
   return h("div", { class: "stack" },
@@ -310,6 +327,15 @@ function assetsTab(n: Network) {
           h("span", { class: "grow" }, x.name, x.testnet ? h("span", { class: "tag" }, "testnet") : null),
           ex && !bx ? h("span", { class: "muted small", title: ex }, "unavailable") : h("span", { class: "mono num" }, bx ? `${fmtAmount(bx.eth, 5)} ${x.symbol}` : "…"),
           h("span", { class: "muted small fiat-col", title: "Native coin plus listed tokens" }, bx && !x.testnet && price(x) !== null ? fmt(t.usd) : ""),
+        ));
+      }),
+      btcNets().filter((b) => activeBtc(b.id)).map((b) => {
+        const sats = btcBalanceSats(b.id);
+        return h("li", null, h("button", { class: `net-row${sats === 0 ? " zero" : ""}`, onclick: () => { selectBtc(b.id); render(); } },
+          h("i", { class: `net-dot nbtc-${b.id}` }),
+          h("span", { class: "grow" }, b.name, b.test ? h("span", { class: "tag" }, "test") : null),
+          h("span", { class: "mono num" }, sats === null ? "…" : `${fmtBtc(sats).replace(/^(\d+\.\d{5})\d+$/, "$1")} ${b.unit}`),
+          h("span", { class: "muted small fiat-col" }, sats !== null && !b.test && prices.BTC != null ? fmt((sats / 1e8) * prices.BTC) : ""),
         ));
       })),
     ),
@@ -1307,9 +1333,12 @@ function renderDrawer() {
     backupCardSection(),
     h("section", { class: "set" },
       h("h4", null, "NETWORK"),
-      h("div", { class: "radio-list" }, NETWORKS.map((x) => h("button", { class: `radio${x.id === prefs.chainId ? " on" : ""}`, onclick: () => { prefs.chainId = x.id; savePrefs(); refreshBalance(x); renderDrawer(); if (view === "home" || view === "receive") render(); } },
-        h("i", { class: `net-dot n${x.id}` }), h("span", { class: "grow" }, x.name), x.testnet ? h("span", { class: "tag" }, "testnet") : null, x.id === prefs.chainId ? icon("check", 16) : null))),
+      h("div", { class: "radio-list" }, NETWORKS.map((x) => h("button", { class: `radio${!prefs.btc && x.id === prefs.chainId ? " on" : ""}`, onclick: () => { if (btcBusy()) return; prefs.btc = null; prefs.chainId = x.id; savePrefs(); refreshBalance(x); renderDrawer(); if (view === "home" || view === "receive") render(); } },
+        h("i", { class: `net-dot n${x.id}` }), h("span", { class: "grow" }, x.name), x.testnet ? h("span", { class: "tag" }, "testnet") : null, !prefs.btc && x.id === prefs.chainId ? icon("check", 16) : null)),
+        btcNets().map((b) => h("button", { class: `radio${prefs.btc === b.id ? " on" : ""}`, onclick: () => { selectBtc(b.id); renderDrawer(); if (view === "home") render(); } },
+          h("i", { class: `net-dot nbtc-${b.id}` }), h("span", { class: "grow" }, b.name), b.test ? h("span", { class: "tag" }, "test") : null, prefs.btc === b.id ? icon("check", 16) : null))),
     ),
+    btcSettingsSection(() => renderDrawer()),
     h("section", { class: "set" },
       h("h4", null, `NODE FOR ${n.name.toUpperCase()}`),
       h("label", { class: "field" }, rpcInput, rpcMsg),
@@ -1340,7 +1369,7 @@ function renderDrawer() {
       h("h4", null, "ABOUT"),
       h("div", { class: "set-row" }, h("span", null, "Phone Vault Companion"), h("span", { class: "mono muted" }, version || "…")),
       h("p", { class: "muted small" }, "This Mac never sees a key. It quotes, relays, verifies and broadcasts. The phone decides."),
-      h("p", { class: "muted small" }, "Prices from Coinbase, for display only. No analytics, no accounts."),
+      h("p", { class: "muted small" }, "Prices from Coinbase, for display only. Bitcoin data from the Esplora server in Settings → Bitcoin. No analytics, no accounts."),
     ),
   ].filter((x): x is HTMLElement => !!x));
 }
@@ -1366,9 +1395,27 @@ mountWalletConnect({
 });
 (async () => {
   await refreshStatus();
+  await btcInit({
+    net: () => prefs.btc ?? "bitcoin",
+    showTestnets: () => prefs.btcTestnets,
+    setShowTestnets: (on) => { prefs.btcTestnets = on; if (!on && prefs.btc && prefs.btc !== "bitcoin") prefs.btc = "bitcoin"; savePrefs(); render(); },
+    price: () => prices.BTC ?? null,
+    rerender: () => { if (view === "home") renderSoon(); },
+    renderNow: () => { if (view === "home") render(); },
+    topbar: (title, back) => topbar(title, back),
+    networkSelect: () => networkSelect(),
+    phoneBlocked: () => device.report?.verdict === "fail" ? "This phone failed the device check (Settings → Device). Signing is blocked." : null,
+    phoneBusy: () => (view === "send" && ["connecting", "on_phone", "verifying"].includes(flow.s)) || wcPhoneBusy() || identifying,
+  });
   render();
-  // Preview only (no Tauri): ?open=drawer opens Settings, ?open=pair the pairing screen, for screenshots.
-  if (!isTauri) { const o = new URLSearchParams(location.search).get("open"); if (o === "drawer") openDrawer(); else if (o === "pair") { pair = { s: "idle" }; go("pair"); } }
+  // Preview only (no Tauri): ?open=drawer opens Settings, ?open=pair the pairing screen, ?open=btc
+  // Bitcoin (with ?btc=0 its pairing screen), ?open=btcsettings the Bitcoin settings, for screenshots.
+  if (!isTauri) {
+    const o = new URLSearchParams(location.search).get("open");
+    if (o === "drawer") openDrawer(); else if (o === "pair") { pair = { s: "idle" }; go("pair"); }
+    else if (o === "btc") { prefs.btc = "bitcoin"; await reloadAccounts(); render(); }
+    else if (o === "btcsettings") { prefs.btc = "bitcoin"; await reloadAccounts(); render(); openDrawer(); requestAnimationFrame(() => document.getElementById("btc-section")?.scrollIntoView({ block: "start" })); }
+  }
   refreshHistory().then(pollPending);
   refreshPrices();
   setInterval(refreshStatus, 3000);

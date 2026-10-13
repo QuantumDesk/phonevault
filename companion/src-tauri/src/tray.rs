@@ -8,7 +8,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Wry};
 
-struct Items { balance: MenuItem<Wry>, address: MenuItem<Wry> }
+struct Items { balance: MenuItem<Wry>, btc: MenuItem<Wry>, address: MenuItem<Wry> }
 static ITEMS: OnceLock<Items> = OnceLock::new();
 
 /// Menu-bar padlock: the brand's pixel padlock redrawn at 14×16 for the menu bar — stepped round
@@ -71,11 +71,12 @@ fn copy_address(app: &AppHandle) {
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let balance = MenuItem::with_id(app, "balance", "Balance: …", false, None::<&str>)?;
+    let btc = MenuItem::with_id(app, "btc", "Bitcoin: not set up", false, None::<&str>)?;
     let address = MenuItem::with_id(app, "address", "Not paired", false, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "Open Phone Vault", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy", "Copy receive address", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Phone Vault", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&balance, &address, &PredefinedMenuItem::separator(app)?, &open, &copy, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(app, &[&balance, &btc, &address, &PredefinedMenuItem::separator(app)?, &open, &copy, &PredefinedMenuItem::separator(app)?, &quit])?;
     TrayIconBuilder::with_id("main")
         .icon(padlock_icon())
         .icon_as_template(true)
@@ -89,7 +90,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             _ => {}
         })
         .build(app)?;
-    let _ = ITEMS.set(Items { balance, address });
+    let _ = ITEMS.set(Items { balance, btc, address });
     if let Ok(Some(a)) = pairing::load() { set_address(app, &verify::checksum(&a)); }
     Ok(())
 }
@@ -112,4 +113,17 @@ pub fn set_balance(app: &AppHandle, chain: u64, wei: u128) {
     let text = match usd { Some(u) => format!("{shown} {symbol} on {name} · ${u:.2}"), None => format!("{shown} {symbol} on {name}") };
     let _ = i.balance.set_text(&text);
     if let Some(t) = app.tray_by_id("main") { let _ = t.set_tooltip(Some(format!("Phone Vault · {text}"))); }
+}
+
+/// "Bitcoin: 0.01234 BTC · $812.40" across the paired Bitcoin (mainnet) accounts; None = none paired.
+pub fn set_btc_balance(_app: &AppHandle, sats: Option<u64>) {
+    let Some(i) = ITEMS.get() else { return };
+    let text = match sats {
+        None => "Bitcoin: not set up".to_string(),
+        Some(s) => {
+            let btc = crate::btc::tx::format_btc(s);
+            match price::spot("BTC").ok() { Some(p) => format!("Bitcoin: {btc} BTC · ${:.2}", s as f64 / 1e8 * p), None => format!("Bitcoin: {btc} BTC") }
+        }
+    };
+    let _ = i.btc.set_text(text);
 }
