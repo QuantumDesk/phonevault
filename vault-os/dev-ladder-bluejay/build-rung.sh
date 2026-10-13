@@ -17,6 +17,24 @@ source build/envsetup.sh
 lunch vault_bluejay-cp2a-userdebug
 [[ -n "${TARGET_PRODUCT:-}" ]] || { echo "LUNCH FAILED"; exit 8; }
 echo "=== BLUEJAY RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} variant=${TARGET_BUILD_VARIANT}"
+# Scrub stale app dirs from the staging tree before building (crosshatch rung 4a finding, see
+# dev-ladder/README.md "Stale staging leftovers"): an app with JNI libs leaves dangling lib/<abi>
+# symlinks that soong_ui's stale-install cleaner cannot delete, and target files copy the staging
+# dir wholesale. Removed here: every app dir without an APK, and every app dir named in the rung's
+# active `overrides` (if such a module really is still installed, ninja re-creates it and
+# check-build.sh fails as it should).
+PV_PRODUCT_OUT="out/target/product/bluejay"
+mapfile -t PV_OVERRIDES < <(awk '/^[[:space:]]*\/\//{next} /overrides:[[:space:]]*\[/{f=1;next}
+  f && /^[[:space:]]*\]/{f=0} f' vendor/phonevault/prebuilt/Android.bp | grep -o '"[^"]*"' | tr -d '"')
+for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-app}/*/; do
+  [[ -d "${d}" ]] || continue
+  name="$(basename "${d}")"
+  if ! compgen -G "${d}*.apk" >/dev/null; then
+    echo "   scrub stale app dir (no APK): ${d}"; rm -rf "${d}"
+  elif printf '%s\n' "${PV_OVERRIDES[@]}" | grep -Fqx "${name}"; then
+    echo "   scrub overridden app dir: ${d}"; rm -rf "${d}"
+  fi
+done
 export DISABLE_DEXPREOPT_CHECK=true
 # Lineage: without this, userdebug gets ro.adb.secure=1 and ro.debuggable=0 (dev rungs need adb).
 export WITH_ADB_INSECURE=true
@@ -128,6 +146,13 @@ if [[ "${RUNG}" != b0 ]]; then
     || { echo "SUPER IMAGE FAILED"; tail -20 "${PV_DEST}/super-build.log"; exit 1; }
   ls -la "${PV_DEST}/super.img"
   install -m 0755 "${SCRIPT_DIR}/flash-mac.sh" "${PV_DEST}/flash-${RUNG}-mac.sh"
+fi
+
+# b2+: the rung's own artifact gate (kernel modules, cmdline, overrides, expect-build.txt).
+if [[ "${RUNG}" != b0 && "${RUNG}" != b1 ]]; then
+  bash "${SCRIPT_DIR}/check-build.sh" "${RUNG}" "${PV_DEST}/vault_bluejay-target_files-${RUNG}.zip" \
+    "${PV_DEST}" "${TREE}" | tee "${PV_DEST}/check-build.txt"
+  [[ ${PIPESTATUS[0]} -eq 0 ]] || { echo "RUNG CHECK FAILED (see ${PV_DEST}/check-build.txt)"; exit 1; }
 fi
 ( cd "${PV_DEST}" && find . -type f ! -name SHA256SUMS | sed 's#^\./##' | sort | xargs sha256sum > SHA256SUMS )
 cat "${PV_DEST}/SHA256SUMS"

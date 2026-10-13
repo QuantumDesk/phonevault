@@ -1,0 +1,43 @@
+# check-build.sh expectations for rung b3 (paths inside the target-files zip). See check-build.sh.
+
+# Never stripped (port-bluejay.md §4): the Titan M2 + Trusty stack the vault's PIN, keys and
+# FBE depend on, and the USB HALs the AOA transport needs.
+present VENDOR/etc/init/citadeld.rc
+present VENDOR/etc/init/android.hardware.weaver-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.citadel.rc
+present VENDOR/etc/init/android.hardware.authsecret-service.citadel.rc
+present VENDOR/etc/init/android.hardware.oemlock-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.trusty.rc
+present VENDOR/etc/init/android.hardware.gatekeeper-service.trusty.rc
+present VENDOR/bin/hw/android.hardware.usb-service.gs101
+present VENDOR/bin/hw/android.hardware.usb.gadget-service.gs101
+present PRODUCT/app/PhoneVault/PhoneVault.apk
+present PRODUCT/app/ModuleMetadata/ModuleMetadata.apk
+present SYSTEM_EXT/priv-app/Settings/Settings.apk
+present PRODUCT/app/LatinIME/LatinIME.apk
+
+# b2 kernel slice 1 keeps these.
+present VENDOR_DLKM/lib/modules/bcmdhd4389.ko
+present VENDOR_DLKM/lib/modules/cpif.ko
+present VENDOR_DLKM/lib/modules/aoc_core.ko
+present VENDOR_DLKM/lib/modules/abrolhos.ko
+present VENDOR_DLKM/lib/modules/goodixfp.ko
+
+# b3 USB: no host feature (gs101 diff), and handheld_core_hardware does not declare it either.
+absent VENDOR/etc/permissions/android.hardware.usb.host.xml
+present VENDOR/etc/permissions/android.hardware.usb.accessory.xml
+nogrep VENDOR/etc/permissions/handheld_core_hardware.xml android\.hardware\.usb\.host
+# Gadget function instances: AOA (kernel + userspace) and, debuggable only, adb. Nothing else.
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+mkdir /config/usb_gadget/g1/functions/accessory\.gs2$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+mkdir /config/usb_gadget/g1/functions/ffs\.aoa$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^on early-boot && property:ro\.debuggable=1$
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc functions/(mtp\.gs0|ptp\.gs1|audio_source|rndis|midi|acm\.|dm\.gs7|uts\.gs8|ncm\.gs9|etr_miu|uvc\.0|ffs\.mtp|ffs\.ptp)
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+chown system system /config/usb_gadget/(g1/functions)?$
+# Type-C: pinned sink at boot and boot_completed; role nodes and the OTG id node root-only.
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+write /sys/class/typec/port0/port_type sink$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^on property:sys\.boot_completed=1\n\s+write /sys/class/typec/port0/port_type sink
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 port_type\s+644 root root$
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 power_role\s+644 root root$
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 data_role\s+644 root root$
+grep VENDOR/etc/ueventd.rc dwc3_exynos_otg_id\s+644 root root$
+grep VENDOR/build.prop ^ro\.vendor\.phonevault\.offline=true$

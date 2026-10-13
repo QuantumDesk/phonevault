@@ -248,6 +248,14 @@ am_crash` + `init: Service … exited` repeats) has to be 0, before the next run
 | b8 | `user` build, release keys, release-signed app, no adb | `adb` unreachable. Full signing suite over AOA only. |
 | **b9** | **Relock:** `avb_custom_key` + `fastboot flashing lock` | Boot shows the yellow "different OS" screen with our key's ID. Attestation → **GENUINE**. A vbmeta signed with another key is refused (red/eio). The OEM unlocking toggle is turned off afterwards. |
 
+**As built (2026-10-13), the order after b1 changed:** b2 = kernel slice 1 (unused GKI/vendor
+modules out, `usbcore.authorized_default=0`), b3 = USB (planned b6; enforced in the gs101 rc and
+ueventd because the USB HALs are prebuilt blobs), b4a = Wi-Fi/BT/NFC/eSE/GNSS/modem drivers with
+their services (planned b3+b4), b4b/b4c = the crosshatch 4a/4b app strips (planned b7). Still
+open: the appliance VINTF manifest (planned b2), camera/TPU/sensors (planned b5), the telephony
+rung, user build and relock. Details, pass criteria and rollback: `dev-ladder-bluejay/README.md`,
+"Hardening rungs b2–b4c".
+
 ## 6. Attestation on the 6a (Titan M2) and what our verifier expects
 
 The verifier (`docs/device-attestation.md`, `companion/src-tauri/src/attest/`) requires all of

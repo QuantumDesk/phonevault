@@ -1,0 +1,24 @@
+# check-build.sh expectations for rung b2 (paths inside the target-files zip). See check-build.sh.
+
+# Never stripped (port-bluejay.md §4): the Titan M2 + Trusty stack the vault's PIN, keys and
+# FBE depend on, and the USB HALs the AOA transport needs.
+present VENDOR/etc/init/citadeld.rc
+present VENDOR/etc/init/android.hardware.weaver-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.citadel.rc
+present VENDOR/etc/init/android.hardware.authsecret-service.citadel.rc
+present VENDOR/etc/init/android.hardware.oemlock-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.trusty.rc
+present VENDOR/etc/init/android.hardware.gatekeeper-service.trusty.rc
+present VENDOR/bin/hw/android.hardware.usb-service.gs101
+present VENDOR/bin/hw/android.hardware.usb.gadget-service.gs101
+present PRODUCT/app/PhoneVault/PhoneVault.apk
+present PRODUCT/app/ModuleMetadata/ModuleMetadata.apk
+present SYSTEM_EXT/priv-app/Settings/Settings.apk
+present PRODUCT/app/LatinIME/LatinIME.apk
+
+# Kernel modules the rung keeps on purpose (b2 removes only modules nothing uses).
+present VENDOR_DLKM/lib/modules/bcmdhd4389.ko
+present VENDOR_DLKM/lib/modules/cpif.ko
+present VENDOR_DLKM/lib/modules/aoc_core.ko
+present VENDOR_DLKM/lib/modules/abrolhos.ko
+present VENDOR_DLKM/lib/modules/goodixfp.ko

@@ -1,0 +1,20 @@
+diff --git a/common.mk b/common.mk
+index 28e08ec..2d3a386 100644
+--- a/common.mk
++++ b/common.mk
+@@ -130,13 +130,14 @@ $(call inherit-product, $(SRC_TARGET_DIR)/product/virtual_ab_ota/launch_with_ven
+ # Enforce generic ramdisk allow list
+ $(call inherit-product, $(SRC_TARGET_DIR)/product/generic_ramdisk.mk)
+ 
++# Phone Vault (bluejay rung b3): android.hardware.usb.host is not declared (the port is
++# sink/UFP-only; UsbService does not start UsbHostManager).
+ PRODUCT_COPY_FILES += \
+ 	frameworks/native/data/etc/android.hardware.wifi.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.xml \
+ 	frameworks/native/data/etc/android.hardware.wifi.direct.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.direct.xml \
+ 	frameworks/native/data/etc/android.hardware.wifi.aware.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.aware.xml \
+ 	frameworks/native/data/etc/android.hardware.wifi.passpoint.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.passpoint.xml \
+ 	frameworks/native/data/etc/android.hardware.wifi.rtt.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.wifi.rtt.xml \
+-	frameworks/native/data/etc/android.hardware.usb.host.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.host.xml \
+ 	frameworks/native/data/etc/android.hardware.usb.accessory.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.accessory.xml
+ 
+ PRODUCT_COPY_FILES += \
