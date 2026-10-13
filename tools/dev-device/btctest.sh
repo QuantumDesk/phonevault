@@ -20,6 +20,7 @@ OUT="${PV_BTC_OUT:-/tmp/btctest}"
 WORK="$(mktemp -d)"
 source "$(dirname "$0")/btclib.sh"
 
+wake  # a sleeping screen (e.g. after a reboot) has no window to read
 ensure_account1
 
 # ---- 0. a clean slate: the phone must ask again for every account

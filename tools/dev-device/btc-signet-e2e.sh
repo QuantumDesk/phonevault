@@ -32,6 +32,8 @@ CONFIRM_WAIT="${PV_SIGNET_CONFIRM_WAIT:-2400}"
 ADDRESS_ONLY=0; [[ "${1:-}" == "--address-only" ]] && ADDRESS_ONLY=1
 mkdir -p "$STATE"; chmod 700 "$STATE"
 S() { "$PY" "$SIGNET" "$@"; }
+wake  # a sleeping screen (e.g. after a reboot) has no window to read
+unlock_if_locked
 
 # ---- 1. the account (watch-only xpub)
 step "1 account"
