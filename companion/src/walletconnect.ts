@@ -495,13 +495,27 @@ function linkIcon(size = 18): SVGSVGElement {
 
 const dappName = (topic: string) => sessionOf(topic)?.meta.name ?? "A dApp";
 
+/** dApp icons come through Rust (nft.rs `dapp_icon`: https only, image types, 256 KiB) as data:
+ *  URLs; the page's CSP loads no remote images, so the dApp's server never sees this app fetch it.
+ *  url → data URL ("" = none), or the request in flight. */
+const iconCache = new Map<string, string | Promise<string>>();
+
 function dappIcon(url: string | undefined, size = 36) {
   const box = h("span", { class: "wc-icon", style: `width:${size}px;height:${size}px` });
-  if (url && /^(https:|data:image\/)/.test(url)) {
-    const img = h("img", { src: url, alt: "", width: size, height: size, referrerpolicy: "no-referrer", loading: "lazy" });
-    img.addEventListener("error", () => { img.remove(); box.append(linkIcon(size * 0.5)); });
-    box.append(img);
-  } else box.append(linkIcon(size * 0.5));
+  const show = (data: string) => {
+    box.replaceChildren(data ? h("img", { src: data, alt: "", width: size, height: size }) : linkIcon(size * 0.5));
+  };
+  if (!url || !/^(https:|data:image\/)/.test(url) || url.length > 2048) { show(""); return box; }
+  const hit = iconCache.get(url);
+  if (typeof hit === "string") { show(hit); return box; }
+  show("");
+  const p = hit ?? call<string>("dapp_icon", { url }).catch(() => "");
+  if (!hit) {
+    if (iconCache.size > 64) iconCache.clear();
+    iconCache.set(url, p);
+    void p.then((d) => iconCache.set(url, d));
+  }
+  void p.then(show);
   return box;
 }
 

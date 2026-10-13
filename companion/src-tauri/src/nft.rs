@@ -247,12 +247,36 @@ fn data_url(url: &str) -> Option<(Vec<u8>, String)> {
 
 const IMAGE_TYPES: [&str; 5] = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 
-fn image_data_url(url: &str) -> Result<String, String> {
-    let (bytes, ctype) = match data_url(url) { Some(d) => d, None => fetch(url, MAX_IMAGE)? };
-    if bytes.len() as u64 > MAX_IMAGE { return Err("image larger than 2 MiB; not loaded".into()); }
+fn image_data_url(url: &str) -> Result<String, String> { image_data_url_capped(url, MAX_IMAGE) }
+
+fn image_data_url_capped(url: &str, cap: u64) -> Result<String, String> {
+    let (bytes, ctype) = match data_url(url) { Some(d) => d, None => fetch(url, cap)? };
+    if bytes.len() as u64 > cap { return Err(format!("image larger than {} KiB; not loaded", cap / 1024)); }
     let ctype = ctype.split(';').next().unwrap_or("").trim().to_string();
     if !IMAGE_TYPES.contains(&ctype.as_str()) { return Err(format!("not a supported image type ({})", if ctype.is_empty() { "unknown" } else { &ctype })); }
     Ok(format!("data:{ctype};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
+}
+
+/// A dApp's icon (WalletConnect metadata), fetched by this side under the same rules as NFT
+/// images (https only, no redirects, no local/private literal hosts, image types only) and at most
+/// 256 KiB, returned as a data: URL. The page's CSP allows no remote images, so a dApp cannot learn
+/// from its icon request that, or when, this app showed its card. Answers are cached per URL for
+/// the session (failures too, as an empty string: the card shows the generic link icon).
+const MAX_ICON: u64 = 256 * 1024;
+const MAX_ICON_CACHE: usize = 64;
+static ICONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+#[tauri::command]
+pub(crate) async fn dapp_icon(url: String) -> CmdResult<String> {
+    blocking(move || {
+        if url.len() > 2048 { return Ok(String::new()); }
+        if let Some((_, v)) = ICONS.lock().map_err(|_| "poisoned")?.iter().find(|(u, _)| *u == url) { return Ok(v.clone()); }
+        let v = image_data_url_capped(&url, MAX_ICON).unwrap_or_default();
+        let mut c = ICONS.lock().map_err(|_| "poisoned")?;
+        if c.len() >= MAX_ICON_CACHE { c.remove(0); }
+        c.push((url, v.clone()));
+        Ok(v)
+    }).await
 }
 
 #[tauri::command]
@@ -320,5 +344,10 @@ mod tests {
         let png = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G']));
         assert!(image_data_url(&png).unwrap().starts_with("data:image/png;base64,"));
         assert!(image_data_url("data:text/html;base64,PGgxPg==").is_err());
+        // dApp icons: same rules, smaller cap
+        let big = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_ICON as usize + 1]));
+        assert!(image_data_url_capped(&big, MAX_ICON).is_err());
+        assert!(image_data_url_capped(&png, MAX_ICON).is_ok());
+        assert!(image_data_url_capped("http://dapp.example/icon.png", MAX_ICON).is_err(), "https only");
     }
 }

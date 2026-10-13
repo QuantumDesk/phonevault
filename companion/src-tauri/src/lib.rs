@@ -245,7 +245,7 @@ pub fn run() {
             send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
-            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
+            watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata, nft::dapp_icon,
             signing::sign_message, signing::sign_typed_data,
             attest::attest_phone, attest::attestation_cached, attest::developer_mode, attest::set_developer_mode,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
@@ -304,6 +304,28 @@ mod tests {
             json!({"id": "a-2", "status": "ok", "address": ADDR}),
             json!({"id": "a-1", "status": "ok", "address": "0x12"}),
         ] { assert!(parse_address_response(&req, &bad).is_err(), "accepted {bad}"); }
+    }
+
+    /// The command list in build.rs (the ACL: anything missing cannot be invoked), the
+    /// app-commands permission set, and generate_handler! must name the same commands.
+    #[test]
+    fn every_registered_command_is_permitted_and_nothing_else() {
+        fn quoted(s: &str) -> Vec<String> { s.split('"').skip(1).step_by(2).map(str::to_string).collect() }
+        let lib = include_str!("lib.rs");
+        let handler = lib.split("generate_handler![").nth(1).unwrap().split("])").next().unwrap();
+        let mut registered: Vec<String> = handler.split(',').map(|x| x.trim().rsplit("::").next().unwrap().to_string()).filter(|x| !x.is_empty()).collect();
+        let build = include_str!("../build.rs");
+        let mut listed = quoted(build.split("COMMANDS: &[&str] = &[").nth(1).unwrap().split("];").next().unwrap());
+        let set = include_str!("../permissions/app-commands.toml");
+        let mut permitted: Vec<String> = quoted(set.split("permissions = [").nth(1).unwrap())
+            .into_iter().map(|p| p.strip_prefix("allow-").expect("allow- only").replace('-', "_")).collect();
+        registered.sort(); listed.sort(); permitted.sort();
+        assert_eq!(registered, listed, "build.rs COMMANDS vs generate_handler!");
+        assert_eq!(registered, permitted, "permissions/app-commands.toml vs generate_handler!");
+        let cap: Value = serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+        assert_eq!(cap["windows"], json!(["main"]));
+        assert!(cap["permissions"].as_array().unwrap().contains(&json!("app-commands")));
+        assert!(cap.get("remote").is_none(), "no remote origin may call commands");
     }
 
     #[test]
