@@ -64,7 +64,7 @@ final class RecipientHistory {
             JSONObject all = root.getJSONObject("wallets");
             java.util.Iterator<String> keys = all.keys();
             while (keys.hasNext()) {
-                String wallet = AddressBook.normalize(keys.next());
+                String wallet = AddressKeys.walletKey(keys.next());
                 JSONArray list = all.getJSONArray(wallet);
                 Map<String, Entry> entries = new LinkedHashMap<>();
                 for (int i = 0; i < list.length() && i < MAX_PER_WALLET; i++) {
@@ -84,13 +84,13 @@ final class RecipientHistory {
 
     /** What this wallet has signed for {@code address}, or null if never. */
     synchronized Entry lookup(String wallet, String address) {
-        Map<String, Entry> entries = wallets.get(wallet.toLowerCase(Locale.ROOT));
-        return entries == null ? null : entries.get(address.toLowerCase(Locale.ROOT));
+        Map<String, Entry> entries = wallets.get(AddressKeys.canon(wallet));
+        return entries == null ? null : entries.get(AddressKeys.canon(address));
     }
 
     /** Every address this wallet has signed for. */
     synchronized List<Entry> entries(String wallet) {
-        Map<String, Entry> entries = wallets.get(wallet.toLowerCase(Locale.ROOT));
+        Map<String, Entry> entries = wallets.get(AddressKeys.canon(wallet));
         return entries == null ? Collections.<Entry>emptyList() : new ArrayList<>(entries.values());
     }
 
@@ -100,7 +100,7 @@ final class RecipientHistory {
      */
     synchronized String record(String wallet, String address, Role role, long now) {
         if (problem != null) return problem;
-        String w = AddressBook.normalize(wallet), a = AddressBook.normalize(address);
+        String w = AddressKeys.walletKey(wallet), a = AddressBook.normalize(address);
         Map<String, Entry> entries = wallets.get(w);
         if (entries == null) wallets.put(w, entries = new LinkedHashMap<>());
         Entry old = entries.get(a);

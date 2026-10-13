@@ -1,7 +1,5 @@
 package dev.phonevault.signer;
 
-import org.web3j.crypto.Keys;
-
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -47,7 +45,7 @@ final class AddressSafety {
     void setOwnAccounts(Map<String, String> accounts) {
         Map<String, String> copy = new LinkedHashMap<>();
         if (accounts != null) for (Map.Entry<String, String> e : accounts.entrySet()) {
-            if (e.getKey() != null) copy.put(e.getKey().toLowerCase(Locale.ROOT), e.getValue());
+            if (e.getKey() != null) copy.put(AddressKeys.canon(e.getKey()), e.getValue());
         }
         ownAccounts = Collections.unmodifiableMap(copy);
     }
@@ -58,11 +56,11 @@ final class AddressSafety {
      */
     List<MessageReview.Row> rows(String signer, String address, RecipientHistory.Role role) {
         List<MessageReview.Row> rows = new ArrayList<>();
-        String a = address.toLowerCase(Locale.ROOT);
+        String a = AddressKeys.canon(address);
         String name = contactName(a);
         if (name != null) rows.add(new MessageReview.Row(CONTACT, name + " (named on this phone)"));
         Map<String, String> own = ownAccounts;
-        String self = signer == null ? null : signer.toLowerCase(Locale.ROOT);
+        String self = signer == null ? null : AddressKeys.canon(signer);
         if (own.containsKey(a) && !a.equals(self)) {
             rows.add(new MessageReview.Row(OWN_ACCOUNT, own.get(a) + " on this phone"));
         }
@@ -85,11 +83,11 @@ final class AddressSafety {
                     : "saved in your address book";
             rows.add(new MessageReview.Row(TransactionReview.DANGER, "Looks like " + LookAlike.shortForm(k)
                     + (kName != null ? " (\"" + kName + "\")" : "") + " " + how + ", but it is a DIFFERENT address ("
-                    + LookAlike.differingChunks(k, a) + " of 10 chunks differ). This is how address-poisoning scams work: "
+                    + LookAlike.differingChunks(k, a) + " of " + LookAlike.chunkCount(k, a) + " chunks differ). This is how address-poisoning scams work: "
                     + "check every character below. Do not sign unless you are sure."));
             rows.add(new MessageReview.Row(COMPARE, LookAlike.grid(k, a)));
-            rows.add(new MessageReview.Row("Known address", Keys.toChecksumAddress(k)));
-            rows.add(new MessageReview.Row("This address", Keys.toChecksumAddress(a)));
+            rows.add(new MessageReview.Row("Known address", AddressKeys.display(k)));
+            rows.add(new MessageReview.Row("This address", AddressKeys.display(a)));
             shown++;
         }
 

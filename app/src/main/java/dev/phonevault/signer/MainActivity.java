@@ -69,6 +69,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Counterparties of the transaction just signed, offered as "Save as contact" on its receipt. */
     private List<TransactionReview.Party> receiptParties;
     private volatile ApprovalDecision approvalDecision;
+    // --- Bitcoin (BtcRequest, BtcWallet, BtcPsbtReview, BtcPsbtSigner).
+    /**
+     * Per network (BtcNetwork ordinal): the STANDARD wallet's Bitcoin account public keys, derived
+     * from the seed inside the seed-key window on first use and kept for this unlocked session only
+     * (cleared on lock and on any wallet change; never written to disk). Guarded by stateLock.
+     */
+    private final BtcWallet[] btcWallets = new BtcWallet[BtcNetwork.values().length];
+    /** walletId the cached Bitcoin accounts were derived for. */
+    private String btcWalletOwner;
+    /** Amounts already signed per coin (SegWit fee-attack guard); memory only. */
+    private final BtcAmountMemory btcAmounts = new BtcAmountMemory();
+    private static final String BTC_PREFS = "bitcoin", BTC_SHARING_KEY = "shared_v1";
     // --- accounts + passphrase wallet (AccountBook, AccountScreens). Published with credentials.
     /** Non-secret description of the key in {@link #credentials}; set and cleared with it under stateLock. */
     private volatile SigningAccount activeAccount;
@@ -349,13 +361,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * Run {@code op} with the seed key usable: in credential mode ask the system to verify the PIN
      * unless that happened moments ago (inside the key's window, with margin). Old mode: run now.
      */
-    private void withSeedKey(String why, Runnable op) {
+    private void withSeedKey(String why, Runnable op) { withSeedKey(why, op, null); }
+
+    /** As {@link #withSeedKey(String, Runnable)}; {@code onCancel} (may be null) runs if the PIN prompt is dismissed. */
+    private void withSeedKey(String why, Runnable op, Runnable onCancel) {
         if (!credentialMode()) { op.run(); return; }
         SeedKeyWindow.Decision decision = SeedKeyWindow.decide(lastCredentialConfirm, android.os.SystemClock.elapsedRealtime());
         if (decision == SeedKeyWindow.Decision.RUN) { op.run(); return; }
         // Our own confirmation is near or past the window's end: probing now could pass keystore2
         // and still fail on the chip a moment later (SeedKeyWindow), so ask.
-        if (decision == SeedKeyWindow.Decision.ASK) { confirmDevicePin(why, op, null); return; }
+        if (decision == SeedKeyWindow.Decision.ASK) { confirmDevicePin(why, op, onCancel); return; }
         // Ask the chip before asking the person: right after a PIN was set or entered on Android's
         // own screen the key may already be usable, and a second prompt would be pure friction.
         final int s = session.get();
@@ -364,7 +379,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             runOnUiThread(() -> {
                 if (s != session.get()) return;
                 if (ready) { op.run(); return; }
-                confirmDevicePin(why, op, null);
+                confirmDevicePin(why, op, onCancel);
             });
         });
     }
@@ -2020,6 +2035,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void clearReceivingIdentity() {
+        clearBtcWallets();
         walletLoaded = false;
         backupVerified = false;
         walletAddress = null;
@@ -2190,6 +2206,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     b = "The connected host asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.";
                 } else if (MessageRequest.handles(json.optString("method"))) {
                     b = MessageReview.lockedSummary(MessageRequest.parse(json));
+                } else if (BtcRequest.handles(json.optString("method"))) {
+                    b = BtcRequest.lockedSummary(json);
                 } else {
                     b = TransactionReview.build(Eip1559Request.parse(json), null, tokens()).lockedSummary;
                 }
@@ -2215,6 +2233,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 sendError(source, id, "Wallet is not ready: finish choosing the account on the phone, then try again");
                 return;
             }
+        }
+        if (BtcRequest.handles(json.optString("method"))) {
+            handleBitcoin(source, json, id, s);
+            return;
         }
         if ("getAddress".equals(json.optString("method"))) {
             try {
@@ -2434,12 +2456,34 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private interface ReviewedSigner { JSONObject sign(Credentials current) throws Exception; }
 
     /**
+     * Produces the response from the BIP-39 seed (Bitcoin): runs on the crypto thread inside the
+     * seed-key window, OUTSIDE stateLock (the decrypt and key derivation take a moment); the
+     * response is sent under stateLock only if the session is still the reviewed one.
+     */
+    private interface SeedSigner { JSONObject sign(byte[] seed) throws Exception; }
+
+    /**
      * The acknowledgement checkbox, Sign and Reject for one request, shared by the transaction and
      * message reviews: one decision, check → sign → send as one step under stateLock.
      */
     private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
                                      String requestId, String prompt, String signText, ReviewedSigner signer,
                                      String doneMessage, String receiptLabel, String receiptField, boolean transaction,
+                                     Runnable afterSigned) {
+        addDecisionControls(root, source, decision, s, requestId, prompt, signText, signer, null, null,
+                doneMessage, receiptLabel, response -> response.optString(receiptField), transaction, afterSigned);
+    }
+
+    /**
+     * @param seedSigner when non-null (Bitcoin), Sign first opens the seed-key window ({@code seedWhy}
+     *                   is the PIN prompt's reason) and the signature is made from the seed; a
+     *                   dismissed PIN prompt answers "rejected" and signs nothing
+     */
+    private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
+                                     String requestId, String prompt, String signText, ReviewedSigner signer,
+                                     SeedSigner seedSigner, String seedWhy,
+                                     String doneMessage, String receiptLabel,
+                                     java.util.function.Function<JSONObject, String> receiptValue, boolean transaction,
                                      Runnable afterSigned) {
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
@@ -2475,30 +2519,55 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             reviewed.setEnabled(false);
             sign.setText("Signing…");
             statusMessage = "Signing approved request";
-            cryptoExecutor.execute(() -> {
+            Runnable work = () -> cryptoExecutor.execute(() -> {
+                boolean mayHaveLeft = seedSigner == null; // the seed path sends only after signing completes
                 try {
                     JSONObject response;
-                    synchronized (stateLock) {
-                        if (!operational || !unlocked || s != session.get() || sensitive.active()
-                                || !backupVerified || source != transport || source.isClosed()
-                                || approvalDecision != decision || !decision.maySign())
-                            throw new IllegalStateException("Session ended before signing");
-                        response = signer.sign(credentials);
-                        if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
-                        decision.finish();
+                    if (seedSigner != null) {
+                        synchronized (stateLock) {
+                            if (!signingStillOwned(source, s, decision)) throw new IllegalStateException("Session ended before signing");
+                        }
+                        JSONObject prepared = vault.withStandardSeed(seedSigner::sign);
+                        synchronized (stateLock) {
+                            if (!signingStillOwned(source, s, decision)) throw new IllegalStateException("Session ended before signing");
+                            mayHaveLeft = true;
+                            if (!source.send(prepared)) throw new IllegalStateException("Signature delivery is uncertain");
+                            decision.finish();
+                        }
+                        response = prepared;
+                    } else {
+                        synchronized (stateLock) {
+                            if (!signingStillOwned(source, s, decision))
+                                throw new IllegalStateException("Session ended before signing");
+                            response = signer.sign(credentials);
+                            if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
+                            decision.finish();
+                        }
                     }
+                    final JSONObject sent = response;
                     runOnUiThread(() -> {
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
                         statusMessage = "Signature created · delivery not confirmed";
                         if (afterSigned != null) afterSigned.run();
-                        showReceipt("Signature created", doneMessage, receiptLabel, response.optString(receiptField), transaction);
+                        showReceipt("Signature created", doneMessage, receiptLabel, receiptValue.apply(sent), transaction);
                     });
                 } catch (Exception e) {
-                    sendError(source, requestId, e.getMessage());
+                    final boolean uncertain = mayHaveLeft;
+                    final boolean lapsed = authLapsed(e);
+                    sendError(source, requestId, uncertain ? e.getMessage()
+                            : (lapsed ? "PIN confirmation expired before signing; nothing was signed" : "Not signed: " + e.getMessage()));
+                    if (!uncertain) android.util.Log.w("Vault", "seed signing failed: " + chain(e));
                     runOnUiThread(() -> {
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
+                        if (!uncertain) {
+                            statusMessage = "Not signed";
+                            showReceipt("Not signed", lapsed
+                                    ? "Your PIN confirmation expired before signing finished. No signature left the phone; send the request again."
+                                    : "Signing did not complete. No signature left the phone.", null, null, transaction);
+                            return;
+                        }
                         showReceipt("Check the host", transaction
                                 ? "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction."
                                 : "Signing or delivery did not complete normally. A signature may have reached the host. Check before signing again.",
@@ -2506,9 +2575,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     });
                 }
             });
+            if (seedSigner == null) {
+                work.run();
+                return;
+            }
+            withSeedKey(seedWhy, work, () -> {
+                synchronized (stateLock) { if (approvalDecision != decision) return; }
+                decision.cancel();
+                source.send(json("id", requestId, "status", "rejected"));
+                finishApproval(decision);
+                statusMessage = "Not signed · PIN not confirmed";
+                showReceipt("Not signed", "The PIN was not confirmed, so nothing was signed.", null, null, transaction);
+            });
         });
         root.addView(sign, matchWrap(dp(8)));
         root.addView(reject, matchWrap(dp(10)));
+    }
+
+    /** Under stateLock: this request still owns the signing decision in the live, reviewed session. */
+    private boolean signingStillOwned(AccessoryTransport source, int s, ApprovalDecision decision) {
+        return operational && unlocked && s == session.get() && !sensitive.active() && backupVerified
+                && source == transport && !source.isClosed() && approvalDecision == decision && decision.maySign();
     }
 
     /** Review for personal_sign / eth_signTypedData_v4, rendered from the parsed request only. */
@@ -2567,16 +2654,352 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.VERTICAL);
         boolean danger = "DANGER".equalsIgnoreCase(label) || "WARNING".equalsIgnoreCase(label);
+        boolean amber = BtcPsbtReview.TEST_NETWORK.equals(label);
         TextView labelView = VaultTheme.bodyText(this, label.toUpperCase(java.util.Locale.ROOT), 13,
-                danger ? VaultTheme.DANGER_INK : VaultTheme.FAINT);
-        TextView valueView = VaultTheme.monoText(this, value, bodySize(),
-                danger ? VaultTheme.DANGER_INK : VaultTheme.INK);
+                danger ? VaultTheme.DANGER_INK : amber ? VaultTheme.AMBER : VaultTheme.FAINT);
+        TextView valueView = VaultTheme.monoText(this, value, amber ? bodySize() + 2 : bodySize(),
+                danger ? VaultTheme.DANGER_INK : amber ? VaultTheme.AMBER : VaultTheme.INK);
         valueView.setTextIsSelectable(false);
         valueView.setPadding(0, dp(6), 0, dp(15));
         row.addView(labelView);
         row.addView(valueView);
         SafetyScreens.style(this, row, label, valueView, value);
         return row;
+    }
+
+    // ------------------------------------------------------------------ Bitcoin
+    //
+    // Same BIP-39 seed and the same PIN window as the EVM accounts. The account public keys of one
+    // network are derived on first use in an unlocked session (withSeedKey → VaultKeyStore.
+    // withStandardSeed → BtcWallet.derive) and cached in memory until lock; signing derives the
+    // input keys from the seed again, inside the window, after the user taps Sign (BtcPsbtSigner),
+    // and destroys them. Bitcoin always uses the STANDARD wallet: while a passphrase wallet is open
+    // the requests are refused (threat-model.md, "Bitcoin").
+
+    private void clearBtcWallets() {
+        synchronized (stateLock) {
+            java.util.Arrays.fill(btcWallets, null);
+            btcWalletOwner = null;
+        }
+    }
+
+    /** The saved "shared with the Mac" choices of the standard wallet. Call under stateLock. */
+    private BtcSharing btcSharing() {
+        return BtcSharing.load(getSharedPreferences(BTC_PREFS, MODE_PRIVATE).getString(BTC_SHARING_KEY, null), walletId);
+    }
+
+    private void saveBtcSharing(BtcSharing sharing) {
+        if (!getSharedPreferences(BTC_PREFS, MODE_PRIVATE).edit().putString(BTC_SHARING_KEY, sharing.encode()).commit()) {
+            android.util.Log.w("Vault", "Bitcoin sharing choice not saved (the phone will ask again)");
+        }
+    }
+
+    private interface BtcWalletUse { void use(BtcWallet wallet) throws Exception; }
+
+    /** btcGetAccount / btcShowAddress / btcSignPsbt: one request owns the approval slot until answered. */
+    private void handleBitcoin(AccessoryTransport source, JSONObject json, String fallbackId, int s) {
+        final ApprovalDecision decision;
+        synchronized (stateLock) {
+            if (!requestPending.compareAndSet(false, true)) {
+                sendError(source, fallbackId, "Another approval is pending");
+                return;
+            }
+            decision = new ApprovalDecision(stateLock);
+            approvalDecision = decision;
+        }
+        String id = fallbackId;
+        try {
+            final BtcRequest r = BtcRequest.parse(json);
+            id = r.id;
+            synchronized (stateLock) {
+                if (passphraseBook != null) {
+                    throw new RequestRefusal("Close the passphrase wallet first", "Bitcoin uses the standard wallet (your 24 words "
+                            + "without a passphrase). Close the passphrase wallet on the phone (☰ → Passphrase wallet), then send "
+                            + "the request again. Nothing was shared or signed.");
+                }
+                if (walletId == null) throw new IllegalStateException("Wallet is not ready: unlock and complete the backup check first");
+            }
+            withBtcWallet(r.network, source, r.id, decision, s, wallet -> {
+                switch (r.kind) {
+                    case GET_ACCOUNT:
+                        answerBtcAccount(source, r, wallet, decision, s);
+                        break;
+                    case SHOW_ADDRESS: {
+                        String address = wallet.address(r.type, r.account, r.change, r.index);
+                        runOnUiThread(() -> showBtcAddress(source, r, wallet, address, decision, s));
+                        break;
+                    }
+                    default: {
+                        // Built once: the review and the signer both use this object.
+                        BtcPsbtReview review = BtcPsbtReview.build(r.psbt, r.network, wallet, safety(), btcAmounts);
+                        runOnUiThread(() -> showBtcApproval(source, r, review, decision, s));
+                    }
+                }
+            });
+        } catch (Exception e) {
+            failBitcoin(source, id, decision, s, e);
+        }
+    }
+
+    /** Answer an error, release the slot, and show a refusal's reason on the phone. Any thread. */
+    private void failBitcoin(AccessoryTransport source, String id, ApprovalDecision decision, int s, Exception e) {
+        finishApproval(decision);
+        sendError(source, id, e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
+        runOnUiThread(() -> {
+            if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
+            if (e instanceof RequestRefusal) {
+                showInfo(((RequestRefusal) e).title, e.getMessage(), this::showHome);
+                Haptics.reject(getWindow().getDecorView());
+            } else if ("loading".equals(screenName)) {
+                showHome();
+            }
+        });
+    }
+
+    /** Under stateLock or on the UI thread: the Bitcoin request still owns an undecided slot in this session. */
+    private boolean btcStillOwned(AccessoryTransport source, ApprovalDecision decision, int s) {
+        return s == session.get() && unlocked && source == transport && approvalDecision == decision
+                && decision.state() == ApprovalDecision.State.REVIEW && !sensitive.active();
+    }
+
+    /**
+     * Run {@code use} with the standard wallet's Bitcoin accounts for {@code network}: from the
+     * session cache, or derived now from the seed (PIN window; a dismissed prompt answers "rejected").
+     */
+    private void withBtcWallet(BtcNetwork network, AccessoryTransport source, String id, ApprovalDecision decision, int s,
+                               BtcWalletUse use) throws Exception {
+        BtcWallet cached;
+        synchronized (stateLock) {
+            cached = walletId != null && walletId.equals(btcWalletOwner) ? btcWallets[network.ordinal()] : null;
+        }
+        if (cached != null) {
+            use.use(cached);
+            return;
+        }
+        runOnUiThread(() -> {
+            if (!btcStillOwned(source, decision, s)) { finishApproval(decision); return; }
+            showLoading("Opening your Bitcoin accounts", "Deriving your " + network.label + " accounts from your recovery phrase…");
+            withSeedKey("Confirm your PIN to open your Bitcoin accounts", () -> {
+                try {
+                    cryptoExecutor.execute(() -> {
+                        try {
+                            final String owner;
+                            synchronized (stateLock) {
+                                if (!btcStillOwned(source, decision, s)) throw new IllegalStateException("Session ended before the Bitcoin accounts opened");
+                                owner = walletId;
+                            }
+                            BtcWallet derived = vault.withStandardSeed(seed -> BtcWallet.derive(seed, network));
+                            synchronized (stateLock) {
+                                if (s != session.get() || owner == null || !owner.equals(walletId)) {
+                                    throw new IllegalStateException("The wallet changed; send the request again");
+                                }
+                                if (!owner.equals(btcWalletOwner)) {
+                                    java.util.Arrays.fill(btcWallets, null);
+                                    btcWalletOwner = owner;
+                                }
+                                btcWallets[network.ordinal()] = derived;
+                            }
+                            use.use(derived);
+                        } catch (Exception e) {
+                            if (authLapsed(e)) {
+                                runOnUiThread(() -> lastCredentialConfirm = 0);
+                                failBitcoin(source, id, decision, s, new RequestRefusal("PIN confirmation expired",
+                                        "The PIN confirmation expired before your Bitcoin accounts opened. Send the request again. Nothing was shared or signed."));
+                            } else {
+                                failBitcoin(source, id, decision, s, e);
+                            }
+                        }
+                    });
+                } catch (java.util.concurrent.RejectedExecutionException closing) {
+                    finishApproval(decision);
+                }
+            }, () -> {
+                synchronized (stateLock) { if (approvalDecision != decision) return; }
+                decision.cancel();
+                source.send(json("id", id, "status", "rejected"));
+                finishApproval(decision);
+                statusMessage = "Bitcoin request declined · PIN not confirmed";
+                showHome();
+            });
+        });
+    }
+
+    /** btcGetAccount: answer at once if the user shared this account before; otherwise ask on screen. */
+    private void answerBtcAccount(AccessoryTransport source, BtcRequest r, BtcWallet wallet, ApprovalDecision decision, int s) throws Exception {
+        boolean shared;
+        synchronized (stateLock) { shared = walletId != null && btcSharing().isShared(r.network, r.type, r.account); }
+        if (!shared) {
+            runOnUiThread(() -> showBtcShare(source, r, wallet, decision, s));
+            return;
+        }
+        JSONObject reply = BtcRequest.accountResponse(r.id, wallet, r.type, r.account);
+        synchronized (stateLock) {
+            if (btcStillOwned(source, decision, s) && decision.beginSigning()) {
+                source.send(reply);
+                decision.finish();
+            }
+        }
+        finishApproval(decision);
+        runOnUiThread(() -> {
+            if (s != session.get() || !unlocked) return;
+            statusMessage = r.network.label + " " + BtcWallet.accountLabel(r.type, r.account) + " sent to the host (watch-only, shared before)";
+            if ("loading".equals(screenName) && approvalDecision == null) showHome();
+            else if (statusView != null) statusView.setText(statusMessage);
+        });
+    }
+
+    private void showBtcShare(AccessoryTransport source, BtcRequest r, BtcWallet wallet, ApprovalDecision decision, int s) {
+        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
+            decision.cancel();
+            finishApproval(decision);
+            return;
+        }
+        keepScreenOn(true);
+        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(java.util.Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
+                "Share Bitcoin account with the Mac?",
+                "The connected computer asks for this account's watch-only key, to show your balance and prepare transactions.");
+        root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
+        root.addView(detail("Account", BtcWallet.accountLabel(r.type, r.account) + "\n" + wallet.accountPathString(r.type, r.account)));
+        root.addView(detail("Wallet fingerprint", wallet.fingerprintHex()));
+        root.addView(detail("What the Mac will see", "Every address, balance and payment of this account, past and future, "
+                + "becomes visible to the Mac and to any software on it. It cannot spend: every payment still needs your approval on this phone."));
+        root.addView(detail("Asked once", "If you share, the phone remembers it for this account and network and answers "
+                + "this request without asking again."));
+        TextView share = VaultTheme.pixelButton(this, "Share with the Mac", true);
+        TextView decline = VaultTheme.pixelButton(this, "Don't share", false);
+        hardenTouch(share);
+        hardenTouch(decline);
+        share.setOnClickListener(v -> {
+            JSONObject reply;
+            try {
+                reply = BtcRequest.accountResponse(r.id, wallet, r.type, r.account);
+            } catch (Exception e) {
+                failBitcoin(source, r.id, decision, s, e);
+                return;
+            }
+            synchronized (stateLock) {
+                if (!btcStillOwned(source, decision, s) || !decision.beginSigning()) return;
+                BtcSharing sharing = btcSharing();
+                sharing.share(r.network, r.type, r.account);
+                saveBtcSharing(sharing);
+                source.send(reply);
+                decision.finish();
+            }
+            Haptics.confirm(v);
+            finishApproval(decision);
+            statusMessage = "Bitcoin account shared (watch-only)";
+            showInfo("Account shared", BtcWallet.accountLabel(r.type, r.account) + " on " + r.network.label
+                    + " is now visible to the Mac (watch-only). It cannot spend without this phone.", this::showHome);
+        });
+        decline.setOnClickListener(v -> {
+            if (!decision.reject()) return;
+            Haptics.reject(v);
+            source.send(json("id", r.id, "status", "rejected"));
+            finishApproval(decision);
+            statusMessage = "Bitcoin account not shared";
+            showHome();
+        });
+        root.addView(share, matchWrap(dp(16)));
+        root.addView(decline, matchWrap(dp(10)));
+        present(root, "btc-share");
+    }
+
+    /** btcShowAddress: the address big, for comparison with the Mac; answered only after Done. */
+    private void showBtcAddress(AccessoryTransport source, BtcRequest r, BtcWallet wallet, String address,
+                                ApprovalDecision decision, int s) {
+        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
+            decision.cancel();
+            finishApproval(decision);
+            return;
+        }
+        keepScreenOn(true);
+        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(java.util.Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
+                "Compare with your Mac", "Check that your Mac shows exactly this address, every group. Only this phone's screen is trusted.");
+        root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
+        LinearLayout box = VaultTheme.box(this);
+        TextView big = VaultTheme.monoText(this, BtcScript.grouped(address, 4), 24, VaultTheme.INK);
+        big.setTextIsSelectable(false);
+        box.addView(big);
+        root.addView(box, matchWrap(dp(12)));
+        root.addView(detail("Account", BtcWallet.accountLabel(r.type, r.account)));
+        root.addView(detail("Path", wallet.addressPathString(r.type, r.account, r.change, r.index)
+                + (r.change == 0 ? " (receiving address " : " (change address ") + r.index + ")"));
+        root.addView(detail("If anything differs", "Tap Cancel and do not use the address shown on the Mac."));
+        TextView done = VaultTheme.pixelButton(this, "Done: it matches", true);
+        TextView cancel = VaultTheme.pixelButton(this, "Cancel", false);
+        hardenTouch(done);
+        hardenTouch(cancel);
+        done.setOnClickListener(v -> {
+            JSONObject reply;
+            try {
+                reply = BtcRequest.addressResponse(r.id, address);
+            } catch (Exception e) {
+                failBitcoin(source, r.id, decision, s, e);
+                return;
+            }
+            synchronized (stateLock) {
+                if (!btcStillOwned(source, decision, s) || !decision.beginSigning()) return;
+                source.send(reply);
+                decision.finish();
+            }
+            Haptics.confirm(v);
+            finishApproval(decision);
+            statusMessage = "Bitcoin address confirmed on the phone";
+            showHome();
+        });
+        cancel.setOnClickListener(v -> {
+            if (!decision.reject()) return;
+            Haptics.reject(v);
+            source.send(json("id", r.id, "status", "rejected"));
+            finishApproval(decision);
+            statusMessage = "Bitcoin address not confirmed";
+            showHome();
+        });
+        root.addView(done, matchWrap(dp(16)));
+        root.addView(cancel, matchWrap(dp(10)));
+        present(root, "btc-address");
+    }
+
+    /** btcSignPsbt review, rendered from the BtcPsbtReview built once in handleBitcoin. */
+    private void showBtcApproval(AccessoryTransport source, BtcRequest r, BtcPsbtReview review, ApprovalDecision decision, int s) {
+        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
+            decision.cancel();
+            finishApproval(decision);
+            return;
+        }
+        keepScreenOn(true);
+        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker, review.title, review.subtitle);
+        for (MessageReview.Row row : review.summary) root.addView(detail(row.label, row.value));
+        LinearLayout raw = new LinearLayout(this);
+        raw.setOrientation(LinearLayout.VERTICAL);
+        for (MessageReview.Row row : review.details) raw.addView(detail(row.label, row.value));
+        raw.setVisibility(View.GONE);
+        TextView details = VaultTheme.pixelButton(this, "Show technical details", false);
+        hardenTouch(details);
+        details.setOnClickListener(v -> {
+            boolean visible = raw.getVisibility() == View.VISIBLE;
+            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
+            details.setText(visible ? "Show technical details" : "Hide technical details");
+        });
+        root.addView(details, matchWrap(dp(8)));
+        root.addView(raw);
+        final String txid = BtcCrypto.hex(BtcCrypto.reversed(review.psbt.tx.txid()));
+        addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, null,
+                seed -> {
+                    byte[] signed = BtcPsbtSigner.sign(review, seed, random);
+                    // Remember what each coin was signed as (SegWit fee-attack guard), before it can leave.
+                    for (BtcPsbtReview.SignInput in : review.inputs) {
+                        btcAmounts.record(review.psbt.tx.inputs.get(in.index).outpoint(), in.amount, in.script);
+                    }
+                    return BtcRequest.signedResponse(r.id, signed);
+                },
+                "Confirm your PIN to sign this Bitcoin transaction",
+                "The signed PSBT was queued for USB. Your Mac finalizes and broadcasts it; unplugging cannot revoke a signature already received.",
+                "Transaction ID (once broadcast)", response -> txid, true, () -> {
+                    safety().record(review.walletKey, review.parties, System.currentTimeMillis());
+                    receiptParties = review.parties;
+                });
+        present(root, "btc-approval");
     }
 
     // ------------------------------------------------------------------ accounts + passphrase wallet
@@ -2617,6 +3040,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** A wallet was created, restored or replaced: its account 1 is active and the list starts over. Under stateLock. */
     private void adoptNewWallet(String account0Address) {
         clearPassphraseWallet();
+        clearBtcWallets();
         walletId = account0Address.toLowerCase(java.util.Locale.ROOT);
         standardBook = AccountBook.fresh(walletId);
         activeAccount = new SigningAccount(0, standardBook.active().name(), false, null, walletId);
@@ -2962,6 +3386,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             operational = false;
             credentials = null;
             clearPassphraseWallet();
+            clearBtcWallets();
             cancelApproval();
             sensitive.reset();
             if (transport != null) transport.close();

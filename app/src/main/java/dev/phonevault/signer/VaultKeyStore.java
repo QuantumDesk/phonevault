@@ -98,6 +98,28 @@ final class VaultKeyStore {
         return SeedVault.deriveAccount(decrypt(record), passphrase, index);
     }
 
+    /** Work done with the standard wallet's BIP-39 seed; the seed is zeroed when it returns. */
+    interface SeedUse<T> { T apply(byte[] seed) throws Exception; }
+
+    /**
+     * Run {@code use} with the STANDARD wallet's BIP-39 seed (no passphrase): one decrypt of the
+     * record with the seed key, so it needs the same PIN window as {@link #deriveAccount}. The seed
+     * array is zeroed afterwards whatever happens (the decrypted phrase is a String, as for the
+     * EVM path, and becomes unreachable). Bitcoin derives its account xpubs and signing keys here.
+     */
+    synchronized <T> T withStandardSeed(SeedUse<T> use) throws Exception {
+        ensureWrappingKey();
+        enforceSecureHardwarePolicy();
+        WalletRecord record = persistence.load();
+        if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
+        byte[] seed = SeedVault.bip39Seed(decrypt(record), "");
+        try {
+            return use.apply(seed);
+        } finally {
+            java.util.Arrays.fill(seed, (byte) 0);
+        }
+    }
+
     /** Authoritative identity from disk after an uncertain commit. Throws if none verifies. */
     synchronized Credentials reconcile() throws Exception {
         ensureWrappingKey();

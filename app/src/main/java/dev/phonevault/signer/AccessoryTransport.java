@@ -39,6 +39,14 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class AccessoryTransport implements Closeable {
     static final int MAX_REQUEST_BYTES = 32_768;
+    /**
+     * btcSignPsbt alone may be longer: a PSBT of up to {@link Psbt#MAX_BYTES} (200 KiB) is ~267 KiB
+     * of base64. A line may grow past {@link #MAX_REQUEST_BYTES} only if its first 32 KiB already
+     * name that method ({@code "method":"btcSignPsbt"}, so the host sends "psbt" last), and a
+     * long line that then parses as any other method is refused.
+     */
+    static final int MAX_PSBT_REQUEST_BYTES = 288 * 1024;
+    private static final byte[] PSBT_METHOD = "\"method\":\"btcSignPsbt\"".getBytes(StandardCharsets.US_ASCII);
     /** ≥ the gadget's 16 KiB bulk buffer, so a single read() drains a whole USB packet. */
     static final int PACKET_BUFFER_BYTES = 16384;
 
@@ -108,7 +116,11 @@ final class AccessoryTransport implements Closeable {
                 listener.onConnected(this); // a throwing listener ends the session like any error
                 String line;
                 while ((line = readBoundedLine(input, MAX_REQUEST_BYTES)) != null) {
-                    listener.onRequest(this, parseStrictRequest(line));
+                    JSONObject request = parseStrictRequest(line);
+                    if (line.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES && !BtcRequest.SIGN_PSBT.equals(request.optString("method"))) {
+                        throw new IllegalArgumentException("USB request exceeds 32 KiB");
+                    }
+                    listener.onRequest(this, request);
                 }
                 fail("USB cable disconnected");
             } catch (Exception exception) {
@@ -168,10 +180,24 @@ final class AccessoryTransport implements Closeable {
                         .toString();
             }
             if (line.size() >= maximumBytes) {
-                throw new IllegalArgumentException("USB request exceeds 32 KiB");
+                if (maximumBytes == MAX_REQUEST_BYTES && namesPsbtMethod(line.toByteArray())) {
+                    maximumBytes = MAX_PSBT_REQUEST_BYTES;
+                } else {
+                    throw new IllegalArgumentException(maximumBytes == MAX_REQUEST_BYTES
+                            ? "USB request exceeds 32 KiB" : "USB request exceeds " + (MAX_PSBT_REQUEST_BYTES / 1024) + " KiB");
+                }
             }
             line.write(value);
         }
+    }
+
+    private static boolean namesPsbtMethod(byte[] head) {
+        outer:
+        for (int i = 0; i + PSBT_METHOD.length <= head.length; i++) {
+            for (int j = 0; j < PSBT_METHOD.length; j++) if (head[i + j] != PSBT_METHOD[j]) continue outer;
+            return true;
+        }
+        return false;
     }
 
     /** Parses the deliberately flat request schema without JSONObject's duplicate-key ambiguity. */

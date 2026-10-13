@@ -317,5 +317,58 @@ class RequestOptionsTest(unittest.TestCase):
         self.assertEqual(request["method"], "signEip1559")
 
 
+class BitcoinTest(unittest.TestCase):
+    """btc-account / btc-show / btc-sign request shapes and answer schema checks."""
+
+    FIXTURES = json.loads((Path(__file__).resolve().parent.parent / "app/src/test/resources/btc/psbt-e2e.json").read_text())
+
+    def args(self, command, **extra):
+        import argparse
+        base = dict(command=command, network="testnet", type="p2wpkh", account="1")
+        base.update(extra)
+        return argparse.Namespace(**base)
+
+    def test_requests_are_schema_exact_and_psbt_comes_last(self):
+        import base64
+        import tempfile
+        request = aoa_client.request_for(self.args("btc-account", network="bitcoin", type="p2tr", account="3"))
+        self.assertEqual(list(request), ["id", "method", "network", "type", "account"])
+        show = aoa_client.request_for(self.args("btc-show", change="1", index="7"))
+        self.assertEqual(list(show), ["id", "method", "network", "type", "account", "change", "index"])
+        psbt = self.FIXTURES["cases"][0]["psbt"]
+        for content in (psbt.encode() + b"\n", base64.b64decode(psbt)):
+            with tempfile.NamedTemporaryFile("wb", suffix=".psbt", delete=False) as f:
+                f.write(content)
+            self.addCleanup(Path(f.name).unlink)
+            sign = aoa_client.request_for(argparse_ns(command="btc-sign", network="bitcoin", psbt=f.name))
+            self.assertEqual(list(sign), ["id", "method", "network", "psbt"])
+            self.assertEqual(sign["psbt"], psbt)
+            line = json.dumps(sign, separators=(",", ":"))
+            self.assertIn('"method":"btcSignPsbt"', line[:200])
+
+    def test_account_answer_checks(self):
+        request = {"id": "a", "method": "btcGetAccount", "network": "bitcoin", "type": "p2tr", "account": "1"}
+        xpub = "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ"
+        ok = {"id": "a", "status": "ok", "fingerprint": "73c5da0a", "path": "m/86'/0'/0'", "xpub": xpub,
+              "descriptor": "tr([73c5da0a/86h/0h/0h]" + xpub + "/<0;1>/*)#xf07c0qd"}
+        aoa_client.validate_btc_response(request, ok)
+        aoa_client.validate_btc_response(request, {"id": "a", "status": "rejected"})
+        for bad in (dict(ok, path="m/84'/0'/0'"), dict(ok, extra="1"), dict(ok, fingerprint="73C5DA0A"),
+                    dict(ok, descriptor="wpkh" + ok["descriptor"][2:])):
+            with self.assertRaises(ValueError):
+                aoa_client.validate_btc_response(request, bad)
+
+    def test_signed_psbt_must_grow(self):
+        psbt = self.FIXTURES["cases"][1]["psbt"]
+        request = {"id": "s", "method": "btcSignPsbt", "network": "bitcoin", "psbt": psbt}
+        with self.assertRaises(ValueError):
+            aoa_client.validate_btc_response(request, {"id": "s", "status": "approved", "psbt": psbt})
+
+
+def argparse_ns(**kw):
+    import argparse
+    return argparse.Namespace(**kw)
+
+
 if __name__ == "__main__":
     unittest.main()

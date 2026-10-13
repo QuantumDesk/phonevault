@@ -22,6 +22,8 @@ final class LookAlike {
     private LookAlike() {}
 
     static boolean similar(String a, String b) {
+        if (AddressKeys.isBtc(a) || AddressKeys.isBtc(b)) return btcSimilar(a, b);
+        if (!isEvm(a) || !isEvm(b)) return false;
         String x = hex(a), y = hex(b);
         if (x.equals(y)) return false;
         int pre = 0;
@@ -38,6 +40,7 @@ final class LookAlike {
      * differing chunks marked "✗ DIFFERENT". Shown in a monospace font so the columns align.
      */
     static String grid(String known, String candidate) {
+        if (AddressKeys.isBtc(known) || AddressKeys.isBtc(candidate)) return btcGrid(known, candidate);
         String k = Keys.toChecksumAddress(known).substring(2), c = Keys.toChecksumAddress(candidate).substring(2);
         StringBuilder out = new StringBuilder("     BEFORE  THIS ONE\n");
         out.append("     0x      0x\n");
@@ -54,16 +57,75 @@ final class LookAlike {
 
     /** Number of 4-character chunks that differ (tests and the summary line). */
     static int differingChunks(String a, String b) {
+        if (AddressKeys.isBtc(a) || AddressKeys.isBtc(b)) {
+            String[] x = chunks(AddressKeys.address(a)), y = chunks(AddressKeys.address(b));
+            int n = 0;
+            for (int i = 0; i < Math.max(x.length, y.length); i++) if (i >= x.length || i >= y.length || !x[i].equals(y[i])) n++;
+            return n;
+        }
         String x = hex(a), y = hex(b);
         int n = 0;
         for (int i = 0; i < 10; i++) if (!x.substring(4 * i, 4 * i + 4).equals(y.substring(4 * i, 4 * i + 4))) n++;
         return n;
     }
 
-    /** 0xAbCd…1234 in checksum casing. */
-    static String shortForm(String address) {
-        String c = Keys.toChecksumAddress(address);
-        return c.substring(0, 6) + "…" + c.substring(c.length() - 4);
+    /** Number of 4-character chunks shown in the grid (10 for EVM). */
+    static int chunkCount(String a, String b) {
+        if (!AddressKeys.isBtc(a) && !AddressKeys.isBtc(b)) return 10;
+        return Math.max(chunks(AddressKeys.address(a)).length, chunks(AddressKeys.address(b)).length);
+    }
+
+    /** 0xAbCd…1234 in checksum casing (bc1qcr8t…306fyu for Bitcoin). */
+    static String shortForm(String address) { return AddressKeys.shortForm(address); }
+
+    private static boolean isEvm(String a) { return a != null && a.matches("0x[0-9a-fA-F]{40}"); }
+
+    // ------------------------------------------------------------------ Bitcoin
+
+    /**
+     * Bitcoin addresses on the same network, compared on the part an attacker can grind: after
+     * "bc1q"/"tb1p" (HRP, separator, witness version) for SegWit, after the version character for
+     * base58. Same three rules as for EVM. Bech32 carries 5 bits and base58 ~5.9 bits per
+     * character, so a random pair matches even less often than two hex addresses.
+     */
+    static boolean btcSimilar(String a, String b) {
+        if (!AddressKeys.isBtc(a) || !AddressKeys.isBtc(b)) return false;
+        if (!AddressKeys.network(a).equals(AddressKeys.network(b))) return false;
+        String x = btcBody(AddressKeys.address(a)), y = btcBody(AddressKeys.address(b));
+        if (x.equals(y) || x.length() < 12 || y.length() < 12) return false;
+        int max = Math.min(x.length(), y.length());
+        int pre = 0;
+        while (pre < max && x.charAt(pre) == y.charAt(pre)) pre++;
+        int suf = 0;
+        while (suf < max && x.charAt(x.length() - 1 - suf) == y.charAt(y.length() - 1 - suf)) suf++;
+        if (pre >= 4 && suf >= 4) return true;
+        if (pre >= 3 && suf >= 3 && pre + suf >= 7) return true;
+        return levenshtein(x.substring(0, 6), y.substring(0, 6)) <= 1
+                && levenshtein(x.substring(x.length() - 6), y.substring(y.length() - 6)) <= 1;
+    }
+
+    static String btcBody(String address) {
+        int sep = address.lastIndexOf('1');
+        boolean segwit = address.startsWith("bc1") || address.startsWith("tb1");
+        return segwit && sep >= 2 && sep + 2 <= address.length() ? address.substring(sep + 2) : address.substring(1);
+    }
+
+    private static String[] chunks(String s) {
+        String[] out = new String[(s.length() + 3) / 4];
+        for (int i = 0; i < out.length; i++) out[i] = s.substring(4 * i, Math.min(s.length(), 4 * i + 4));
+        return out;
+    }
+
+    private static String btcGrid(String known, String candidate) {
+        String[] k = chunks(AddressKeys.address(known)), c = chunks(AddressKeys.address(candidate));
+        StringBuilder out = new StringBuilder("     BEFORE  THIS ONE\n");
+        int n = Math.max(k.length, c.length);
+        for (int i = 0; i < n; i++) {
+            String a = i < k.length ? k[i] : "", b = i < c.length ? c[i] : "";
+            out.append(String.format(Locale.ROOT, "%2d   %-4s    %-4s%s", i + 1, a, b, a.equals(b) ? "" : "  " + DIFFERENT_MARK));
+            if (i < n - 1) out.append('\n');
+        }
+        return out.toString();
     }
 
     private static String hex(String address) {

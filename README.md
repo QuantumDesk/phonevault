@@ -65,7 +65,7 @@ land (roadmap chunk 5).
 ## USB protocol
 
 The desktop is the Android Open Accessory (AOA) USB host. Requests and responses are
-newline-delimited UTF-8 JSON, limited to 32 KiB per request. A request must end with a newline
+newline-delimited UTF-8 JSON, limited to 32 KiB per request (`btcSignPsbt`: 288 KiB, see Bitcoin below). A request must end with a newline
 before disconnect, use a short ASCII request ID, and contain exactly the fields in its method
 schema. Malformed UTF-8, truncated frames, missing fields, unknown fields, duplicate keys,
 non-string values, and trailing JSON data fail closed. The phone answers only while unlocked,
@@ -112,6 +112,32 @@ gas is not presented as a total network-fee cap on networks with additional char
 Reject is effective during review. Tapping Sign atomically commits the decision and disables
 Reject; lock still cancels work that has not reached signing. A created signature is reported as
 queued with delivery unconfirmed, never as proof of broadcast or settlement.
+
+### Bitcoin
+
+Same seed, standard wallet only (refused while a passphrase wallet is open). All values are
+strings; `account` is "1"…"20" (account "1" is m/84'/coin'/0' or m/86'/coin'/0'); `network` is
+`bitcoin`, `testnet` or `signet` (coin type 0 / 1 / 1); `type` is `p2wpkh` or `p2tr`.
+
+```json
+{"id":"b1","method":"btcGetAccount","network":"bitcoin","type":"p2wpkh","account":"1"}
+{"id":"b1","status":"ok","fingerprint":"73c5da0a","path":"m/84'/0'/0'","xpub":"xpub6Cat…","descriptor":"wpkh([73c5da0a/84h/0h/0h]xpub6Cat…/<0;1>/*)#qf45pmyh"}
+
+{"id":"b2","method":"btcShowAddress","network":"testnet","type":"p2tr","account":"1","change":"0","index":"0"}
+{"id":"b2","status":"ok","address":"tb1p…"}
+
+{"id":"b3","method":"btcSignPsbt","network":"bitcoin","psbt":"cHNidP8B…"}
+{"id":"b3","status":"approved","psbt":"cHNidP8B…"}
+```
+
+`btcGetAccount` asks once per (network, type, account) on the phone ("Share Bitcoin account with
+the Mac?") and is remembered; `btcShowAddress` answers after the user compared the address and
+tapped Done; `btcSignPsbt` takes a BIP-174 v0 PSBT (≤ 200 KiB, ≤ 100 inputs/outputs) and returns it
+with `PSBT_IN_PARTIAL_SIG` (P2WPKH, BIP-143 ECDSA, SIGHASH_ALL) or `PSBT_IN_TAP_KEY_SIG` (P2TR key
+path, BIP-341/340 Schnorr, 64 bytes for DEFAULT) added; the host finalizes and broadcasts. Declines
+answer `{"id","status":"rejected"}`, refusals `{"id","status":"error","error"}`. A `btcSignPsbt`
+line may exceed 32 KiB (up to 288 KiB) only when `"method":"btcSignPsbt"` comes before `psbt`.
+The signing rules and the review are in `vault-os/docs/threat-model.md` ("Bitcoin").
 
 ## Desktop client
 

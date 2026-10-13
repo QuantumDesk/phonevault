@@ -11,8 +11,6 @@ import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
-import org.web3j.crypto.Keys;
-
 import java.util.List;
 
 /**
@@ -61,7 +59,7 @@ final class SafetyScreens {
             host.card(root, "No contacts yet", "After a transfer is signed, the receipt offers \"Save as contact\" for the recipient.");
         }
         for (AddressBook.Contact c : contacts) {
-            host.action(root, c.name + " · " + LookAlike.shortForm(c.address), false, () -> showContact(c.address));
+            host.action(root, c.name + " · " + LookAlike.shortForm(c.address) + AddressKeys.networkSuffix(c.address), false, () -> showContact(c.address));
         }
         host.action(root, "Back to menu", true, host::showMenu);
         host.present(root, "address-book");
@@ -197,8 +195,10 @@ final class SafetyScreens {
     private void addressCard(LinearLayout root, String label, String address) {
         LinearLayout box = VaultTheme.box(host.context());
         box.addView(VaultTheme.bodyText(host.context(), label, 13, VaultTheme.FAINT));
-        String c = Keys.toChecksumAddress(address);
-        TextView t = VaultTheme.monoText(host.context(), c.substring(0, 22) + "\n" + c.substring(22), host.bodySize(), VaultTheme.INK);
+        String c = AddressKeys.display(address);
+        String shown = AddressKeys.isBtc(address) ? BtcScript.grouped(c, 5) + AddressKeys.networkSuffix(address).replace(" · ", "\n")
+                : c.substring(0, 22) + "\n" + c.substring(22);
+        TextView t = VaultTheme.monoText(host.context(), shown, host.bodySize(), VaultTheme.INK);
         t.setPadding(0, host.dp(6), 0, 0);
         box.addView(t);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);

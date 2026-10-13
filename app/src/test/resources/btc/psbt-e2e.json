@@ -1,0 +1,147 @@
+{
+ "source": "tools/btc_fixtures.py (embit 0.8.0), mnemonic: abandon x11 about",
+ "fingerprint": "73c5da0a",
+ "cases": [
+  {
+   "name": "p2wpkh-send-with-change",
+   "network": "bitcoin",
+   "psbt": "cHNidP8BAJoCAAAAApHB5Z+r6ZZPdH6HnevHik37wjVchQ9lkbQVlnfnf/bcAQAAAAD9////CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsBAAAAAP3///8Ch9YSAAAAAAAWABSjxrHuSknZ8q87OAKXR0T7qSQWSlgDBAAAAAAAFgAUPjSYXcpv3cn7NplA5MfY4oc/UpwAAAAAAAEAcQIAAAABKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgAAAAAAP////8C6AMAAAAAAAAWABRZafAPVejm5lVQRZsZlA9rQ7MKR0BCDwAAAAAAFgAUwM681sPTyox13F7GLr5VMw75EOIAAAAAAQEfQEIPAAAAAAAWABTAzrzWw9PKjHXcXsYuvlUzDvkQ4iIGAzDVT9DdQgpuX402JPXzSCyuNQ951fB1O/W+75wtka88GHPF2gpUAACAAAAAgAAAAIAAAAAAAAAAAAABAR8goQcAAAAAABYAFJyQ+TTqUfoPZQQXcEPgkI2mkpmDIgYD53X9UfDfuM2GXZ/xzKKhWM9lH+mX/cn+6cHTtemV6ncYc8XaClQAAIAAAACAAAAAgAAAAAABAAAAAAAiAgMCUySIjkKauOPbrx94AmSLnNAem0GEhcX6TBubVwDhphhzxdoKVAAAgAAAAIAAAACAAQAAAAAAAAAA",
+   "signatures": [
+    {
+     "input": 0,
+     "type": "partial_sig",
+     "pubkey": "0330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c",
+     "sig": "3045022100d13ede880f3a5adead35e39afc290b25481ca8d396871d138374e624b2f2e58602204e2ecb667a5e5bd65b93c56fa1ab7af2a17a42f4d4ed91951c2bb7edeb97f94601"
+    },
+    {
+     "input": 1,
+     "type": "partial_sig",
+     "pubkey": "03e775fd51f0dfb8cd865d9ff1cca2a158cf651fe997fdc9fee9c1d3b5e995ea77",
+     "sig": "304402203498b01aa622e17b56e5fe59a6eb2f76bfc4e1106fa5a0acf8838d9b07c14f3c02206109ebd74c9d29b390d32208965b4deb69a1db8bf7585cfa991d0ef1c800491801"
+    }
+   ],
+   "finalTx": "0200000000010291c1e59fabe9964f747e879debc78a4dfbc2355c850f6591b4159677e77ff6dc0100000000fdffffff0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0100000000fdffffff0287d6120000000000160014a3c6b1ee4a49d9f2af3b3802974744fba924164a58030400000000001600143e34985dca6fddc9fb369940e4c7d8e2873f529c02483045022100d13ede880f3a5adead35e39afc290b25481ca8d396871d138374e624b2f2e58602204e2ecb667a5e5bd65b93c56fa1ab7af2a17a42f4d4ed91951c2bb7edeb97f94601210330d54fd0dd420a6e5f8d3624f5f3482cae350f79d5f0753bf5beef9c2d91af3c0247304402203498b01aa622e17b56e5fe59a6eb2f76bfc4e1106fa5a0acf8838d9b07c14f3c02206109ebd74c9d29b390d32208965b4deb69a1db8bf7585cfa991d0ef1c8004918012103e775fd51f0dfb8cd865d9ff1cca2a158cf651fe997fdc9fee9c1d3b5e995ea7700000000",
+   "txid": "a4f2501e0619fbc5706924cf999a910846b3bda963b2e8ad6d6c3ae14ebda5f4",
+   "fee": 2433,
+   "vsizeSigned": null,
+   "outputs": [
+    {
+     "address": "bc1q50rtrmj2f8vl9tem8qpfw36ylw5jg9j29e5za5",
+     "value": 1234567,
+     "own": null
+    },
+    {
+     "address": "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el",
+     "value": 263000,
+     "own": "m/84h/0h/0h/1/0"
+    }
+   ]
+  },
+  {
+   "name": "p2tr-send-with-change",
+   "network": "bitcoin",
+   "psbt": "cHNidP8BAIkCAAAAAQoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKAAAAAAD9////AmDjFgAAAAAAIlEgSDozZGbTHivoWJKTHsZhPKGfmmdiMpaYtMPnFRwBEis4nQcAAAAAACJRIIgtdOXQVy1agWzvAEGpa2wd6DL2+WdtlgXETV6al9PcAAAAAAABASuAhB4AAAAAACJRIKYIafDbzx3GWcnOy6+AUBNeqejNxIcFPx3GiAlJ3GhMIRbMikvGTYl73cX7wvZw96i6CzhneRBs8SI8b8XXzW/BFRkAc8XaClYAAIAAAACAAAAAgAAAAAAAAAAAARcgzIpLxk2Je93F+8L2cPeougs4Z3kQbPEiPG/F181vwRUAAAEFIDmfGy9Dk/KaGMk3hZxd2KdzUBAxV+uIDwLowIIUJ3zvIQc5nxsvQ5PymhjJN4WcXdinc1AQMVfriA8C6MCCFCd87xkAc8XaClYAAIAAAACAAAAAgAEAAAAAAAAAAA==",
+   "signatures": [
+    {
+     "input": 0,
+     "type": "tap_key_sig",
+     "sig": "f1a03f983fec845f137151f769f883744a03b7466e67fa08e906745ffa4afa6d3a90b36c7db6ef717a17bad52cd40663dc2a5ae13f3acb4751713d27f5d2ad76"
+    }
+   ],
+   "finalTx": "020000000001010a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0000000000fdffffff0260e3160000000000225120483a336466d31e2be85892931ec6613ca19f9a6762329698b4c3e7151c01122b389d070000000000225120882d74e5d0572d5a816cef0041a96b6c1de832f6f9676d9605c44d5e9a97d3dc0140f1a03f983fec845f137151f769f883744a03b7466e67fa08e906745ffa4afa6d3a90b36c7db6ef717a17bad52cd40663dc2a5ae13f3acb4751713d27f5d2ad7600000000",
+   "txid": "f2d731f34afa1f2075fa8f49f9d1190fde8ca45eb32fcef7802e38f0e5a07ea3",
+   "fee": 1000,
+   "vsizeSigned": null,
+   "outputs": [
+    {
+     "address": "bc1pfqarxerx6v0zh6zcj2f3a3np8jselxn8vgefdx95c0n328qpzg4ssw6kv5",
+     "value": 1500000,
+     "own": null
+    },
+    {
+     "address": "bc1p3qkhfews2uk44qtvauqyr2ttdsw7svhkl9nkm9s9c3x4ax5h60wqwruhk7",
+     "value": 499000,
+     "own": "m/86h/0h/0h/1/0"
+    }
+   ]
+  },
+  {
+   "name": "testnet-mixed-opreturn",
+   "network": "testnet",
+   "psbt": "cHNidP8BALwCAAAAAgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKAAAAAAD9////CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsBAAAAAP3///8DwCcJAAAAAAAiUSA/JSDof5HZf4X30YU/KUj9vSZTng5Z7D1VYXZ+GUWYHgAAAAAAAAAADWoLaGVsbG8gd29ybGS4ggEAAAAAABYAFDHUORI3eUFKBYByM9r5KsMZw49aAAAAAAABAR/gkwQAAAAAABYAFCTCiGndDq5eMJ6TzfzDLlOOoE3xIgYCsVcfcMDVK6jUka+g6Ykfg8vFWMdNElCTB+3RiKv4APQYc8XaClQAAIABAACAAAAAgAAAAAADAAAAAAEBK4AaBgAAAAAAIlEgftGm/+FsZzjbnH9oMGSFzYT4VGLutXZtk1TC/TJyfb8hFrdU1MjD07XqdnVRr8FXT+zkfKnAXZfnM1YpvSR3Qi3jGQBzxdoKVgAAgAEAAIABAACAAAAAAAIAAAABFyC3VNTIw9O16nZ1Ua/BV0/s5HypwF2X5zNWKb0kd0It4wAAACICArZ8zUPxRCpR+sy1/cpEJIWuARsB0rnP8pjOshWYJQH7GHPF2gpUAACAAQAAgAAAAIABAAAABwAAAAA=",
+   "signatures": [
+    {
+     "input": 0,
+     "type": "partial_sig",
+     "pubkey": "02b1571f70c0d52ba8d491afa0e9891f83cbc558c74d12509307edd188abf800f4",
+     "sig": "3045022100dcbdadbaf33720aec351644e3a5d4b172f9a113cb1002af4263a42e87250bcfd022023b4b45218a6f1b96e7d6775d33dfd84070bbde5d98ebed9d1f21af8ce6a8c0901"
+    },
+    {
+     "input": 1,
+     "type": "tap_key_sig",
+     "sig": "46db6e3759ecaf52366519c22cc7ffa3305b7d28784d8b594e849f6cf83b071396e7ab5c411d253c6ef381de618477fc538a6daad338aa2917f8336204038f42"
+    }
+   ],
+   "finalTx": "020000000001020a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0000000000fdffffff0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0100000000fdffffff03c0270900000000002251203f2520e87f91d97f85f7d1853f2948fdbd26539e0e59ec3d5561767e1945981e00000000000000000d6a0b68656c6c6f20776f726c64b88201000000000016001431d439123779414a05807233daf92ac319c38f5a02483045022100dcbdadbaf33720aec351644e3a5d4b172f9a113cb1002af4263a42e87250bcfd022023b4b45218a6f1b96e7d6775d33dfd84070bbde5d98ebed9d1f21af8ce6a8c09012102b1571f70c0d52ba8d491afa0e9891f83cbc558c74d12509307edd188abf800f4014046db6e3759ecaf52366519c22cc7ffa3305b7d28784d8b594e849f6cf83b071396e7ab5c411d253c6ef381de618477fc538a6daad338aa2917f8336204038f4200000000",
+   "txid": "711ddd36c02d9aa9a592815b5fefbed638a6b1c6be470db3b3486f56067ae835",
+   "fee": 1000,
+   "vsizeSigned": null,
+   "outputs": [
+    {
+     "address": "tb1p8ujjp6rlj8vhlp0h6xzn722glk7jv5u7pev7c024v9m8ux29nq0q0m9c6d",
+     "value": 600000,
+     "own": null
+    },
+    {
+     "address": null,
+     "value": 0,
+     "own": null
+    },
+    {
+     "address": "tb1qx82rjy3h09q55pvqwgea47f2cvvu8r66pfm8qu",
+     "value": 99000,
+     "own": "m/84h/1h/0h/1/7"
+    }
+   ]
+  },
+  {
+   "name": "p2wpkh-account-2-legacy-recipients",
+   "network": "bitcoin",
+   "psbt": "cHNidP8BAMsCAAAAAQoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKCgoKAAAAAAD9////BKCGAQAAAAAAGXapFEF9S+kNNTYyZ7jyr6/JUxERxBrkiKxADQMAAAAAABepFEoatoZPIlugnDDXf3ql2fVQWAH7h+CTBAAAAAAAIgAgBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQVYCQMAAAAAACJRIL2y5P9hCh81yA1ntHObYQb7BLouBMumY4IDq30KYinJAAAAAAABAR8ANQwAAAAAABYAFFfdGeTtqOngtGcxy/T61WM9EGSnIgYCWjVAhnDRA4KlfkrWbCFNebcTCIzLxz1p0HAY8eNgNqUYc8XaClQAAIAAAACAAQAAgAAAAAAFAAAAAAAAAAEFIBHI63Jv9k8ptzU1AKQrP/wbj8ZNgeg6oDgVUBrJfqk/IQcRyOtyb/ZPKbc1NQCkKz/8G4/GTYHoOqA4FVAayX6pPxkAc8XaClYAAIAAAACAAQAAgAEAAAAAAAAAAA==",
+   "signatures": [
+    {
+     "input": 0,
+     "type": "partial_sig",
+     "pubkey": "025a35408670d10382a57e4ad66c214d79b713088ccbc73d69d07018f1e36036a5",
+     "sig": "3045022100f1e47aaa2a4b18c34d7f2ca84098d0d1e54979d5f13d3954fe025734c952b70402200d1d22529a97a8b2fc1f68d84c92ad10c9f3d2e93ba95e342609f6327e5fb4be01"
+    }
+   ],
+   "finalTx": "020000000001010a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0000000000fdffffff04a0860100000000001976a914417d4be90d35363267b8f2afafc9531111c41ae488ac400d03000000000017a9144a1ab6864f225ba09c30d77f7aa5d9f5505801fb87e09304000000000022002005050505050505050505050505050505050505050505050505050505050505055809030000000000225120bdb2e4ff610a1f35c80d67b4739b6106fb04ba2e04cba6638203ab7d0a6229c902483045022100f1e47aaa2a4b18c34d7f2ca84098d0d1e54979d5f13d3954fe025734c952b70402200d1d22529a97a8b2fc1f68d84c92ad10c9f3d2e93ba95e342609f6327e5fb4be0121025a35408670d10382a57e4ad66c214d79b713088ccbc73d69d07018f1e36036a500000000",
+   "txid": "4fda04261a03c7d91a5fd6a4c8edccb93bfd5c5d3487cb4c7c9ca2133af05864",
+   "fee": 1000,
+   "vsizeSigned": null,
+   "outputs": [
+    {
+     "address": "16yH2E12NYA5pg1d4BB7wtXXnBTZ8Lws7L",
+     "value": 100000,
+     "own": null
+    },
+    {
+     "address": "38Sqvnn4PbsHHfarwki7bm2vSeYvuZDgpz",
+     "value": 200000,
+     "own": null
+    },
+    {
+     "address": "bc1qq5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zs2pg9q5zsjlsnv2",
+     "value": 300000,
+     "own": null
+    },
+    {
+     "address": "bc1phkewflmppg0ntjqdv7688xmpqmasfw3wqn96vcuzqw4h6znz98ysxmc2wg",
+     "value": 199000,
+     "own": "m/86h/0h/1h/1/0"
+    }
+   ]
+  }
+ ]
+}

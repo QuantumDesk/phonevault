@@ -40,7 +40,7 @@ final class TransactionReview {
         final RecipientHistory.Role role;
 
         Party(String address, RecipientHistory.Role role) {
-            this.address = address.toLowerCase(Locale.ROOT);
+            this.address = AddressKeys.canon(address); // lowercase 0x…, or a btc:<network>:<address> key
             this.role = role;
         }
     }
