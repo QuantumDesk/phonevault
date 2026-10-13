@@ -47,18 +47,29 @@ for name in "${!TARGET[@]}"; do
   fi
 done
 
-# Upstream device tree: each rung carries exactly its own edits. Restore, apply the rung's diff
-# (if any), then append the BoardConfigVault include (the only standing edit).
+# Upstream trees: each rung carries exactly its own edits. Every tree below is restored to
+# upstream (tracked files only: the kernel dir's untracked Kleaf dist and vendor/google/bluejay's
+# LFS blobs stay), then the rung's diff for it, if any, is applied:
+#   device-google-bluejay.diff          device/google/bluejay        (b4a+: eSE VINTF entry)
+#   device-google-gs101.diff            device/google/gs101          (b3+: features, b4a+: BT VINTF)
+#   vendor-google-bluejay.diff          vendor/google/bluejay        (b3+: USB rc/ueventd, b4a+: radio rc)
+#   device-google-bluejay-kernels.diff  device/google/bluejay-kernels (b4a+: the tracked module lists)
+# Then the BoardConfigVault include is appended to bluejay/BoardConfig.mk (the one standing edit).
 DEV="${TREE}/device/google/bluejay"
-if ! git -C "${DEV}" diff --quiet; then
-  git -C "${DEV}" checkout -- .
-  echo "   device/google/bluejay restored to upstream"
-fi
-if [[ -s "${RUNG_DIR}/device-google-bluejay.diff" ]]; then
-  git -C "${DEV}" apply --check "${RUNG_DIR}/device-google-bluejay.diff"
-  git -C "${DEV}" apply "${RUNG_DIR}/device-google-bluejay.diff"
-  echo "   device diff applied"
-fi
+for repo in device/google/bluejay device/google/gs101 vendor/google/bluejay device/google/bluejay-kernels; do
+  dir="${TREE}/${repo}"
+  diff_file="${RUNG_DIR}/${repo//\//-}.diff"
+  [[ -d "${dir}/.git" || -f "${dir}/.git" ]] || { echo "not a git checkout: ${dir}" >&2; exit 2; }
+  if ! git -C "${dir}" diff --quiet; then
+    git -C "${dir}" checkout -- .
+    echo "   ${repo} restored to upstream"
+  fi
+  if [[ -s "${diff_file}" ]]; then
+    git -C "${dir}" apply --check "${diff_file}"
+    git -C "${dir}" apply "${diff_file}"
+    echo "   ${repo}: $(basename "${diff_file}") applied"
+  fi
+done
 BOARD="${DEV}/bluejay/BoardConfig.mk"
 INCLUDE='include vendor/phonevault/config/BoardConfigVault.mk'
 printf '\n# Phone Vault product board policy (after every upstream board setting)\n%s\n' \

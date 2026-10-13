@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phone Vault (bluejay, ladder rung b4a+): the Bluetooth, NFC, secure-element (OMAPI) and GNSS
+  drivers and HALs are not in the image. Their feature files are not installed either, but
+  frameworks/native handheld_core_hardware.xml itself declares android.hardware.bluetooth, so
+  the features are also withdrawn here (SystemConfig removes unavailable features after reading
+  every partition). Without android.hardware.bluetooth SystemServer does not start
+  BluetoothManagerService; without any NFC feature the nfcservices APEX never creates NfcService.
+  Installed only by rungs that remove those radios (dev-ladder-bluejay/rung-b4a/common.mk).
+-->
+<config>
+    <unavailable-feature name="android.hardware.bluetooth" />
+    <unavailable-feature name="android.hardware.bluetooth_le" />
+    <unavailable-feature name="android.hardware.nfc" />
+    <unavailable-feature name="android.hardware.nfc.any" />
+    <unavailable-feature name="android.hardware.nfc.hce" />
+    <unavailable-feature name="android.hardware.nfc.hcef" />
+    <unavailable-feature name="android.hardware.nfc.uicc" />
+    <unavailable-feature name="android.hardware.nfc.ese" />
+    <unavailable-feature name="com.nxp.mifare" />
+    <unavailable-feature name="android.hardware.se.omapi.ese" />
+    <unavailable-feature name="android.hardware.se.omapi.uicc" />
+    <unavailable-feature name="android.hardware.location.gps" />
+</config>

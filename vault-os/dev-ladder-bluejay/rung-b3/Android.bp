@@ -1,0 +1,39 @@
+android_app_import {
+    name: "PhoneVault",
+    apk: "PhoneVault.apk",
+    presigned: true,
+    // Keep APK Signature Scheme v2 intact; Soong must not realign or rewrite
+    // this already-verified signer artifact.
+    preprocessed: true,
+    // Device-owner authority is granted by DevicePolicyManager, not by
+    // priv-app placement. Keep the signer in the ordinary system-app domain
+    // (frameworks/base 0003 refuses a privileged owner).
+    privileged: false,
+    // gs101 enforces build/make/target/product/generic_system.mk's artifact path requirement:
+    // a device product may not install into /system. Apps on /product are still system apps
+    // (ApplicationInfo.FLAG_SYSTEM) and, outside priv-app, not privileged, which is exactly
+    // what frameworks/base 0003 requires of the owner.
+    product_specific: true,
+    // main.mk drops every module named here before it expands `required`, so an override
+    // removes a module whichever inherited makefile listed it (crosshatch rung 4). It does not
+    // help when another installed module `required`s the target: checked for b1 in
+    // out/soong/Android-vault_bluejay.mk (nothing requires Launcher3QuickStep or
+    // Launcher3Overlay). Verify on the target-files after the build.
+    overrides: [
+        // Rung b0 (= crosshatch rung 1b): the appliance has no setup wizard.
+        "LineageSetupWizard",
+
+        // Rung b1: no launcher, so HOME has exactly one real candidate (PhoneVault, plus
+        // Settings' direct-boot FallbackHome at priority -1000) and no chooser can appear,
+        // whatever happens to the preferred-activity records. On Lineage 24.0 Trebuchet is
+        // packages/apps/Launcher3's `Launcher3QuickStep` (system_ext/priv-app, listed by AOSP
+        // handheld_system_ext.mk and Lineage common_mobile.mk); its `required` auto-generated
+        // RRO, privapp allowlists and protolog go with it. Launcher3Overlay is Lineage's RRO for
+        // it (vendor/lineage/overlay/rro_packages). b0 showed "Trebuchet" in a HOME chooser.
+        "Launcher3QuickStep",
+        "Launcher3Overlay",
+    ],
+    dex_preopt: {
+        enabled: true,
+    },
+}

@@ -1,0 +1,78 @@
+# check-build.sh expectations for rung b4a (paths inside the target-files zip). See check-build.sh.
+
+# Never stripped (port-bluejay.md §4): the Titan M2 + Trusty stack the vault's PIN, keys and
+# FBE depend on, and the USB HALs the AOA transport needs.
+present VENDOR/etc/init/citadeld.rc
+present VENDOR/etc/init/android.hardware.weaver-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.citadel.rc
+present VENDOR/etc/init/android.hardware.authsecret-service.citadel.rc
+present VENDOR/etc/init/android.hardware.oemlock-service.citadel.rc
+present VENDOR/etc/init/android.hardware.security.keymint-service.trusty.rc
+present VENDOR/etc/init/android.hardware.gatekeeper-service.trusty.rc
+present VENDOR/bin/hw/android.hardware.usb-service.gs101
+present VENDOR/bin/hw/android.hardware.usb.gadget-service.gs101
+present PRODUCT/app/PhoneVault/PhoneVault.apk
+present PRODUCT/app/ModuleMetadata/ModuleMetadata.apk
+present SYSTEM_EXT/priv-app/Settings/Settings.apk
+present PRODUCT/app/LatinIME/LatinIME.apk
+
+# b3 USB: no host feature (gs101 diff), and handheld_core_hardware does not declare it either.
+absent VENDOR/etc/permissions/android.hardware.usb.host.xml
+present VENDOR/etc/permissions/android.hardware.usb.accessory.xml
+nogrep VENDOR/etc/permissions/handheld_core_hardware.xml android\.hardware\.usb\.host
+# Gadget function instances: AOA (kernel + userspace) and, debuggable only, adb. Nothing else.
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+mkdir /config/usb_gadget/g1/functions/accessory\.gs2$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+mkdir /config/usb_gadget/g1/functions/ffs\.aoa$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^on early-boot && property:ro\.debuggable=1$
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc functions/(mtp\.gs0|ptp\.gs1|audio_source|rndis|midi|acm\.|dm\.gs7|uts\.gs8|ncm\.gs9|etr_miu|uvc\.0|ffs\.mtp|ffs\.ptp)
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+chown system system /config/usb_gadget/(g1/functions)?$
+# Type-C: pinned sink at boot and boot_completed; role nodes and the OTG id node root-only.
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+write /sys/class/typec/port0/port_type sink$
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^on property:sys\.boot_completed=1\n\s+write /sys/class/typec/port0/port_type sink
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 port_type\s+644 root root$
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 power_role\s+644 root root$
+grep VENDOR/etc/ueventd.rc ^/sys/class/typec/port0 data_role\s+644 root root$
+grep VENDOR/etc/ueventd.rc dwc3_exynos_otg_id\s+644 root root$
+grep VENDOR/build.prop ^ro\.vendor\.phonevault\.offline=true$
+
+# b4a radios: init rc of every removed daemon/HAL gone (vendor diff for the prebuilts; the source
+# HALs' rc goes with the overridden module).
+absent VENDOR/etc/init/android.hardware.bluetooth-service.bcmbtlinux.rc
+absent VENDOR/etc/init/init.gps.rc
+absent VENDOR/etc/init/cbd.rc
+absent VENDOR/etc/init/rfsd.rc
+absent VENDOR/etc/init/dmd.rc
+absent VENDOR/etc/init/init.shared_modem_platform_l.rc
+absent VENDOR/etc/init/nfc-service-default.rc
+absent VENDOR/etc/init/android.hardware.secure_element@1.2-service-gto.rc
+# Features: no Bluetooth, NFC, OMAPI, GPS.
+absent VENDOR/etc/permissions/android.hardware.nfc.xml
+absent VENDOR/etc/permissions/android.hardware.nfc.hce.xml
+absent VENDOR/etc/permissions/android.hardware.nfc.hcef.xml
+absent VENDOR/etc/permissions/android.hardware.nfc.uicc.xml
+absent VENDOR/etc/permissions/android.hardware.nfc.ese.xml
+absent VENDOR/etc/permissions/com.nxp.mifare.xml
+absent VENDOR/etc/permissions/android.hardware.se.omapi.ese.xml
+absent VENDOR/etc/permissions/android.hardware.se.omapi.uicc.xml
+# handheld_core_hardware.xml declares android.hardware.bluetooth itself: withdrawn by sysconfig.
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.bluetooth" />
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.nfc" />
+grep PRODUCT/etc/sysconfig/phonevault-no-radios.xml <unavailable-feature name="android\.hardware\.location\.gps" />
+nogrep VENDOR/etc/permissions/handheld_core_hardware.xml <feature name="android\.hardware\.(nfc|location\.gps)
+# VINTF: nothing declared that no longer registers; the radio HAL (rild) stays declared.
+nogrep VENDOR/etc/vintf/manifest.xml <name>(android\.hardware\.bluetooth|vendor\.google\.bluetooth_ext|android\.hardware\.nfc|android\.hardware\.gnss|vendor\.samsung_slsi\.telephony\.hardware\.oemservice|com\.google\.pixel\.shared_modem_platform)
+nogrep VENDOR/etc/vintf/manifest.xml ISecureElement/eSE1
+grep VENDOR/etc/vintf/manifest.xml ISecureElement/SIM1
+grep VENDOR/etc/vintf/manifest.xml <name>android\.hardware\.radio</name>
+# The Wi-Fi driver is no longer named in the device insmod list (and not installed).
+nogrep VENDOR_DLKM/etc/init.insmod.bluejay.cfg bcmdhd4389
+grep VENDOR_DLKM/etc/init.insmod.bluejay.cfg ^modprobe\|ftm5\.ko$
+# Kept: the telephony rung / still needed.
+present VENDOR/bin/hw/rild_exynos
+present VENDOR/etc/init/rild_exynos.rc
+present VENDOR/bin/hw/android.hardware.secure_element@1.2-uicc-service
+present VENDOR_DLKM/lib/modules/google_modemctl.ko
+present VENDOR_DLKM/lib/modules/cp_thermal_zone.ko
+present VENDOR_DLKM/lib/modules/aoc_core.ko
+present VENDOR_DLKM/lib/modules/abrolhos.ko
+present VENDOR_DLKM/lib/modules/goodixfp.ko
