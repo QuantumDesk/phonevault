@@ -30,8 +30,8 @@ AMT_50=0000000000000000000000000000000000000000000000000000000002faf080   # 50 0
 AMT_2_5=00000000000000000000000000000000000000000000000000000000002625a0  # 2 500 000 = 2.5 USDC
 
 find_checkbox() {
-  local box="" i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  local box=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
     box="$(uidump | grep -o 'checkable="true"[^>]*bounds="\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]"' | head -1 | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true)"
     [[ -n "$box" ]] && { echo "$box"; return 0; }
     scroll_down; sleep 0.6
@@ -51,8 +51,8 @@ run_case() {
   sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
   [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
-  local seen=0 i
-  for i in 1 2 3 4 5 6; do uidump | grep -qF "$must" && { seen=1; break; }; scroll_down; sleep 0.6; done
+  local seen=0
+  for _ in 1 2 3 4 5 6; do uidump | grep -qF "$must" && { seen=1; break; }; scroll_down; sleep 0.6; done
   [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$must': $(texts 14)"; }
   pass "$name: review shows '$title' and '$must'"
   if [[ "$decision" == approve ]]; then

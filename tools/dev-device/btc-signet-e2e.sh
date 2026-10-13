@@ -50,6 +50,7 @@ else
   pass "signet account 1 ($SHARED_HOW): $(grep -o '"descriptor": "[^"]*' "$STATE/account.json" | cut -c16-60)…"
 fi
 ADDR0="$(S derive --account "$STATE/account.json" --index 0)"
+# shellcheck disable=SC2034  # derived as a check that index 1 derives; not used further
 ADDR1="$(S derive --account "$STATE/account.json" --index 1)"
 
 # ---- 2. receive address 0, shown on the phone
@@ -146,6 +147,7 @@ TXID="$(cat "$STATE/txid")"
 S wait-confirm --txid "$TXID" --timeout "$CONFIRM_WAIT" | tee "$OUT/confirm.out" || die "mempool.space never saw $TXID"
 if grep -q '"confirmed": true' "$OUT/confirm.out"; then pass "confirmed: $(tail -1 "$OUT/confirm.out")"
 else echo "NOTE: seen in the mempool but not confirmed within ${CONFIRM_WAIT}s (signet blocks ~10 min); rerun to keep waiting"; fi
+# shellcheck disable=SC2034  # read by the EXIT trap in btclib.sh
 STEP="done"
 echo "SIGNET ROUND TRIP: txid $TXID"
 echo "  https://mempool.space/signet/tx/$TXID"
