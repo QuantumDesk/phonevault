@@ -164,7 +164,7 @@ final class UniversalRouter {
                 BigInteger amount = Abi.uint(a.get(2));
                 sim.give(token, amount, SwapPlan.Bound.EXACT);
                 sim.usesPermit2 = true;
-                sim.hold(token, SwapPlan.Bal.exactly(amount));
+                sim.hold(token, SwapPlan.Bal.inputExactly(amount));
                 sim.steps.add("Move " + amount + " base units of " + token + " from this wallet to the router (Permit2)");
                 return;
             }
@@ -192,8 +192,9 @@ final class UniversalRouter {
                 if (SwapPlan.CONTRACT_BALANCE.equals(amount)) {
                     wrapped = sim.takeAll(SwapPlan.NATIVE, "WRAP_ETH");
                 } else {
+                    SwapPlan.Bal source = sim.held.get(SwapPlan.NATIVE); // null is refused by take()
                     sim.take(SwapPlan.NATIVE, amount, "WRAP_ETH");
-                    wrapped = SwapPlan.Bal.exactly(amount);
+                    wrapped = source.exactlyLike(amount); // the wallet's own coin stays "input" when wrapped
                 }
                 sim.hold(router.wrappedNative, wrapped);
                 sim.steps.add("Wrap the native coin sent with this transaction into " + router.wrappedSymbol);
@@ -235,8 +236,9 @@ final class UniversalRouter {
                     if (SwapPlan.NATIVE.equals(asset)) throw new SwapPlan.Refusal("TRANSFER of the whole native balance");
                     sim.deliver(to, asset, sim.takeAll(asset, "TRANSFER"));
                 } else {
+                    SwapPlan.Bal source = sim.held.get(asset); // null is refused by take()
                     sim.take(asset, amount, "TRANSFER");
-                    sim.deliver(to, asset, SwapPlan.Bal.exactly(amount));
+                    sim.deliver(to, asset, source.exactlyLike(amount));
                 }
                 sim.steps.add("Pay " + amount + " of " + asset + " from the router to " + who(to));
                 return;
@@ -466,6 +468,7 @@ final class UniversalRouter {
                     if (bips.compareTo(BIPS) > 0) throw new SwapPlan.Refusal("V4 TAKE_PORTION above 100%");
                     SwapPlan.Bal have = credit.get(c);
                     if (have == null) throw new SwapPlan.Refusal("V4 TAKE_PORTION for a currency with no credit");
+                    if (SwapPlan.NATIVE.equals(to)) throw new SwapPlan.Refusal("a fee paid to the zero address");
                     if (SwapPlan.MSG_SENDER.equals(to) || SwapPlan.ADDRESS_THIS.equals(to) || sim.router.address.equals(to)) {
                         throw new SwapPlan.Refusal("V4 TAKE_PORTION back to the wallet or router");
                     }
@@ -577,7 +580,7 @@ final class UniversalRouter {
 
     private static SwapPlan.Bal raise(SwapPlan.Bal b, BigInteger min) {
         if (b.known()) return b; // an exact amount already implies (or fails) the minimum
-        return SwapPlan.Bal.atLeast(b.min.max(min));
+        return b.atLeastLike(b.min.max(min));
     }
 
     private static String token(String address) throws SwapPlan.Refusal {

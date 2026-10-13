@@ -238,6 +238,141 @@ public final class MessageReviewTest {
                 .warns("does not follow EIP-4361"));
     }
 
+    private static String siweFor(String domain, String uri) {
+        return domain + " wants you to sign in with your Ethereum account:\n"
+                + "0xCD2a3d9F938E13CD947Ec05AbC7FE734Df8DD826\n\n\n"
+                + "URI: " + uri + "\nVersion: 1\nChain ID: 1\nNonce: abcdefgh12\nIssued At: 2026-09-27T12:00:00Z";
+    }
+
+    private static MessageReview withOrigin(String text, String origin) throws Exception {
+        JSONObject json = MessageRequestTest.personal(Numeric.toHexString(text.getBytes(StandardCharsets.UTF_8)));
+        if (origin != null) json.put("origin", origin);
+        return MessageReview.of(MessageRequest.parse(json), COW);
+    }
+
+    @Test public void siweLookalikeDomainsAreShownInPunycodeWithDanger() throws Exception {
+        // Cyrillic "а" (U+0430) in place of the Latin "a"
+        String fake = "uniswаp.org";
+        MessageReview r = personalReview(siweFor(fake, "https://uniswаp.org/").getBytes(StandardCharsets.UTF_8), "0x1", COW);
+        assertEquals(MessageReview.Category.SIGN_IN, r.category);
+        String ascii = java.net.IDN.toASCII(fake);
+        assertTrue(ascii, ascii.startsWith("xn--"));
+        assertEquals(ascii, r.summaryValue("Website (as claimed)"));
+        assertTrue(r.warns("lookalike characters"));
+        assertTrue(r.warns("which is really " + ascii));
+        assertTrue(MessageReview.lockedSummary(MessageRequest.parse(MessageRequestTest.personal(
+                Numeric.toHexString(siweFor(fake, "https://x.org/").getBytes(StandardCharsets.UTF_8))))).contains(ascii));
+        // fullwidth letters that nameprep maps to plain ASCII are still flagged
+        MessageReview wide = personalReview(siweFor("ｕniswap.org", "https://uniswap.org/").getBytes(StandardCharsets.UTF_8), "0x1", COW);
+        assertEquals("uniswap.org", wide.summaryValue("Website (as claimed)"));
+        assertTrue(wide.warns("lookalike characters"));
+        // a plain ASCII domain (with port) is not
+        MessageReview plain = personalReview(siweFor("App.Example.org:8443", "https://app.example.org:8443/").getBytes(StandardCharsets.UTF_8), "0x1", COW);
+        assertEquals("app.example.org:8443", plain.summaryValue("Website (as claimed)"));
+        assertFalse(plain.warns("lookalike"));
+        assertFalse(plain.warns("differs from the website"));
+        // a name with no valid ASCII form is a malformed sign-in
+        StringBuilder longLabel = new StringBuilder("é");
+        while (longLabel.length() < 70) longLabel.append('a');
+        assertTrue(personalReview(siweFor(longLabel + ".org", "https://x.org/").getBytes(StandardCharsets.UTF_8), "0x1", COW)
+                .warns("does not follow EIP-4361"));
+    }
+
+    @Test public void signingAddressRowNamesTheActualAccount() throws Exception {
+        org.web3j.crypto.Credentials key = org.web3j.crypto.Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+        String addr = key.getAddress();
+        MessageRequest req = MessageRequest.parse(MessageRequestTest.personal(Numeric.toHexString("hi".getBytes(StandardCharsets.UTF_8))));
+        String checksummed = org.web3j.crypto.Keys.toChecksumAddress(addr);
+        assertEquals(checksummed, new MessageApprovalSession(req, key).review.summaryValue("Signing address"));
+        assertNull(new MessageApprovalSession(req, key).review.summaryValue("Signing address · Account 1"));
+        SigningAccount second = new SigningAccount(1, "Account 2", false, "73c5da0a", addr);
+        assertEquals(checksummed, new MessageApprovalSession(req, key, second).review.summaryValue("Signing address · Account 2"));
+        SigningAccount passphrase = new SigningAccount(0, "Account 1", true, "1a2b3c4d", addr);
+        assertEquals(checksummed, new MessageApprovalSession(req, key, passphrase).review
+                .summaryValue("Signing address · Account 1 (passphrase wallet)"));
+        // typed data and sign-in use the same row
+        MessageRequest typed = MessageRequest.parse(MessageRequestTest.typed(MessageSigningVectorsTest.vector("permit2-single", "typedData")));
+        assertEquals(checksummed, new MessageApprovalSession(typed, key, second).review.summaryValue("Signing address · Account 2"));
+        MessageRequest siwe = MessageRequest.parse(MessageRequestTest.personal(MessageSigningVectorsTest.vector("personal-siwe", "message")));
+        assertEquals(checksummed, new MessageApprovalSession(siwe, key, second).review.summaryValue("Signing address · Account 2"));
+        try {
+            new MessageApprovalSession(req, key, new SigningAccount(1, "Account 2", false, "73c5da0a", OTHER));
+            org.junit.Assert.fail("review built for a different account than the key");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    @Test public void hostReportedOriginIsShownAndComparedWithTheSignIn() throws Exception {
+        // shown, marked as the Mac's claim, on every message kind
+        MessageReview plain = withOrigin("Hello", "https://app.uniswap.org");
+        String row = plain.summaryValue(MessageReview.ORIGIN_LABEL);
+        assertTrue(row, row.startsWith("app.uniswap.org\n") && row.contains("can't verify"));
+        assertNull(withOrigin("Hello", null).summaryValue(MessageReview.ORIGIN_LABEL));
+        JSONObject typed = MessageRequestTest.typed(MessageSigningVectorsTest.vector("permit2-single", "typedData"))
+                .put("origin", "http://localhost:5173");
+        assertTrue(MessageReview.of(MessageRequest.parse(typed), COW).summaryValue(MessageReview.ORIGIN_LABEL).startsWith("http://localhost:5173\n"));
+
+        // sign-in for the same host (port and case ignored): no mismatch
+        MessageReview same = withOrigin(siweFor("app.uniswap.org", "https://app.uniswap.org/"), "https://app.uniswap.org");
+        assertEquals("app.uniswap.org\nReported by your Mac (browser or WalletConnect). This phone can't verify it.",
+                same.summaryValue(MessageReview.ORIGIN_LABEL));
+        assertFalse(same.warns("phishing"));
+        assertFalse(withOrigin(siweFor("localhost:3000", "http://localhost:3000/"), "http://localhost:3000").warns("phishing"));
+        // sign-in for another site than the one that asked: DANGER
+        MessageReview phish = withOrigin(siweFor("app.uniswap.org", "https://app.uniswap.org/"), "https://uniswap-airdrop.io");
+        assertTrue(phish.warns("This sign-in is for app.uniswap.org, but the request came from uniswap-airdrop.io. A site may be phishing you."));
+        // a lookalike sign-in domain compared in its ASCII form
+        assertTrue(withOrigin(siweFor("app.uniswаp.org", "https://x.org/"), "https://app.uniswap.org").warns("may be phishing you"));
+        assertFalse(withOrigin(siweFor("app.uniswаp.org", "https://x.org/"), "https://" + java.net.IDN.toASCII("app.uniswаp.org"))
+                .warns("may be phishing you"));
+    }
+
+    @Test public void originFieldContract() throws Exception {
+        String[] ok = {"https://app.uniswap.org", "https://a.b-c.example:8443", "https://xn--unswap-b1a.org", "http://localhost",
+                "http://localhost:3000", "http://127.0.0.1:8080", "http://[::1]:5173", "https://localhost"};
+        for (String o : ok) {
+            MessageRequest r = MessageRequest.parse(MessageRequestTest.personal("0x6869").put("origin", o));
+            assertEquals(o, r.origin);
+        }
+        StringBuilder longHost = new StringBuilder("https://");
+        while (longHost.length() < 256) longHost.append("a.");
+        longHost.append("io");
+        String[] bad = {"", "app.uniswap.org", "https://App.uniswap.org", "https://app.uniswap.org/", "https://app.uniswap.org/path",
+                "http://app.uniswap.org", "https://user@app.uniswap.org", "https://app.uniswap.org:0", "https://app.uniswap.org:65536",
+                "https://app.uniswap.org:080", "https://ünï.org", "https://.org", "https://a..org", "https://a.org.", "http://localhost.evil.com",
+                "http://127.0.0.2", "https://app.uniswap.org?x", "https://app.uniswap.org#x", " https://a.org", "https://a.org ",
+                "javascript:alert(1)", longHost.toString()};
+        for (String o : bad) {
+            try {
+                MessageRequest.parse(MessageRequestTest.personal("0x6869").put("origin", o));
+                org.junit.Assert.fail("accepted origin " + o);
+            } catch (org.json.JSONException expected) {
+                assertTrue(expected.getMessage(), expected.getMessage().contains("origin"));
+            }
+        }
+        // only a string
+        try {
+            MessageRequest.parse(MessageRequestTest.personal("0x6869").put("origin", 5));
+            org.junit.Assert.fail();
+        } catch (org.json.JSONException expected) { }
+        // typed data too
+        assertEquals("https://app.uniswap.org", MessageRequest.parse(MessageRequestTest.typed(
+                MessageSigningVectorsTest.vector("permit2-single", "typedData")).put("origin", "https://app.uniswap.org")).origin);
+        // never on transactions
+        JSONObject tx = new JSONObject().put("id", "t-1").put("method", "signEip1559").put("chainId", "0x1").put("nonce", "0x0")
+                .put("maxPriorityFeePerGas", "0x1").put("maxFeePerGas", "0x2").put("gasLimit", "0x5208")
+                .put("to", OTHER).put("value", "0x1").put("data", "0x").put("origin", "https://app.uniswap.org");
+        try {
+            Eip1559Request.parse(tx);
+            org.junit.Assert.fail("origin accepted on a transaction");
+        } catch (org.json.JSONException expected) {
+            assertTrue(expected.getMessage().contains("unknown=[origin]"));
+        }
+        // through the strict USB frame parser, as the companion sends it
+        JSONObject frame = AccessoryTransport.parseStrictRequest(
+                "{\"id\":\"m-1\",\"method\":\"personal_sign\",\"chainId\":\"0x1\",\"message\":\"0x6869\",\"origin\":\"https://app.uniswap.org\"}");
+        assertEquals("https://app.uniswap.org", MessageRequest.parse(frame).origin);
+    }
+
     @Test public void plainTextIsShownVerbatim() throws Exception {
         MessageReview r = personalReview("Hello\r\nworld\tok".getBytes(StandardCharsets.UTF_8), "0x1", COW);
         assertEquals(MessageReview.Category.MESSAGE, r.category);

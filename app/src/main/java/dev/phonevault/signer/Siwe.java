@@ -78,6 +78,7 @@ final class Siwe {
         String scheme = header.group(1);
         String domain = header.group(2);
         if (domain.contains("@")) throw new InvalidSiwe("the domain contains user information ('@')");
+        asciiAuthority(domain); // an internationalized name that has no valid ASCII form is malformed
 
         String address = c.next("address");
         if (!ADDRESS.matcher(address).matches()) throw new InvalidSiwe("the account line is not an address");
@@ -118,6 +119,55 @@ final class Siwe {
         if (c.hasNext()) throw new InvalidSiwe("unexpected line: " + c.peek());
         return new Siwe(scheme, domain, address, statement, uri, version, Long.parseLong(chain), nonce,
                 issuedAt, expiration, notBefore, requestId, Collections.unmodifiableList(resources));
+    }
+
+    /** True when the domain contains any non-ASCII character (an internationalized, possibly lookalike, name). */
+    boolean lookalike() {
+        for (int i = 0; i < domain.length(); i++) if (domain.charAt(i) > 0x7e || domain.charAt(i) < 0x21) return true;
+        return false;
+    }
+
+    /** The domain as shown on the phone: host in ASCII (punycode, lowercase) plus any port. */
+    String displayDomain() {
+        try {
+            return asciiAuthority(domain);
+        } catch (InvalidSiwe e) {
+            return domain; // unreachable: parse() already converted it
+        }
+    }
+
+    /** The domain's host only (no port), ASCII lowercase, for comparison with a host-reported origin. */
+    String asciiHost() {
+        String a = displayDomain();
+        if (a.startsWith("[")) {
+            int close = a.indexOf(']');
+            return close < 0 ? a : a.substring(0, close + 1);
+        }
+        int colon = a.lastIndexOf(':');
+        return colon < 0 ? a : a.substring(0, colon);
+    }
+
+    /**
+     * "host[:port]" with the host converted by {@link java.net.IDN#toASCII} (IDNA 2003 nameprep +
+     * punycode) and lowercased. An IPv6 literal is only lowercased.
+     */
+    static String asciiAuthority(String authority) throws InvalidSiwe {
+        if (authority.startsWith("[")) return authority.toLowerCase(java.util.Locale.ROOT);
+        String host = authority, port = "";
+        int colon = authority.lastIndexOf(':');
+        if (colon >= 0 && authority.substring(colon + 1).matches("[0-9]{1,5}")) {
+            host = authority.substring(0, colon);
+            port = authority.substring(colon);
+        }
+        if (host.isEmpty()) throw new InvalidSiwe("the domain is empty");
+        String ascii;
+        try {
+            ascii = java.net.IDN.toASCII(host);
+        } catch (IllegalArgumentException e) {
+            throw new InvalidSiwe("the domain is not a valid host name");
+        }
+        if (ascii.isEmpty()) throw new InvalidSiwe("the domain is not a valid host name");
+        return ascii.toLowerCase(java.util.Locale.ROOT) + port;
     }
 
     /** host[:port] of the URI line, or null when the URI has no authority. */

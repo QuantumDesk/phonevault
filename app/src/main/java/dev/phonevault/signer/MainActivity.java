@@ -2283,8 +2283,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 // Parsed once: the review and the digest both come from this object.
                 MessageRequest message = MessageRequest.parse(json);
                 RequestRefusal.requireFrom(message.from, account.headline(), account.address);
-                MessageApprovalSession approval = new MessageApprovalSession(message, signer);
-                approval.signingAs = account;
+                MessageApprovalSession approval = new MessageApprovalSession(message, signer, account);
                 runOnUiThread(() -> showMessageApproval(source, approval, decision, s));
                 return;
             }
@@ -2292,8 +2291,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             RequestRefusal.requireFrom(request.from, account.headline(), account.address);
             AddressSafety safety = safety();
             safety.setOwnAccounts(ownAccountNames());
-            ApprovalSession approval = new ApprovalSession(request, signer, tokens(), safety);
-            approval.signingAs = account;
+            ApprovalSession approval = new ApprovalSession(request, signer, tokens(), safety, account);
             runOnUiThread(() -> showApproval(source, approval, decision, s));
         } catch (Exception e) {
             finishApproval(decision);

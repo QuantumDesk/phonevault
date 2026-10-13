@@ -93,13 +93,81 @@ public final class Erc20ReviewTest {
         assertEquals("0 ETH (only the fee below)", value(r, "Native value sent"));
         assertEquals("50000000 (uint256)", value(r, "Amount in base units"));
         assertEquals("transfer(address,uint256) · selector 0xa9059cbb", value(r, "Function"));
-        assertEquals(Keys.toChecksumAddress(KEY.getAddress()), value(r, "From · Account 1"));
+        // no account description given: the row names no account number (never a guessed "Account 1")
+        assertEquals(Keys.toChecksumAddress(KEY.getAddress()), value(r, "From"));
+        assertNull(value(r, "From · Account 1"));
         assertEquals("Ethereum Mainnet (chain ID 1)", value(r, "Network"));
         assertEquals(0, count(r, "WARNING"));
         assertEquals(0, count(r, "DANGER"));
         assertEquals("Approve & sign", r.signLabel);
         assertTrue(r.lockedSummary.startsWith("Send 50 USDC to 0x"));
         assertTrue(r.reviewPrompt.contains("token contract"));
+    }
+
+    // ------------------------------------------------------------------ which account signs
+
+    @Test public void fromRowNamesTheActualSigningAccount() throws Exception {
+        Eip1559Request transfer = Eip1559Request.parse(request("0x1", USDC_ETH, transfer(BOB, BigInteger.valueOf(50_000_000))));
+        String checksummed = Keys.toChecksumAddress(KEY.getAddress());
+        SigningAccount second = new SigningAccount(1, "Account 2", false, "73c5da0a", KEY.getAddress());
+        TransactionReview r2 = new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, second).review;
+        assertEquals(checksummed, value(r2, "From · Account 2"));
+        assertNull(value(r2, "From · Account 1"));
+        SigningAccount passphrase = new SigningAccount(0, "Account 1", true, "1a2b3c4d", KEY.getAddress());
+        TransactionReview rp = new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, passphrase).review;
+        assertEquals(checksummed, value(rp, "From · Account 1 (passphrase wallet)"));
+        SigningAccount named = new SigningAccount(2, "Savings", false, "73c5da0a", KEY.getAddress());
+        assertEquals(checksummed, value(new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, named).review, "From · Savings"));
+        // swaps, NFT calls and native transfers use the same row
+        Eip1559Request nativeSend = Eip1559Request.parse(new JSONObject(request("0x1", BOB, "0x").toString()).put("value", "0x1"));
+        assertEquals(checksummed, value(new ApprovalSession(nativeSend, KEY, TokenListTest.bundled(), null, second).review, "From · Account 2"));
+        // an account description for another key is a bug, never shown
+        SigningAccount other = new SigningAccount(1, "Account 2", false, "73c5da0a", BOB);
+        try {
+            new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, other);
+            fail("review built for a different account than the key");
+        } catch (IllegalArgumentException expected) { }
+    }
+
+    // ------------------------------------------------------------------ fee alarm
+
+    private static TransactionReview feeReview(String chain, String to, String value, String data, String gasLimit, String maxFee) throws Exception {
+        JSONObject j = request(chain, to, data).put("value", value).put("gasLimit", gasLimit).put("maxFeePerGas", maxFee)
+                .put("maxPriorityFeePerGas", "0x0");
+        return new ApprovalSession(Eip1559Request.parse(j), KEY, TokenListTest.bundled()).review;
+    }
+
+    private static boolean dangerContains(TransactionReview r, String fragment) {
+        for (MessageReview.Row row : r.summary) if (row.label.equals("DANGER") && row.value.contains(fragment)) return true;
+        return false;
+    }
+
+    @Test public void absurdMaximumFeesAreDanger() throws Exception {
+        String usdc = transfer(BOB, BigInteger.valueOf(50_000_000));
+        // normal: 65,000 gas at 2 gwei = 0.00013 ETH
+        assertEquals(0, count(review("0x1", USDC_ETH, usdc), "DANGER"));
+        // 0.05 ETH exactly is not above the cap; 0.05 ETH + 1 wei is
+        BigInteger gwei = BigInteger.TEN.pow(9);
+        String limit = "0x" + BigInteger.valueOf(50_000).toString(16);
+        String fee1 = "0x" + gwei.multiply(BigInteger.valueOf(1000)).toString(16);           // 50,000 × 1000 gwei = 0.05 ETH
+        assertEquals(0, count(feeReview("0x1", USDC_ETH, "0x0", usdc, limit, fee1), "DANGER"));
+        String fee2 = "0x" + gwei.multiply(BigInteger.valueOf(1000)).add(BigInteger.ONE).toString(16);
+        TransactionReview high = feeReview("0x1", USDC_ETH, "0x0", usdc, limit, fee2);
+        assertTrue(high.text(), dangerContains(high, "far more than a normal fee on Ethereum Mainnet"));
+        // the same cap on an L2
+        assertTrue(dangerContains(feeReview("0x2105", USDC_BASE, "0x0", usdc, limit, fee2), "far more than a normal fee on Base"));
+        // Polygon: 50 POL, so 0.05 POL-worth is nothing
+        assertEquals(0, count(feeReview("0x89", BOB, "0x1", "0x", limit, fee2), "DANGER"));
+        String pol = "0x" + gwei.multiply(BigInteger.valueOf(1_000_001)).toString(16);         // 50,000 × 1,000,001 gwei ≈ 50.00005 POL
+        assertTrue(dangerContains(feeReview("0x89", BOB, "0xde0b6b3a7640000000", "0x", limit, pol), "far more than a normal fee on Polygon"));
+        // a fee larger than the ETH sent, above the 0.005 ETH floor: 0.01 ETH fee for 0.001 ETH
+        String fee10m = "0x" + gwei.multiply(BigInteger.valueOf(200)).toString(16);            // 50,000 × 200 gwei = 0.01 ETH
+        TransactionReview tiny = feeReview("0x1", BOB, "0x38d7ea4c68000", "0x", limit, fee10m);
+        assertTrue(tiny.text(), dangerContains(tiny, "is more than the 0.001 ETH being sent"));
+        // below the floor a fee larger than a dust transfer is not flagged
+        String fee1m = "0x" + gwei.multiply(BigInteger.valueOf(20)).toString(16);              // 0.001 ETH
+        assertEquals(0, count(feeReview("0x1", BOB, "0x1", "0x", limit, fee1m), "DANGER"));
+        assertEquals(TransactionReview.feeDangerCap(1), BigInteger.TEN.pow(16).multiply(BigInteger.valueOf(5)));
     }
 
     @Test public void decimalsComeFromTheListPerToken() throws Exception {

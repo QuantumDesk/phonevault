@@ -21,17 +21,26 @@ final class MessageApprovalSession {
     private final byte[] digest;
     private final Credentials reviewedCredentials;
     private final String reviewedAddress;
-    /** Which account (of which wallet) the reviewed key is, for the "Signing with" row. Display only. */
-    SigningAccount signingAs;
+    /**
+     * Which account (of which wallet) the reviewed key is, for the "Signing with" row and the
+     * review's "Signing address · Account N" row. Display only; null in tests that do not name one.
+     */
+    final SigningAccount signingAs;
 
     MessageApprovalSession(MessageRequest request, Credentials credentials) {
+        this(request, credentials, null);
+    }
+
+    /** @param account the account {@code credentials} belongs to (must be the same address), or null */
+    MessageApprovalSession(MessageRequest request, Credentials credentials, SigningAccount account) {
         if (request == null || credentials == null) {
             throw new IllegalArgumentException("Approval requires a request and signing identity");
         }
         this.request = request;
         this.reviewedCredentials = credentials;
         this.reviewedAddress = credentials.getAddress().toLowerCase(Locale.ROOT);
-        this.review = MessageReview.of(request, reviewedAddress);
+        this.signingAs = account;
+        this.review = MessageReview.of(request, reviewedAddress, account);
         this.digest = request.digest();
     }
 

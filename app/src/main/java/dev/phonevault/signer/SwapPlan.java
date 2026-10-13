@@ -36,11 +36,22 @@ final class SwapPlan {
         final String asset;
         final BigInteger value;
         final Bound bound;
+        /**
+         * True only when every part of this amount is this wallet's own unspent input coming back
+         * (native value the swaps did not use, the remainder of an exact-output swap's maximum).
+         * Anything that includes a swap's output is false, however it reaches the wallet.
+         */
+        final boolean unusedInput;
 
         Amount(String asset, BigInteger value, Bound bound) {
+            this(asset, value, bound, false);
+        }
+
+        Amount(String asset, BigInteger value, Bound bound, boolean unusedInput) {
             this.asset = asset;
             this.value = value;
             this.bound = bound;
+            this.unusedInput = unusedInput;
         }
     }
 
@@ -115,27 +126,44 @@ final class SwapPlan {
 
     // ------------------------------------------------------------------ the balance model
 
-    /** What the model knows about one amount: exactly {@code exact}, or at least {@code min}. */
+    /**
+     * What the model knows about one amount: exactly {@code exact}, or at least {@code min}; and
+     * where it came from. {@code input} is true only for this wallet's own input that no swap has
+     * touched (the native value sent, tokens pulled in, and what remains of them); a swap's output
+     * and anything mixed with one is never "input", so it can't be passed off as a refund.
+     */
     static final class Bal {
         final BigInteger exact;
         final BigInteger min;
+        final boolean input;
 
-        private Bal(BigInteger exact, BigInteger min) {
+        private Bal(BigInteger exact, BigInteger min, boolean input) {
             this.exact = exact;
             this.min = min;
+            this.input = input;
         }
 
-        static Bal exactly(BigInteger v) { return new Bal(v, v); }
-        static Bal atLeast(BigInteger v) { return new Bal(null, v); }
+        /** A swap output (or other amount that is not purely the wallet's unspent input). */
+        static Bal exactly(BigInteger v) { return new Bal(v, v, false); }
+        static Bal atLeast(BigInteger v) { return new Bal(null, v, false); }
+        /** The wallet's own input, untouched by any swap. */
+        static Bal inputExactly(BigInteger v) { return new Bal(v, v, true); }
+
+        /** Same provenance as this balance, new amount. */
+        Bal exactlyLike(BigInteger v) { return new Bal(v, v, input); }
+        Bal atLeastLike(BigInteger v) { return new Bal(null, v, input); }
 
         boolean known() { return exact != null; }
         boolean surelyZero() { return exact != null && exact.signum() == 0; }
 
         Bal plus(Bal o) {
-            return exact != null && o.exact != null ? exactly(exact.add(o.exact)) : atLeast(min.add(o.min));
+            boolean in = input && o.input;
+            return exact != null && o.exact != null ? new Bal(exact.add(o.exact), exact.add(o.exact), in) : new Bal(null, min.add(o.min), in);
         }
 
-        Amount as(String asset) { return new Amount(asset, known() ? exact : min, known() ? Bound.EXACT : Bound.AT_LEAST); }
+        Amount as(String asset) {
+            return new Amount(asset, known() ? exact : min, known() ? Bound.EXACT : Bound.AT_LEAST, input);
+        }
     }
 
     /** The router's balances, this wallet's flows and the steps, as a call is decoded. */
@@ -155,7 +183,7 @@ final class SwapPlan {
         Sim(UniswapRouters.Router router, BigInteger nativeValue) {
             this.router = router;
             if (nativeValue.signum() > 0) {
-                held.put(NATIVE, Bal.exactly(nativeValue));
+                held.put(NATIVE, Bal.inputExactly(nativeValue));
                 give(NATIVE, nativeValue, Bound.EXACT);
             }
         }
@@ -185,7 +213,8 @@ final class SwapPlan {
             Amount add = amount.as(asset);
             if (old == null) receives.put(asset, add);
             else receives.put(asset, new Amount(asset, old.value.add(add.value),
-                    old.bound == Bound.EXACT && add.bound == Bound.EXACT ? Bound.EXACT : Bound.AT_LEAST));
+                    old.bound == Bound.EXACT && add.bound == Bound.EXACT ? Bound.EXACT : Bound.AT_LEAST,
+                    old.unusedInput && add.unusedInput));
         }
 
         void hold(String asset, Bal amount) {
@@ -213,7 +242,7 @@ final class SwapPlan {
                 return null;
             }
             if (b.known()) return b;
-            return Bal.atLeast(b.min.max(min));
+            return b.atLeastLike(b.min.max(min));
         }
 
         /** Exactly {@code amount} from the router's balance; refused unless it is provably there. */
@@ -222,10 +251,10 @@ final class SwapPlan {
             if (b == null) throw new Refusal(why + " spends a router balance this transaction never funded");
             if (b.known()) {
                 if (b.exact.compareTo(amount) < 0) throw new Refusal(why + " spends more than the router holds");
-                held.put(asset, Bal.exactly(b.exact.subtract(amount)));
+                held.put(asset, b.exactlyLike(b.exact.subtract(amount)));
             } else {
                 if (b.min.compareTo(amount) < 0) throw new Refusal(why + " may spend more than the router is known to hold");
-                held.put(asset, Bal.atLeast(b.min.subtract(amount)));
+                held.put(asset, b.atLeastLike(b.min.subtract(amount)));
             }
             if (held.get(asset).surelyZero()) held.remove(asset);
         }
@@ -236,7 +265,7 @@ final class SwapPlan {
             if (b == null) throw new Refusal(why + " spends a router balance this transaction never funded");
             BigInteger have = b.known() ? b.exact : b.min;
             if (have.compareTo(max) < 0) throw new Refusal(why + " may need more than the router is known to hold");
-            held.put(asset, Bal.atLeast(have.subtract(max)));
+            held.put(asset, b.atLeastLike(have.subtract(max)));
         }
 
         /** Portion fee: {@code numerator/denominator} of the router's balance goes to {@code recipient}. */
@@ -245,13 +274,22 @@ final class SwapPlan {
             Bal b = held.get(asset);
             if (b == null) throw new Refusal("a fee taken from a router balance this transaction never funded");
             BigInteger feeMin = b.min.multiply(numerator).divide(denominator);
-            if (MSG_SENDER.equals(recipient) || ADDRESS_THIS.equals(recipient) || router.address.equals(recipient)) {
-                throw new Refusal("a portion paid back to the wallet or router");
-            }
+            checkFeeRecipient(recipient, router);
             payments.add(new Payment(recipient, new Amount(asset, feeMin, Bound.AT_LEAST), label));
             // what stays is at least min − ceil(min × portion); exact amounts become lower bounds
             BigInteger keep = b.min.subtract(b.min.multiply(numerator).add(denominator).subtract(BigInteger.ONE).divide(denominator));
-            held.put(asset, Bal.atLeast(keep.max(BigInteger.ZERO)));
+            held.put(asset, b.atLeastLike(keep.max(BigInteger.ZERO)));
+        }
+
+        /**
+         * A portion fee (PAY_PORTION, PAY_PORTION_FULL_PRECISION, V4 TAKE_PORTION) must go to a real
+         * third address: the zero address burns it, and the wallet/router flags would hide it.
+         */
+        static void checkFeeRecipient(String recipient, UniswapRouters.Router router) throws Refusal {
+            if (NATIVE.equals(recipient)) throw new Refusal("a fee paid to the zero address");
+            if (MSG_SENDER.equals(recipient) || ADDRESS_THIS.equals(recipient) || router.address.equals(recipient)) {
+                throw new Refusal("a portion paid back to the wallet or router");
+            }
         }
 
         /** Final checks: unused native coin is refused; other possible leftovers become a warning. */

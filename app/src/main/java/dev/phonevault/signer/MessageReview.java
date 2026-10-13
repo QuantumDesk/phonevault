@@ -80,9 +80,31 @@ final class MessageReview {
      * @param wallet the signing address shown on screen (the reviewed credential snapshot)
      */
     static MessageReview of(MessageRequest request, String wallet) {
+        return of(request, wallet, null);
+    }
+
+    /**
+     * @param account which account of which wallet {@code wallet} is (the "Signing address · Account 3"
+     *                row), or null when unknown: the row then says only "Signing address"
+     */
+    static MessageReview of(MessageRequest request, String wallet, SigningAccount account) {
         String signer = wallet.toLowerCase(Locale.ROOT);
+        if (account != null && !account.address.equals(signer)) {
+            throw new IllegalArgumentException("The account description does not match the signing address");
+        }
+        String signerLabel = account == null ? "Signing address" : "Signing address · " + account.headline();
         return request.kind == MessageRequest.Kind.PERSONAL
-                ? personal(request, signer) : typed(request, signer);
+                ? personal(request, signer, signerLabel) : typed(request, signer, signerLabel);
+    }
+
+    /** Label of the host-reported origin row: the Mac says which site asked; the phone can't check. */
+    static final String ORIGIN_LABEL = "Requested by (your Mac says)";
+
+    /** The origin row (host-reported, not verified), or nothing when the request carries no origin. */
+    private static void addOrigin(List<Row> rows, MessageRequest request) {
+        if (request.origin == null) return;
+        rows.add(new Row(ORIGIN_LABEL, MessageRequest.originDisplay(request.origin)
+                + "\nReported by your Mac (browser or WalletConnect). This phone can't verify it."));
     }
 
     /** One line for the PIN gate while locked (no identity is loaded yet). */
@@ -90,7 +112,7 @@ final class MessageReview {
         String network = Eip1559Request.networkLabel(request.chainId);
         if (request.kind == MessageRequest.Kind.PERSONAL) {
             PersonalMessage m = request.personal;
-            String what = m.siwe != null ? "Sign-in request from " + m.siwe.domain
+            String what = m.siwe != null ? "Sign-in request from " + m.siwe.displayDomain()
                     : m.text != null ? "Message signature request (" + m.length() + " bytes)"
                     : "Signature request for UNREADABLE data (" + m.length() + " bytes)";
             return what + " · host on " + network + ". Unlock to review before anything is signed.";
@@ -103,7 +125,7 @@ final class MessageReview {
 
     // ------------------------------------------------------------------ personal_sign
 
-    private static MessageReview personal(MessageRequest request, String signer) {
+    private static MessageReview personal(MessageRequest request, String signer, String signerLabel) {
         PersonalMessage m = request.personal;
         List<Row> rows = new ArrayList<>();
         List<Row> details = new ArrayList<>();
@@ -118,7 +140,8 @@ final class MessageReview {
                     + "transaction or permission; signing may authorize something this screen cannot show."
                     + (m.length() == 32 ? " It is exactly 32 bytes, the size of a hash." : "")));
             rows.add(new Row("Data (hex)", Numeric.toHexString(m.bytes())));
-            rows.add(new Row("Signing address · Account 1", Keys.toChecksumAddress(signer)));
+            addOrigin(rows, request);
+            rows.add(new Row(signerLabel, Keys.toChecksumAddress(signer)));
             rows.add(new Row("Host network", host));
             return new MessageReview(Category.UNREADABLE, "MESSAGE REVIEW", "Review unreadable data",
                     "Only sign if you know exactly what these bytes are. This phone cannot decode them.",
@@ -128,9 +151,21 @@ final class MessageReview {
         if (m.siwe != null) {
             Siwe s = m.siwe;
             rows.add(new Row("Action", "Sign in with Ethereum (EIP-4361)"));
-            rows.add(new Row("Website (as claimed)", (s.scheme != null ? s.scheme + "://" : "") + s.domain));
+            // Shown in its ASCII (punycode) form: "xn--uniswp-…" cannot pass for "uniswap" the way
+            // a Cyrillic "а" can.
+            rows.add(new Row("Website (as claimed)", (s.scheme != null ? s.scheme + "://" : "") + s.displayDomain()));
+            if (s.lookalike()) {
+                rows.add(new Row(DANGER, "This site name uses lookalike characters: the message writes it as \""
+                        + s.domain + "\", which is really " + s.displayDomain() + ". Phishing sites use letters from "
+                        + "other alphabets that look like familiar ones. Do not sign unless you are sure."));
+            }
+            addOrigin(rows, request);
+            if (request.origin != null && !MessageRequest.originHost(request.origin).equals(s.asciiHost())) {
+                rows.add(new Row(DANGER, "This sign-in is for " + s.displayDomain() + ", but the request came from "
+                        + MessageRequest.originDisplay(request.origin) + ". A site may be phishing you."));
+            }
             rows.add(new Row(WARNING, "This phone cannot see which website asked. Only sign if you opened "
-                    + s.domain + " yourself and your browser shows that exact address."));
+                    + s.displayDomain() + " yourself and your browser shows that exact address."));
             boolean mine = s.address.toLowerCase(Locale.ROOT).equals(signer);
             rows.add(new Row("Account in message", s.address));
             if (!mine) {
@@ -142,8 +177,8 @@ final class MessageReview {
             if (s.statement != null) rows.add(new Row("Statement", s.statement));
             rows.add(new Row("URI", s.uri));
             String authority = s.uriAuthority();
-            if (authority != null && !authority.equalsIgnoreCase(s.domain)) {
-                rows.add(new Row(WARNING, "The URI host (" + authority + ") differs from the website (" + s.domain + ")."));
+            if (authority != null && !authority.equalsIgnoreCase(s.domain) && !authority.equalsIgnoreCase(s.displayDomain())) {
+                rows.add(new Row(WARNING, "The URI host (" + authority + ") differs from the website (" + s.displayDomain() + ")."));
             }
             rows.add(new Row("Network in message", Eip1559Request.networkLabel(s.chainId)));
             if (s.chainId != request.chainId) {
@@ -155,7 +190,7 @@ final class MessageReview {
             if (s.notBefore != null) rows.add(new Row("Not before", s.notBefore));
             if (s.requestId != null) rows.add(new Row("Request ID", s.requestId));
             for (int i = 0; i < s.resources.size(); i++) rows.add(new Row("Resource " + (i + 1), s.resources.get(i)));
-            rows.add(new Row("Signing address · Account 1", Keys.toChecksumAddress(signer)));
+            rows.add(new Row(signerLabel, Keys.toChecksumAddress(signer)));
             rows.add(new Row("Host network", host));
             rows.add(new Row("Note", "Times are as written in the message; this offline phone's clock is not trusted to judge them."));
             details.add(0, new Row("Full message", m.text));
@@ -172,7 +207,8 @@ final class MessageReview {
         rows.add(new Row("Message", m.text));
         rows.add(new Row("What it means", "Signing does not send a transaction, but a website or contract may treat "
                 + "the signature as your agreement to this text."));
-        rows.add(new Row("Signing address · Account 1", Keys.toChecksumAddress(signer)));
+        addOrigin(rows, request);
+        rows.add(new Row(signerLabel, Keys.toChecksumAddress(signer)));
         rows.add(new Row("Host network", host));
         return new MessageReview(Category.MESSAGE, "MESSAGE REVIEW", "Review message",
                 "Read the whole message. This phone is the approval screen.", rows, details,
@@ -181,7 +217,7 @@ final class MessageReview {
 
     // ------------------------------------------------------------------ eth_signTypedData_v4
 
-    private static MessageReview typed(MessageRequest request, String signer) {
+    private static MessageReview typed(MessageRequest request, String signer, String signerLabel) {
         Eip712.TypedData t = request.typedData;
         List<Row> who = new ArrayList<>();
         who.add(new Row("Requested by (domain name)", t.domainName() != null ? visible(t.domainName()) : "Not specified"));
@@ -218,8 +254,9 @@ final class MessageReview {
         rows.add(new Row("Action", s.action));
         rows.addAll(chainWarnings);
         rows.addAll(s.rows);
+        addOrigin(rows, request);
         rows.addAll(who);
-        rows.add(new Row("Signing address · Account 1", Keys.toChecksumAddress(signer)));
+        rows.add(new Row(signerLabel, Keys.toChecksumAddress(signer)));
         rows.add(new Row("Host network", host));
         return new MessageReview(s.category, "TYPED DATA REVIEW", s.title, s.subtitle, rows, details, s.prompt, s.signLabel);
     }
