@@ -46,15 +46,19 @@ def make(args):
 
     amount, send = 100_000, 60_000
     fee = args.fee
-    # One fabricated outpoint per spent script: the phone remembers each coin it signed for
-    # (outpoint → amount + script, the SegWit fee-attack guard) and refuses the same outpoint
-    # later claimed with another script, so P2WPKH and P2TR must not share one.
-    outpoint = hashlib.sha256(b"phone-vault fabricated coin " + spk(recv).data).digest()
-    vin = [TransactionInput(outpoint, 0, sequence=0xFFFFFFFD)]
+    # The fabricated coin is output 0 of a fabricated previous transaction, so the PSBT can carry
+    # that transaction as non_witness_utxo (the phone requires it for P2WPKH inputs: it proves the
+    # amount). Its txid depends on the spent script, so P2WPKH and P2TR never share an outpoint
+    # (the phone remembers each coin it signed for and refuses one later claimed with another script).
+    seed = hashlib.sha256(b"phone-vault fabricated coin " + spk(recv).data).digest()
+    prev = Transaction(version=2, vin=[TransactionInput(seed, 0)], vout=[TransactionOutput(amount, spk(recv))], locktime=0)
+    vin = [TransactionInput(prev.txid(), 0, sequence=0xFFFFFFFD)]
     external = script.p2wpkh(ec.PrivateKey(bytes([42] * 32)).get_public_key())
     vout = [TransactionOutput(send, external), TransactionOutput(amount - send - fee, spk(change))]
     psbt = PSBT(Transaction(version=2, vin=vin, vout=vout, locktime=0))
     psbt.inputs[0].witness_utxo = TransactionOutput(amount, spk(recv))
+    if not taproot:
+        psbt.inputs[0].non_witness_utxo = prev
     for scope, key, tail in ((psbt.inputs[0], recv, [0, 0]), (psbt.outputs[1], change, [1, 0])):
         der = DerivationPath(fp if scope is psbt.inputs[0] else bytes.fromhex(answer["fingerprint"]), path + tail)
         if taproot:
