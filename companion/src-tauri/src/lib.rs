@@ -26,6 +26,8 @@ mod watcher;
 mod tokens;
 // WalletConnect: request policy only; signing goes through send/signing above
 mod wc;
+// Sign-In with Ethereum: refuse a sign-in message for another site than the one asking
+mod siwe;
 // Browser extension: another dApp transport over native messaging; policy reuses wc.rs
 pub mod bridge;
 // Bitcoin: watch-only xpub accounts, Esplora, PSBT build → phone → independent verification

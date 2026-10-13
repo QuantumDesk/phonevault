@@ -47,9 +47,20 @@ pub const MAX_IN_FRAME: usize = 512 * 1024;
 pub const MAX_OUT_FRAME: usize = 1024 * 1024 - 8 * 1024;
 /// Network a site sees before it is connected (the app's default network).
 pub const DEFAULT_CHAIN: u64 = 8453;
-/// Requests waiting for the user, per site and in total. More are refused (-32005).
+/// Requests waiting for the user, per site, per registrable domain (all of a site's subdomains
+/// together, see `registrable_domain`) and in total. More are refused (-32005).
 pub const MAX_PENDING_PER_ORIGIN: usize = 4;
+pub const MAX_PENDING_PER_DOMAIN: usize = 8;
 pub const MAX_PENDING_TOTAL: usize = 16;
+/// After the user rejects a connection, new connection requests from the same registrable domain
+/// are refused at once (4001, no window, no notification) for this long, doubling on every further
+/// rejection up to the maximum; an approved connection resets it.
+pub const CONNECT_BACKOFF_START: Duration = Duration::from_secs(30);
+pub const CONNECT_BACKOFF_MAX: Duration = Duration::from_secs(600);
+/// A refused sign-in for another site is shown in the app at most this often per site.
+const BLOCKED_NOTICE_EVERY: Duration = Duration::from_secs(10);
+/// The extension popup's "Open Phone Vault Companion" brings the window forward at most this often.
+const SHOW_WINDOW_EVERY: Duration = Duration::from_secs(2);
 /// Node calls in flight at once, all sites together.
 const MAX_PROXY_INFLIGHT: usize = 16;
 /// Token bucket per site: bursts of 60, 20 requests per second sustained.
@@ -68,6 +79,7 @@ pub const READ_ONLY_METHODS: [&str; 16] = [
 pub const PROMPT_METHODS: [&str; 4] = ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4", "wallet_switchEthereumChain"];
 
 const LIMITED: i64 = -32005;
+const USER_REJECTED: i64 = 4001;
 const ALREADY_PENDING: i64 = -32002;
 const INVALID_REQUEST: i64 = -32600;
 
@@ -142,6 +154,46 @@ pub fn normalize_origin(s: &str) -> Result<String, String> {
 /// "app.uniswap.org" from "https://app.uniswap.org" (port kept when present).
 pub fn origin_host(origin: &str) -> String { origin.split_once("://").map(|(_, h)| h.to_string()).unwrap_or_else(|| origin.to_string()) }
 pub fn origin_is_local(origin: &str) -> bool { origin.starts_with("http://") }
+
+/// Second-level labels under which countries (and a few hosting services) hand out names, so the
+/// registrable domain is one label further left ("example.co.uk", "alice.github.io"). Deliberately
+/// short, not the Public Suffix List: it only groups a site's subdomains for the waiting-request
+/// cap and the connection backoff, and a miss errs towards treating two sites as one family.
+const TWO_LABEL_SUFFIXES: [&str; 40] = [
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk", "ltd.uk", "plc.uk", "net.uk",
+    "com.au", "net.au", "org.au", "edu.au", "co.nz", "org.nz", "co.jp", "ne.jp", "or.jp", "ac.jp",
+    "co.kr", "or.kr", "com.br", "net.br", "com.cn", "net.cn", "com.hk", "com.sg", "com.tw", "co.in",
+    "co.za", "com.mx", "com.tr", "com.ar", "co.il",
+    "github.io", "vercel.app", "netlify.app", "pages.dev", "web.app", "firebaseapp.com", "herokuapp.com",
+];
+
+/// Registrable domain ("eTLD+1", simplified) of a normalized origin's host: the last two labels,
+/// or three under a known two-label suffix (TWO_LABEL_SUFFIXES). Local and IP-literal origins are
+/// their own host. The port is ignored.
+pub fn registrable_domain(origin: &str) -> String {
+    let auth = origin_host(origin);
+    let host = if auth.starts_with('[') { auth.split_once(']').map(|(h, _)| format!("{h}]")).unwrap_or(auth.clone()) } else { auth.split(':').next().unwrap_or("").to_string() };
+    if host.starts_with('[') || host.bytes().all(|b| b.is_ascii_digit() || b == b'.') { return host; }
+    let labels: Vec<&str> = host.split('.').collect();
+    if labels.len() <= 2 { return host; }
+    let last2 = labels[labels.len() - 2..].join(".");
+    let keep = if TWO_LABEL_SUFFIXES.contains(&last2.as_str()) { 3 } else { 2 };
+    labels[labels.len().saturating_sub(keep)..].join(".")
+}
+
+/// Connection backoff for one registrable domain after the user rejected a connection.
+#[derive(Clone, Copy, Debug)]
+pub struct Backoff { pub until: Instant, pub next: Duration }
+
+impl Backoff {
+    /// The user rejected a connection: blocked for the current penalty, doubled for next time.
+    pub fn after_rejection(previous: Option<Backoff>, now: Instant) -> Backoff {
+        let penalty = previous.map(|b| b.next).unwrap_or(CONNECT_BACKOFF_START);
+        Backoff { until: now + penalty, next: (penalty * 2).min(CONNECT_BACKOFF_MAX) }
+    }
+    /// Time left, if still blocked.
+    pub fn remaining(&self, now: Instant) -> Option<Duration> { (self.until > now).then(|| self.until - now) }
+}
 
 fn valid_method(m: &str) -> bool { !m.is_empty() && m.len() <= 64 && m.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') }
 
@@ -307,16 +359,33 @@ struct Inner {
     node_chain: HashMap<String, u64>,
     listening: Option<PathBuf>,
     listen_error: Option<String>,
+    /// registrable domain → connection backoff after a rejection
+    backoff: HashMap<String, Backoff>,
+    /// origin → when a refused sign-in was last shown in the app
+    blocked_shown: HashMap<String, Instant>,
+    last_show_window: Option<Instant>,
 }
 
 type Paired = Box<dyn Fn() -> Option<String> + Send + Sync>;
 type Notify = Box<dyn Fn() + Send + Sync>;
+/// What the app shows for something the user should know about but need not answer.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Alert {
+    /// A request now waits for the user: bring the window forward and notify.
+    Queued { origin: String, connect: bool, method: String },
+    /// A request was refused before it reached the user (sign-in for another site).
+    Blocked { origin: String, message: String },
+    /// The extension popup asked to bring the window forward.
+    ShowWindow,
+}
+type Alerts = Box<dyn Fn(Alert) + Send + Sync>;
 
 pub struct Bridge {
     inner: Mutex<Inner>,
     store: Option<PathBuf>,
     paired: Paired,
     notify: Notify,
+    alerts: Alerts,
     next_id: AtomicU64,
     next_conn: AtomicU64,
     proxies: Arc<AtomicUsize>,
@@ -328,10 +397,13 @@ pub struct SiteOut { pub origin: String, pub host: String, pub local: bool, pub 
 impl Bridge {
     /// `store`: where permissions persist (None = memory only, for tests). `paired`: the pinned
     /// signer address (lowercase), read fresh for every decision. `notify`: the webview should refresh.
-    pub fn new(store: Option<PathBuf>, paired: Paired, notify: Notify) -> Arc<Bridge> {
+    pub fn new(store: Option<PathBuf>, paired: Paired, notify: Notify) -> Arc<Bridge> { Self::with_alerts(store, paired, notify, Box::new(|_| {})) }
+
+    /// As `new`, with `alerts` for the window/notification side effects (the app wires on_alert).
+    pub fn with_alerts(store: Option<PathBuf>, paired: Paired, notify: Notify, alerts: Alerts) -> Arc<Bridge> {
         let sites = store.as_deref().map(load_sites).unwrap_or_default();
         Arc::new(Bridge {
-            inner: Mutex::new(Inner { sites, ..Default::default() }), store, paired, notify,
+            inner: Mutex::new(Inner { sites, ..Default::default() }), store, paired, notify, alerts,
             next_id: AtomicU64::new(1), next_conn: AtomicU64::new(1), proxies: Arc::new(AtomicUsize::new(0)),
         })
     }
@@ -375,6 +447,19 @@ impl Bridge {
                 if let Some(w) = w { Self::send_to(&w, &json!({"type": "hello", "ok": true, "version": 1, "app": "Phone Vault Companion", "paired": self.paired().is_some()})); }
             }
             Some("request") => self.on_request(conn, msg),
+            Some("show_window") => {
+                // Extension popup: "Open Phone Vault Companion" (native messaging cannot start an
+                // app, but it can ask the running one to come forward). Throttled.
+                let now = Instant::now();
+                let go = {
+                    let mut g = self.lock();
+                    let ok = g.last_show_window.is_none_or(|t| now.saturating_duration_since(t) >= SHOW_WINDOW_EVERY);
+                    if ok { g.last_show_window = Some(now); }
+                    ok
+                };
+                if go { (self.alerts)(Alert::ShowWindow); }
+                if let Some(id) = msg.get("id").and_then(Value::as_u64) { self.reply(conn, id, Ok(json!(go))); }
+            }
             Some("cancel") => {
                 let Some(ext_id) = msg.get("id").and_then(Value::as_u64) else { return };
                 let removed = { let mut g = self.lock(); let n = g.pending.len(); g.pending.retain(|p| !(p.conn == conn && p.ext_id == ext_id)); n != g.pending.len() };
@@ -426,12 +511,42 @@ impl Bridge {
             }
             d @ (Decision::Connect | Decision::Prompt { .. }) => {
                 let (kind, chain) = match d { Decision::Prompt { chain } => (PendingKind::Request, chain), _ => (PendingKind::Connect, DEFAULT_CHAIN) };
+                // A sign-in (EIP-4361) message for another site than this one is refused here,
+                // before any card: the origin is the browser's, so a mismatch is phishing.
+                if method == "personal_sign" {
+                    if let Some(text) = paired.as_deref().and_then(|p| wc::personal_sign_params(&params, p).ok()).and_then(|(_, t)| t) {
+                        if let crate::siwe::Check::Mismatch { domain, site } = crate::siwe::check(&text, Some(&origin)) {
+                            let message = crate::siwe::blocked_message(&site, &domain);
+                            let show = {
+                                let mut g = self.lock();
+                                let now = Instant::now();
+                                let due = g.blocked_shown.get(&origin).is_none_or(|t| now.saturating_duration_since(*t) >= BLOCKED_NOTICE_EVERY);
+                                if due { g.blocked_shown.insert(origin.clone(), now); }
+                                if g.blocked_shown.len() > MAX_SITES { g.blocked_shown.retain(|_, t| now.saturating_duration_since(*t) < BLOCKED_NOTICE_EVERY); }
+                                due
+                            };
+                            if show { (self.alerts)(Alert::Blocked { origin: origin.clone(), message: message.clone() }); }
+                            return self.reply_err(conn, ext_id, rpc(wc::UNAUTHORIZED, message));
+                        }
+                    }
+                }
+                let domain = registrable_domain(&origin);
                 let mut g = self.lock();
+                if kind == PendingKind::Connect {
+                    let now = Instant::now();
+                    if let Some(left) = g.backoff.get(&domain).and_then(|b| b.remaining(now)) {
+                        drop(g);
+                        return self.reply_err(conn, ext_id, rpc(USER_REJECTED, format!(
+                            "You rejected a connection from {domain} in Phone Vault. Try again in {} s.", left.as_secs().max(1))));
+                    }
+                }
                 if kind == PendingKind::Connect && g.pending.iter().any(|p| p.origin == origin && p.kind == PendingKind::Connect) {
                     drop(g);
                     return self.reply_err(conn, ext_id, rpc(ALREADY_PENDING, "A connection request from this site is already waiting in Phone Vault."));
                 }
-                if g.pending.iter().filter(|p| p.origin == origin).count() >= MAX_PENDING_PER_ORIGIN || g.pending.len() >= MAX_PENDING_TOTAL {
+                if g.pending.iter().filter(|p| p.origin == origin).count() >= MAX_PENDING_PER_ORIGIN
+                    || g.pending.iter().filter(|p| registrable_domain(&p.origin) == domain).count() >= MAX_PENDING_PER_DOMAIN
+                    || g.pending.len() >= MAX_PENDING_TOTAL {
                     drop(g);
                     return self.reply_err(conn, ext_id, rpc(LIMITED, "Too many requests are waiting in Phone Vault. Answer or reject them first."));
                 }
@@ -442,7 +557,7 @@ impl Bridge {
                 // Tell the extension this one waits for the user (badge), and bring the app forward.
                 if let Some(w) = writer { Self::send_to(&w, &json!({"type": "queued", "id": ext_id})); }
                 (self.notify)();
-                on_queued(&origin, kind == PendingKind::Connect, method);
+                (self.alerts)(Alert::Queued { origin: origin.clone(), connect: kind == PendingKind::Connect, method: method.to_string() });
             }
             Decision::Proxy { chain } => {
                 let url = self.lock().nodes.get(&chain).cloned();
@@ -488,6 +603,14 @@ impl Bridge {
                 let code = if (-32768..=4999).contains(&e.code) { e.code } else { wc::INTERNAL };
                 let message: String = e.message.chars().take(500).collect();
                 self.take_pending(id);
+                if p.kind == PendingKind::Connect && code == USER_REJECTED {
+                    // The user said no: new connects from this site family wait out a backoff.
+                    let mut g = self.lock();
+                    let domain = registrable_domain(&p.origin);
+                    let next = Backoff::after_rejection(g.backoff.get(&domain).copied(), Instant::now());
+                    g.backoff.insert(domain, next);
+                    if g.backoff.len() > MAX_SITES { let now = Instant::now(); g.backoff.retain(|_, b| b.remaining(now).is_some()); }
+                }
                 self.reply_err(p.conn, p.ext_id, rpc(code, message));
             }
             (Some(r), None) => {
@@ -528,6 +651,7 @@ impl Bridge {
             if g.sites.len() >= MAX_SITES { g.sites.remove(0); }
             g.sites.push(Site { origin: p.origin.clone(), address: paired.clone(), active: list[0], chains: list.clone(), connected_at: now_secs() });
             g.pending.retain(|x| x.id != id);
+            g.backoff.remove(&registrable_domain(&p.origin));
             self.persist(&g);
         }
         let account = verify::checksum(&paired);
@@ -883,18 +1007,29 @@ static APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
 /// pairing file, a `bridge-changed` event to the webview on every change.
 pub fn create() -> Arc<Bridge> {
     use tauri::Emitter;
-    Bridge::new(
+    Bridge::with_alerts(
         sites_path(),
         Box::new(|| pairing::load().ok().flatten()),
         Box::new(|| { if let Some(app) = APP.get() { let _ = app.emit("bridge-changed", ()); } }),
+        Box::new(on_alert),
     )
+}
+
+fn on_alert(alert: Alert) {
+    use tauri::Emitter;
+    let Some(app) = APP.get() else { return };
+    match alert {
+        Alert::Queued { origin, connect, method } => on_queued(app, &origin, connect, &method),
+        // Shown in the app (Connections); no notification, so a site cannot spam the desktop.
+        Alert::Blocked { origin, message } => { let _ = app.emit("bridge-blocked", json!({"origin": origin, "message": message})); }
+        Alert::ShowWindow => crate::tray::show_main(app),
+    }
 }
 
 /// A site's request now waits for the user: show the window, and post a notification in case
 /// the window can't come forward (another Space, full screen). Nothing from the site's request
 /// beyond its origin and method name goes into the notification.
-fn on_queued(origin: &str, connect: bool, method: &str) {
-    let Some(app) = APP.get() else { return };
+fn on_queued(app: &tauri::AppHandle, origin: &str, connect: bool, method: &str) {
     use tauri_plugin_notification::NotificationExt;
     crate::tray::show_main(app);
     let host = origin.strip_prefix("https://").unwrap_or(origin);
@@ -1081,6 +1216,28 @@ mod tests {
         assert_eq!(d("wallet_revokePermissions", json!([{"eth_accounts": {}}])), Decision::Revoke);
         // params must be an array
         assert!(matches!(d("eth_chainId", json!({})), Decision::Error(e) if e.code == wc::INVALID_PARAMS));
+    }
+
+    #[test]
+    fn registrable_domains() {
+        for (o, d) in [
+            ("https://app.uniswap.org", "uniswap.org"), ("https://uniswap.org", "uniswap.org"), ("https://a.b.c.example.com:8443", "example.com"),
+            ("https://shop.example.co.uk", "example.co.uk"), ("https://example.co.uk", "example.co.uk"), ("https://alice.github.io", "alice.github.io"),
+            ("https://x.alice.github.io", "alice.github.io"), ("http://localhost:5173", "localhost"), ("http://127.0.0.1:8080", "127.0.0.1"),
+            ("http://[::1]:3000", "[::1]"), ("https://com", "com"),
+        ] { assert_eq!(registrable_domain(o), d, "{o}"); }
+    }
+
+    #[test]
+    fn connect_backoff_doubles_to_ten_minutes() {
+        let t0 = Instant::now();
+        let b = Backoff::after_rejection(None, t0);
+        assert_eq!(b.remaining(t0), Some(Duration::from_secs(30)));
+        assert!(b.remaining(t0 + Duration::from_secs(30)).is_none());
+        let mut b = Some(b);
+        let mut seen = vec![];
+        for _ in 0..7 { let n = Backoff::after_rejection(b, t0); seen.push(n.until - t0); b = Some(n); }
+        assert_eq!(seen.iter().map(Duration::as_secs).collect::<Vec<_>>(), [60, 120, 240, 480, 600, 600, 600]);
     }
 
     #[test]
@@ -1283,11 +1440,125 @@ mod tests {
         assert_eq!(refused, MAX_PENDING_PER_ORIGIN - 1);
         assert_eq!(c.req(12, o, "eth_accounts", json!([]))["result"], json!([]));
 
+        // a sign-in message for another site never reaches the user, and the app is told once
+        c.send(json!({"type": "request", "id": 30, "origin": o, "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.approve_connect(bridge.pending()[0].id, &[1]).unwrap();
+        assert_eq!(c.response()["id"], 30);
+        let siwe = |domain: &str| format!("{domain} wants you to sign in with your Ethereum account:\n{ME}\n\nURI: https://{domain}\nVersion: 1\nChain ID: 1\nNonce: 1\nIssued At: 2021-09-30T16:25:24Z");
+        let r = c.req(31, o, "personal_sign", json!([siwe("opensea.io"), ME]));
+        assert_eq!(r["error"]["code"], wc::UNAUTHORIZED);
+        assert!(r["error"]["message"].as_str().unwrap().starts_with("Blocked: app.example.org asked you to sign in to opensea.io"), "{r}");
+        assert!(bridge.pending().is_empty());
+        let _ = c.req(32, o, "personal_sign", json!([siwe("opensea.io"), ME]));
+        // the matching site's own sign-in is queued as usual
+        c.send(json!({"type": "request", "id": 33, "origin": o, "method": "personal_sign", "params": [siwe("app.example.org"), ME]}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.reject(bridge.pending()[0].id, 4001, "no").unwrap();
+        assert_eq!(c.response()["id"], 33);
+        bridge.revoke(o);
+        loop { let v = c.recv(); if v["name"] == "accountsChanged" { break; } }
+
         // closing the connection drops what it left waiting
         c.send(json!({"type": "request", "id": 13, "origin": o, "method": "eth_requestAccounts", "params": []}));
         wait_for(|| bridge.pending().len() == 1);
         drop(c);
         wait_for(|| bridge.pending().is_empty() && bridge.connection_count() == 0);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    fn alert_log() -> (Arc<Mutex<Vec<Alert>>>, Alerts) {
+        let log = Arc::new(Mutex::new(vec![]));
+        let l = log.clone();
+        (log, Box::new(move |a| l.lock().unwrap().push(a)))
+    }
+
+    #[test]
+    fn rejected_connects_back_off_per_domain_without_alerts() {
+        let d = std::env::temp_dir().join(format!("pvk{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let sock = d.join("k.sock");
+        let (log, alerts) = alert_log();
+        let bridge = Bridge::with_alerts(None, Box::new(|| Some(ME.to_string())), Box::new(|| {}), alerts);
+        bridge.serve(&sock).unwrap();
+        let mut c = Client::connect(&sock, &format!("chrome-extension://{CHROME_EXTENSION_ID}/"));
+        let o = "https://app.spam.example";
+        let queued = |log: &Arc<Mutex<Vec<Alert>>>| log.lock().unwrap().iter().filter(|a| matches!(a, Alert::Queued { .. })).count();
+
+        // first connect: queued, alerted; the user rejects it
+        c.send(json!({"type": "request", "id": 1, "origin": o, "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(queued(&log), 1);
+        bridge.reject(bridge.pending()[0].id, 4001, "User rejected the request.").unwrap();
+        assert_eq!(c.response()["error"]["code"], 4001);
+
+        // during the backoff: refused at once, nothing queued, no window or notification —
+        // from the same origin and from another subdomain of the same site
+        for (id, origin) in [(2, o), (3, "https://other.spam.example"), (4, o)] {
+            let r = c.req(id, origin, "eth_requestAccounts", json!([]));
+            assert_eq!(r["error"]["code"], 4001, "{origin}");
+            assert!(r["error"]["message"].as_str().unwrap().contains("spam.example"));
+        }
+        assert!(bridge.pending().is_empty());
+        assert_eq!(queued(&log), 1, "no alert during the backoff");
+        // other sites and non-connect calls are unaffected
+        assert_eq!(c.req(5, o, "eth_chainId", json!([]))["result"], "0x2105");
+        c.send(json!({"type": "request", "id": 6, "origin": "https://fine.example", "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.reject(bridge.pending()[0].id, -32603, "not a user rejection").unwrap();
+        assert_eq!(c.response()["id"], 6);
+        c.send(json!({"type": "request", "id": 7, "origin": "https://fine.example", "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.reject(bridge.pending()[0].id, -32603, "x").unwrap();
+        assert_eq!(c.response()["id"], 7);
+
+        // the backoff runs out: asked again, rejected again → the next penalty doubled
+        let dom = registrable_domain(o);
+        assert_eq!(bridge.lock().backoff[&dom].next, Duration::from_secs(60));
+        bridge.lock().backoff.get_mut(&dom).unwrap().until = Instant::now();
+        c.send(json!({"type": "request", "id": 8, "origin": o, "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.reject(bridge.pending()[0].id, 4001, "no").unwrap();
+        assert_eq!(c.response()["id"], 8);
+        let b = bridge.lock().backoff[&dom];
+        assert!(b.remaining(Instant::now()).unwrap() > Duration::from_secs(50), "second rejection: 60 s");
+        assert_eq!(b.next, Duration::from_secs(120));
+
+        // an approval resets it
+        bridge.lock().backoff.get_mut(&dom).unwrap().until = Instant::now();
+        c.send(json!({"type": "request", "id": 9, "origin": o, "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.approve_connect(bridge.pending()[0].id, &[8453]).unwrap();
+        assert_eq!(c.response()["id"], 9);
+        assert!(!bridge.lock().backoff.contains_key(&dom));
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn pending_cap_per_registrable_domain_and_show_window() {
+        let d = std::env::temp_dir().join(format!("pvd{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let sock = d.join("d.sock");
+        let (log, alerts) = alert_log();
+        let bridge = Bridge::with_alerts(None, Box::new(|| Some(ME.to_string())), Box::new(|| {}), alerts);
+        bridge.serve(&sock).unwrap();
+        let mut c = Client::connect(&sock, &format!("chrome-extension://{CHROME_EXTENSION_ID}/"));
+        // one connect from each of many subdomains: only MAX_PENDING_PER_DOMAIN wait
+        for i in 0..MAX_PENDING_PER_DOMAIN as u64 {
+            c.send(json!({"type": "request", "id": i, "origin": format!("https://s{i}.flood.example"), "method": "eth_requestAccounts", "params": []}));
+        }
+        wait_for(|| bridge.pending().len() == MAX_PENDING_PER_DOMAIN);
+        assert_eq!(c.req(100, "https://s99.flood.example", "eth_requestAccounts", json!([]))["error"]["code"], LIMITED);
+        // another site still gets through
+        c.send(json!({"type": "request", "id": 101, "origin": "https://other.example", "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == MAX_PENDING_PER_DOMAIN + 1);
+
+        // the popup's "Open Phone Vault Companion": answered, throttled
+        c.send(json!({"type": "show_window", "id": 500}));
+        assert_eq!(c.response()["result"], true);
+        c.send(json!({"type": "show_window", "id": 501}));
+        assert_eq!(c.response()["result"], false, "throttled");
+        assert_eq!(log.lock().unwrap().iter().filter(|a| **a == Alert::ShowWindow).count(), 1);
         let _ = std::fs::remove_dir_all(d);
     }
 

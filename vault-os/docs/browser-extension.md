@@ -74,8 +74,12 @@ side:
    subscriptions and everything unknown are refused (`4200`).
 7. **Bounded.** Frames: 512 KiB in, just under 1 MiB out (Chrome's host limit); the page and the
    worker refuse requests over 384 KiB before sending. Rate: 60-request bursts, 20/s sustained, per
-   site in the companion and per tab in the worker. At most 4 requests waiting per site and 16 in
-   total; 16 node calls in flight. The webview can only answer a request with what the verified
+   site in the companion and per tab in the worker. At most 4 requests waiting per site, 8 per
+   registrable domain (a site's subdomains together; simplified eTLD+1: the last two labels, three
+   under a short list of two-label suffixes such as `co.uk` or `github.io`) and 16 in total; 16 node
+   calls in flight. After the user rejects a connection, new connection requests from that
+   registrable domain are refused at once with `4001` and no window or notification for 30 s,
+   doubling on each further rejection up to 10 minutes; an approved connection resets it. The webview can only answer a request with what the verified
    pipeline produces (a 32-byte transaction hash, a 65-byte signature, or `null` for a network
    switch), and never supplies accounts.
 
@@ -112,6 +116,11 @@ parses or acts on requests; if the companion is not running it answers "not runn
   read and alter the page the user sees, including our provider's answers).
 - Phishing by a real origin: `app-uniswap.help` is shown as exactly that. The connection card
   states the address comes from the browser; it does not judge it.
+- Sign-in phishing: a `personal_sign` whose text is a Sign-In with Ethereum (EIP-4361) message for
+  another domain than the asking origin (first-line domain, or the `URI:` host) is refused before
+  any card (`4100`, "Blocked: <site> asked you to sign in to <domain>…"), and the app shows the
+  same line. WalletConnect requests get the same check against Verify's origin when Verify says
+  VALID; otherwise the card carries a DANGER note that the asking site is unverified.
 - A site the user connected asking for many signatures: each one is a card on the Mac and a review
   on the phone; rate and queue limits keep it bounded, the user rejects.
 - Read-only node calls from connected sites go to the user's configured node, which therefore sees
