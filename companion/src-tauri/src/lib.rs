@@ -218,36 +218,6 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
 }
 
 #[derive(Serialize)]
-struct SignedTx { raw: String, hash: String, signer: String }
-
-/// Hand the quote to the phone. The user reviews and approves ON THE PHONE; this waits up to 3 minutes.
-#[tauri::command]
-async fn sign(q: Quote) -> CmdResult<SignedTx> {
-    blocking(move || {
-        let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        attest::require_ok(&pinned)?;
-        let request = pinned_request(json!({
-            "id": uuid::Uuid::new_v4().to_string(), "method": "signEip1559",
-            "chainId": q.chain_id, "nonce": q.nonce, "maxPriorityFeePerGas": q.max_priority_fee_per_gas,
-            "maxFeePerGas": q.max_fee_per_gas, "gasLimit": q.gas_limit, "to": q.to, "value": q.value, "data": q.data,
-        }), &pinned);
-        let response = ask_phone(request.clone(), Duration::from_secs(300))?;
-        let v = verify::validate_signature(&request, &response, &pinned).map_err(|e| e.0)?;
-        Ok(SignedTx { raw: v.raw_hex, hash: v.tx_hash, signer: verify::checksum(&v.signer) })
-    }).await
-}
-
-#[tauri::command]
-async fn broadcast(rpc_url: String, raw: String, expected_hash: String) -> CmdResult<String> {
-    blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let hash = rpc.send_raw(&raw).map_err(|e| e.0)?;
-        if hash.to_ascii_lowercase() != expected_hash.to_ascii_lowercase() { return Err(format!("node returned hash {hash}, expected {expected_hash}")); }
-        Ok(hash)
-    }).await
-}
-
-#[derive(Serialize)]
 struct Receipt { mined: bool, success: bool, block: u128 }
 
 #[tauri::command]
@@ -269,7 +239,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, sign, broadcast, receipt, default_rpc,
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, receipt, default_rpc,
             send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
             history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
             replace::replacement_quote,
