@@ -143,22 +143,31 @@ def cmd_build(a):
     fee = rate * estimate_vsize(len(vin), 2)
     send = total // 2
     change = total - send - fee
-    if send < DUST or change < DUST:
-        sys.exit(f"coin too small to split: {total} sats at {rate} sat/vB (fee {fee})")
-    vout = [TransactionOutput(send, script.p2wpkh(k1.key)), TransactionOutput(change, script.p2wpkh(kc.key))]
+    sweep = send < DUST or change < DUST
+    if sweep:
+        # Too small to split into payment + change (e.g. a 1,000-sat faucet drip): send the whole
+        # coin to …/0/1 with no change output. Still a full sign → verify → broadcast round trip.
+        fee = rate * estimate_vsize(len(vin), 1)
+        send, change = total - fee, 0
+        if send < DUST:
+            sys.exit(f"coin too small even to sweep: {total} sats at {rate} sat/vB (fee {fee})")
+        vout = [TransactionOutput(send, script.p2wpkh(k1.key))]
+    else:
+        vout = [TransactionOutput(send, script.p2wpkh(k1.key)), TransactionOutput(change, script.p2wpkh(kc.key))]
     psbt = PSBT(Transaction(version=2, vin=vin, vout=vout, locktime=0))
     for i, (prev, out) in enumerate(inputs_meta):
         psbt.inputs[i].witness_utxo = out
         psbt.inputs[i].non_witness_utxo = prev
         psbt.inputs[i].bip32_derivations[k0.key] = DerivationPath(fp, path + [0, 0])
     psbt.outputs[0].bip32_derivations[k1.key] = DerivationPath(fp, path + [0, 1])
-    psbt.outputs[1].bip32_derivations[kc.key] = DerivationPath(fp, path + [1, 0])
+    if not sweep:
+        psbt.outputs[1].bip32_derivations[kc.key] = DerivationPath(fp, path + [1, 0])
     open(a.out, "w").write(psbt.to_string() + "\n")
     plan = {
         "network": "signet", "from": addr0, "inputs": [f"{u['txid']}:{u['vout']}" for u in coins],
         "total_in": total, "fee_rate": rate, "fee": fee,
-        "outputs": [{"address": address_of(k1), "value": send, "path": "0/1"},
-                    {"address": address_of(kc), "value": change, "path": "1/0 (change)"}],
+        "outputs": [{"address": address_of(k1), "value": send, "path": "0/1"}]
+                   + ([] if sweep else [{"address": address_of(kc), "value": change, "path": "1/0 (change)"}]),
         "unsigned_txid": psbt.tx.txid().hex(),
         "psbt_sha256": hashlib.sha256(psbt.serialize()).hexdigest(),
     }

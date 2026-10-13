@@ -111,9 +111,19 @@ if [[ ! -s "$STATE/txid" ]]; then
   wait_screen "$TITLE"
   expect_below "Bitcoin SIGNET"
   expect_below "YOUR OWN ADDRESS ✓"
-  expect_below "CHANGE BACK TO YOUR WALLET"
+  if [[ "$("$PY" -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["outputs"]))' "$STATE/plan.json")" == 2 ]]; then
+    expect_below "CHANGE BACK TO YOUR WALLET"
+  else
+    echo "note: coin too small to split: whole coin sent to …/0/1, no change output"
+  fi
   expect_below "NETWORK FEE"
-  expect_not "DANGER"
+  if [[ "$("$PY" -c 'import json,sys; p=json.load(open(sys.argv[1])); print(int(p["fee"] * 10 > p["outputs"][0]["value"]))' "$STATE/plan.json")" == 1 ]]; then
+    # A tiny faucet coin: the fee is more than 10% of what is sent, so the phone must say so.
+    expect_below "DANGER"
+    echo "note: fee is over 10% of the amount sent; the phone flagged it as DANGER (correct)"
+  else
+    expect_not "DANGER"
+  fi
   approve_review
   finish_client sign 0
   [[ -s "$STATE/signed.psbt" ]] || die "no signed PSBT written"
