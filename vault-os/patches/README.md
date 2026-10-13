@@ -137,11 +137,37 @@ release-blocking.
 The Crosshatch kernel patch adds a fragment merged after the stock
 `b1c1_defconfig`. It disables Wi-Fi, Bluetooth, NFC, the Qualcomm modem
 firmware loader, cellular RMNET/IPA, GLINK test/userspace packet endpoints,
-camera, sensor-hub, and unused compute-DSP drivers. It also changes DWC3 from
-dual-role to gadget-only and removes every configfs USB function except Android
-Open Accessory and FunctionFS (the latter is retained only for gated userdebug
-ADB). The target-files gate evaluates `META/kernel_configs.txt`, so a future
-upstream config change cannot silently re-enable these drivers.
+camera, sensor-hub, and unused compute-DSP drivers, and removes every configfs
+USB function except Android Open Accessory and FunctionFS (the latter is
+retained only for gated userdebug ADB). It is symbol-for-symbol the union of the
+boot-tested dev-ladder slices A-D (rung 2d-d). DWC3 stays dual-role: a
+gadget-only kernel booted but never enumerated on USB (rung 2d-d first attempt,
+2026-09-28); the host-only mode is forbidden, and host/source roles are refused
+in user space instead (device patches 0002, 0003, 0027-0029 and the sink pin in
+`init.phonevault.usb.rc`). The target-files gate evaluates
+`META/kernel_configs.txt`, so a future upstream config change cannot silently
+re-enable these drivers.
+
+Device patches 0027-0029 fold the dev-ladder rung-3 USB lock-down (boot-tested
+2026-10-10) into the release series: the gadget HAL appends no Qualcomm vendor
+functions (diag/serial/rmnet via `vendor.usb.config` or the usbradio boot mode),
+a failed port mode switch falls back to `sink` instead of dual-role and the port
+status reports UFP-only with no role or mode changes, and the dwc3 `id` node
+(writing 0 forces host mode) stays root-only.
+
+## Recovery
+
+`bootable-recovery/0001-recovery-no-unverified-install-or-adb-on-user-builds.patch`
+(Phone Vault) makes recovery on a user build (`ro.debuggable=0`) refuse packages
+that fail signature verification, undeclared downgrades and SPL downgrades
+without offering "Install anyway?", remove the "Enable ADB" and system
+mount/format items, and never start recovery adbd (the explicit "Apply from
+ADB" sideload remains for signed OTAs). Upstream keyed these on the
+`ro.build.type` string alone. Userdebug development images, which the dev
+ladder sideloads with the install-anyway tap, keep the upstream prompts. The
+same patch applies to the Lineage 22.2 crosshatch tree and, with line offsets
+only, to the Lineage 24.0 (Android 17) bluejay tree. `install-overlay.sh`
+applies it with the other release patches.
 
 `install-overlay.sh` records the exact patch bytes under `.repo`, but it also
 checks whether a recorded patch is forward-applicable and repairs it when

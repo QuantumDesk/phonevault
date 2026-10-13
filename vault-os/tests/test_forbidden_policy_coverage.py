@@ -43,11 +43,65 @@ DEVICE_AUDIT = ROOT / "scripts/audit-development-device.sh"
 PRODUCT_CONFIG = ROOT / "vendor/phonevault/config/common.mk"
 
 blueprint = BLUEPRINT.read_text(encoding="utf-8")
-overrides_block = re.search(r"overrides:\s*\[(.*?)\]", blueprint, re.DOTALL)
+# Comments may quote module names or brackets (`required: ["TrebuchetQuickStep"]`); only
+# active entries count, exactly as Soong, build-rung.sh and check-overrides.sh read them.
+blueprint_code = "\n".join(
+    line for line in blueprint.splitlines() if not line.strip().startswith("//")
+)
+overrides_block = re.search(r"overrides:\s*\[(.*?)\]", blueprint_code, re.DOTALL)
 if overrides_block is None:
     raise SystemExit("PhoneVault overrides list was not found")
 
 overrides = re.findall(r'"([^"]+)"', overrides_block.group(1))
+if len(overrides) != len(set(overrides)):
+    raise SystemExit("PhoneVault overrides list has duplicate entries")
+
+# The dev ladder proved these modules are required for the appliance to boot or to work
+# (vault-os/dev-ladder/README.md, rung 4 "Kept, and why"; vault-os/docs/release-config.md).
+# Removing one again must be a deliberate, boot-tested change to this list, not an edit of
+# Android.bp alone.
+ladder_required_modules = {
+    "FusedLocation",  # LocationManagerService: direct-boot fused provider required (DEBUG-39)
+    "LatinIME",  # the only IME; SystemUI's step-up PIN prompt needs it
+    "ModuleMetadata",  # system_server boot loop without it (rung 4b, 2026-10-11)
+    "PackageInstaller",  # PackageManagerService requires exactly one installer
+    "PermissionController",
+    "Settings",  # FallbackHome, confirm-credential, device-admin UI
+    "SettingsProvider",
+    "SystemUI",
+}
+overridden_required = sorted(ladder_required_modules.intersection(overrides))
+if overridden_required:
+    raise SystemExit(
+        "release overrides remove modules the dev ladder proved required: "
+        + ", ".join(overridden_required)
+    )
+required_policy_paths = [
+    f"{partition}/{kind}/{module}/{module}.apk"
+    for module in sorted(ladder_required_modules)
+    for partition in ("SYSTEM", "SYSTEM_EXT", "PRODUCT")
+    for kind in ("app", "priv-app")
+]
+
+# Every override of the boot-tested ladder rung must also be in the release list: the release
+# never ships less hardening than the newest rung that passed on a phone.
+LADDER_BLUEPRINT = ROOT / "dev-ladder/rung-4b/Android.bp"
+ladder_code = "\n".join(
+    line
+    for line in LADDER_BLUEPRINT.read_text(encoding="utf-8").splitlines()
+    if not line.strip().startswith("//")
+)
+ladder_block = re.search(r"overrides:\s*\[(.*?)\]", ladder_code, re.DOTALL)
+if ladder_block is None:
+    raise SystemExit("rung-4b overrides list was not found")
+missing_ladder_overrides = sorted(
+    set(re.findall(r'"([^"]+)"', ladder_block.group(1))).difference(overrides)
+)
+if missing_ladder_overrides:
+    raise SystemExit(
+        "release overrides omit boot-tested rung-4b removals: "
+        + ", ".join(missing_ladder_overrides)
+    )
 patterns = [
     re.compile(line, re.IGNORECASE)
     for line in POLICY.read_text(encoding="utf-8").splitlines()
@@ -71,6 +125,15 @@ if uncovered:
     raise SystemExit(1)
 
 print(f"Forbidden-artifact policy covers all {len(overrides)} module overrides.")
+
+forbidden_required = sorted(
+    path for path in required_policy_paths if any(p.search(path) for p in patterns)
+)
+if forbidden_required:
+    print("artifact policy forbids modules the dev ladder proved required:", file=sys.stderr)
+    print("\n".join(forbidden_required), file=sys.stderr)
+    raise SystemExit(1)
+print("Ladder-required modules are neither overridden nor forbidden.")
 
 required_network_removals = {
     "bugreport",

@@ -35,6 +35,12 @@ on boot
     # devices as a host. AOA uses the desktop as host and Phone Vault as UFP.
     write /sys/class/typec/port0/port_type sink
 
+# Re-assert after boot in case anything reset the port type while services
+# started (dev ladder rung 3). tcpm then presents Rd only: the phone charges and
+# is a USB device, never sources VBUS or hosts, and rejects DR/PR swaps.
+on property:sys.boot_completed=1
+    write /sys/class/typec/port0/port_type sink
+
 on property:sys.usb.config=none
     write /config/usb_gadget/g1/UDC "none"
     rm /config/usb_gadget/g1/configs/b.1/f1

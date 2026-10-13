@@ -12,6 +12,13 @@ BOARD_AVB_KEY_PATH := vendor/phonevault/keys/avb.pem
 BOARD_AVB_VBMETA_SYSTEM_ALGORITHM := SHA256_RSA4096
 BOARD_AVB_VBMETA_SYSTEM_KEY_PATH := vendor/phonevault/keys/avb.pem
 
+# Project-owned, strictly increasing AVB rollback index (release-version.mk)
+# instead of the inherited security-patch timestamp. sign-release.sh refuses a
+# release whose index does not exceed the previous signed release manifest.
+include vendor/phonevault/config/release-version.mk
+BOARD_AVB_ROLLBACK_INDEX := $(PHONEVAULT_AVB_ROLLBACK_INDEX)
+BOARD_AVB_VBMETA_SYSTEM_ROLLBACK_INDEX := $(PHONEVAULT_AVB_ROLLBACK_INDEX)
+
 # The upstream common device tree deliberately accepts both Pixel 3 XL
 # (crosshatch) and Pixel 3 (blueline). Phone Vault images are built and tested
 # only for crosshatch, so fastboot/OTA metadata must fail closed on blueline.
@@ -26,5 +33,8 @@ DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := \
 
 # Merge the appliance fragment after Crosshatch's stock b1c1_defconfig. This
 # removes hardware attack surface in the kernel rather than relying solely on
-# absent userspace services and firmware.
+# absent userspace services and firmware. The fragment equals the boot-tested
+# dev-ladder slices A-D (rung 2d-d): DWC3 stays dual-role (a gadget-only build
+# never enumerated on USB); host/source roles are refused by the USB HALs and
+# the Type-C port is pinned to sink by init instead.
 TARGET_KERNEL_CONFIG += phonevault.config

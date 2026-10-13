@@ -21,6 +21,8 @@ PATCH_STATE="${SOURCE}/.repo/phonevault-patches"
   /workspace/phone-vault
 "${OVERLAY}/scripts/verify-patch-provenance.sh" \
   /workspace/phone-vault
+"${OVERLAY}/scripts/verify-release-source.sh" \
+  /workspace/phone-vault
 
 apply_versioned_patch() {
   local source_root="$1"
@@ -85,6 +87,15 @@ for kernel_patch in "${OVERLAY}"/patches/kernel-crosshatch/*.patch; do
   patch_name="$(basename "${kernel_patch}")"
   apply_versioned_patch "${KERNEL_SOURCE}" "${kernel_patch}" \
     "${PATCH_STATE}/kernel-${patch_name}" "crosshatch kernel ${patch_name}"
+done
+
+# Recovery: on user builds (ro.debuggable=0) no "Install anyway?" for unverified
+# or downgrade packages and no recovery ADB. Userdebug keeps upstream behavior.
+RECOVERY_SOURCE="${SOURCE}/bootable/recovery"
+for recovery_patch in "${OVERLAY}"/patches/bootable-recovery/*.patch; do
+  patch_name="$(basename "${recovery_patch}")"
+  apply_versioned_patch "${RECOVERY_SOURCE}" "${recovery_patch}" \
+    "${PATCH_STATE}/recovery-${patch_name}" "recovery ${patch_name}"
 done
 
 for appliance_patch in "${OVERLAY}"/patches/appliance/*.patch; do

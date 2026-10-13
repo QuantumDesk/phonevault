@@ -178,7 +178,7 @@ for required_kernel_setting in \
     'CONFIG_MSM_GLINK_SPI_XPRT=y' \
     'CONFIG_USB_GADGET=y' \
     'CONFIG_USB_DWC3=y' \
-    'CONFIG_USB_DWC3_GADGET=y' \
+    'CONFIG_USB_DWC3_DUAL_ROLE=y' \
     'CONFIG_USB_DWC3_MSM=y' \
     'CONFIG_USB_CONFIGFS=y' \
     'CONFIG_USB_CONFIGFS_F_ACC=y'; do
@@ -536,6 +536,22 @@ if [[ -n "${adb_setup_triggers}" && \
       "${adb_setup_triggers}" != 'on early-boot && property:ro.debuggable=1' ]]; then
   echo "ADB endpoint setup is not confined to immutable userdebug policy" >&2
   printf '%s\n' "${adb_setup_triggers}" >&2
+  exit 1
+fi
+
+# DWC3 stays dual-role in the kernel (dev ladder rung 2d-d), so the dwc3-msm
+# "id" node must stay root-only: writing 0 to it forces the controller into
+# host mode underneath the Type-C port policy (rung 3 / device patch 0029).
+dwc3_id_access="$({
+  while IFS= read -r init_rc; do
+    unzip -p "${TARGET_FILES}" "${init_rc}" |
+      grep -E '^[[:space:]]*(chown|chmod)[[:space:]].*/a600000\.ssusb/id([[:space:]]|$)' |
+      sed "s|^|${init_rc}:|"
+  done <<<"${installed_init_rcs}"
+} || true)"
+if [[ -n "${dwc3_id_access}" ]]; then
+  echo "init grants non-root access to the DWC3 host-mode id node:" >&2
+  printf '%s\n' "${dwc3_id_access}" >&2
   exit 1
 fi
 

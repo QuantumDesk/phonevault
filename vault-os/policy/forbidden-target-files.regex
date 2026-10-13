@@ -2,13 +2,22 @@
 # Every non-comment line is a release-blocking artifact class.
 
 # Consumer applications and alternate launchers.
-/(Aperture|AudioFX|AvatarPicker|Backgrounds|BasicDreams|BlockedNumberProvider|BookmarkProvider|Browser2|BuiltInPrintService|Calendar[^/]*|CallLogBackup|Camelot|DeskClock|DeviceDiagnostics|DocumentsUI|DownloadProvider[^/]*|DynamicSystemInstallationService|E2eeContactKeysProvider|EasterEgg|Email|Etar|ExactCalculator|ExternalStorageProvider|Gallery2|Glimpse|Jelly|LatinIME|LineageParts|LineageSetupWizard|ManagedProvisioning|MtpService|Music[^/]*|PackageInstaller|PrintRecommendationService|PrintSpooler|Profiles|Recorder|Seedvault|Settings|SetupWizard|SharedStorageBackup|SimAppDialog|SoundPicker|ThemePicker|ThemesStub|Trebuchet[^/]*|Twelve|Updater|WallpaperPicker[^/]*)/
+/(Aperture|AudioFX|AvatarPicker|Backgrounds|BasicDreams|BlockedNumberProvider|BookmarkProvider|Browser2|BuiltInPrintService|Calendar[^/]*|CallLogBackup|Camelot|DeskClock|DeviceDiagnostics|DocumentsUI|DownloadProvider[^/]*|DynamicSystemInstallationService|E2eeContactKeysProvider|EasterEgg|Email|Etar|ExactCalculator|ExternalStorageProvider|Gallery2|Glimpse|Jelly|LineageParts|LineageSetupWizard|ManagedProvisioning|MtpService|Music[^/]*|PrintRecommendationService|PrintSpooler|Profiles|Recorder|Seedvault|SetupWizard|SharedStorageBackup|SimAppDialog|SoundPicker|ThemePicker|ThemesStub|Trebuchet[^/]*|Twelve|Updater|WallpaperPicker[^/]*)/
 /(AdServicesApk|SdkSandbox|Bluetooth|DeviceLockController|HealthConnectBackupRestore|HealthConnectController|MediaProvider|Photopicker|OnDevicePersonalization|FederatedCompute|ServiceUwbResources|ServiceWifiResources|WifiDialog)(/|\.apk$)
 /com\.android\.appsearch\.apk$
 /wpa_supplicant_mainline(\.|/|$)
 /(mediatranscoding|media_provider)(\.|/|$)
 /(AmbientSensePrebuilt|AppDirectedSMSService|CarrierServices|CarrierSettings|CarrierWifi|ConnMO|DCMO|DMService|DeviceIntelligenceNetworkPrebuilt|DevicePersonalizationPrebuiltPixel3|DiagMon|EuiccGoogle|EuiccSupportPixel[^/]*|HardwareInfo|HotwordEnrollment[^/]*|MobileFeliCa[^/]*|MyVerizonServices|OBDM_Permissions|OemDmTrigger|PixelCameraServicesCrosshatch|SprintDM|SprintHM|TetheringEntitlement|USCCDM|VZWAPNLib|WfcActivation)/
 /CarrierSettings/
+
+# Boot-tested app strip (dev ladder rungs 4a/4b): launcher remnants and icon
+# packs, Settings satellites, telephony UI, backup transports, Lineage/Pixel
+# extras and framework satellites bound only on explicit request. Settings,
+# PackageInstaller, LatinIME, FusedLocation and ModuleMetadata are required
+# (rung 4) and deliberately not listed.
+/(AccessibilityMenu|ApertureLensLauncher|BackupRestoreConfirmation|BluetoothMidiService|CertInstaller|CompanionDeviceManager|Contacts|CredentialManager|ElmyraService|GoogleParts|HTMLViewer|Launcher3[^/]*|LiveWallpapersPicker|LocalContactsBackup|LocalTransport|PartnerBookmarksProvider|PhotoTable|QuickAccessWallet|SettingsIntelligence|StatementService|Stk|StorageManager|WallpaperBackup|com\.qualcomm\.qti\.services\.secureui|messaging)/
+/(IconPack[^/]*LauncherOverlay|DocumentsUIOverlay)(\.apk$|/)
+/android\.software\.webview[^/]*(\.|/|$)
 
 # Remote shells and general-purpose network clients/servers.
 /(bash|curl|htop|nano|rsync|scp|sftp|ssh|ssh-keygen|sshd|sshd_config|start-ssh|vim)(\.|/|$)
@@ -48,7 +57,7 @@
 /init\.radio\.sh$
 
 # Wi-Fi, Bluetooth, NFC, GNSS, and camera runtime services.
-/(Bluetooth|DeviceAsWebcam|FusedLocation|NfcNci|SecureElement|Tag|cameraserver|cnss-daemon|cnss_diag|easelmanagerd|libgnss|libgps\.utils|liblocation_api|wificond|wpa_supplicant|hostapd)(\.|/|$)
+/(Bluetooth|DeviceAsWebcam|NfcNci|SecureElement|Tag|cameraserver|cnss-daemon|cnss_diag|easelmanagerd|libgnss|libgps\.utils|liblocation_api|wificond|wpa_supplicant|hostapd)(\.|/|$)
 /android\.hardware\.(bluetooth|camera|gnss|nfc|wifi)[^/]*(\.|/|$)
 /(android\.hardware\.drm-service\.clearkey|android\.hardware\.drm@1\.3-service\.widevine|android\.hardware\.drm@1\.3\.vendor)(\.|/|$)
 /(android\.hardware\.secure_element@1\.1-service-disabled|camera\.device@3\.2-impl|camera\.sdm845)(\.|/|$)
