@@ -313,8 +313,14 @@ fn unlocked_pixel3_is_development_and_says_so() {
     let mut info = chain::verify(&pem_chain(BLUELINE_SB), &roots(), NOW).unwrap();
     info.leaf_p256_point = Some(vec![4u8; 65]);
     let challenge = b"challenge".to_vec();
-    // release-signed app on an unlocked phone → DEVELOPMENT, with the plain headline
+    // release-signed app on an unlocked phone: FAIL without Developer mode (an unlocked bootloader
+    // is never accepted from a phone someone else set up) …
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    assert_eq!(a.verdict, Verdict::Fail, "{:?}", a);
+    assert!(a.problems.iter().any(|p| p == policy::UNLOCKED_PROBLEM), "{:?}", a.problems);
+    assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
+    // … and DEVELOPMENT with it, with the plain headline
+    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
     assert_eq!(a.headline, policy::UNLOCKED_HEADLINE);
     assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
@@ -323,11 +329,12 @@ fn unlocked_pixel3_is_development_and_says_so() {
     assert_eq!(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false).verdict, Verdict::Fail);
     let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
+    assert_eq!(a.headline, policy::UNLOCKED_HEADLINE, "today's dev phones (Pixel 3 XL: unlocked, dev-signed app) look exactly as before");
     assert!(a.cautions.iter().any(|c| c.contains("development key")));
     assert_eq!(a.details.unwrap().app_signer_kind, "development");
     // old patch level on a dev phone is a note, not a failure
     let mut p2 = policy_for(&info, true); p2.min_os_patch_level = 202_501;
-    let a = evaluate(&info, &p2, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    let a = evaluate(&info, &p2, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
     assert!(a.notes.iter().any(|n| n.contains("2019-08")), "{:?}", a.notes);
 }
@@ -336,7 +343,8 @@ fn unlocked_pixel3_is_development_and_says_so() {
 fn tee_attestation_is_never_genuine() {
     let info = chain::verify(&pem_chain(BLUELINE_TEE), &roots(), NOW).unwrap();
     let challenge = info.description.challenge.clone();
-    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), false);
+    // (the sample phone is unlocked: Developer mode on, so the TEE caution is what is tested)
+    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
     assert!(a.cautions.iter().any(|c| c.contains("TEE")));
     // and claiming StrongBox for a TEE chain fails

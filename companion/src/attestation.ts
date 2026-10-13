@@ -57,12 +57,48 @@ function row(k: string, v: Node | string | null | undefined, title?: string) {
   return h("div", { class: "set-row" }, h("span", { class: "muted" }, k), h("span", { class: "att-val", title: title ?? "" }, v ?? "—"));
 }
 
-/** Settings → Device. */
-export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: boolean, recheck: () => void, setDevMode: (on: boolean) => void): HTMLElement {
+/** The phrase Settings → Device asks for before Developer mode turns on (Rust checks it too). */
+export const DEV_CONFIRMATION = "I FLASHED THIS PHONE";
+/** Settings → Device's Developer-mode form: open, and the last error. Survives drawer re-renders. */
+const devForm = { open: false, error: null as string | null, busy: false };
+
+/** Settings → Device. `setDevMode` asks Rust (the only place Developer mode is stored). */
+export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: boolean, recheck: () => void, setDevMode: (on: boolean, confirmation: string | null) => Promise<void>, rerender: () => void): HTMLElement {
   const a = c.report;
   const d = a?.details ?? null;
-  const toggle = h("input", { type: "checkbox", role: "switch", checked: devMode });
-  toggle.addEventListener("change", () => setDevMode((toggle as HTMLInputElement).checked));
+  const change = async (on: boolean, confirmation: string | null) => {
+    devForm.busy = true; devForm.error = null; rerender();
+    try { await setDevMode(on, confirmation); devForm.open = false; }
+    catch (e) { devForm.error = typeof e === "string" ? e : String((e as { message?: unknown })?.message ?? e); }
+    finally { devForm.busy = false; rerender(); }
+  };
+  let devControls: (Node | null)[];
+  if (devMode) {
+    devControls = [
+      h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "att-badge att-dev" }, "On")),
+      h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones with an unlocked bootloader or the development-signed app are accepted as Development (never Genuine). Turn it off for real funds."),
+      h("div", { class: "row gap" }, h("button", { disabled: devForm.busy, onclick: () => change(false, null) }, "Turn off Developer mode")),
+    ];
+  } else if (!devForm.open) {
+    devControls = [
+      h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "muted" }, "Off")),
+      h("p", { class: "muted small" }, "Off: only locked Phone Vault firmware with the release-signed app passes. Developer mode is only for a phone you flashed yourself."),
+      h("div", { class: "row gap" }, h("button", { class: "ghost", onclick: () => { devForm.open = true; devForm.error = null; rerender(); } }, "Developer mode…")),
+    ];
+  } else {
+    const input = h("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", placeholder: DEV_CONFIRMATION, "aria-label": "Confirmation phrase" }) as HTMLInputElement;
+    const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => change(true, input.value) }, "Turn on") as HTMLButtonElement;
+    input.addEventListener("input", () => { turnOn.disabled = devForm.busy || input.value.trim() !== DEV_CONFIRMATION; });
+    devControls = [
+      h("div", { class: "callout", style: "border-color:color-mix(in srgb, var(--danger) 45%, transparent)" },
+        h("strong", null, "Only for a phone you flashed yourself"),
+        h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
+        h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),
+      input,
+      devForm.error ? h("p", { class: "inline-error" }, icon("alert", 15), devForm.error) : null,
+      h("div", { class: "row gap" }, turnOn, h("button", { onclick: () => { devForm.open = false; devForm.error = null; rerender(); } }, "Cancel")),
+    ];
+  }
   const level = (l: string | undefined) => l === "StrongBox" ? "StrongBox (Titan M)" : l === "TrustedEnvironment" ? "TEE (not the Titan M)" : l ?? "—";
   return h("section", { class: "set", id: "device-section" },
     h("h4", null, "DEVICE"),
@@ -88,8 +124,6 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
     a && a.notes.length ? h("ul", { class: "att-notes muted small" }, a.notes.map((n) => h("li", null, n))) : null,
     a ? h("p", { class: "muted small" }, `Checked ${ago(a.checked_at)}${a.address ? ` for ${short(a.address)}` : ""}. Checked again on every connection and before sending.`) : null,
     h("div", { class: "row gap" }, h("button", { onclick: recheck, disabled: c.checking || !phonePresent }, icon("refresh", 15), c.checking ? "Checking…" : "Check again")),
-    h("label", { class: `toggle${devMode ? " dev-on" : ""}` }, h("span", null, "Developer mode: accept development phones"), toggle, h("i", { class: "knob" })),
-    devMode ? h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones running the development-signed app are accepted as Development (never Genuine). Turn it off for real funds.")
-      : h("p", { class: "muted small" }, "Off: only the release-signed Phone Vault app passes. Turn on only for a development phone you flashed yourself."),
+    ...devControls,
   );
 }

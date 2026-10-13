@@ -117,6 +117,7 @@ pub struct Evidence<'a> {
 }
 
 pub const UNLOCKED_HEADLINE: &str = "Development firmware: bootloader unlocked — not safe for real funds";
+pub const UNLOCKED_PROBLEM: &str = "The phone's bootloader is unlocked, so its software can be replaced without anyone noticing. Accept it only for a phone you flashed yourself: Settings → Device → Developer mode.";
 
 pub fn fail(problem: impl Into<String>) -> Assessment {
     let p = problem.into();
@@ -246,7 +247,11 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                 (true, BootState::Verified) => problems.push(format!("The phone is locked to its maker's stock software, not Phone Vault firmware{pinned_note}.")),
                 (true, BootState::SelfSigned) => problems.push(format!("The phone boots firmware signed by a key that is not Phone Vault's (verified boot key {}){pinned_note}.", short(&rot.verified_boot_key))),
                 (true, BootState::Unverified) => problems.push("The phone reports a locked bootloader with unverified (orange) boot, which is inconsistent.".into()),
-                (false, _) => cautions.push(UNLOCKED_HEADLINE.to_string()),
+                // An unlocked bootloader lets anything above the security chip be replaced: never
+                // acceptable for a phone someone else set up. Only Developer mode (a typed
+                // confirmation in Settings → Device, kept on this Mac) accepts it, as DEVELOPMENT.
+                (false, _) if allow_dev => cautions.push(UNLOCKED_HEADLINE.to_string()),
+                (false, _) => problems.push(UNLOCKED_PROBLEM.to_string()),
             }
             if !rot.device_locked {
                 if let Some(p) = hw.os_patch_level {

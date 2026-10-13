@@ -23,16 +23,16 @@ import "./extras.css";
 
 type Theme = "dark" | "light" | "system";
 type HomeTab = "assets" | "nfts" | "activity";
-interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; devMode: boolean; activity: ActivityFilter; tab: HomeTab; setupDone: boolean;
+interface Prefs { chainId: number; rpc: Record<string, string>; notify: boolean; theme: Theme; activity: ActivityFilter; tab: HomeTab; setupDone: boolean;
   /** a Bitcoin network is shown instead of an EVM one (null: EVM) */
   btc: BtcNet | null; btcTestnets: boolean }
 const PREFS_KEY = "phonevault.prefs.v1";
 function loadPrefs(): Prefs {
-  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", devMode: false, activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false, btc: null, btcTestnets: false };
+  const d: Prefs = { chainId: DEFAULT_CHAIN, rpc: {}, notify: true, theme: "dark", activity: { kind: "all", thisNetwork: false }, tab: "assets", setupDone: false, btc: null, btcTestnets: false };
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}");
     const a = p.activity && typeof p.activity === "object" ? p.activity : {};
-    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme, devMode: p.devMode === true,
+    return { chainId: NETWORKS.some((n) => n.id === p.chainId) ? p.chainId : d.chainId, rpc: p.rpc && typeof p.rpc === "object" ? p.rpc : {}, notify: p.notify !== false, theme: ["dark", "light", "system"].includes(p.theme) ? p.theme : d.theme,
       activity: { kind: ["all", "out", "in", "pending"].includes(a.kind) ? a.kind : "all", thisNetwork: a.thisNetwork === true },
       tab: ["assets", "nfts", "activity"].includes(p.tab) ? p.tab : d.tab, setupDone: p.setupDone === true,
       btcTestnets: p.btcTestnets === true, btc: ["bitcoin", "testnet", "signet"].includes(p.btc) && (p.btc === "bitcoin" || p.btcTestnets === true) ? p.btc : null };
@@ -349,8 +349,6 @@ function assetsTab(n: Network) {
 const setupHost: SetupHost = {
   status: () => status,
   device: () => device,
-  devMode: () => prefs.devMode,
-  setDevMode: (on) => { prefs.devMode = on; savePrefs(); identifyPhone(); render(); },
   recheck: () => { void identifyPhone(); },
   confirmPairing: async (address) => { await pairAccount(address, null); phoneAddress = address; identity = { s: "match" }; await refreshStatus(); },
   chainId: () => prefs.chainId,
@@ -602,13 +600,16 @@ async function readAddress() {
 // ------------------------------------------------------------------ device check (attestation)
 // Run on every identify/pair and (in Rust) before every send; cached per USB connection there.
 let device: DeviceCheck = { report: null, checking: false, error: null };
+/** Developer mode as Rust stores it (Settings → Device, typed confirmation); shown only. */
+let devMode = false;
+void api.developerMode().then((on) => { devMode = on; if (drawerOpen) renderDrawer(); }).catch(() => { /* off */ });
 let failDismissed = false;
 
 async function checkDevice(): Promise<Attestation> {
   device = { ...device, checking: true, error: null };
   renderHeader(); if (drawerOpen) renderDrawer();
   try {
-    const r = await api.attest(prefs.devMode);
+    const r = await api.attest();
     device = { report: r, checking: false, error: null };
     if (r.verdict !== "fail") failDismissed = false;
     return r;
@@ -1329,7 +1330,10 @@ function renderDrawer() {
       ),
       status?.pairing_path ? h("p", { class: "muted small" }, "Stored in ", h("span", { class: "mono" }, status.pairing_path)) : null,
     ),
-    deviceSection(device, prefs.devMode, phone !== "none", () => identifyPhone(), (on) => { prefs.devMode = on; savePrefs(); renderDrawer(); identifyPhone(); }),
+    deviceSection(device, devMode, phone !== "none", () => identifyPhone(), async (on, confirmation) => {
+      devMode = await api.setDeveloperMode(on, confirmation);
+      if (phone !== "none") void identifyPhone();
+    }, () => renderDrawer()),
     backupCardSection(),
     h("section", { class: "set" },
       h("h4", null, "NETWORK"),

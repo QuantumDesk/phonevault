@@ -275,7 +275,7 @@ pub fn run() {
             replace::replacement_quote,
             watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata,
             signing::sign_message, signing::sign_typed_data,
-            attest::attest_phone, attest::attestation_cached,
+            attest::attest_phone, attest::attestation_cached, attest::developer_mode, attest::set_developer_mode,
             tokens::token_list, tokens::token_balances, tokens::token_quote,
             wc::wc_plan_session, wc::wc_session_namespaces, wc::wc_add_chain, wc::wc_session_matches, wc::wc_prepare,
             bridge::bridge_status, bridge::bridge_pending, bridge::bridge_respond, bridge::bridge_approve_connect,
