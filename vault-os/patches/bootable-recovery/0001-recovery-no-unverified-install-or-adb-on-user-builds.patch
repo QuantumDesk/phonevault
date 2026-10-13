@@ -1,0 +1,109 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Tue, 13 Oct 2026 09:45:28 -0400
+Subject: [PATCH] recovery: no unverified-install override or ADB on user
+ builds
+
+A production Phone Vault image is a user build with ro.debuggable=0. Recovery
+then refuses packages that fail signature verification, undeclared downgrades
+and SPL downgrades without offering "Install anyway?", removes the "Enable
+ADB" and system-mount/format items, and never starts recovery adbd (the
+explicit "Apply from ADB" sideload remains). Upstream keyed these on the
+ro.build.type string alone; this also requires the immutable ro.debuggable.
+Userdebug development images keep the upstream prompts.
+---
+ recovery.cpp      | 20 +++++++++++++++++---
+ recovery_main.cpp | 11 ++++++++---
+ 2 files changed, 25 insertions(+), 6 deletions(-)
+
+diff --git a/recovery.cpp b/recovery.cpp
+index ecf5807..3cfb423 100644
+--- a/recovery.cpp
++++ b/recovery.cpp
+@@ -127,6 +127,14 @@ static bool IsRoDebuggable() {
+   return android::base::GetBoolProperty("ro.debuggable", false);
+ }
+ 
++// Phone Vault: the "Install anyway?" overrides (unverified signature, undeclared downgrade, SPL
++// downgrade) and recovery ADB exist only on development images. A production build is a user
++// build with ro.debuggable=0 (both immutable, from the verified boot/vendor_boot ramdisk); there
++// recovery refuses those packages outright instead of asking whoever holds the phone.
++static bool PhoneVaultDevelopmentOverridesAllowed() {
++  return IsRoDebuggable() && get_build_type() != "user";
++}
++
+ // Clear the recovery command and prepare to boot a (hopefully working) system,
+ // copy our log file to cache as well (for the system to read). This function is
+ // idempotent: call it as many times as you like.
+@@ -179,7 +187,7 @@ bool ask_to_ab_reboot(Device* device) {
+ }
+ 
+ bool ask_to_continue_unverified(Device* device) {
+-  if (get_build_type() == "user") {
++  if (!PhoneVaultDevelopmentOverridesAllowed()) {
+     return false;
+   } else {
+     device->GetUI()->SetProgressType(RecoveryUI::EMPTY);
+@@ -188,7 +196,7 @@ bool ask_to_continue_unverified(Device* device) {
+ }
+ 
+ bool ask_to_continue_downgrade(Device* device) {
+-  if (get_build_type() == "user") {
++  if (!PhoneVaultDevelopmentOverridesAllowed()) {
+     return false;
+   } else {
+     device->GetUI()->SetProgressType(RecoveryUI::EMPTY);
+@@ -197,7 +205,7 @@ bool ask_to_continue_downgrade(Device* device) {
+ }
+ 
+ bool ask_to_continue_spl_downgrade(Device* device) {
+-  if (get_build_type() == "user") {
++  if (!PhoneVaultDevelopmentOverridesAllowed()) {
+     return false;
+   } else {
+     device->GetUI()->SetProgressType(RecoveryUI::EMPTY);
+@@ -624,6 +632,12 @@ change_menu:
+         break;
+ 
+       case Device::ENABLE_ADB:
++        if (!PhoneVaultDevelopmentOverridesAllowed()) {
++          // Phone Vault: the item is removed on user builds; refuse even if it is reached.
++          device->RemoveMenuItemForAction(Device::ENABLE_ADB);
++          device->GoHome();
++          break;
++        }
+         android::base::SetProperty("ro.adb.secure.recovery", "0");
+         android::base::SetProperty("ctl.restart", "adbd");
+         device->RemoveMenuItemForAction(Device::ENABLE_ADB);
+diff --git a/recovery_main.cpp b/recovery_main.cpp
+index 91b2515..3cd5f65 100644
+--- a/recovery_main.cpp
++++ b/recovery_main.cpp
+@@ -494,11 +494,12 @@ int main(int argc, char** argv) {
+     device->RemoveMenuItemForAction(Device::ENTER_RESCUE);
+   }
+ 
+-  if (get_build_type() != "userdebug") {
++  // Phone Vault: also key on the immutable ro.debuggable, not only on the build-type string.
++  if (get_build_type() != "userdebug" || !IsRoDebuggable()) {
+     device->RemoveMenuItemForAction(Device::ENABLE_ADB);
+   }
+ 
+-  if (get_build_type() == "user") {
++  if (get_build_type() == "user" || !IsRoDebuggable()) {
+     device->RemoveMenuItemForAction(Device::WIPE_SYSTEM);
+     device->RemoveMenuItemForAction(Device::MOUNT_SYSTEM);
+   }
+@@ -532,7 +533,11 @@ int main(int argc, char** argv) {
+   while (true) {
+     // We start adbd in recovery for the device with userdebug build or a unlocked bootloader.
+     std::string usb_config =
+-        fastboot ? "fastboot" : IsRoDebuggable() || IsDeviceUnlocked() ? "adb" : "none";
++        fastboot ? "fastboot"
++        // Phone Vault: a user build never starts recovery adbd, even with an unlocked
++        // bootloader. "Apply from ADB" still switches to the sideload function on request.
++        : IsRoDebuggable() || (IsDeviceUnlocked() && get_build_type() != "user") ? "adb"
++                                                                               : "none";
+     std::string usb_state = android::base::GetProperty("sys.usb.state", "none");
+     if (fastboot) {
+       device->PreFastboot();

@@ -1,0 +1,46 @@
+diff --git a/usb/usb/Usb.cpp b/usb/usb/Usb.cpp
+index 4cfd3e1..917f3b4 100644
+--- a/usb/usb/Usb.cpp
++++ b/usb/usb/Usb.cpp
+@@ -254,7 +254,11 @@ void switchToDrp(const string &portName) {
+     if (filename != "") {
+         fp = fopen(filename.c_str(), "w");
+         if (fp != NULL) {
+-            int ret = fputs("dual", fp);
++            // Phone Vault: the port is sink/UFP-only (init writes port_type=sink at boot). A
++            // failed mode switch falls back to that, never to dual-role: a DRP port presents Rp
++            // when toggling and becomes the USB host for any OTG device.
++            const bool vault = GetProperty("ro.vendor.phonevault.offline", "false") == "true";
++            int ret = fputs(vault ? "sink" : "dual", fp);
+             fclose(fp);
+             if (ret == EOF)
+                 ALOGE("Fatal: Error while switching back to drp");
+@@ -592,13 +596,22 @@ Status getPortStatusHelper(android::hardware::usb::Usb *usb,
+                 goto done;
+             }
+ 
+-            (*currentPortStatus)[i].canChangeMode = true;
+-            (*currentPortStatus)[i].canChangeDataRole =
+-                port.second ? canSwitchRoleHelper(port.first) : false;
+-            (*currentPortStatus)[i].canChangePowerRole =
+-                port.second ? canSwitchRoleHelper(port.first) : false;
++            if (GetProperty("ro.vendor.phonevault.offline", "false") == "true") {
++                // Phone Vault: report the port as it is enforced — UFP (sink + USB device) only,
++                // no mode or role changes — so the framework never offers host/source.
++                (*currentPortStatus)[i].canChangeMode = false;
++                (*currentPortStatus)[i].canChangeDataRole = false;
++                (*currentPortStatus)[i].canChangePowerRole = false;
++                (*currentPortStatus)[i].supportedModes.push_back(PortMode::UFP);
++            } else {
++                (*currentPortStatus)[i].canChangeMode = true;
++                (*currentPortStatus)[i].canChangeDataRole =
++                    port.second ? canSwitchRoleHelper(port.first) : false;
++                (*currentPortStatus)[i].canChangePowerRole =
++                    port.second ? canSwitchRoleHelper(port.first) : false;
+ 
+-            (*currentPortStatus)[i].supportedModes.push_back(PortMode::DRP);
++                (*currentPortStatus)[i].supportedModes.push_back(PortMode::DRP);
++            }
+ 
+             if (!usb->mUsbDataEnabled) {
+                 (*currentPortStatus)[i].usbDataStatus.push_back(UsbDataStatus::DISABLED_FORCE);

@@ -41,7 +41,7 @@ printf '%s\n' \
   'CONFIG_MSM_GLINK_SPI_XPRT=y' \
   'CONFIG_USB_GADGET=y' \
   'CONFIG_USB_DWC3=y' \
-  'CONFIG_USB_DWC3_GADGET=y' \
+  'CONFIG_USB_DWC3_DUAL_ROLE=y' \
   'CONFIG_USB_DWC3_MSM=y' \
   'CONFIG_USB_CONFIGFS=y' \
   'CONFIG_USB_CONFIGFS_F_ACC=y' \
@@ -543,4 +543,48 @@ if "${ROOT}/scripts/verify-appliance-target-files.sh" \
 fi
 grep -Fq 'ADB endpoint setup is not confined to immutable userdebug policy' \
   "${work_dir}/negative-adb-endpoint.stderr"
+sed -i.bak \
+  's/^on early-boot$/on early-boot \&\& property:ro.debuggable=1/' \
+  "${fixture}/VENDOR/etc/init/hw/init.sdm845.usb.rc"
+rm "${fixture}/VENDOR/etc/init/hw/init.sdm845.usb.rc.bak"
+
+# DWC3: dual-role is required (rung 2d-d), the host-only mode is forbidden, and
+# the dwc3 "id" node (host-mode switch) must stay root-only.
+expect_appliance_failure() {
+  local name="$1" expected="$2" archive="${work_dir}/$1.zip"
+  (cd "${fixture}" && zip -qr "${archive}" .)
+  if "${ROOT}/scripts/verify-appliance-target-files.sh" "${archive}" \
+      > "${work_dir}/${name}.stdout" 2> "${work_dir}/${name}.stderr"; then
+    echo "${name} fixture unexpectedly passed" >&2
+    exit 1
+  fi
+  grep -Fq -- "${expected}" "${work_dir}/${name}.stderr" || {
+    echo "${name} failed for the wrong reason:" >&2
+    cat "${work_dir}/${name}.stderr" >&2
+    exit 1
+  }
+}
+"${ROOT}/scripts/verify-appliance-target-files.sh" \
+  "$(cd "${fixture}" && zip -qr "${work_dir}/dual-role-positive.zip" . && echo "${work_dir}/dual-role-positive.zip")"
+
+cp "${fixture}/META/kernel_configs.txt" "${work_dir}/kernel_configs.saved"
+sed 's/^CONFIG_USB_DWC3_DUAL_ROLE=y$/CONFIG_USB_DWC3_HOST=y/' \
+  "${work_dir}/kernel_configs.saved" > "${fixture}/META/kernel_configs.txt"
+expect_appliance_failure negative-dwc3-host 'CONFIG_USB_DWC3_HOST=y'
+sed 's/^CONFIG_USB_DWC3_DUAL_ROLE=y$/CONFIG_USB_DWC3_GADGET=y/' \
+  "${work_dir}/kernel_configs.saved" > "${fixture}/META/kernel_configs.txt"
+expect_appliance_failure negative-dwc3-gadget-only \
+  'missing required appliance kernel setting: CONFIG_USB_DWC3_DUAL_ROLE=y'
+cp "${work_dir}/kernel_configs.saved" "${fixture}/META/kernel_configs.txt"
+
+printf '%s\n' \
+  'on post-fs' \
+  '    chown root system /sys/devices/platform/soc/a600000.ssusb/id' \
+  '    chmod 664 /sys/devices/platform/soc/a600000.ssusb/id' \
+  > "${fixture}/VENDOR/etc/init/android.hardware.usb.gadget-service.crosshatch.rc"
+expect_appliance_failure negative-dwc3-id-node \
+  'init grants non-root access to the DWC3 host-mode id node'
+rm "${fixture}/VENDOR/etc/init/android.hardware.usb.gadget-service.crosshatch.rc"
+"${ROOT}/scripts/verify-appliance-target-files.sh" \
+  "$(cd "${fixture}" && zip -qr "${work_dir}/final-positive.zip" . && echo "${work_dir}/final-positive.zip")"
 echo "Appliance gate positive and negative tests passed."

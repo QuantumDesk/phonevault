@@ -1,0 +1,16 @@
+diff --git a/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc b/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
+index c298b0a..45e0d2c 100644
+--- a/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
++++ b/usb/gadget/android.hardware.usb.gadget-service.crosshatch.rc
+@@ -12,9 +12,9 @@ on boot
+     chmod 664 /sys/class/typec/port0/port_type
+ 
+ on post-fs
++    # Phone Vault: dwc3-msm's "id" node stays root-only — writing 0 to it forces the controller
++    # into host mode underneath the Type-C port policy, and no HAL uses it.
+     chown root system /sys/devices/platform/soc/a600000.ssusb/b_sess
+-    chown root system /sys/devices/platform/soc/a600000.ssusb/id
+     chown root system /sys/devices/platform/soc/a600000.ssusb/usb_data_enabled
+     chmod 664 /sys/devices/platform/soc/a600000.ssusb/b_sess
+-    chmod 664 /sys/devices/platform/soc/a600000.ssusb/id
+     chmod 664 /sys/devices/platform/soc/a600000.ssusb/usb_data_enabled

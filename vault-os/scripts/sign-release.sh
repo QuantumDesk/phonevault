@@ -5,8 +5,10 @@ if [[ ! -f /.dockerenv ]]; then
   echo "Run inside the isolated Phone Vault build container." >&2
   exit 2
 fi
-if [[ $# -ne 3 || "$2" != /release-keys ]]; then
-  echo "usage: $0 INPUT_TARGET_FILES_ZIP /release-keys OUTPUT_DIRECTORY" >&2
+if [[ $# -ne 4 || "$2" != /release-keys ]]; then
+  echo "usage: $0 INPUT_TARGET_FILES_ZIP /release-keys OUTPUT_DIRECTORY (PREVIOUS_RELEASE_DIRECTORY | --first-release)" >&2
+  echo "  PREVIOUS_RELEASE_DIRECTORY holds the last production RELEASE-MANIFEST.txt/.sig;" >&2
+  echo "  the new AVB rollback index must be strictly greater than its vbmeta_rollback_index." >&2
   exit 2
 fi
 
@@ -16,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT_TARGET_FILES="$1"
 KEY_DIR="$2"
 OUTPUT_DIR="$3"
+PREVIOUS_RELEASE="$4"
 SIGN_TOOL="${SOURCE}/out/host/linux-x86/bin/sign_target_files_apks"
 OTA_TOOL="${SOURCE}/out/host/linux-x86/bin/ota_from_target_files"
 OTA_VERIFY_TOOL="${SOURCE}/out/host/linux-x86/bin/check_ota_package_signature"
@@ -108,12 +111,32 @@ for output in "${signed_target_files}" "${release_ota}" \
   }
 done
 
+# The release configuration itself must carry no development deviation (adb as
+# default USB function, early-adb init scripts, DEBUG-NN markers, backups).
+"${SCRIPT_DIR}/verify-release-source.sh" "${PROJECT}"
+
 # PRESIGNED APKs are not replaced by sign_target_files_apks. Refuse to begin a
 # release if the input archive does not already contain the dedicated app key.
 "${SCRIPT_DIR}/verify-production-target-files.sh" "${INPUT_TARGET_FILES}"
 "${SCRIPT_DIR}/verify-appliance-target-files.sh" \
   "${INPUT_TARGET_FILES}" "vendor/phonevault/keys/avb.pem" \
   "${expected_app_cert}" "${input_app_sha}"
+# Every release override must really be absent from the image: an override is
+# silently defeated when an installed module `required`s its target.
+"${PROJECT}/vault-os/dev-ladder/check-overrides.sh" release "${INPUT_TARGET_FILES}"
+
+# AVB anti-rollback: the image carries the project-owned index and it is
+# strictly greater than the previous signed production release's.
+candidate_rollback_index="$(unzip -p "${INPUT_TARGET_FILES}" META/misc_info.txt | \
+  sed -n -E 's/^avb_vbmeta_args=.*--rollback_index[=[:space:]]+([0-9]+).*/\1/p')"
+release_version_mk="${PROJECT}/vault-os/vendor/phonevault/config/release-version.mk"
+if [[ "${PREVIOUS_RELEASE}" == --first-release ]]; then
+  "${SCRIPT_DIR}/verify-rollback-index.sh" "${candidate_rollback_index}" \
+    "${release_version_mk}" --first-release
+else
+  "${SCRIPT_DIR}/verify-rollback-index.sh" "${candidate_rollback_index}" \
+    "${release_version_mk}" "${PREVIOUS_RELEASE}" "${KEY_DIR}/metadata-public.pem"
+fi
 
 "${SIGN_TOOL}" -o -d "${KEY_DIR}" \
   "${apex_signing_args[@]}" \
@@ -168,6 +191,10 @@ rollback_index="$(sed -n \
     && "${rollback_index}" =~ ^[0-9]+$ \
     && "${rollback_index}" != 0 ]] || {
   echo "could not derive trusted release vbmeta metadata" >&2
+  exit 1
+}
+[[ "${rollback_index}" == "${candidate_rollback_index}" ]] || {
+  echo "signed vbmeta rollback index ${rollback_index} differs from the checked index ${candidate_rollback_index}" >&2
   exit 1
 }
 

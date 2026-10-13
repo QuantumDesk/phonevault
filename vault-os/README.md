@@ -66,7 +66,15 @@ path consumed by the build, signing, and packaging scripts.
    product, retrofit `super_empty`, system, system_ext, vendor, and enforcing
    root-vbmeta images plus exact-crosshatch fastboot metadata. It performs no
    device operation.
-7. Inject the externally mounted release keys with `scripts/sign-release.sh`.
+7. Inject the externally mounted release keys with `scripts/sign-release.sh
+   INPUT /release-keys OUTPUT (PREVIOUS_RELEASE_DIR | --first-release)`. Before
+   signing it runs the release-source gate (`scripts/verify-release-source.sh`:
+   no adb default, early-adb init script, `DEBUG-` marker or backup file in
+   `vendor/phonevault`/`device/phonevault`), the production ADB policy on the
+   target-files, `dev-ladder/check-overrides.sh release`, and the AVB
+   rollback-index gate (`scripts/verify-rollback-index.sh`: the index equals
+   `vendor/phonevault/config/release-version.mk` and is strictly greater than
+   the previous signed release manifest's). See `docs/release-config.md`.
    It reruns appliance policy and cryptographically verifies the signed vbmeta
    images before producing an OTA. It also re-signs every non-presigned APEX
    with project module/payload keys, then verifies the actual certificate of
@@ -94,7 +102,15 @@ path consumed by the build, signing, and packaging scripts.
    fingerprint, source/public inventories, and exported identities. The
    cryptographic AVB-chain and OTA gates remain separately mandatory.
 
-No script in this directory unlocks, wipes, flashes, or relocks a device.
+No script in `scripts/` unlocks, wipes, flashes, or relocks a device. The
+development ladder does: `dev-ladder/flash-rung.sh` sideloads a rung OTA (and,
+with `--wipe`, erases userdata and metadata from fastboot) and
+`dev-ladder/wipe-data.sh` erases userdata and metadata. Both pin every adb and
+fastboot call to one serial (`PV_SERIAL`), refuse to run while any other device
+is attached, and refuse any erase without `PV_THROWAWAY_DEVICE=1`; use them only
+on a development phone whose wallet holds nothing. `dev-ladder-bluejay/flash-mac.sh`
+flashes and wipes the Pixel 6a ladder images from the bootloader and refuses
+unless exactly one device is in fastboot. Nothing here ever relocks a bootloader.
 `scripts/preflight-crosshatch.sh` verifies the complete development artifact
 checksum set against an independently recorded checksum-manifest digest,
 requires that every bundle file is covered exactly once, and reads the exact

@@ -11,53 +11,170 @@ android_app_import {
     // Android expands inherited product lists after evaluating the leaf
     // product, so Make's -= cannot reliably remove upstream entries. Module
     // overrides are applied to the fully expanded install graph.
+    // Release removal list = the boot-tested dev ladder (rung 4b, PASSED 2026-10-11 on phone 2)
+    // plus the release-only entries below it. See vault-os/docs/release-config.md.
+    //
+    // NEVER override (proven required by the ladder; tests/test_forbidden_policy_coverage.py
+    // enforces it): Settings (FallbackHome, confirm-credential, device-admin UI),
+    // PackageInstaller (PackageManagerService requires exactly one installer at boot),
+    // LatinIME (the only IME; SystemUI's step-up PIN prompt is an ImeAwareEditText),
+    // FusedLocation (LocationManagerService requires a direct-boot fused provider),
+    // ModuleMetadata (system_server boot loop without it, rung 4b first flash).
+    //
+    // How removal works (rung 4, verified against build/make/core): main.mk drops every
+    // module named in an installed module's `overrides` before it expands `required`, so an
+    // override removes a module no matter which inherited makefile listed it. It does NOT
+    // help when another *installed* module lists the target in `required`; requirers are
+    // overridden with their targets (Launcher3QuickStep -> TrebuchetQuickStep, Aperture ->
+    // ApertureLensLauncher, Seedvault -> LocalContactsBackup). The release gate runs
+    // dev-ladder/check-overrides.sh release on the target-files before signing.
     overrides: [
+        "LineageSetupWizard",
+
+        // ---- Rung 4a: user-facing apps nothing in system_server / SystemUI binds at boot ----
+        // Launcher. AOSP handheld_system_ext.mk lists Launcher3QuickStep, whose Trebuchet module
+        // has required: ["TrebuchetQuickStep"]; Lineage common_mobile.mk lists TrebuchetQuickStep.
+        // Both ends are overridden. HOME is then PhoneVault (priority 0) with Settings'
+        // FallbackHome (priority -1000, direct-boot only) as the only other candidate.
+        "TrebuchetQuickStep",
+        "Launcher3QuickStep",
+        "TrebuchetOverlay",
+        "IconPackCircularLauncherOverlay",
+        "IconPackFilledLauncherOverlay",
+        "IconPackKaiLauncherOverlay",
+        "IconPackRoundedLauncherOverlay",
+        "IconPackSamLauncherOverlay",
+        "IconPackVictorLauncherOverlay",
+        // Camera / media / productivity apps (no camera, no media, no network on the appliance).
         "Aperture",
+        "ApertureLensLauncher",
         "AudioFX",
+        "Camelot",
+        "DeskClock",
+        "Etar",
+        "ExactCalculator",
+        "Gallery2",
+        "Glimpse",
+        "Jelly",
+        "Recorder",
+        "Twelve",
+        "Updater",
+        // Wallpaper / theme / sound pickers, dreams, misc UI.
         "AvatarPicker",
         "Backgrounds",
         "BasicDreams",
-        "BlockedNumberProvider",
-        "BookmarkProvider",
-        "Browser2",
-        "BuiltInPrintService",
-        "CallLogBackup",
-        "CalendarProvider",
-        "Camelot",
+        "EasterEgg",
+        "HTMLViewer",
+        "LiveWallpapersPicker",
+        "PhotoTable",
+        "SoundPicker",
+        "ThemePicker",
+        "ThemesStub",
+        // Settings satellites and leaf services launched only by explicit user action.
+        "AccessibilityMenu",
         "CameraExtensionsProxy",
-        "CaptivePortalLogin",
-        "CarrierConfig",
-        "CarrierDefaultApp",
-        "CellBroadcastLegacyApp",
-        "CneApp",
-        "DeskClock",
-        "ConnectivityOverlay",
         "DeviceAsWebcam",
         "DeviceDiagnostics",
-        "Dialer",
-        "DocumentsUI",
-        "DownloadProvider",
         "DownloadProviderUi",
-        "DynamicSystemInstallationService",
-        "E2eeContactKeysProvider",
-        "EasterEgg",
         "EmergencyInfo",
-        "Etar",
-        "ExactCalculator",
+        "SettingsIntelligence",
+        "Tag",
+
+        // ---- Rung 4b: system-side apps (bound by system_server / SystemUI / TeleService on demand,
+        // never needed to boot); the device diff also drops the BT / NFC / OMAPI features ----
+        // Active Edge: persistent, crash-loops without the squeeze sensors (gone since slice C).
+        "ElmyraService",
+        "GoogleParts",
+        // Telephony *UI* and role-holder apps. TeleService, Telecom, TelephonyProvider,
+        // CarrierConfig and the radio/IMS glue stay for the telephony rung (system_server gating).
+        "CallLogBackup",
+        "CarrierDefaultApp",
+        "CellBroadcastLegacyApp",
+        "Contacts",
+        "Dialer",
+        "SimAppDialog",
+        "Stk",
+        "messaging",
+        // Backup: a device owner disables the backup service anyway; app has allowBackup=false.
+        "BackupRestoreConfirmation",
+        "LocalContactsBackup",
+        "LocalTransport",
+        "Seedvault",
+        "SharedStorageBackup",
+        "WallpaperBackup",
+        // Printing (PrintManagerService only binds the spooler when a print job is created).
+        "BuiltInPrintService",
+        "PrintRecommendationService",
+        "PrintSpooler",
+        // WebView: provider and the android.software.webview feature, so SystemServer does not
+        // start WebViewUpdateService at all (nothing on the appliance renders web content).
+        "webview",
+        "android.software.webview.prebuilt.xml",
+        // Files / storage UIs (MediaProvider, MediaProviderLegacy, DownloadProvider and
+        // ExternalStorageProvider stay for the media rung).
+        "DocumentsUI",
+        "DocumentsUIOverlay",
+        "MtpService",
+        "StorageManager",
+        // Lineage extras (the SDK services and LineageSettingsProvider stay).
+        "LineageParts",
+        "Profiles",
+        "QuickAccessWallet",
+        // Framework satellites bound only on explicit request (DSU, CDM pairing, credential
+        // manager UI, cert install, app-link verification, module metadata, VPN, PAC, captive
+        // portal, BT MIDI) and the OMAPI service (its feature goes in the device diff).
+        "BluetoothMidiService",
+        "CaptivePortalLogin",
+        "CertInstaller",
+        "CompanionDeviceManager",
+        "CredentialManager",
+        "DynamicSystemInstallationService",
+        // "ModuleMetadata": KEPT — without it ModuleInfoProvider never loads and
+        // AppRestrictionController.onSystemReady crashes system_server on every boot
+        // (boot loop on phone 2, 2026-10-11).
+        "PacProcessor",
+        "ProxyHandler",
+        "SecureElement",
+        "StatementService",
+        "VpnDialogs",
+        // Content providers nobody on the appliance queries.
+        "BookmarkProvider",
+        "CalendarProvider",
+        "E2eeContactKeysProvider",
+        "PartnerBookmarksProvider",
+        // Pixel proprietary, non-radio (FeliCa, camera services, AiAi / ambient / hotword,
+        // hardware-info, Qualcomm secure-UI). Radio/carrier blobs go with the telephony rung.
+        "AmbientSensePrebuilt",
+        "DeviceIntelligenceNetworkPrebuilt",
+        "DevicePersonalizationPrebuiltPixel3",
+        "HardwareInfo",
+        "HotwordEnrollmentOKGoogleWCD9340",
+        "HotwordEnrollmentXGoogleWCD9340",
+        "MobileFeliCaClient",
+        "MobileFeliCaMenuMainApp",
+        "MobileFeliCaSettingApp",
+        "MobileFeliCaWebPlugin",
+        "MobileFeliCaWebPluginBoot",
+        "PixelCameraServicesCrosshatch",
+        "com.qualcomm.qti.services.secureui",
+
+        // ---- Release-only: ahead of the boot-tested ladder (rungs 4c+: telephony/radio,
+        // network stack, media providers, ManagedProvisioning, APEXes, HAL services and
+        // native tools). Each is coupled to the release appliance/device patches; none has
+        // been boot-tested in a ladder rung yet, so a release build that boots is still
+        // required before shipping (vault-os/docs/release-config.md). ----
+        "BlockedNumberProvider",
+        "Browser2",
+        "CarrierConfig",
+        "CneApp",
+        "ConnectivityOverlay",
+        "DownloadProvider",
         "ExternalStorageProvider",
-        "FusedLocation",
-        "Gallery2",
-        "Glimpse",
         "IPACM_cfg.xml",
         "IWlanService",
         "ImsServiceEntitlement",
-        "Jelly",
-        "LatinIME",
-        "LineageParts",
-        "LineageSetupWizard",
         "ManagedProvisioning",
         "MmsService",
-        "MtpService",
         "Music",
         "modem_svc",
         "MusicFX",
@@ -67,35 +184,15 @@ android_app_import {
         "NfcNci",
         "ONS",
         "OsuLogin",
-        "PackageInstaller",
-        "PacProcessor",
-        "PrintRecommendationService",
-        "PrintSpooler",
-        "Profiles",
-        "ProxyHandler",
         "QtiTelephonyService",
         "RadioConfigLib",
-        "Recorder",
         "RilConfigService",
-        "SecureElement",
-        "Seedvault",
-        "Settings",
-        "SharedStorageBackup",
-        "SimAppDialog",
-        "SoundPicker",
-        "Tag",
         "TeleService",
         "Telecom",
         "TelephonyProvider",
         "TelephonyProviderHsum",
         "Tethering",
-        "ThemePicker",
-        "ThemesStub",
-        "TrebuchetQuickStep",
         "TrebuchetQuickStepGo",
-        "Twelve",
-        "Updater",
-        "VpnDialogs",
         "WallpaperPicker2",
         "WifiOverlay",
         "android.hardware.bluetooth@1.0-impl-qti",
@@ -238,7 +335,6 @@ android_app_import {
         "vendor.google_paintbox@1.0",
         "vendor.qti.media.c2@1.0-service",
         "vim",
-        "webview",
         "wifi.rc",
         "wificond",
         "wpa_supplicant",

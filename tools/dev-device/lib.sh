@@ -32,6 +32,25 @@ require_dev_appliance() {
   # chasing it by toggling adb_enabled remotely disabled adb on a kiosk with no UI (2026-09-05).
 }
 
+# Exactly one target: either ANDROID_SERIAL names an attached device (adb honours it for every
+# call), or exactly one device is on the bus. A second phone (say the owner's real wallet on a
+# charger port) must never receive an install, a provisioning reset or a wipe.
+require_single_device() {
+  local attached
+  attached="$("$A" devices 2>/dev/null | awk 'NR>1 && NF>=2 {print $1}')"
+  if [[ -n "${ANDROID_SERIAL:-}" ]]; then
+    grep -qxF -- "$ANDROID_SERIAL" <<<"$attached" || die "ANDROID_SERIAL=$ANDROID_SERIAL is not attached (attached: $(tr '\n' ' ' <<<"$attached"))"
+    return 0
+  fi
+  [[ "$(grep -c . <<<"$attached" || true)" == "1" ]] || die "refusing: expected exactly one attached device, found [$(tr '\n' ' ' <<<"$attached")]; unplug the others or set ANDROID_SERIAL"
+}
+
+# Development images only: a production (user) build is never a deploy/test target.
+require_dev_image() {
+  local type; type="$("$A" shell getprop ro.build.type 2>/dev/null | tr -d '\r')"
+  [[ "$type" == userdebug || "$type" == eng ]] || die "refusing: ro.build.type=${type:-unknown}; these scripts only target userdebug dev images"
+}
+
 adb_is_root() { "$A" shell id 2>/dev/null | grep -q "uid=0"; }
 
 require_pin() {

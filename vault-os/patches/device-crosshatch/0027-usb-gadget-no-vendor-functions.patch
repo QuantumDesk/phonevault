@@ -1,0 +1,17 @@
+diff --git a/usb/gadget/UsbGadget.cpp b/usb/gadget/UsbGadget.cpp
+index 7a703ed..fb112d6 100644
+--- a/usb/gadget/UsbGadget.cpp
++++ b/usb/gadget/UsbGadget.cpp
+@@ -341,6 +341,12 @@ static V1_0::Status setVidPid(const char *vid, const char *pid) {
+ }
+ 
+ static std::string getVendorFunctions() {
++    // Phone Vault: vendor.usb.config / persist.vendor.usb.usbradio.config and the usbradio boot
++    // mode append Qualcomm diag, serial and rmnet functions to *any* composition, outside the
++    // GadgetFunction allowlist enforced in setCurrentUsbFunctions. The appliance has none.
++    if (GetProperty("ro.vendor.phonevault.offline", "false") == "true")
++        return "";
++
+     if (GetProperty(BUILD_TYPE, "") == "user")
+         return "user";
+ 

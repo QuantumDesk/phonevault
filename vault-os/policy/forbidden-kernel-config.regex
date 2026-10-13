@@ -20,8 +20,12 @@
 ^CONFIG_(MSM_ADSPRPC|MSM_CDSP_LOADER)=(y|m)$
 
 # USB must remain a peripheral with only configfs and the Android accessory
-# function available to the appliance transport.
-^CONFIG_USB_DWC3_(DUAL_ROLE|HOST)=(y|m)$
+# function available to the appliance transport. DWC3 itself stays dual-role
+# (dev ladder rung 2d-d: a gadget-only kernel never enumerated on USB; the
+# appliance gate requires CONFIG_USB_DWC3_DUAL_ROLE=y); the host-only mode is
+# forbidden, and the host/source roles are refused in the USB HALs while init
+# pins the Type-C port to sink.
+^CONFIG_USB_DWC3_HOST=(y|m)$
 ^CONFIG_USB_DWC3_(OF_SIMPLE|PCI)=(y|m)$
 ^CONFIG_USB_CONFIGFS_(MASS_STORAGE|F_(AUDIO_SRC|CCID|CDEV|DIAG|GSI|HID|MIDI|MTP|PTP|QDSS))=(y|m)$
 ^CONFIG_SND_USB_AUDIO_QMI=(y|m)$
