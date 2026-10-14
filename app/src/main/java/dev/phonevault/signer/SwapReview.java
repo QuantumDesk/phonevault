@@ -58,8 +58,13 @@ final class SwapReview {
 
         String give = join(gives, names, "You give ");
         String get = join(receives, names, "You get ");
+        // Portion fees count per asset, together: several small portions of the same output add up
+        // to one fee (as a share of that asset's output) before the 1% / 3% limits are applied.
+        java.util.Map<String, java.math.BigDecimal> feeShare = feeShares(others);
+        java.util.Map<String, Integer> feeCount = new java.util.HashMap<>();
+        for (SwapPlan.Payment p : others) if (p.fee()) feeCount.merge(p.amount.asset, 1, Integer::sum);
         boolean otherRecipient = false;
-        for (SwapPlan.Payment p : others) if (!p.fee() || bigFee(p)) otherRecipient = true;
+        for (SwapPlan.Payment p : others) if (!p.fee() || bigFee(p, feeShare)) otherRecipient = true;
 
         String headline = (give.isEmpty() ? "" : give) + (get.isEmpty() ? "" : (give.isEmpty() ? "" : " · ") + get)
                 + " · Recipient: " + (otherRecipient ? "OTHER ADDRESS ✗" : receives.isEmpty() ? "—" : "this wallet ✓")
@@ -75,6 +80,9 @@ final class SwapReview {
             if (a.bound == SwapPlan.Bound.AT_LEAST && a.value.signum() == 0) {
                 rows.add(row(DANGER, "No minimum: this swap accepts getting nothing back in " + names.symbolOrContract(a.asset)
                         + ". It has no protection against a bad price."));
+            } else if (a.bound == SwapPlan.Bound.AT_LEAST && dust(a, names)) {
+                rows.add(row(DANGER, "No minimum: this swap accepts getting next to nothing back ("
+                        + names.amount(a.asset, a.value) + "). A dust minimum is no protection against a bad price."));
             }
         }
         if (receives.isEmpty() && !otherRecipient) rows.add(row(WARNING, "Nothing from this swap comes back to this wallet."));
@@ -82,23 +90,44 @@ final class SwapReview {
         if (!otherRecipient) {
             rows.add(row("Recipient", receives.isEmpty() ? "—" : THIS_WALLET));
         }
+        List<String> feeTotalsShown = new ArrayList<>();
+        List<String> feeRecipientsShown = new ArrayList<>();
         for (SwapPlan.Payment p : others) {
             String to = Keys.toChecksumAddress(p.recipient);
-            if (p.fee() && !bigFee(p)) {
-                String fee = "Fee: " + p.portion + " of the " + names.symbolOrContract(p.amount.asset) + " output"
-                        + (p.amount.value.signum() > 0 ? " (at least " + names.amount(p.amount.asset, p.amount.value) + ")" : "")
+            String asset = p.amount.asset;
+            boolean split = p.fee() && feeCount.get(asset) > 1;
+            if (split && !feeTotalsShown.contains(asset)) {
+                // one row for all the portions of this output, ahead of the individual fees
+                feeTotalsShown.add(asset);
+                java.math.BigDecimal total = feeShare.get(asset);
+                String text = feeCount.get(asset) + " separate fees together take " + percentLabel(total) + " of the "
+                        + names.symbolOrContract(asset) + " output";
+                if (bigFee(p, feeShare)) {
+                    rows.add(row(DANGER, "OTHER ADDRESS ✗ " + text + ". That is more than 3%, far above any normal interface fee. "
+                            + "Do not sign unless you meant to give that much away."));
+                } else if (above(total, WARNING_FEE_PERCENT)) {
+                    rows.add(row(WARNING, text + ". That is more than 1%, unusually high."));
+                }
+            }
+            if (p.fee() && !bigFee(p, feeShare)) {
+                String fee = "Fee: " + p.portion + " of the " + names.symbolOrContract(asset) + " output"
+                        + (p.amount.value.signum() > 0 ? " (at least " + names.amount(asset, p.amount.value) + ")" : "")
                         + " goes to " + to;
-                boolean high = portionAbove(p.portion, WARNING_FEE_PERCENT);
+                boolean high = !split && above(feeShare.get(asset), WARNING_FEE_PERCENT);
                 rows.add(row(high ? WARNING : "Fee", fee + (high ? ". That is more than 1%, unusually high." : "")));
             } else if (p.fee()) {
-                // A "fee" above 3% is not a fee: it is shown and counted like any other payout to another address.
-                rows.add(row(DANGER, "OTHER ADDRESS ✗ " + p.portion + " of the " + names.symbolOrContract(p.amount.asset)
-                        + " output" + (p.amount.value.signum() > 0 ? " (at least " + names.amount(p.amount.asset, p.amount.value) + ")" : "")
-                        + " goes to " + to + " as a \"fee\". That is more than 3%, far above any normal interface fee. "
-                        + "Do not sign unless you meant to give that much away."));
+                // A "fee" above 3% (alone, or together with the other portions of the same output) is
+                // not a fee: it is shown and counted like any other payout to another address.
+                rows.add(row(DANGER, "OTHER ADDRESS ✗ " + p.portion + " of the " + names.symbolOrContract(asset)
+                        + " output" + (p.amount.value.signum() > 0 ? " (at least " + names.amount(asset, p.amount.value) + ")" : "")
+                        + " goes to " + to + " as a \"fee\". " + (split ? "It is one of the fees totalled above."
+                        : "That is more than 3%, far above any normal interface fee. Do not sign unless you meant to give that much away.")));
                 rows.add(row("Recipient", to));
-                if (safety != null) rows.addAll(safety.rows(signer, p.recipient, RecipientHistory.Role.SEND));
-                parties.add(new TransactionReview.Party(p.recipient, RecipientHistory.Role.SEND));
+                if (!feeRecipientsShown.contains(p.recipient)) {
+                    feeRecipientsShown.add(p.recipient);
+                    if (safety != null) rows.addAll(safety.rows(signer, p.recipient, RecipientHistory.Role.SEND));
+                    parties.add(new TransactionReview.Party(p.recipient, RecipientHistory.Role.SEND));
+                }
             } else {
                 rows.add(row(DANGER, "OTHER ADDRESS ✗ " + amount(p.amount, names) + " goes to " + to
                         + ", not to this wallet. Sign only if you meant to send the swapped tokens there."));
@@ -241,16 +270,48 @@ final class SwapReview {
     /** A portion fee above this is treated as a payout to another address (DANGER, "OTHER ADDRESS"). */
     static final java.math.BigDecimal DANGER_FEE_PERCENT = java.math.BigDecimal.valueOf(3);
 
-    static boolean bigFee(SwapPlan.Payment p) {
-        return p.fee() && portionAbove(p.portion, DANGER_FEE_PERCENT);
+    /** True when this portion fee, together with every other portion of the same asset, is above 3%. */
+    static boolean bigFee(SwapPlan.Payment p, java.util.Map<String, java.math.BigDecimal> feeShares) {
+        return p.fee() && above(feeShares.get(p.amount.asset), DANGER_FEE_PERCENT);
     }
 
-    /** True when the "0.25%"-style label exceeds {@code limit} percent; an unparseable label counts as above. */
-    private static boolean portionAbove(String percent, java.math.BigDecimal limit) {
-        try {
-            return new java.math.BigDecimal(percent.replace("%", "")).compareTo(limit) > 0;
-        } catch (NumberFormatException e) {
-            return true;
+    /**
+     * Per asset, the share of that asset's output all its portion fees take together:
+     * 1 − Π(1 − portion), since each portion is taken from what the previous ones left. A portion
+     * whose exact share is unknown counts as 100% (above every limit).
+     */
+    static java.util.Map<String, java.math.BigDecimal> feeShares(List<SwapPlan.Payment> payments) {
+        java.util.Map<String, java.math.BigDecimal> kept = new java.util.HashMap<>();
+        for (SwapPlan.Payment p : payments) {
+            if (!p.fee()) continue;
+            java.math.BigDecimal share = p.share != null ? p.share : java.math.BigDecimal.ONE;
+            java.math.BigDecimal k = kept.getOrDefault(p.amount.asset, java.math.BigDecimal.ONE);
+            kept.put(p.amount.asset, k.multiply(java.math.BigDecimal.ONE.subtract(share), java.math.MathContext.DECIMAL128));
         }
+        java.util.Map<String, java.math.BigDecimal> out = new java.util.HashMap<>();
+        for (java.util.Map.Entry<String, java.math.BigDecimal> e : kept.entrySet()) {
+            out.put(e.getKey(), java.math.BigDecimal.ONE.subtract(e.getValue()));
+        }
+        return out;
+    }
+
+    /** True when {@code share} (a fraction) is above {@code limitPercent} percent. */
+    private static boolean above(java.math.BigDecimal share, java.math.BigDecimal limitPercent) {
+        return share.movePointRight(2).compareTo(limitPercent) > 0;
+    }
+
+    /** "34.71%" (rounded down to 2 decimals). */
+    private static String percentLabel(java.math.BigDecimal share) {
+        return share.movePointRight(2).setScale(2, java.math.RoundingMode.DOWN).stripTrailingZeros().toPlainString() + "%";
+    }
+
+    /**
+     * A minimum so small it protects nothing: for a token whose decimals the phone knows, less than
+     * 10^(decimals−6) base units (a millionth of one token); for an unknown token, at most 1000 base units.
+     */
+    static boolean dust(SwapPlan.Amount a, SwapPlan.TokenNames names) {
+        Integer decimals = names.decimals(a.asset);
+        if (decimals == null) return a.value.compareTo(BigInteger.valueOf(1000)) <= 0;
+        return a.value.compareTo(BigInteger.TEN.pow(Math.max(0, decimals - 6))) < 0;
     }
 }

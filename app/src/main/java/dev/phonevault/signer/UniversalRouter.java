@@ -473,7 +473,8 @@ final class UniversalRouter {
                         throw new SwapPlan.Refusal("V4 TAKE_PORTION back to the wallet or router");
                     }
                     String label = percent(bips, BIPS);
-                    sim.payments.add(new SwapPlan.Payment(to, new SwapPlan.Amount(c, have.min.multiply(bips).divide(BIPS), SwapPlan.Bound.AT_LEAST), label));
+                    sim.payments.add(new SwapPlan.Payment(to, new SwapPlan.Amount(c, have.min.multiply(bips).divide(BIPS), SwapPlan.Bound.AT_LEAST), label,
+                            SwapPlan.Payment.share(bips, BIPS)));
                     BigInteger keep = have.min.subtract(have.min.multiply(bips).add(BIPS).subtract(BigInteger.ONE).divide(BIPS));
                     credit.put(c, SwapPlan.Bal.atLeast(keep.max(BigInteger.ZERO)));
                     sim.steps.add("V4: pay " + label + " of " + c + " to " + who(to));

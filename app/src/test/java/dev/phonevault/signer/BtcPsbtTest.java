@@ -335,17 +335,18 @@ public final class BtcPsbtTest {
 
     @Test public void changeMustBeTheSpentAccountAndTypeWithinTheIndexWindow() throws Exception {
         Psbt p = psbt(fixture("p2wpkh-send-with-change")); // spends m/84'/0'/0'/0/0 and /0/1
-        // the fixture's own change (account 1, /1/0) and the window edge: highest input index 1 + 1000
+        // the fixture's own change (account 1, /1/0) and the gap-limit edge: highest input index 1 + 20
         assertTrue(review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 0), BtcNetwork.BITCOIN).outputs.get(1).change);
-        BtcPsbtReview edge = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 1001), BtcNetwork.BITCOIN);
+        BtcPsbtReview edge = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 21), BtcNetwork.BITCOIN);
         assertTrue(edge.outputs.get(1).change);
         assertNotNull(value(edge, "Change back to your wallet ✓"));
-        // one past the window: own, but shown as a normal output with a WARNING
-        BtcPsbtReview far = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 1002), BtcNetwork.BITCOIN);
+        // one past the gap limit: own, but shown as a normal output with a WARNING
+        BtcPsbtReview far = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 22), BtcNetwork.BITCOIN);
         assertFalse(far.outputs.get(1).change);
         assertTrue(far.outputs.get(1).ownElsewhere);
         assertNull(value(far, "Change back to your wallet ✓"));
-        assertTrue(has(far, MessageReview.WARNING, "To your wallet: Account 1 · Native SegWit, path m/84'/0'/0'/1/1002, which your wallet app may not show"));
+        assertTrue(has(far, MessageReview.WARNING, "To your wallet: Account 1 · Native SegWit, path m/84'/0'/0'/1/22, which your wallet app may not show"
+                + " (it is far beyond the addresses your wallet app scans (gap limit))"));
         assertEquals("Send 0.01497567 BTC", far.title);
         // the old rule's extreme: index 999,999 of account 20
         BtcPsbtReview extreme = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 19, 1, 999_999), BtcNetwork.BITCOIN);
@@ -355,15 +356,19 @@ public final class BtcPsbtTest {
         BtcPsbtReview other = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 1, 0), BtcNetwork.BITCOIN);
         assertFalse(other.outputs.get(1).change);
         assertTrue(has(other, MessageReview.WARNING, "Account 2 · Native SegWit, path m/84'/0'/1'/1/0"));
-        // an own RECEIVE address of another account stays "Your own address ✓" within the window
-        BtcPsbtReview receive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 5), BtcNetwork.BITCOIN);
+        assertTrue(has(other, MessageReview.WARNING, "(it is change for a different account or address type than the coins spent)"));
+        // an own RECEIVE address of another account stays "Your own address ✓" within the first 20 (gap limit)
+        BtcPsbtReview receive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 19), BtcNetwork.BITCOIN);
         assertTrue(receive.outputs.get(1).ownReceive);
-        assertTrue(has(receive, "Your own address ✓", "m/84'/0'/1'/0/5"));
-        // ... but not far past it
-        BtcPsbtReview farReceive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 1001), BtcNetwork.BITCOIN);
+        assertTrue(has(receive, "Your own address ✓", "m/84'/0'/1'/0/19"));
+        // ... but not past it
+        BtcPsbtReview farReceive = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 1, 0, 20), BtcNetwork.BITCOIN);
         assertFalse(farReceive.outputs.get(1).ownReceive);
-        assertTrue(has(farReceive, MessageReview.WARNING, "path m/84'/0'/1'/0/1001"));
-        assertEquals(1000, BtcPsbtReview.OWN_INDEX_WINDOW);
+        assertTrue(has(farReceive, MessageReview.WARNING, "path m/84'/0'/1'/0/20, which your wallet app may not show (it is far beyond"));
+        // a receive address of the spent account: up to highest input index (1) + 20
+        assertTrue(review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 0, 21), BtcNetwork.BITCOIN).outputs.get(1).ownReceive);
+        assertTrue(review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 0, 22), BtcNetwork.BITCOIN).outputs.get(1).ownElsewhere);
+        assertEquals(20, BtcPsbtReview.GAP_LIMIT);
     }
 
     /** Replaces input {@code index}'s coin by output 0 of a fresh previous transaction paying {@code script}. */
@@ -432,7 +437,7 @@ public final class BtcPsbtTest {
     @Test public void farFutureLockTimeIsWarned() throws Exception {
         Psbt p = psbt(fixture("p2wpkh-send-with-change"));
         long oct2026 = 1_791_900_000L; // 2026-10-13
-        long tip = BtcPsbtReview.MAIN_ANCHOR_HEIGHT + (oct2026 - BtcPsbtReview.MAIN_ANCHOR_TIME) / BtcPsbtReview.MAIN_SECONDS_PER_BLOCK;
+        long tip = BtcPsbtReview.estimatedTip(BtcNetwork.BITCOIN, oct2026);
         // none, current height (anti fee sniping), a few days out: no warning
         for (long lock : new long[] {0, tip - 3000, tip, tip + 1008}) {
             assertNull(Long.toString(lock), BtcPsbtReview.lockTimeWarning(withLockTime(p, lock, 0xfffffffdL).tx, BtcNetwork.BITCOIN, oct2026));

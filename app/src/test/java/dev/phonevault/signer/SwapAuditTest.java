@@ -59,26 +59,43 @@ public final class SwapAuditTest {
     // ------------------------------------------------------------------ F1: split fees
 
     /**
-     * F1. The ">3% fee = DANGER + OTHER ADDRESS" rule is per PAY_PORTION command. Fourteen 3% portions
-     * take ~34.7% of the output to two other addresses with no DANGER row, "Recipient: this wallet ✓"
-     * and the ordinary "Approve swap & sign" label.
+     * F1 (fixed). The ">3% fee = DANGER + OTHER ADDRESS" rule applies to all portions of the same
+     * output together: fourteen 3% portions (~34.7% of the output, to two other addresses) are one
+     * DANGER total, "Recipient: OTHER ADDRESS ✗", the other-address title and sign label, and both
+     * collectors are recorded parties.
      */
-    @Test public void splitPortionsTakeAThirdWithoutAnyDanger() throws Exception {
+    @Test public void splitPortionsAreAddedUpIntoOneDanger() throws Exception {
         TransactionReview r = vector("audit-split-fees-under-three-percent");
-        assertEquals(r.text(), 0, count(r, "DANGER"));
-        assertTrue(value(r, "Summary"), value(r, "Summary").contains("Recipient: this wallet ✓"));
-        assertEquals("Approve swap & sign", r.signLabel);
-        assertEquals("Swap USDC → ETH", r.title);
-        assertEquals("each 3% fee is only a CHECK-level row", 14, count(r, "WARNING"));
-        assertTrue(r.parties.isEmpty()); // fee collectors are never recorded or look-alike checked
-        // what the wallet is left with: 0.0312 × 0.97^14 ≈ 0.02037 — a third gone
+        assertTrue(r.text(), has(r, "DANGER", "OTHER ADDRESS ✗ 14 separate fees together take 34.71% of the WETH output"));
+        assertEquals(r.text(), 15, count(r, "DANGER")); // the total, plus each portion as an OTHER ADDRESS payout
+        assertTrue(value(r, "Summary"), value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertEquals("Swap to other address & sign", r.signLabel);
+        assertEquals("Swap to OTHER ADDRESS", r.title);
+        assertEquals(r.text(), 0, count(r, "WARNING"));
+        assertEquals(2, r.parties.size()); // each collector once
+        // what the wallet is left with is still shown: 0.0312 × 0.97^14 ≈ 0.02037 — a third gone
         BigDecimal left = ethAmount(value(r, "You get at least"));
         assertTrue(left.toPlainString(), left.compareTo(new BigDecimal("0.0204")) < 0);
         assertTrue(left.compareTo(new BigDecimal("0.0203")) > 0);
     }
 
-    /** F1 in V4: twelve 3% TAKE_PORTIONs (~30.6% of the USDC output), still no DANGER. */
-    @Test public void splitV4TakePortionsAvoidTheDanger() throws Exception {
+    /** F1 (fixed): portions adding up to 1–3% are one WARNING; each portion stays a plain "Fee" row. */
+    @Test public void splitPortionsBetweenOneAndThreePercentAreOneWarning() throws Exception {
+        byte[] usdcForWeth = Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), new BigInteger("31200000000000000"),
+                Calldata.v3Path(USDC, 500, WETH), true);
+        String data = Calldata.execute(cmds(0x00, 0x06, 0x06, 0x0c), Arrays.asList(usdcForWeth,
+                Calldata.payPortion(WETH, FEE_COLLECTOR, 100), Calldata.payPortion(WETH, FEE_COLLECTOR_2, 100),
+                Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
+        TransactionReview r = review("0x1", UR_ETH, "0x0", data);
+        assertTrue(r.text(), has(r, "WARNING", "2 separate fees together take 1.99% of the WETH output"));
+        assertEquals(r.text(), 1, count(r, "WARNING"));
+        assertEquals(2, count(r, "Fee"));
+        assertTrue(value(r, "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(r.parties.isEmpty());
+    }
+
+    /** F1 in V4 (fixed): twelve 3% TAKE_PORTIONs (~30.6% of the USDC output) are a DANGER. */
+    @Test public void splitV4TakePortionsAreADanger() throws Exception {
         BigInteger in = new BigInteger("500000000000000000");
         List<byte[]> params = new ArrayList<>();
         params.add(Calldata.v4ExactInSingle(Calldata.poolKey(ETH, USDC, 500, 10, ETH), true, in, BigInteger.valueOf(1200).multiply(E6)));
@@ -95,8 +112,10 @@ public final class SwapAuditTest {
         byte[] v4 = Calldata.v4(cmds(actions), params.toArray(new byte[0][]));
         TransactionReview r = review("0x1", UR_ETH, "0x6f05b59d3b20000",
                 Calldata.execute(cmds(0x10), Collections.singletonList(v4), BigInteger.valueOf(DEADLINE)));
-        assertEquals(r.text(), 0, count(r, "DANGER"));
-        assertTrue(value(r, "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(r.text(), has(r, "DANGER", "OTHER ADDRESS ✗ 12 separate fees together take 30.61% of the USDC output"));
+        assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertEquals("Swap to other address & sign", r.signLabel);
+        assertEquals(2, r.parties.size());
         // 1200 × 0.97^12 ≈ 832.9 USDC left of a 1200 USDC minimum
         String got = value(r, "You get at least");
         assertTrue(got, new BigDecimal(got.replace(" USDC", "").replace(",", "")).compareTo(new BigDecimal("833")) < 0);
@@ -105,17 +124,15 @@ public final class SwapAuditTest {
     // ------------------------------------------------------------------ F2: abandoned input
 
     /**
-     * F2. Unused native value is refused ("does not use"), but the same ETH wrapped first and left in
-     * the router as an EXACTLY known 1 WETH is only a "may be left" WARNING: no DANGER, no amount.
-     * Anyone (the host's own bot) can SWEEP it in the next block.
+     * F2 (fixed). Unused native value is refused ("does not use"), and so is the same ETH wrapped
+     * first and left in the router as an exactly known 1 WETH (anyone — the host's own bot — could
+     * SWEEP it in the next block).
      */
-    @Test public void wrappedNativeLeftInTheRouterIsOnlyAWarning() throws Exception {
-        TransactionReview r = vector("audit-wrapped-eth-left-in-router");
-        assertEquals(r.text(), 0, count(r, "DANGER"));
-        assertTrue(value(r, "Summary"), value(r, "Summary").startsWith("You give 2 ETH · You get at least 1,200 USDC · Recipient: this wallet ✓"));
-        assertTrue(has(r, "WARNING", "Some WETH may be left in the router"));
-        assertFalse("the known amount (1 WETH) is never stated", has(r, "WARNING", "1 WETH"));
-        // ... while the unwrapped twin of exactly this call is refused outright
+    @Test public void wrappedNativeLeftInTheRouterIsRefused() throws Exception {
+        JSONObject v = synthetic("audit-wrapped-eth-left-in-router");
+        String why = refused(v.getString("chainId"), v.getString("to"), v.getString("value"), v.getString("data"));
+        assertTrue(why, why.contains("it leaves 1000000000000000000 of this wallet's own " + WETH.toLowerCase() + " in the router"));
+        // ... like the unwrapped twin of exactly this call
         String unwrapped = Calldata.execute(cmds(0x0b, 0x00), Arrays.asList(
                 Calldata.wrap(ADDRESS_THIS, E18),
                 Calldata.v3Swap(MSG_SENDER, E18, BigInteger.valueOf(1200).multiply(E6), Calldata.v3Path(WETH, 500, USDC), false)),
@@ -123,31 +140,51 @@ public final class SwapAuditTest {
         assertTrue(refused("0x1", UR_ETH, "0x1bc16d674ec80000", unwrapped).contains("does not use"));
     }
 
-    /** F2 with tokens: 1000 USDC pulled by Permit2, 100 swapped, exactly 900 USDC abandoned — WARNING only. */
-    @Test public void permit2PulledTokensLeftInTheRouterAreOnlyAWarning() throws Exception {
+    /** F2 with tokens (fixed): 1000 USDC pulled by Permit2, 100 swapped, exactly 900 USDC abandoned — refused. */
+    @Test public void permit2PulledTokensLeftInTheRouterAreRefused() throws Exception {
         byte[] pull = Calldata.args(Calldata.a(USDC), Calldata.a(ADDRESS_THIS),
                 new org.web3j.abi.datatypes.generated.Uint160(BigInteger.valueOf(1000).multiply(E6)));
         String data = Calldata.execute(cmds(0x02, 0x00), Arrays.asList(pull,
                 Calldata.v3Swap(MSG_SENDER, BigInteger.valueOf(100).multiply(E6), new BigInteger("31200000000000000"),
                         Calldata.v3Path(USDC, 500, WETH), false)), BigInteger.valueOf(DEADLINE));
-        TransactionReview r = review("0x1", UR_ETH, "0x0", data);
-        assertEquals(r.text(), 0, count(r, "DANGER"));
-        assertTrue(value(r, "Summary").startsWith("You give 1,000 USDC · You get at least 0.0312 WETH · Recipient: this wallet ✓"));
-        assertTrue(has(r, "WARNING", "Some USDC may be left in the router"));
+        String why = refused("0x1", UR_ETH, "0x0", data);
+        assertTrue(why, why.contains("it leaves 900000000 of this wallet's own " + USDC.toLowerCase() + " in the router"));
+        // pulling exactly what is swapped is still fine
+        byte[] exact = Calldata.args(Calldata.a(USDC), Calldata.a(ADDRESS_THIS),
+                new org.web3j.abi.datatypes.generated.Uint160(BigInteger.valueOf(100).multiply(E6)));
+        TransactionReview ok = review("0x1", UR_ETH, "0x0", Calldata.execute(cmds(0x02, 0x00), Arrays.asList(exact,
+                Calldata.v3Swap(MSG_SENDER, BigInteger.valueOf(100).multiply(E6), new BigInteger("31200000000000000"),
+                        Calldata.v3Path(USDC, 500, WETH), false)), BigInteger.valueOf(DEADLINE)));
+        assertEquals(ok.text(), 0, count(ok, "DANGER"));
+        assertFalse(ok.text().contains("may be left"));
     }
 
     // ------------------------------------------------------------------ F3: 1-wei minimum
 
     /**
-     * F3. The No-minimum DANGER fires only for a minimum of exactly 0. A 1-wei minimum is just as
-     * unprotected (sandwichable to nothing) and gets no DANGER; a host simulation claiming a fair
-     * 0.3 WETH output does not contradict it either.
+     * F3 (fixed). A 1-wei minimum is just as unprotected as 0 (sandwichable to nothing) and gets the
+     * No-minimum DANGER. (A host simulation claiming a fair 0.3 WETH output does not contradict a
+     * 1-wei minimum, so the DANGER row is what warns.)
      */
-    @Test public void oneWeiMinimumIsNotFlagged() throws Exception {
+    @Test public void oneWeiMinimumIsFlaggedAsNoMinimum() throws Exception {
         TransactionReview r = vector("audit-one-wei-minimum");
         assertEquals("0.000000000000000001 WETH", value(r, "You get at least"));
-        assertEquals(r.text(), 0, count(r, "DANGER"));
+        assertTrue(r.text(), has(r, "DANGER", "No minimum: this swap accepts getting next to nothing back (0.000000000000000001 WETH)"));
+        assertEquals(1, count(r, "DANGER"));
         assertEquals(0, count(r, "WARNING"));
+        // no real transaction trips the dust rule: only the one with a literal 0 minimum shows "No minimum"
+        JSONArray real = SwapReviewTest.vectors();
+        for (int i = 0; i < real.length(); i++) {
+            JSONObject t = real.getJSONObject(i);
+            TransactionReview tr;
+            try {
+                tr = TransactionReview.build(Eip1559Request.parse(request(t.getString("chainId"), t.getString("to"),
+                        t.getString("value"), t.getString("data"))), t.getString("from"), TokenListTest.bundled());
+            } catch (RequestRefusal refusedVector) {
+                continue;
+            }
+            assertEquals(t.getString("tx"), t.getString("tx").startsWith("0x4d2a784f"), has(tr, "DANGER", "No minimum"));
+        }
 
         JSONObject v = synthetic("audit-one-wei-minimum");
         JSONObject claim = new JSONObject().put("node", "ethereum-rpc.publicnode.com").put("block", "0x18f603b")
