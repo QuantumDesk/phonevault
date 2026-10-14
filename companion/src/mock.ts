@@ -257,7 +257,6 @@ export function createMock(): Mock {
           : target && h.kind === "out" && h.status === "pending" && h.chain_id === target.chain_id && h.nonce === target.nonce && a.status !== "pending" ? { ...h, status: "dropped" } : h);
         return history as T;
       }
-      case "history_add_incoming": return history as T;
       case "history_reconcile": await sleep(200); return history as T;
       case "replacement_quote": {
         await sleep(600);
@@ -271,7 +270,6 @@ export function createMock(): Mock {
           balance_eth: BAL[c] ?? "0", network: c === 8453 ? "Base" : "Ethereum Mainnet", token: null,
           replaces: { hash: e.hash!, kind: a.kind, previous_max_fee_per_gas: e.tx?.max_fee_per_gas ?? "0x3b9aca00", previous_max_priority_fee_per_gas: e.tx?.max_priority_fee_per_gas ?? "0xf4240" } } as T;
       }
-      case "spot_usd": await sleep(200); return (a.symbol === "POL" ? 0.21 : a.symbol === "BTC" ? 61234.5 : 2451.37) as T;
       case "prices_usd": await sleep(200); return { ETH: 2451.37, POL: 0.21, BTC: 61234.5 } as T;
       case "watch_configure": return undefined as T;
       case "watch_scan_status": return [
