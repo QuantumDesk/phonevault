@@ -562,7 +562,7 @@ function connectCard() {
   const c = connect!;
   if (engine.s !== "ready") {
     return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
-      h("p", { class: "kicker" }, "WALLETCONNECT"),
+      h("p", { class: "kicker" }, "WalletConnect"),
       h("h3", null, engine.s === "starting" ? "Starting WalletConnect…" : engine.s === "error" ? "WalletConnect didn't start" : "Add a project ID first"),
       engine.s === "error" ? h("p", { class: "inline-error" }, icon("alert", 15), engine.message) : null,
       engine.s === "off" ? h("p", { class: "muted" }, "WalletConnect needs a free project ID from Reown (cloud.reown.com). Paste it in Settings → WalletConnect. It is stored only on this Mac.") : null,
@@ -580,7 +580,7 @@ function connectCard() {
     catch { c.error = "Couldn't read the clipboard. Paste into the field with ⌘V."; render(); }
   };
   return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
-    h("p", { class: "kicker" }, "CONNECT A DAPP"),
+    h("p", { class: "kicker" }, "Connect a dApp"),
     h("h3", null, "Paste the WalletConnect link"),
     h("p", { class: "muted small" }, "In the dApp, choose WalletConnect, then “Copy link” under the QR code. The dApp will see your address and can ask for signatures; each one still needs your phone."),
     h("label", { class: "field" }, input),
@@ -605,7 +605,7 @@ function proposalCard() {
   }) : [h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Checking what it asks for…")];
   const approveOk = !!plan && !plan.blocker && pr.selected.size > 0 && !!paired && !pr.busy;
   return h("section", { class: `card modal wc-modal${danger ? " danger-card" : ""}`, role: "dialog", "aria-modal": "true" },
-    h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "BROWSER CONNECTION REQUEST" : "CONNECTION REQUEST"),
+    h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "Browser connection request" : "Connection request"),
     dappHeader(meta, verify),
     verifyWarning(meta, verify),
     meta.description ? h("p", { class: "muted small wc-desc" }, meta.description) : null,
@@ -648,7 +648,7 @@ function itemView(it: Item): Node {
   const prep = it.prep;
   const chain = chainNum(it.req.chainId);
   const later = h("button", { class: "link wc-later", onclick: () => { requestsHidden = true; render(); }, title: "Hide this; it stays waiting on the main view" }, "Decide later");
-  const head = [h("p", { class: "kicker" }, prep?.kind === "transaction" ? "TRANSACTION REQUEST" : prep?.kind === "switch_chain" ? "NETWORK REQUEST" : "SIGNATURE REQUEST"), dappHeader(meta, v), verifyWarning(meta, v)];
+  const head = [h("p", { class: "kicker" }, prep?.kind === "transaction" ? "Transaction request" : prep?.kind === "switch_chain" ? "Network request" : "Signature request"), dappHeader(meta, v), verifyWarning(meta, v)];
 
   switch (it.stage.s) {
     case "waiting": case "preparing":

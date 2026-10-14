@@ -179,7 +179,7 @@ function emptyView() {
   const n = btcNet(host.net());
   return h("div", { class: "stack fade" },
     h("section", { class: "card account" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, "BITCOIN"), host.networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, "Bitcoin"), host.networkSelect()),
       h("div", { class: "pair-hero" }, padlock(5)),
       h("h3", null, n.test ? `Add a ${n.name} account` : "Add a Bitcoin account"),
       h("p", { class: "muted" }, "Your phone derives Bitcoin keys from the same 24 words and keeps them. This Mac stores only the account's public key (xpub), to show addresses, balance and history and to prepare transactions for the phone to sign."),
@@ -193,10 +193,10 @@ function emptyView() {
 
 function accountChip(a: BtcAccount) {
   const list = accountsOn(a.network);
-  if (list.length < 2) return h("p", { class: "kicker" }, a.label.toUpperCase());
+  if (list.length < 2) return h("p", { class: "kicker" }, a.label);
   const sel = h("select", { class: "net-select", "aria-label": "Bitcoin account" }, list.map((x) => h("option", { value: x.id, selected: x.id === a.id }, `${x.label} · ${x.kind_name}`)));
   sel.addEventListener("change", async () => { try { await btcApi.select(sel.value); await reloadAccounts(); host.renderNow(); } catch (e) { toast(errText(e)); } });
-  return h("label", { class: "net-chip acct-chip", title: "Bitcoin accounts paired with this Mac" }, h("span", { class: "kicker" }, a.label.toUpperCase()), icon("chevron", 14), sel);
+  return h("label", { class: "net-chip acct-chip", title: "Bitcoin accounts paired with this Mac" }, h("span", { class: "kicker" }, a.label), icon("chevron", 14), sel);
 }
 
 function homeView(a: BtcAccount) {
@@ -290,7 +290,7 @@ function receiveView(a: BtcAccount) {
   return h("div", { class: "stack fade" },
     host.topbar("Receive bitcoin", () => go("home")),
     h("section", { class: "card receive" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, `${a.label.toUpperCase()} · ${a.kind_name.toUpperCase()}`), host.networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, `${a.label} · ${a.kind_name}`), host.networkSelect()),
       h("div", { class: "qr-tile" }, qr),
       h("button", { class: "addr-full", onclick: () => copy(addr), title: "Click to copy" }, h("span", { class: "mono" }, groupedBtc(addr)), icon("copy", 16)),
       h("p", { class: "muted small center" }, `Address #${idx + 1} on the receive chain · a new one after each payment`),
@@ -335,7 +335,7 @@ function pairView() {
       host.renderNow();
     };
     body = h("section", { class: "card" },
-      h("p", { class: "kicker" }, "STEP 2 OF 2 · COMPARE ON THE PHONE"),
+      h("p", { class: "kicker" }, "Step 2 of 2 · Compare on the phone"),
       h("h3", null, `${c.kind === "p2tr" ? "Taproot" : "Native SegWit"} account ${c.account}`),
       h("dl", { class: "facts" },
         fact("Fingerprint", h("span", { class: "mono" }, c.fingerprint)),
@@ -360,7 +360,7 @@ function pairView() {
     );
   } else if (pair.s === "mismatch") {
     body = h("section", { class: "card danger-card" },
-      h("p", { class: "kicker danger" }, "NOT PAIRED"),
+      h("p", { class: "kicker danger" }, "Not paired"),
       h("h3", null, "Stop here"),
       h("p", null, "The phone and this Mac disagree about the account's first address, so this Mac would show addresses your phone doesn't control. Nothing was saved. Use another cable and port, and don't receive to this account until they match."),
       pair.shown ? h("p", { class: "mono small" }, `Phone: ${groupedBtc(pair.shown)}`) : null,
@@ -380,7 +380,7 @@ function pairView() {
       host.renderNow();
     };
     body = h("section", { class: "card pair" },
-      h("p", { class: "kicker" }, `STEP 1 OF 2 · ${n.name.toUpperCase()}`),
+      h("p", { class: "kicker" }, `Step 1 of 2 · ${n.name}`),
       h("h3", null, "Add a Bitcoin account from your phone"),
       h("p", { class: "muted" }, "The phone shares the account's public key (xpub) once you approve it there. This Mac can then show balances and prepare transactions; only the phone can sign."),
       h("div", { class: "field" }, h("span", { class: "field-label" }, "Address type"),
@@ -581,7 +581,7 @@ function flowBody(a: BtcAccount): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        q.replaces ? h("p", { class: "kicker" }, `REPLACES ${short(q.replaces).toUpperCase()}`) : null,
+        q.replaces ? h("p", { class: "kicker" }, `Replaces ${short(q.replaces)}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" }, s.checks.map((c) => h("li", null, icon("check", 14), c))),
         h("dl", { class: "facts" },
@@ -620,7 +620,7 @@ function review(a: BtcAccount, q: BtcQuote) {
   const change = q.outputs.find((o) => o.change);
   const big = q.fee_sats > q.amount_sats * 0.1 && q.fee_sats > 5_000;
   return h("section", { class: "card" },
-    h("p", { class: "kicker" }, q.replaces ? `REPLACEMENT FOR ${short(q.replaces).toUpperCase()} · HIGHER FEE` : "CHECK, THEN SEND TO YOUR PHONE"),
+    h("p", { class: "kicker" }, q.replaces ? `Replacement for ${short(q.replaces)} · higher fee` : "Check, then send to your phone"),
     h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtBtc(q.amount_sats), h("span", { class: "unit" }, n.unit)), $(q.amount_sats) ? h("span", { class: "fiat" }, $(q.amount_sats)) : null),
     h("dl", { class: "facts" },
       fact("To", h("span", { class: "mono break" }, groupedBtc(q.recipient))),
@@ -737,7 +737,7 @@ function exportModal(): HTMLElement | null {
     : x.error ? h("p", { class: "inline-error" }, x.error) : h("div", { class: "boot" }, h("div", { class: "spinner" }));
   return h("div", { id: "btc-export", class: "modal-scrim fade", onclick: (e: Event) => { if ((e.target as HTMLElement).id === "btc-export") close(); } },
     h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, `EXPORT TO SPARROW · ${x.a.label.toUpperCase()}`), h("button", { class: "icon-btn", onclick: close, "aria-label": "Close" }, icon("close", 18))),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, `Export to Sparrow · ${x.a.label}`), h("button", { class: "icon-btn", onclick: close, "aria-label": "Close" }, icon("close", 18))),
       body));
 }
 

@@ -35,7 +35,7 @@ function reasonList(a: Attestation): HTMLElement | null {
 export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   if (!c.report) {
     return h("section", { class: "card att-card att-pending" },
-      h("p", { class: "kicker" }, "DEVICE CHECK"),
+      h("p", { class: "kicker" }, "Device check"),
       c.checking ? h("p", { class: "row gap" }, h("i", { class: "mini-spin" }), "Checking that this phone is genuine Phone Vault hardware and firmware…")
         : h("p", { class: "muted" }, c.error ? `Not checked yet: ${c.error}` : "Not checked yet."),
       !c.checking ? h("div", { class: "row gap" }, h("button", { onclick: recheck }, icon("refresh", 15), "Check now")) : null,
@@ -44,7 +44,7 @@ export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   const a = c.report;
   const { label, cls } = verdictLabel(a);
   return h("section", { class: `card att-card ${cls}` },
-    h("p", { class: "kicker" }, icon("shield", 13), " DEVICE CHECK · ", label.toUpperCase()),
+    h("p", { class: "kicker" }, icon("shield", 13), " Device check · ", label),
     h("h3", null, a.headline),
     reasonList(a),
     a.verdict === "genuine" ? h("p", { class: "muted small" }, "Google's attestation proves the keys are in the Titan M, the app is Phone Vault's, and the phone booted locked Phone Vault firmware.") : null,

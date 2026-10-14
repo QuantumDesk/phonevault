@@ -278,12 +278,12 @@ async function selectAccount(address: string) {
 function accountSelect() {
   const list = pairedAccounts();
   const onPhone = (a: PairedAccount) => phoneAddress?.toLowerCase() === a.address.toLowerCase() && identity.s !== "unreadable";
-  if (list.length < 2) return h("p", { class: "kicker" }, activeLabel().toUpperCase());
+  if (list.length < 2) return h("p", { class: "kicker" }, activeLabel());
   const sel = h("select", { class: "net-select", "aria-label": "Account" },
     list.map((a) => h("option", { value: a.address, selected: a.active }, `${a.label} · ${short(a.checksum)}${onPhone(a) ? " · on the phone" : ""}`)));
   sel.addEventListener("change", () => { void selectAccount(sel.value); });
   return h("label", { class: "net-chip acct-chip", title: "Accounts paired with this Mac. Requests are pinned to the one shown; the phone must be on the same account." },
-    h("span", { class: "kicker" }, activeLabel().toUpperCase()), icon("chevron", 14), sel);
+    h("span", { class: "kicker" }, activeLabel()), icon("chevron", 14), sel);
 }
 
 function homeTabs() {
@@ -396,7 +396,7 @@ function receiveView() {
   return h("div", { class: "stack fade" },
     topbar("Receive", () => go("home")),
     h("section", { class: "card receive" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, "YOUR ADDRESS"), networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, "Your address"), networkSelect()),
       h("div", { class: "qr-tile" }, qr),
       h("button", { class: "addr-full", onclick: () => copy(addr), title: "Click to copy" }, h("span", { class: "mono" }, grouped(addr)), icon("copy", 16)),
       h("div", { class: "row center" }, h("button", { class: "primary", onclick: () => copy(addr) }, icon("copy", 16), "Copy address")),
@@ -451,7 +451,7 @@ function pairView() {
       if (!labelInput.value) labelInput.value = cmp.label;
     });
     body = h("div", { class: "stack" }, h("section", { class: "card" },
-      h("p", { class: "kicker" }, "COMPARE"),
+      h("p", { class: "kicker" }, "Compare"),
       h("h3", null, "Does this match your phone?"),
       h("p", { class: "muted" }, "On the phone, open Wallet. Compare every group of four characters below with the address it shows."),
       h("p", { class: "addr-compare mono" }, grouped(address)),
@@ -466,7 +466,7 @@ function pairView() {
     ), verdictCard(device, () => identifyPhone()));
   } else if (pair.s === "mismatch") {
     body = h("section", { class: "card danger-card" },
-      h("p", { class: "kicker danger" }, "NOT PAIRED"),
+      h("p", { class: "kicker danger" }, "Not paired"),
       h("h3", null, "Stop here"),
       h("p", null, "If the phone shows a different address, something between this Mac and the phone is changing data. Nothing was saved. Use another cable and port, and don't send funds until the addresses match."),
       h("div", { class: "actions" }, h("button", { onclick: () => { pair = { s: "idle" }; render(); } }, "Start over")),
@@ -567,7 +567,7 @@ function renderPhoneNotice() {
     const close = () => { if (identity.s === "other") identity.dismissed = true; renderPhoneNotice(); };
     noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
       h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-        h("p", { class: "kicker" }, "OTHER ACCOUNT ON THE PHONE"),
+        h("p", { class: "kicker" }, "Other account on the phone"),
         h("h3", null, `The phone is using ${label}`),
         h("p", { class: "muted" }, `This Mac shows ${activeLabel()}. Requests from this Mac are pinned to the account it shows, and the phone refuses a request for an account that is not active on it. Show ${label} here, or switch accounts on the phone (☰ → Accounts).`),
         h("div", { class: "set-row" }, h("span", { class: "muted" }, "This Mac shows"), h("span", { class: "mono" }, `${activeLabel()} · ${short(status?.paired_checksum ?? "")}`)),
@@ -585,7 +585,7 @@ function renderPhoneNotice() {
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
   noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
     h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-      h("p", { class: "kicker" }, "UNPAIRED ACCOUNT ON USB"),
+      h("p", { class: "kicker" }, "Unpaired account on USB"),
       h("h3", null, "The phone is using an account this Mac hasn't paired"),
       h("p", { class: "muted" }, "That happens when you switch to a new account or a passphrase wallet on the phone, after the phone was reset or restored, or with a different phone. Sending from it stays blocked until you pair it; your other paired accounts stay as they are."),
       h("div", { class: "set-row" }, h("span", { class: "muted" }, "Paired with"), h("span", { class: "mono" }, short(status?.paired_checksum ?? ""))),
@@ -792,7 +792,7 @@ function flowBody(): Node {
       if (quote.replaces) return replacementReview(quote);
       const sim = reviewSimulation(quote);
       return h("section", { class: "card" },
-        h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
+        h("p", { class: "kicker" }, "Check, then send to your phone"),
         quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
           : h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtAmount(quote.amount_eth, 8), h("span", { class: "unit" }, n.symbol)), usd(quote.amount_eth) ? h("span", { class: "fiat" }, usd(quote.amount_eth)) : null),
         h("dl", { class: "facts" },
@@ -856,7 +856,7 @@ function flowBody(): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        quote.replaces ? h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(quote.replaces.hash).toUpperCase()}`) : null,
+        quote.replaces ? h("p", { class: "kicker" }, `Replacement for tx ${shortHash(quote.replaces.hash)}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
           h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
@@ -956,7 +956,7 @@ function replacementReview(quote: Quote) {
   const usd = (eth: string) => fmtUsd(eth, price(n));
   const sim = reviewSimulation(quote);
   return h("section", { class: "card replace-card" },
-    h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(r.hash).toUpperCase()}`),
+    h("p", { class: "kicker" }, `Replacement for tx ${shortHash(r.hash)}`),
     h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
     h("p", { class: "muted" }, cancel
       ? "This sends 0 to your own address with the same nonce and a higher fee. If it is included first, the original can never be included. You pay only the network fee."

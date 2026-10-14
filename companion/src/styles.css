@@ -84,7 +84,7 @@ main { max-width: 580px; margin: 0 auto; padding: 18px 16px 48px; }
 .row.between { justify-content: space-between; }
 .row.gap { flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
-.kicker { font: 8.5px/1.6 var(--pixel); letter-spacing: 0.08em; color: var(--accent); }
+.kicker { font: 8.5px/1.6 var(--pixel); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
 .kicker.danger { color: var(--danger); }
 .section { display: grid; gap: 8px; }
 .section-title { text-transform: uppercase; font: 8.5px/1.6 var(--pixel); letter-spacing: 0.08em; color: var(--muted); padding: 6px 4px 0; font-weight: 400; }

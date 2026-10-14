@@ -101,7 +101,7 @@ function plugStep(host: SetupHost) {
   const found = phone !== "none";
   return h("section", { class: "card setup-card" },
     h("div", { class: `plug ${found ? "found" : "searching"}` }, h("div", { class: "phone-art" }, h("div", { class: "phone-screen" }, padlock(3)))),
-    h("p", { class: "kicker" }, "STEP 1 OF 5"),
+    h("p", { class: "kicker" }, "Step 1 of 5"),
     h("h3", null, found ? "Phone found" : "Plug in your Phone Vault"),
     h("p", { class: "muted" }, found
       ? "Your phone is on USB. Next, this Mac checks that it really is Phone Vault hardware and firmware."
@@ -155,7 +155,7 @@ function genuineStep(host: SetupHost) {
   }
   return h("section", { class: "card setup-card" },
     verdictBig(c),
-    h("p", { class: "kicker" }, "STEP 2 OF 5 · IS IT GENUINE?"),
+    h("p", { class: "kicker" }, "Step 2 of 5 · Is it genuine?"),
     ...body,
     !r ? legend : null,
   );
@@ -168,12 +168,12 @@ function pairStep(host: SetupHost) {
   if (!address || !r || r.verdict === "fail") return genuineStep(host);
   const already = !!st?.paired && st.paired.toLowerCase() === address.toLowerCase();
   if (s.mismatch) return h("section", { class: "card setup-card danger-card" },
-    h("p", { class: "kicker danger" }, "NOT PAIRED"),
+    h("p", { class: "kicker danger" }, "Not paired"),
     h("h3", null, "Stop here"),
     h("p", null, "If the phone shows a different address, something between this Mac and the phone is changing data. Nothing was saved. Try another cable and port, and don't send funds until the addresses match."),
     h("div", { class: "actions" }, h("button", { class: "big", onclick: () => { s.mismatch = false; host.recheck(); go(host, 1); } }, "Start over")));
   return h("section", { class: "card setup-card" },
-    h("p", { class: "kicker" }, "STEP 3 OF 5 · PAIR"),
+    h("p", { class: "kicker" }, "Step 3 of 5 · Pair"),
     h("h3", null, already ? "Already paired with this phone" : "Does this match your phone?"),
     h("p", { class: "muted" }, already ? "This Mac already checks every signature against this address." : "On the phone, open Wallet. Compare every group of four characters below with the address it shows."),
     h("p", { class: "addr-compare mono" }, grouped(address)),
@@ -204,7 +204,7 @@ function receiveStep(host: SetupHost) {
     const an = byId(s.arrived.chainId);
     return h("section", { class: "card setup-card celebrate" }, confetti(),
       h("div", { class: "result-ic ok big" }, icon("check", 32)),
-      h("p", { class: "kicker" }, "STEP 4 OF 5 · IT ARRIVED"),
+      h("p", { class: "kicker" }, "Step 4 of 5 · It arrived"),
       h("h3", null, `${s.arrived.text} received`),
       h("p", { class: "muted" }, `Your wallet on ${an.name} received it${s.arrived.from ? ` from ${short(s.arrived.from)}` : ""}. You'll get a notification like this whenever funds arrive, even with the window closed.`),
       h("div", { class: "actions" },
@@ -214,7 +214,7 @@ function receiveStep(host: SetupHost) {
   const sel = h("select", { class: "net-select", "aria-label": "Network" }, NETWORKS.map((x) => h("option", { value: x.id, selected: x.id === n.id }, x.testnet ? `${x.name} (testnet)` : x.name)));
   sel.addEventListener("change", () => { host.setChain(Number(sel.value)); go(host, 3); });
   return h("section", { class: "card setup-card" },
-    h("p", { class: "kicker" }, "STEP 4 OF 5 · RECEIVE"),
+    h("p", { class: "kicker" }, "Step 4 of 5 · Receive"),
     h("h3", null, "Send a small test amount"),
     h("p", { class: "muted" }, `From an exchange or another wallet, send a small amount to this address on ${n.name}. Before sharing it for anything larger, compare it with the Wallet screen on your phone.`),
     h("label", { class: "net-chip" }, h("i", { class: `net-dot n${n.id}` }), h("span", null, n.name), icon("chevron", 14), sel),
@@ -229,7 +229,7 @@ function sendStep(host: SetupHost) {
   const back = s.arrived?.from ?? null;
   return h("section", { class: "card setup-card" },
     h("div", { class: "pair-hero" }, padlock(5)),
-    h("p", { class: "kicker" }, "STEP 5 OF 5 · FIRST SEND (OPTIONAL)"),
+    h("p", { class: "kicker" }, "Step 5 of 5 · First send (optional)"),
     h("h3", null, "Send a little back"),
     h("p", { class: "muted" }, back ? `Send a small amount back to ${short(back)} to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Broadcast.`
       : "Send a small amount to an address you control to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Broadcast."),

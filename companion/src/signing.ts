@@ -26,7 +26,7 @@ export function mountSigning(parent: HTMLElement = document.querySelector("main"
   const error = h("p", { class: "inline-error", hidden: true });
 
   const card = h("section", { class: "card form", id: "message-card" },
-    h("p", { class: "kicker" }, "SIGN A MESSAGE"),
+    h("p", { class: "kicker" }, "Sign a message"),
     h("h3", null, "Message or typed data"),
     h("p", { class: "muted small" }, "The phone shows who is asking and what the signature allows. Anyone who receives a signature can use it; sign only what you started yourself."),
     h("label", { class: "field" }, h("span", { class: "field-label" }, "Network your app is on"),
