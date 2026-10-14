@@ -2,14 +2,8 @@ package dev.phonevault.signer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import org.junit.Test;
-
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 
 /**
  * The seed key's 30 s window, as seen from the app. Phone 2 (StrongBox) showed keystore2 accepting
@@ -49,23 +43,8 @@ public class SeedKeyWindowTest {
 
     // ---- source guards for the parts only the phone can exercise
 
-    private static String source(String file) throws Exception {
-        for (String root : new String[] {"src/main/java/dev/phonevault/signer/", "app/src/main/java/dev/phonevault/signer/"}) {
-            Path p = Paths.get(root + file);
-            if (Files.exists(p)) return new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
-        }
-        fail(file + " not found from " + Paths.get("").toAbsolutePath());
-        return null;
-    }
-
-    private static String body(String src, String signature) {
-        int start = src.indexOf(signature);
-        assertTrue(signature + " is missing", start >= 0);
-        return src.substring(start, src.indexOf("\n    }\n", start));
-    }
-
     @Test public void probeCompletesARealOperation() throws Exception {
-        String probe = body(source("VaultKeyStore.java"), "synchronized boolean seedKeyUsableNow() {");
+        String probe = SourceGuard.body(SourceGuard.source("VaultKeyStore.java"), "synchronized boolean seedKeyUsableNow() {");
         int init = probe.indexOf("cipher.init(");
         int fin = probe.indexOf("cipher.doFinal(");
         assertTrue("the probe must reach the chip's own check (update/finish), not stop at init",
@@ -73,14 +52,14 @@ public class SeedKeyWindowTest {
     }
 
     @Test public void withSeedKeyUsesTheWindowDecision() throws Exception {
-        String gate = body(source("MainActivity.java"), "private void withSeedKey(String why, Runnable op) {");
+        String gate = SourceGuard.body(SourceGuard.source("MainActivity.java"), "private void withSeedKey(String why, Runnable op) {");
         assertTrue(gate.contains("SeedKeyWindow.decide("));
         assertTrue("an own, stale confirmation must prompt, not probe",
                 gate.indexOf("Decision.ASK") < gate.indexOf("seedKeyUsableNow()"));
     }
 
     @Test public void backupRetryStaysInsideTheOwningFlow() throws Exception {
-        String open = body(source("MainActivity.java"), "private void openBackup(int token, int s, boolean checkOnly, boolean retried) {");
+        String open = SourceGuard.body(SourceGuard.source("MainActivity.java"), "private void openBackup(int token, int s, boolean checkOnly, boolean retried) {");
         assertTrue(open.contains("!retried && authLapsed(e)"));
         assertTrue("retry re-opens with the same token", open.contains("openBackup(token, s, checkOnly, true)"));
         assertEquals("re-entering beginSensitive is refused while the flow is active",

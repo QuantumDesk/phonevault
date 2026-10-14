@@ -22,7 +22,7 @@ import java.util.Collections;
  * contradiction check against what the phone decoded (vault-os/docs/simulation.md).
  */
 public final class HostSimulationTest {
-    private static final Credentials KEY = Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials KEY = TestKeys.EVM_KEY;
     private static final String ME = KEY.getAddress().toLowerCase();
     private static final String USDC = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
     private static final String DAI = "0x6b175474e89094c44da98b954eedeac495271d0f";

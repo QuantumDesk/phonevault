@@ -4,7 +4,7 @@ package dev.phonevault.signer;
  * When may the app use the credential-bound seed key without asking for the PIN first?
  *
  * <p>Two clocks decide whether the key works, and they disagree near the end of the window
- * (StrongBox, phone 2, 2026-10-11): keystore2 admits {@code Cipher.init} by how long ago it
+ * (observed on StrongBox): keystore2 admits {@code Cipher.init} by how long ago it
  * <em>received</em> the auth token, in whole seconds (a token re-delivered when the prompt closes
  * makes it look ~0.4 s younger, and truncation adds up to 1 s more), while the Titan M refuses the
  * first update/finish from the token's <em>issue</em> time and the secure-clock timestamp, in

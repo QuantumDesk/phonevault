@@ -81,7 +81,7 @@ public class SeedVaultTest {
     @Test
     public void collapsedSourceFailsTheAdaptiveProportionTest() {
         // A source whose health sample is dominated by one value: passes RCT (no long runs) but
-        // must fail APT — the test that previously never executed.
+        // must fail APT (so the health sample must be large enough for the APT to run at all).
         EntropySource collapsed = new EntropySource() {
             public String name() { return "kernel-getrandom"; }
             public boolean required() { return true; }

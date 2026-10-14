@@ -15,7 +15,6 @@ import java.util.Set;
 final class Eip1559Request {
     private static final int MAX_ID_LENGTH = 128;
     private static final int MAX_QUANTITY_BITS = 256;
-    private static final BigInteger UINT256_MAX = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);
     private static final Set<String> REQUEST_FIELDS = new HashSet<>(Arrays.asList(
             "id", "method", "chainId", "nonce", "maxPriorityFeePerGas",
             "maxFeePerGas", "gasLimit", "to", "value", "data"));
@@ -227,11 +226,6 @@ final class Eip1559Request {
         }
     }
 
-    /** approve or increaseAllowance: grants a spender permission. */
-    boolean grantsAllowance() {
-        return kind == Kind.TOKEN_APPROVAL || kind == Kind.TOKEN_INCREASE_ALLOWANCE;
-    }
-
     private static String normalizeAddress(String address) throws JSONException {
         String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase(java.util.Locale.ROOT);
         if (normalized.matches("0x0{40}")) throw new JSONException("Zero destination address is not allowed");
@@ -303,64 +297,6 @@ final class Eip1559Request {
         if (kind == Kind.TOKEN_TRANSFER_FROM) return "Token transferFrom (interface unverified)";
         if (kind == Kind.TOKEN_INCREASE_ALLOWANCE) return "Token allowance increase (interface unverified)";
         return "Token approval (interface unverified)";
-    }
-
-    String displayedAmountLabel() {
-        if (kind == Kind.NATIVE_TRANSFER) return valueEth();
-        if (grantsAllowance() && UINT256_MAX.equals(displayedAmount)) {
-            return "MAXIMUM uint256 (commonly unlimited ERC-20 allowance)";
-        }
-        return displayedAmount.toString() + " raw uint256 argument (token decimals unverified)";
-    }
-
-    String displayedAmountTitle() {
-        return grantsAllowance() ? "Allowance / token ID" : "Send";
-    }
-
-    String displayedPartyTitle() {
-        return grantsAllowance() ? "Spender / approved address" : "Recipient";
-    }
-
-    String contractDataLabel() {
-        if (kind == Kind.NATIVE_TRANSFER) return "None";
-        if (kind == Kind.TOKEN_TRANSFER) {
-            return "Selector 0xa9059cbb: transfer(address,uint256); contract interface and semantics unverified";
-        }
-        if (kind == Kind.TOKEN_APPROVAL) {
-            return "Selector 0x095ea7b3: approve(address,uint256); contract interface and semantics unverified";
-        }
-        return "Selector 0x" + tokenCall.function.selector + ": " + tokenCall.function.signature
-                + "; contract interface and semantics unverified";
-    }
-
-    String reviewPrompt() {
-        if (grantsAllowance()) {
-            return "I verified the signing address, network, target contract, decoded approved-address and allowance/token-ID arguments, and maximum fee shown above.";
-        }
-        if (kind == Kind.TOKEN_TRANSFER || kind == Kind.TOKEN_TRANSFER_FROM) {
-            return "I verified the signing address, network, target contract, decoded recipient and amount arguments, and maximum fee shown above.";
-        }
-        return "I verified the signing address, network, recipient, amount, and maximum fee shown above.";
-    }
-
-    String contractWarningTitle() {
-        return grantsAllowance() ? "DANGER" : "Warning";
-    }
-
-    String contractWarningLabel() {
-        if (kind == Kind.TOKEN_TRANSFER) {
-            return "The 0xa9059cbb selector resembles transfer(address,uint256), but the offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
-        }
-        if (kind == Kind.TOKEN_TRANSFER_FROM) {
-            return "transferFrom(address,address,uint256) moves tokens out of the decoded source address using an allowance. The offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
-        }
-        if (kind == Kind.TOKEN_INCREASE_ALLOWANCE) {
-            return "increaseAllowance(address,uint256) adds to an existing allowance. The offline signer cannot verify the contract interface, execution semantics, token identity, decimals, or the current allowance.";
-        }
-        if (kind == Kind.TOKEN_APPROVAL) {
-            return "approve(address,uint256) may grant a fungible-token allowance or approve an NFT. The offline signer cannot verify the contract interface, execution semantics, token identity, or decimals.";
-        }
-        return "Offline signer cannot verify whether the recipient is a contract or what code it may execute.";
     }
 
     /** Upper bound on what execution can cost, in the native coin: gas limit × max fee per gas. */

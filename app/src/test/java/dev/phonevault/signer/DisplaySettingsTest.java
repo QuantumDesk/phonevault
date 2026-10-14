@@ -8,7 +8,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 
 public class DisplaySettingsTest {
 
@@ -110,7 +109,7 @@ public class DisplaySettingsTest {
         VaultPinTest.FakePrefs prefs = new VaultPinTest.FakePrefs();
         assertTrue(new DisplaySettings(prefs).setLargeText(true));
         assertTrue(new DisplaySettings(prefs).largeText());
-        assertEquals(Boolean.TRUE, prefs.map.get("large_text")); // the key the app always used
+        assertEquals(Boolean.TRUE, prefs.map.get("large_text")); // the stored key name is fixed: existing settings keep working
     }
 
     /**
@@ -118,12 +117,7 @@ public class DisplaySettingsTest {
      * escape it. (SeedQrView sizes a Paint to its grid cells and is exempt by design.)
      */
     @Test public void noScreenSetsATextSizeOutsideTheTheme() throws Exception {
-        Path dir = null;
-        for (String path : new String[] {"src/main/java/dev/phonevault/signer", "app/src/main/java/dev/phonevault/signer"}) {
-            if (Files.isDirectory(Paths.get(path))) dir = Paths.get(path);
-        }
-        assertNotNull("sources not found from " + Paths.get("").toAbsolutePath(), dir);
-        try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "*.java")) {
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(SourceGuard.dir(), "*.java")) {
             for (Path f : files) {
                 String name = f.getFileName().toString();
                 if (name.equals("VaultTheme.java") || name.equals("SeedQrView.java")) continue;

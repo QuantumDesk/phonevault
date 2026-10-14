@@ -2,36 +2,21 @@ package dev.phonevault.signer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-
 /**
  * Source guard for a phone-only failure the JVM cannot reproduce: a request refused on the USB
- * reader thread (e.g. ERC-20 calldata with a trailing byte) released the approval slot with a
- * direct {@code getWindow().clearFlags(...)}. Off the UI thread that throws
- * CalledFromWrongThreadException mid-relayout, which ended the USB session before the refusal
- * was sent (the host timed out) and left the window permanently undrawn (blank screen, empty
+ * reader thread (e.g. ERC-20 calldata with a trailing byte) releases the approval slot there. A
+ * direct {@code getWindow().clearFlags(...)} off the UI thread throws
+ * CalledFromWrongThreadException mid-relayout, which ends the USB session before the refusal is
+ * sent (the host times out) and leaves the window permanently undrawn (blank screen, empty
  * uiautomator dump). Window flags may only change inside {@code keepScreenOn}, which posts to the
  * UI thread.
  */
 public class MainActivityThreadingTest {
 
-    private static String source() throws Exception {
-        for (String path : new String[] {
-                "src/main/java/dev/phonevault/signer/MainActivity.java",
-                "app/src/main/java/dev/phonevault/signer/MainActivity.java"}) {
-            Path p = Paths.get(path);
-            if (Files.exists(p)) return new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
-        }
-        fail("MainActivity.java not found from " + Paths.get("").toAbsolutePath());
-        return null;
-    }
+    private static String source() throws Exception { return SourceGuard.mainActivity(); }
 
     @Test public void windowFlagsChangeOnlyThroughTheUiThreadHelper() throws Exception {
         String src = source();

@@ -149,4 +149,18 @@ public final class MessageRequestTest {
             fail("threw " + unexpected + " instead of a schema error for " + json);
         }
     }
+
+    /** The 255-character origin limit is checked before the host-name regex (no StackOverflowError). */
+    @Test public void longOriginIsRefusedByLength() throws Exception {
+        StringBuilder origin = new StringBuilder("https://a");
+        for (int i = 0; i < 15000; i++) origin.append(".a"); // ~30 KB: fits a 32 KiB USB frame
+        JSONObject request = new JSONObject().put("id", "m").put("method", "personal_sign").put("chainId", "0x1")
+                .put("message", Numeric.toHexString("hello".getBytes(StandardCharsets.UTF_8))).put("origin", origin.toString());
+        try {
+            MessageRequest.parse(request);
+            fail("expected a refusal");
+        } catch (JSONException expected) {
+            assertTrue(expected.getMessage().contains("origin"));
+        }
+    }
 }

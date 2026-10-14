@@ -2,41 +2,71 @@ package dev.phonevault.signer;
 
 import android.app.Activity;
 import android.app.ActivityManager;
-import android.app.AlertDialog;
+import android.app.KeyguardManager;
 import android.app.admin.DevicePolicyManager;
+import android.content.BroadcastReceiver;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.res.ColorStateList;
+import android.database.ContentObserver;
+import android.graphics.Bitmap;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
-import android.os.Handler;
-import android.os.Looper;
-import android.provider.Settings;
+import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
+import android.os.BatteryManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.UserManager;
-import android.text.InputType;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
+import android.provider.Settings;
+import android.security.KeyStoreException;
+import android.security.keystore.UserNotAuthenticatedException;
+import android.text.Layout;
+import android.util.Log;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.Window;
 import android.view.WindowManager;
-import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 import org.json.JSONObject;
 import org.web3j.crypto.Credentials;
+import org.web3j.crypto.Keys;
+import org.web3j.crypto.MnemonicUtils;
 
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.nio.CharBuffer;
+import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 public final class MainActivity extends Activity implements AccessoryTransport.Listener {
+    private static final String TAG = "Vault";
     private final ExecutorService cryptoExecutor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     /**
@@ -59,7 +89,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private volatile AccessoryTransport transport;
     private volatile boolean operational;
     private TextView addressView;
-    private android.widget.ImageView qrView;
+    private ImageView qrView;
     private TextView statusView;
     private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
     private TokenList tokenList;
@@ -69,7 +99,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Counterparties of the transaction just signed, offered as "Save as contact" on its receipt. */
     private List<TransactionReview.Party> receiptParties;
     private volatile ApprovalDecision approvalDecision;
-    // --- Bitcoin (BtcRequest, BtcWallet, BtcPsbtReview, BtcPsbtSigner).
+    // ------------------------------------------------------------------ Bitcoin state
+    // See BtcRequest, BtcWallet, BtcPsbtReview, BtcPsbtSigner.
     /**
      * Per network (BtcNetwork ordinal): the STANDARD wallet's Bitcoin account public keys, derived
      * from the seed inside the seed-key window on first use and kept for this unlocked session only
@@ -81,7 +112,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Amounts already signed per coin (SegWit fee-attack guard); memory only. */
     private final BtcAmountMemory btcAmounts = new BtcAmountMemory();
     private static final String BTC_PREFS = "bitcoin", BTC_SHARING_KEY = "shared_v1";
-    // --- accounts + passphrase wallet (AccountBook, AccountScreens). Published with credentials.
+    // ------------------------------------------------------------------ accounts + passphrase wallet state
+    // See AccountBook, AccountScreens. Published together with credentials.
     /** Non-secret description of the key in {@link #credentials}; set and cleared with it under stateLock. */
     private volatile SigningAccount activeAccount;
     /** Lowercase account-0 address of the STANDARD wallet: identity of the backup check and the saved account list. */
@@ -102,7 +134,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private static final String ACCOUNT_PREFS = "accounts", ACCOUNT_BOOK_KEY = "account_book_v1";
     private volatile boolean walletLoaded, backupVerified;
     private volatile String walletAddress;
-    private volatile android.graphics.Bitmap walletQr;
+    private volatile Bitmap walletQr;
     private BackupCheck backupCheck;
     private BackupReminder backupReminder;
     private boolean largeText;
@@ -113,7 +145,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private BatteryStatus battery = BatteryStatus.UNKNOWN;
     private View batteryIndicator;
     private boolean batteryRegistered;
-    private final android.content.BroadcastReceiver batteryReceiver = new android.content.BroadcastReceiver() {
+    private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { onBattery(readBattery(intent)); }
     };
     private String screenName = "loading";
@@ -124,15 +156,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private String backupIdentity;
     private BackupCheck.Challenge backupChallenge;
     private SeedVault.Generation replacementCandidate;
-    private final java.security.SecureRandom random = new java.security.SecureRandom();
+    private final SecureRandom random = new SecureRandom();
     private long seedIdleDeadline, seedHardDeadline;
     private TextView seedTimer;
     private char[][] pinSetupEntries;
 
-    // --- device security & lifecycle (roadmap chunk 1) ---
+    // ------------------------------------------------------------------ device security & lifecycle
     /** Idle time (no touch) before the vault locks and drops the key from memory. */
     private static final long IDLE_LOCK_MS = 2 * 60 * 1000L;
-    /** The recovery phrase never stays on screen longer than this. */
     /** Idle time before the phrase hides. Copying 24 words onto paper means not touching the phone;
      *  every touch or page turn restarts it. */
     private static final long SEED_TIMEOUT_MS = 120 * 1000L;
@@ -176,8 +207,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * it at start and refuses to publish credentials/UI if it changed — a lock can never be undone
      * by a load or regeneration that finishes late.
      */
-    private final java.util.concurrent.atomic.AtomicInteger session =
-            new java.util.concurrent.atomic.AtomicInteger();
+    private final AtomicInteger session =
+            new AtomicInteger();
     /** True between onStart and onStop. Nothing unlocks or publishes while the activity is hidden. */
     private volatile boolean foreground;
     private Intent pendingUsb;
@@ -193,7 +224,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private String gateNotice;
     private int shiftPhase;
     /** Release builds: watches Settings.Global.ADB_ENABLED and adb_wifi_enabled (see adbRefused). */
-    private android.database.ContentObserver adbObserver;
+    private ContentObserver adbObserver;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -205,7 +236,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         ui.postDelayed(pixelShift, PIXEL_SHIFT_MS);
         // Release: USB debugging switched on while the vault is open stops it at once (adbRefused).
         if (!devBuild()) {
-            adbObserver = new android.database.ContentObserver(ui) {
+            adbObserver = new ContentObserver(ui) {
                 @Override public void onChange(boolean selfChange) { activateIfPolicyReady(); }
             };
             getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver);
@@ -228,7 +259,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         // permission) is delivered at once, then every change while we are in front.
         if (!batteryRegistered) {
             batteryRegistered = true;
-            Intent sticky = registerReceiver(batteryReceiver, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+            Intent sticky = registerReceiver(batteryReceiver, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
             if (sticky != null) onBattery(readBattery(sticky));
         }
         devDumpUi();
@@ -244,10 +275,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private static BatteryStatus readBattery(Intent intent) {
         if (intent == null) return BatteryStatus.UNKNOWN;
-        return BatteryStatus.of(intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1),
-                intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1),
-                intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1),
-                intent.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0));
+        return BatteryStatus.of(intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1),
+                intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1),
+                intent.getIntExtra(BatteryManager.EXTRA_STATUS, -1),
+                intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0));
     }
 
     /** UI thread (receiver). Updates the header in place; Home re-renders only when "low" flips. */
@@ -274,7 +305,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         super.onUserInteraction();
         if (unlocked) armIdleLock();
         if (sensitive.active() && backupWords != null)
-            seedIdleDeadline = android.os.SystemClock.elapsedRealtime() + SEED_TIMEOUT_MS;
+            seedIdleDeadline = SystemClock.elapsedRealtime() + SEED_TIMEOUT_MS;
         devDumpUi(); // dev-only: every touch refreshes the UI dump (no-op in release)
     }
 
@@ -396,7 +427,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** As {@link #withSeedKey(String, Runnable)}; {@code onCancel} (may be null) runs if the PIN prompt is dismissed. */
     private void withSeedKey(String why, Runnable op, Runnable onCancel) {
         if (!credentialMode()) { op.run(); return; }
-        SeedKeyWindow.Decision decision = SeedKeyWindow.decide(lastCredentialConfirm, android.os.SystemClock.elapsedRealtime());
+        SeedKeyWindow.Decision decision = SeedKeyWindow.decide(lastCredentialConfirm, SystemClock.elapsedRealtime());
         if (decision == SeedKeyWindow.Decision.RUN) { op.run(); return; }
         // Our own confirmation is near or past the window's end: probing now could pass keystore2
         // and still fail on the chip a moment later (SeedKeyWindow), so ask.
@@ -422,7 +453,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             credentialPromptOpen = false;
             if (s != session.get() && unlocked) return;
             if (ok) {
-                lastCredentialConfirm = android.os.SystemClock.elapsedRealtime();
+                lastCredentialConfirm = SystemClock.elapsedRealtime();
                 onOk.run();
             } else if (onCancel != null) {
                 onCancel.run();
@@ -433,11 +464,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Keystore refused because the PIN window lapsed (the op took longer than the window). */
     private static boolean authLapsed(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof android.security.keystore.UserNotAuthenticatedException) return true;
+            if (c instanceof UserNotAuthenticatedException) return true;
             // Keystore2 may report the same refusal as a KeyStoreException instead.
-            if (c instanceof android.security.KeyStoreException
-                    && ((android.security.KeyStoreException) c).getNumericErrorCode()
-                            == android.security.KeyStoreException.ERROR_USER_AUTHENTICATION_REQUIRED) return true;
+            if (c instanceof KeyStoreException
+                    && ((KeyStoreException) c).getNumericErrorCode()
+                            == KeyStoreException.ERROR_USER_AUTHENTICATION_REQUIRED) return true;
             String m = c.getMessage();
             if (m != null && (m.contains("not authenticated") || m.contains("KEY_USER_NOT_AUTHENTICATED"))) return true;
         }
@@ -454,23 +485,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Locked gate in credential mode: our screen, the system verifies the PIN. */
     private void showCredentialGate(int s) {
         // The boot attempt below is still waiting for this session: onCreate and onResume both
-        // show the gate on a cold start, and a second call used to replace the attempt's loading
-        // screen with the locked page AND queue the system prompt while the boot lock screen was
-        // still animating away (credentialtest "asked a second time", rung 4b, 2026-10-11). The
+        // show the gate on a cold start, and a second call would replace the attempt's loading
+        // screen with the locked page AND queue the system prompt while the boot lock screen is
+        // still animating away (the PIN would be asked a second time). The
         // attempt shows the gate itself if the keystore refuses; a new session (lock) passes.
         if (bootAttemptSession == s) return;
-        boolean freshBoot = android.os.SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
+        boolean freshBoot = SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
         if (freshBoot && bootUnlock.tryConsume(bootId())) {
             // The boot lock screen may still be animating away: give it up to 4 s to report the
             // device unlocked, then try the key; if the keystore refuses we come back and prompt.
             // tryConsume committed "used for this boot" before we got here.
             bootAttemptSession = s;
-            android.app.KeyguardManager keyguard = getSystemService(android.app.KeyguardManager.class);
-            final long deadline = android.os.SystemClock.elapsedRealtime() + 4000;
+            KeyguardManager keyguard = getSystemService(KeyguardManager.class);
+            final long deadline = SystemClock.elapsedRealtime() + 4000;
             Runnable attempt = new Runnable() {
                 @Override public void run() {
                     if (s != session.get() || unlocked) { bootAttemptSession = -1; return; }
-                    if (keyguard != null && keyguard.isDeviceLocked() && android.os.SystemClock.elapsedRealtime() < deadline) {
+                    if (keyguard != null && keyguard.isDeviceLocked() && SystemClock.elapsedRealtime() < deadline) {
                         ui.postDelayed(this, 250);
                         return;
                     }
@@ -515,24 +546,24 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void clearPinEntry() {
         if (pinScreen != null) pinScreen.dispose();
         pinScreen = null;
-        if (pinSetupEntries != null && pinSetupEntries[0] != null) java.util.Arrays.fill(pinSetupEntries[0], '0');
+        if (pinSetupEntries != null && pinSetupEntries[0] != null) Arrays.fill(pinSetupEntries[0], '0');
         pinSetupEntries = null;
     }
 
     private void onCreatePinEntry(char[] entered, char[][] firstEntry, int s) {
-        if (s != session.get()) { java.util.Arrays.fill(entered, '0'); return; }
+        if (s != session.get()) { Arrays.fill(entered, '0'); return; }
         if (firstEntry[0] == null) {
             firstEntry[0] = entered.clone();
-            java.util.Arrays.fill(entered, '0');
+            Arrays.fill(entered, '0');
             pinScreen.setTitle("CONFIRM PIN");
             pinScreen.setSubtitle("Enter the same PIN again.");
             pinScreen.reset();
             return;
         }
-        boolean match = java.util.Arrays.equals(firstEntry[0], entered);
-        java.util.Arrays.fill(entered, '0');
+        boolean match = Arrays.equals(firstEntry[0], entered);
+        Arrays.fill(entered, '0');
         if (!match) {
-            java.util.Arrays.fill(firstEntry[0], '0');
+            Arrays.fill(firstEntry[0], '0');
             firstEntry[0] = null;
             pinScreen.setTitle("SET PIN");
             pinScreen.setSubtitle("Choose a " + VaultPin.PIN_LENGTH + "-digit PIN.");
@@ -551,7 +582,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 // repaired at startup: VaultPin.reconcile sees the device credential.)
                 boolean bound = SystemCredential.install(this, forSystem); // zeroes forSystem
                 if (bound) {
-                    java.util.Arrays.fill(chosen, '0');
+                    Arrays.fill(chosen, '0');
                     pin.markCredentialHeld();
                 } else {
                     pin.set(chosen); // zeroes the array
@@ -562,7 +593,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     unlock(s);
                 });
             } catch (Exception e) {
-                java.util.Arrays.fill(forSystem, '0');
+                Arrays.fill(forSystem, '0');
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) return;
                     pinScreen.setTitle("SET PIN");
@@ -573,7 +604,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void onUnlockEntry(char[] entered, int s) {
-        if (s != session.get()) { java.util.Arrays.fill(entered, '0'); return; }
+        if (s != session.get()) { Arrays.fill(entered, '0'); return; }
         pinScreen.setSubtitle("Checking…");
         final char[] forSystem = SystemCredential.supported() ? entered.clone() : new char[0];
         cryptoExecutor.execute(() -> {
@@ -594,11 +625,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         return;
                     }
                 }
-                java.util.Arrays.fill(forSystem, '0');
+                Arrays.fill(forSystem, '0');
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) {
                         // Stopped/locked while checking: the gate was re-created with a new token.
-                        android.util.Log.i("Vault", "pin result discarded: stale session");
+                        Log.i(TAG, "pin result discarded: stale session");
                         return;
                     }
                     switch (result.outcome) {
@@ -642,13 +673,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         getSharedPreferences(ACCOUNT_PREFS, MODE_PRIVATE).edit().remove(ACCOUNT_BOOK_KEY).commit();
         vault.secureErase();
         backupCheck.clear();
-        android.util.Log.w("Vault", "wallet erased after " + VaultPin.MAX_ATTEMPTS + " failed PIN attempts");
+        Log.w(TAG, "wallet erased after " + VaultPin.MAX_ATTEMPTS + " failed PIN attempts");
     }
 
     /** Only the gate that verified the PIN (token {@code s}) may unlock, and only while visible. */
     private void unlock(int s) {
         if (!operational || !foreground || s != session.get()) {
-            android.util.Log.i("Vault", "unlock refused: stale session or activity not visible");
+            Log.i(TAG, "unlock refused: stale session or activity not visible");
             return;
         }
         clearPinEntry();
@@ -711,7 +742,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         sensitive.reset();
         activeSensitive = -1;
         afterReauth = null;
-        if (backupWords != null) java.util.Arrays.fill(backupWords, null);
+        if (backupWords != null) Arrays.fill(backupWords, null);
         backupWords = null;
         if (backupChallenge != null) backupChallenge.destroy();
         backupChallenge = null;
@@ -800,7 +831,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             policy.setSystemSetting(admin, Settings.System.SCREEN_OFF_TIMEOUT,
                     String.valueOf(display != null ? display.screenTimeoutMs() : SCREEN_OFF_TIMEOUT_MS));
         } catch (Exception e) {
-            android.util.Log.w("Vault", "idle policy not applied", e);
+            Log.w(TAG, "idle policy not applied", e);
         }
     }
 
@@ -873,11 +904,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (ApplianceLockdown.restrictsCameraAndInput(dev)) {
             policy.setCameraDisabled(admin, true);
             // System services/keyboards are always permitted by Android; these lists refuse the rest.
-            if (!policy.setPermittedAccessibilityServices(admin, java.util.Collections.emptyList())) {
+            if (!policy.setPermittedAccessibilityServices(admin, Collections.emptyList())) {
                 throw new IllegalStateException("Accessibility services could not be restricted");
             }
             String ime = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
-            if (!policy.setPermittedInputMethods(admin, new java.util.ArrayList<>(ApplianceLockdown.permittedInputMethods(ime)))) {
+            if (!policy.setPermittedInputMethods(admin, new ArrayList<>(ApplianceLockdown.permittedInputMethods(ime)))) {
                 throw new IllegalStateException("Input methods could not be restricted");
             }
         }
@@ -941,10 +972,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
 
-    // ---------- Native, scrollable pages. Sensitive operations never use floating dialogs.
-
-    /** Base body size; VaultTheme applies the Text size scale (one factor for every screen). */
-    private float bodySize() { return 16; }
+    // ------------------------------------------------------------------ pages
+    // Native, scrollable pages. Sensitive operations never use floating dialogs.
 
     private LinearLayout page(String eyebrow, String title, String description) {
         LinearLayout root = new LinearLayout(this);
@@ -974,15 +1003,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             mlp.setMargins(dp(12), -dp(6), 0, 0);
             header.addView(menu, mlp);
         }
-        TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(java.util.Locale.ROOT), 12, VaultTheme.FAINT);
+        TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(Locale.ROOT), 12, VaultTheme.FAINT);
         label.setPadding(0, dp(30), 0, dp(8));
         root.addView(label);
         TextView heading = VaultTheme.bodyText(this, title, 28, VaultTheme.INK);
-        heading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         root.addView(heading);
         if (description != null && !description.isEmpty()) {
             String shown = ReviewStyle.groupEvmIn(description); // e.g. a refusal naming the requested account
-            TextView caption = VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.DIM);
+            TextView caption = VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.DIM);
             if (!shown.equals(description)) keepGroupsWhole(caption);
             caption.setPadding(0, dp(12), 0, dp(12));
             root.addView(caption);
@@ -1018,8 +1047,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
         // Whole EVM addresses in groups of four; a card that IS an address is monospace.
         String shown = ReviewStyle.groupEvmIn(value);
-        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, bodySize(), VaultTheme.INK)
-                : VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.INK);
+        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK)
+                : VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK);
         if (!shown.equals(value)) keepGroupsWhole(text);
         text.setPadding(0, dp(6), 0, 0);
         box.addView(text);
@@ -1037,9 +1066,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return unlocked && operational && walletLoaded && !sensitive.active() && approvalDecision == null
                 && !replacementActive() && !restoreReplacing;
     }
-
-    /** Former tab row. Navigation moved into the ☰ header menu; kept so screens stay one-line simple. */
-    private void nav(LinearLayout parent, String selected) { }
 
     private void showMenu() {
         LinearLayout root = page("MENU", "Where to?", null);
@@ -1067,8 +1093,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         getWindow().setNavigationBarColor(VaultTheme.BG);
         display = new DisplaySettings(getPreferences(MODE_PRIVATE));
         applyDisplaySettings();
-        battery = readBattery(registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
-        statusView = VaultTheme.bodyText(this, "", bodySize(), VaultTheme.DIM);
+        battery = readBattery(registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
+        statusView = VaultTheme.bodyText(this, "", VaultTheme.BODY_SIZE, VaultTheme.DIM);
         showLoading("Opening Phone Vault", "Checking appliance policy…");
     }
 
@@ -1109,7 +1135,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
             box.setGravity(Gravity.CENTER_HORIZONTAL);
-            qrView = new android.widget.ImageView(this);
+            qrView = new ImageView(this);
             qrView.setContentDescription("Receiving address QR. Full address follows.");
             qrView.setImageBitmap(walletQr);
             // Shown at the bitmap's own pixel size: integer-scaled modules stay perfectly square.
@@ -1117,10 +1143,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             qlp.gravity = Gravity.CENTER_HORIZONTAL;
             qlp.setMargins(0, dp(4), 0, dp(18));
             box.addView(qrView, qlp);
-            box.addView(VaultTheme.bodyText(this, accountName.toUpperCase(java.util.Locale.ROOT)
+            box.addView(VaultTheme.bodyText(this, accountName.toUpperCase(Locale.ROOT)
                     + (passphraseWallet ? " · PASSPHRASE" : "") + " · RECEIVE", 13, VaultTheme.FAINT));
             addressView = VaultTheme.monoText(this, formatAddress(
-                    org.web3j.crypto.Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
+                    Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
             keepGroupsWhole(addressView);
             addressView.setPadding(0, dp(12), 0, dp(8));
             box.addView(addressView);
@@ -1134,7 +1160,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
         }
         if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
-        statusView = VaultTheme.bodyText(this, statusMessage, bodySize(), VaultTheme.DIM);
+        statusView = VaultTheme.bodyText(this, statusMessage, VaultTheme.BODY_SIZE, VaultTheme.DIM);
         statusView.setPadding(dp(2), dp(20), 0, dp(4));
         root.addView(statusView);
         action(root, "Lock now", false, this::lock);
@@ -1178,7 +1204,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         present(root, "first-run");
     }
 
-    // --- optional user entropy: physical dice rolls, mixed with the two device sources.
+    // ------------------------------------------------------------------ optional user entropy
+    // Physical dice rolls, mixed with the two device sources.
 
     /** Rolls as bytes '1'..'6'; never shown back on screen, zeroed after use and on lock. */
     private final StringBuilder diceRolls = new StringBuilder();
@@ -1204,7 +1231,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             TextView b = VaultTheme.pixelButton(this, String.valueOf(face), true);
             VaultTheme.size(b, 20);
             b.setPadding(0, 0, 0, 0);
-            b.setGravity(android.view.Gravity.CENTER);
+            b.setGravity(Gravity.CENTER);
             hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
@@ -1230,7 +1257,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void createFirstWallet() {
         final int s = session.get();
-        final byte[] userEntropy = diceRolls.toString().getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        final byte[] userEntropy = diceRolls.toString().getBytes(StandardCharsets.US_ASCII);
         clearDice();
         showLoading("Creating your wallet", userEntropy.length == 0
                 ? "Generating a new recovery phrase from device entropy…"
@@ -1242,9 +1269,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 Credentials fresh;
                 try { fresh = vault.generateAndStore(userEntropy); recordEntropyReport(userEntropy.length > 0); }
-                finally { java.util.Arrays.fill(userEntropy, (byte) 0); }
+                finally { Arrays.fill(userEntropy, (byte) 0); }
                 String address = fresh.getAddress();
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
                     credentials = fresh;
@@ -1272,8 +1299,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    // --- restore OVER an existing wallet: same entry screens, but owned by a fresh-PIN sensitive
-    //     flow and the replacement state machine, exactly like Replace (USB excluded throughout).
+    // ------------------------------------------------------------------ restore over an existing wallet
+    // Same entry screens, but owned by a fresh-PIN sensitive flow and the replacement state
+    // machine, exactly like Replace (USB excluded throughout).
 
     private boolean restoreReplacing;
     private int restoreOverOp = -1;
@@ -1282,7 +1310,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!walletLoaded || credentials == null) return;
         LinearLayout root = page("SECURITY / RESTORE", "Restore a different wallet?",
                 "You will type a 24-word recovery phrase on this phone. The wallet it produces REPLACES the current one on this device. Nothing changes until you confirm the address it shows.");
-        card(root, "Current Account 1", org.web3j.crypto.Keys.toChecksumAddress(walletId != null ? walletId : walletAddress));
+        card(root, "Current Account 1", Keys.toChecksumAddress(walletId != null ? walletId : walletAddress));
         card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
         action(root, "Continue · verify PIN", true, () -> beginSensitive("restore a different wallet", () -> {
             int op;
@@ -1319,7 +1347,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     walletLoaded = true;
                     endReplacement(op);
                 }
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 runOnUiThread(() -> {
                     if (!sensitiveValid(token, s)) return;
                     walletQr = qr;
@@ -1337,14 +1365,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    // --- restore: on-device word entry (no system keyboard), validate, confirm address, commit
+    // ------------------------------------------------------------------ restore
+    // On-device word entry (no system keyboard), validate, confirm address, commit.
 
     private final String[] restoreWords = new String[SeedRestore.WORD_COUNT];
     private int restoreIndex;
     private final StringBuilder restoreBuffer = new StringBuilder();
 
     private void clearRestoreEntry() {
-        java.util.Arrays.fill(restoreWords, null);
+        Arrays.fill(restoreWords, null);
         restoreIndex = 0;
         restoreBuffer.setLength(0);
     }
@@ -1372,7 +1401,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         restoreKeyRow(root, "s t u v w x y z ⌫".split(" "));
 
         // Suggestions from the BIP39 list for what's been typed, in a slot of constant height.
-        java.util.List<String> suggestions = SeedRestore.suggestions(typed, 6);
+        List<String> suggestions = SeedRestore.suggestions(typed, 6);
         LinearLayout slot = new LinearLayout(this);
         slot.setOrientation(LinearLayout.VERTICAL);
         slot.setMinimumHeight(dp(2 * 60 + 8));
@@ -1394,7 +1423,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             slot.addView(srow);
         }
         if (suggestions.isEmpty() && !typed.isEmpty()) {
-            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", bodySize(), VaultTheme.DANGER_INK);
+            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
             none.setPadding(0, dp(12), 0, dp(6));
             slot.addView(none);
         }
@@ -1431,7 +1460,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             TextView b = VaultTheme.pixelButton(this, key, false);
             VaultTheme.size(b, 18);
             b.setPadding(0, 0, 0, 0); // a ninth of the width: any horizontal padding hides the letter
-            b.setGravity(android.view.Gravity.CENTER);
+            b.setGravity(Gravity.CENTER);
             hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
@@ -1466,7 +1495,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** All 24 entered: validate (count, wordlist, checksum) and show the address for confirmation. */
     private void validateRestore() {
         final int s = session.get();
-        final String raw = String.join(" ", java.util.Arrays.asList(restoreWords).stream()
+        final String raw = String.join(" ", Arrays.asList(restoreWords).stream()
                 .map(w -> w == null ? "" : w).toArray(String[]::new));
         final String mnemonic;
         try {
@@ -1487,8 +1516,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             replacing ? "Replace with this wallet?" : "Is this your wallet?",
                             replacing ? "This is the address your phrase produces. Confirming REPLACES the current wallet on this phone. If the address is not the one you expect, a word or its order is wrong — nothing has been saved yet."
                                       : "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
-                    card(root, replacing ? "New Account 1" : "Account 1", org.web3j.crypto.Keys.toChecksumAddress(address));
-                    if (replacing && walletAddress != null) card(root, "Replaces current", org.web3j.crypto.Keys.toChecksumAddress(walletAddress));
+                    card(root, replacing ? "New Account 1" : "Account 1", Keys.toChecksumAddress(address));
+                    if (replacing && walletAddress != null) card(root, "Replaces current", Keys.toChecksumAddress(walletAddress));
                     card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
                     action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
                             () -> withSeedKey("Confirm your PIN to save the restored wallet",
@@ -1511,7 +1540,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             try {
                 Credentials restored;
                 String address;
-                android.graphics.Bitmap qr;
+                Bitmap qr;
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational || walletLoaded) return;
                     restored = vault.restore(mnemonic);
@@ -1620,10 +1649,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         String entropy = getPreferences(MODE_PRIVATE).getString("entropy_report", null);
         card(root, "Entropy at wallet creation", entropy != null ? entropy
                 : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
-        android.content.Intent battery = registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED));
+        Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery != null) {
-            int level = battery.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1);
-            int scale = battery.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1);
+            int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+            int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
             card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
         }
         card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
@@ -1634,7 +1663,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Persist WHICH sources fed the last generated seed and whether each passed its health tests
      *  (names and pass/fail only; no entropy bytes). Shown on Device information (R7). */
     private void recordEntropyReport(boolean dice) {
-        java.util.List<SeedVault.SourceReport> reports = vault.lastGenerationReports();
+        List<SeedVault.SourceReport> reports = vault.lastGenerationReports();
         if (reports == null) return;
         StringBuilder b = new StringBuilder();
         for (SeedVault.SourceReport r : reports) {
@@ -1713,7 +1742,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         afterReauth = afterPin;
         pinScreen = new PinScreen(this, "VERIFY PIN", "Enter your PIN to " + purpose + ".", entered -> {
-            if (!sensitiveValid(token, s)) { java.util.Arrays.fill(entered, '0'); return; }
+            if (!sensitiveValid(token, s)) { Arrays.fill(entered, '0'); return; }
             final PinScreen gate = pinScreen;
             gate.setSubtitle("Checking PIN…");
             cryptoExecutor.execute(() -> {
@@ -1747,7 +1776,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             updatePinPolicy(gate);
                         }
                     });
-                } finally { java.util.Arrays.fill(entered, '0'); }
+                } finally { Arrays.fill(entered, '0'); }
             });
         });
         updatePinPolicy(pinScreen);
@@ -1788,7 +1817,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 String mnemonic = vault.revealMnemonic(() -> sensitiveValid(token, s));
                 String[] words = mnemonic.split(" ");
                 runOnUiThread(() -> {
-                    if (!sensitiveValid(token, s)) { java.util.Arrays.fill(words, null); return; }
+                    if (!sensitiveValid(token, s)) { Arrays.fill(words, null); return; }
                     backupWords = words;
                     backupIdentity = walletId; // the backup covers the wallet: its account-0 identity
                     backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
@@ -1807,7 +1836,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                 this::hideBackup);
                         return;
                     }
-                    android.util.Log.w("Vault", "backup open failed: " + chain(e));
+                    Log.w(TAG, "backup open failed: " + chain(e));
                     showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
                 });
             }
@@ -1836,7 +1865,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         try {
             modules = SeedQr.encode(backupWords, seedQrFormat);
         } catch (RuntimeException e) {
-            android.util.Log.w("Vault", "SeedQR unavailable: " + e.getClass().getSimpleName());
+            Log.w(TAG, "SeedQR unavailable: " + e.getClass().getSimpleName());
             showInfo("SeedQR unavailable", "This recovery phrase could not be shown as a SeedQR. Your written words are the backup; nothing changed.", this::hideBackup);
             return;
         }
@@ -1871,10 +1900,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!backupReminder.due(now)) return;
         LinearLayout box = VaultTheme.box(this);
         box.addView(VaultTheme.bodyText(this, "BACKUP CHECK", 13, VaultTheme.FAINT));
-        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), bodySize(), VaultTheme.INK);
+        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), VaultTheme.BODY_SIZE, VaultTheme.INK);
         headline.setPadding(0, dp(6), 0, 0);
         box.addView(headline);
-        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", bodySize() - 2, VaultTheme.DIM);
+        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", VaultTheme.BODY_SIZE - 2, VaultTheme.DIM);
         body.setPadding(0, dp(6), 0, 0);
         box.addView(body);
         action(box, "Check my backup now", false, () -> startBackupAccess(true));
@@ -1890,7 +1919,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 "Now and then Home suggests a two-minute check: pick 3 words from your written backup. Your phrase is not shown, and the reminder never interrupts a request.");
         int last = backupReminder.lastCheckDay();
         card(root, "Last checked", last < 0 ? "Not recorded on this phone yet"
-                : java.time.LocalDate.ofEpochDay(last) + " (by this phone's clock)");
+                : LocalDate.ofEpochDay(last) + " (by this phone's clock)");
         int current = backupReminder.intervalDays();
         for (int days : BackupReminder.CHOICES) {
             action(root, BackupReminder.label(days), days == current, () -> {
@@ -1903,7 +1932,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void startSeedTimer() {
-        long now = android.os.SystemClock.elapsedRealtime();
+        long now = SystemClock.elapsedRealtime();
         seedHardDeadline = now + SEED_SESSION_MS;
         seedIdleDeadline = now + SEED_TIMEOUT_MS;
         // The phrase/SeedQR has its own hide timer; don't let a short screen timeout switch the
@@ -1915,7 +1944,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void tickSeedTimer() {
         if (!sensitive.active() || backupWords == null || replacement.state() == ReplacementState.COMMITTING) return;
-        long remaining = Math.min(seedHardDeadline, seedIdleDeadline) - android.os.SystemClock.elapsedRealtime();
+        long remaining = Math.min(seedHardDeadline, seedIdleDeadline) - SystemClock.elapsedRealtime();
         if (remaining <= 0) {
             boolean discarded = replacementCandidate != null;
             if (!discarded) resumeBackupPage = backupPage;
@@ -1945,7 +1974,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         for (int i = backupPage * 4; i < backupPage * 4 + 4; i++) {
             LinearLayout row = VaultTheme.box(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
-            TextView number = VaultTheme.monoText(this, String.format(java.util.Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
+            TextView number = VaultTheme.monoText(this, String.format(Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
             number.setWidth(dp(44));
             row.addView(number);
             row.addView(VaultTheme.monoText(this, backupWords[i], 23, VaultTheme.INK),
@@ -1973,14 +2002,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         int position = backupChallenge.position();
         LinearLayout root = page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF " + backupChallenge.total(),
                 "Find word " + (position + 1), "Use your written backup. Select the word beside this number.");
-        java.util.List<String> choices = new java.util.ArrayList<>();
+        List<String> choices = new ArrayList<>();
         choices.add(backupWords[position]);
-        java.util.List<String> dictionary = org.web3j.crypto.MnemonicUtils.getWords();
+        List<String> dictionary = MnemonicUtils.getWords();
         while (choices.size() < 6) {
             String next = dictionary.get(random.nextInt(dictionary.size()));
             if (!choices.contains(next)) choices.add(next);
         }
-        java.util.Collections.shuffle(choices, random);
+        Collections.shuffle(choices, random);
         final BackupCheck.Challenge challenge = backupChallenge;
         final int token = activeSensitive, s = session.get();
         for (String choice : choices) action(root, choice, false, () -> {
@@ -2004,7 +2033,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showBackupChecked() {
         if (backupChallenge == null || !backupChallenge.complete()) return;
         ui.removeCallbacks(hideSeed);
-        if (backupWords != null) java.util.Arrays.fill(backupWords, null);
+        if (backupWords != null) Arrays.fill(backupWords, null);
         backupWords = null;
         backupChallenge.destroy();
         int checked = backupChallenge == null ? BackupCheck.SPOT_CHECK : backupChallenge.total();
@@ -2015,7 +2044,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 replacementCandidate == null ? "Confirm the account below. This check does not replace an independent restore drill."
                         : "Your current wallet will be replaced. Keep its backup if it controls any assets. The new wallet is not active until you confirm.");
         card(root, replacementCandidate == null ? "Account 1" : "New Account 1",
-                org.web3j.crypto.Keys.toChecksumAddress(address));
+                Keys.toChecksumAddress(address));
         card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
         action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
                 replacementCandidate == null ? this::saveBackupCheck
@@ -2112,7 +2141,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     walletLoaded = true;
                     endReplacement(op);
                 }
-                android.graphics.Bitmap qr = qrFor(candidate.address);
+                Bitmap qr = qrFor(candidate.address);
                 runOnUiThread(() -> {
                     if (!sensitiveValid(token, s)) return;
                     walletQr = qr;
@@ -2130,7 +2159,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    private static void secure(android.view.Window window) {
+    private static void secure(Window window) {
         if (!DevTools.SCREENSHOTS) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
     }
 
@@ -2174,7 +2203,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 final Credentials loaded = derived.credentials;
                 final AccountBook loadedBook = book;
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
                     credentials = loaded;
@@ -2201,7 +2230,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     credentials = null;
                     clearReceivingIdentity();
-                    android.util.Log.w("Vault", "wallet load failed: " + chain(e));
+                    Log.w(TAG, "wallet load failed: " + chain(e));
                     if (authLapsed(e)) {
                         if (!silentUnlockAttempt) gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again.";
                         silentUnlockAttempt = false;
@@ -2217,8 +2246,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    private android.graphics.Bitmap qrFor(String address) {
-        android.graphics.Bitmap qr = VaultTheme.qrBitmap(address, dp(232), dp(12));
+    private Bitmap qrFor(String address) {
+        Bitmap qr = VaultTheme.qrBitmap(address, dp(232), dp(12));
         if (qr == null) throw new IllegalStateException("QR could not be generated");
         return qr;
     }
@@ -2244,7 +2273,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
-                pendingUsb = intent; // fall back to the old replay-after-unlock behaviour
+                pendingUsb = intent; // fall back to replaying the attach after unlock
                 if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
             }
             return;
@@ -2447,7 +2476,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     attesting.set(false);
                 }
             });
-        } catch (java.util.concurrent.RejectedExecutionException closing) {
+        } catch (RejectedExecutionException closing) {
             attesting.set(false);
         }
     }
@@ -2530,8 +2559,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private synchronized TokenList tokens() {
         if (tokenList != null) return tokenList;
-        try (java.io.InputStream in = getResources().openRawResource(R.raw.tokens)) {
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (InputStream in = getResources().openRawResource(R.raw.tokens)) {
+            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
             for (int n; (n = in.read(buffer)) > 0; ) {
                 bytes.write(buffer, 0, n);
@@ -2611,7 +2640,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                      ReviewedSigner signer,
                                      SeedSigner seedSigner, String seedWhy,
                                      String doneMessage, String receiptLabel,
-                                     java.util.function.Function<JSONObject, String> receiptValue, boolean transaction,
+                                     Function<JSONObject, String> receiptValue, boolean transaction,
                                      Runnable afterSigned) {
         // Approve needs: the end of the review on screen once, "I verified…", and for a review with
         // a DANGER row a second box that states that danger in words (ApprovalGate).
@@ -2620,9 +2649,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (gate.dangerRequired) {
             dangerAck = new CheckBox(this);
             dangerAck.setText(ReviewStyle.dangerAcknowledgement(dangers));
-            VaultTheme.size(dangerAck, bodySize());
+            VaultTheme.size(dangerAck, VaultTheme.BODY_SIZE);
             dangerAck.setTextColor(VaultTheme.DANGER_INK);
-            dangerAck.setButtonTintList(android.content.res.ColorStateList.valueOf(VaultTheme.DANGER_INK));
+            dangerAck.setButtonTintList(ColorStateList.valueOf(VaultTheme.DANGER_INK));
             dangerAck.setMinHeight(dp(56));
             dangerAck.setPadding(dp(4), dp(18), dp(4), dp(18));
             hardenTouch(dangerAck);
@@ -2630,7 +2659,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
-        VaultTheme.size(reviewed, bodySize());
+        VaultTheme.size(reviewed, VaultTheme.BODY_SIZE);
         reviewed.setTextColor(VaultTheme.INK);
         reviewed.setMinHeight(dp(56));
         reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
@@ -2713,7 +2742,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     final boolean lapsed = authLapsed(e);
                     sendError(source, requestId, uncertain ? e.getMessage()
                             : (lapsed ? "PIN confirmation expired before signing; nothing was signed" : "Not signed: " + e.getMessage()));
-                    if (!uncertain) android.util.Log.w("Vault", "seed signing failed: " + chain(e));
+                    if (!uncertain) Log.w(TAG, "seed signing failed: " + chain(e));
                     runOnUiThread(() -> {
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
@@ -2816,12 +2845,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 : level == ReviewStyle.Level.CHECK ? VaultTheme.WARNING_INK : amber ? VaultTheme.AMBER : 0;
         TextView labelView = VaultTheme.bodyText(this, ReviewStyle.heading(r), 13, ink != 0 ? ink : VaultTheme.FAINT);
         String shown = ReviewStyle.displayValue(label, value);
-        TextView valueView = VaultTheme.monoText(this, shown, amber ? bodySize() + 2 : bodySize(), ink != 0 ? ink : VaultTheme.INK);
+        TextView valueView = VaultTheme.monoText(this, shown, amber ? VaultTheme.BODY_SIZE + 2 : VaultTheme.BODY_SIZE, ink != 0 ? ink : VaultTheme.INK);
         if (!shown.equals(value)) keepGroupsWhole(valueView);
         valueView.setTextIsSelectable(false);
         valueView.setPadding(0, dp(6), 0, dp(15));
         if (level != ReviewStyle.Level.NONE) {
-            labelView.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+            labelView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
             LinearLayout heading = new LinearLayout(this);
             heading.setOrientation(LinearLayout.HORIZONTAL);
             heading.setGravity(Gravity.CENTER_VERTICAL);
@@ -2841,8 +2870,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** Grouped addresses: break lines only at the spaces between groups (no hyphenation inside one). */
     private static void keepGroupsWhole(TextView t) {
-        t.setHyphenationFrequency(android.text.Layout.HYPHENATION_FREQUENCY_NONE);
-        t.setBreakStrategy(android.text.Layout.BREAK_STRATEGY_SIMPLE);
+        t.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);
+        t.setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE);
     }
 
     /**
@@ -2853,7 +2882,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (dangers.isEmpty()) return;
         LinearLayout panel = new LinearLayout(this);
         panel.setOrientation(LinearLayout.VERTICAL);
-        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        GradientDrawable bg = new GradientDrawable();
         bg.setColor(0x33FF5A5A);
         bg.setStroke(dp(2), VaultTheme.DANGER_INK);
         bg.setCornerRadius(dp(6));
@@ -2866,8 +2895,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         glp.rightMargin = dp(10);
         heading.addView(VaultTheme.levelGlyph(this, ReviewStyle.Level.DANGER), glp);
-        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), bodySize(), VaultTheme.DANGER_INK);
-        title.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
+        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         panel.addView(heading);
         StringBuilder topics = new StringBuilder();
@@ -2893,7 +2922,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void clearBtcWallets() {
         synchronized (stateLock) {
-            java.util.Arrays.fill(btcWallets, null);
+            Arrays.fill(btcWallets, null);
             btcWalletOwner = null;
         }
     }
@@ -2905,7 +2934,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void saveBtcSharing(BtcSharing sharing) {
         if (!getSharedPreferences(BTC_PREFS, MODE_PRIVATE).edit().putString(BTC_SHARING_KEY, sharing.encode()).commit()) {
-            android.util.Log.w("Vault", "Bitcoin sharing choice not saved (the phone will ask again)");
+            Log.w(TAG, "Bitcoin sharing choice not saved (the phone will ask again)");
         }
     }
 
@@ -3010,7 +3039,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                     throw new IllegalStateException("The wallet changed; send the request again");
                                 }
                                 if (!owner.equals(btcWalletOwner)) {
-                                    java.util.Arrays.fill(btcWallets, null);
+                                    Arrays.fill(btcWallets, null);
                                     btcWalletOwner = owner;
                                 }
                                 btcWallets[network.ordinal()] = derived;
@@ -3026,7 +3055,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             }
                         }
                     });
-                } catch (java.util.concurrent.RejectedExecutionException closing) {
+                } catch (RejectedExecutionException closing) {
                     finishApproval(decision);
                 }
             }, () -> {
@@ -3071,7 +3100,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             return;
         }
         keepScreenOn(true);
-        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(java.util.Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
+        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
                 "Share Bitcoin account with the Mac?",
                 "The connected computer asks for this account's watch-only key, to show your balance and prepare transactions.");
         root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
@@ -3126,8 +3155,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * already received, and it never changes what is signed.
      */
     private void showBtcSharing() {
-        java.util.List<String> keys;
-        synchronized (stateLock) { keys = walletId != null ? btcSharing().keys() : java.util.Collections.emptyList(); }
+        List<String> keys;
+        synchronized (stateLock) { keys = walletId != null ? btcSharing().keys() : Collections.emptyList(); }
         LinearLayout root = page("SECURITY / PRIVACY", "Bitcoin sharing",
                 "Bitcoin accounts whose watch-only key the Mac receives without asking. Stop sharing to make the phone ask again.");
         if (keys.isEmpty()) {
@@ -3171,7 +3200,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             return;
         }
         keepScreenOn(true);
-        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(java.util.Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
+        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
                 "Compare with your Mac", "Check that your Mac shows exactly this address, every group. Only this phone's screen is trusted.");
         root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
         LinearLayout box = VaultTheme.box(this);
@@ -3253,7 +3282,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     // ------------------------------------------------------------------ accounts + passphrase wallet
     //
-    // One private key in memory, as before: the ACTIVE account's (credentials). Switching derives
+    // One private key in memory: the ACTIVE account's (credentials). Switching derives
     // the new account from the seed inside the PIN window (withSeedKey → VaultKeyStore.deriveAccount,
     // one decrypt) and replaces credentials under stateLock, like unlock does. The passphrase lives
     // only in `passphrase` (char[]) while its wallet is open, and is zeroed on lock / close.
@@ -3265,8 +3294,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** Zero and forget the passphrase wallet. Call under stateLock (or where nothing else runs). */
     private void clearPassphraseWallet() {
-        if (passphrase != null) java.util.Arrays.fill(passphrase, '\0');
-        if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0');
+        if (passphrase != null) Arrays.fill(passphrase, '\0');
+        if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0');
         passphrase = null;
         pendingPassphrase = null;
         passphraseBook = null;
@@ -3282,7 +3311,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void saveStandardBook(AccountBook book) {
         if (book == null) return;
         if (!getSharedPreferences(ACCOUNT_PREFS, MODE_PRIVATE).edit().putString(ACCOUNT_BOOK_KEY, book.encode()).commit()) {
-            android.util.Log.w("Vault", "account list not saved (it is rebuilt from the seed on demand)");
+            Log.w(TAG, "account list not saved (it is rebuilt from the seed on demand)");
         }
     }
 
@@ -3290,7 +3319,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void adoptNewWallet(String account0Address) {
         clearPassphraseWallet();
         clearBtcWallets();
-        walletId = account0Address.toLowerCase(java.util.Locale.ROOT);
+        walletId = account0Address.toLowerCase(Locale.ROOT);
         standardBook = AccountBook.fresh(walletId);
         activeAccount = new SigningAccount(0, standardBook.active().name(), false, null, walletId);
         saveStandardBook(standardBook);
@@ -3336,7 +3365,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 SeedVault.Derived d = vault.deriveAccount(index, pass);
                 pass = null;
                 String address = d.credentials.getAddress();
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 boolean switched = false;
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
@@ -3372,7 +3401,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         confirmDevicePin("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, true), this::showHome);
                         return;
                     }
-                    android.util.Log.w("Vault", "account switch failed: " + chain(e));
+                    Log.w(TAG, "account switch failed: " + chain(e));
                     showInfo("Account not switched", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
@@ -3386,7 +3415,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void previewWorker(char[] chars, AccountScreens.PreviewResult result, boolean retried) {
         final int s = session.get();
-        if (!passphraseEntry || chars == null || chars.length == 0 || SeedVault.passphraseProblem(java.nio.CharBuffer.wrap(chars)) != null) return;
+        if (!passphraseEntry || chars == null || chars.length == 0 || SeedVault.passphraseProblem(CharBuffer.wrap(chars)) != null) return;
         final String pass = new String(chars); // short-lived; web3j derives from a String
         showLoading("Opening passphrase wallet", "Deriving its fingerprint and first address…");
         cryptoExecutor.execute(() -> {
@@ -3403,7 +3432,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> previewWorker(chars, result, true), this::showHome);
                         return;
                     }
-                    android.util.Log.w("Vault", "passphrase preview failed: " + chain(e));
+                    Log.w(TAG, "passphrase preview failed: " + chain(e));
                     showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. Lock and retry.", this::showHome);
                 });
             }
@@ -3413,7 +3442,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** "Use this wallet": takes ownership of {@code chars}. */
     private void usePassphrase(char[] chars) {
         synchronized (stateLock) {
-            if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0');
+            if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0');
             pendingPassphrase = chars;
         }
         withSeedKey("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(false));
@@ -3432,11 +3461,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if (s != session.get() || !unlocked) return;
                 SeedVault.Derived d = vault.deriveAccount(0, pass);
                 String address = d.credentials.getAddress();
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational || pendingPassphrase == null) return;
                     if (requestPending.get() || approvalDecision != null) throw new IllegalStateException("a request arrived; try again after it");
-                    if (passphrase != null) java.util.Arrays.fill(passphrase, '\0');
+                    if (passphrase != null) Arrays.fill(passphrase, '\0');
                     passphrase = pendingPassphrase;
                     pendingPassphrase = null;
                     passphraseFingerprint = d.fingerprint;
@@ -3459,12 +3488,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (authLapsed(e) && !retried) {
                         lastCredentialConfirm = 0;
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(true),
-                                () -> { synchronized (stateLock) { if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; } endPassphraseEntry(); showHome(); });
+                                () -> { synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; } endPassphraseEntry(); showHome(); });
                         return;
                     }
-                    synchronized (stateLock) { if (pendingPassphrase != null) java.util.Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; }
+                    synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; }
                     endPassphraseEntry();
-                    android.util.Log.w("Vault", "passphrase wallet open failed: " + chain(e));
+                    Log.w(TAG, "passphrase wallet open failed: " + chain(e));
                     showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
@@ -3487,7 +3516,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if (s != session.get() || !unlocked) return;
                 SeedVault.Derived d = vault.deriveAccount(book.activeIndex(), null);
                 String address = d.credentials.getAddress();
-                android.graphics.Bitmap qr = qrFor(address);
+                Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
                     if (!d.account0Address.equals(walletId) || !book.active().address.equalsIgnoreCase(address)) throw new IllegalStateException("the standard wallet did not match its saved account list");
@@ -3529,7 +3558,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
                 @Override public boolean ready() { return accountScreensReady() && backupVerified; }
                 @Override public void showHome() { endPassphraseEntry(); activity.showHome(); }
-                @Override public float bodySize() { return activity.bodySize(); }
                 @Override public void harden(View view) { hardenTouch(view); }
                 @Override public int dp(int value) { return activity.dp(value); }
                 @Override public AccountBook book() { return currentBook(); }
@@ -3561,12 +3589,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * send to your own other account and catches look-alikes of it. Display only; a list being
      * edited on screen at that instant just yields no names this time.
      */
-    private java.util.Map<String, String> ownAccountNames() {
-        java.util.Map<String, String> own = new java.util.LinkedHashMap<>();
+    private Map<String, String> ownAccountNames() {
+        Map<String, String> own = new LinkedHashMap<>();
         try {
             AccountBook standard = standardBook, passphraseAccounts = passphraseBook;
-            if (standard != null) for (AccountBook.Account a : new java.util.ArrayList<>(standard.all())) own.put(a.address, a.name());
-            if (passphraseAccounts != null) for (AccountBook.Account a : new java.util.ArrayList<>(passphraseAccounts.all())) {
+            if (standard != null) for (AccountBook.Account a : new ArrayList<>(standard.all())) own.put(a.address, a.name());
+            if (passphraseAccounts != null) for (AccountBook.Account a : new ArrayList<>(passphraseAccounts.all())) {
                 own.put(a.address, a.name() + " (passphrase wallet)");
             }
         } catch (RuntimeException concurrentEdit) {
@@ -3596,7 +3624,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public boolean ready() { return menuAvailable(); }
                 @Override public void showMenu() { activity.showMenu(); }
                 @Override public void showHome() { activity.showHome(); }
-                @Override public float bodySize() { return activity.bodySize(); }
                 @Override public void harden(View view) { hardenTouch(view); }
                 @Override public int dp(int value) { return activity.dp(value); }
             }, safety().book);

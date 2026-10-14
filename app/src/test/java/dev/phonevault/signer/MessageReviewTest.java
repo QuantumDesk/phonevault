@@ -279,7 +279,7 @@ public final class MessageReviewTest {
     }
 
     @Test public void signingAddressRowNamesTheActualAccount() throws Exception {
-        org.web3j.crypto.Credentials key = org.web3j.crypto.Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+        org.web3j.crypto.Credentials key = TestKeys.EVM_KEY;
         String addr = key.getAddress();
         MessageRequest req = MessageRequest.parse(MessageRequestTest.personal(Numeric.toHexString("hi".getBytes(StandardCharsets.UTF_8))));
         String checksummed = org.web3j.crypto.Keys.toChecksumAddress(addr);
@@ -427,5 +427,32 @@ public final class MessageReviewTest {
         assertEquals("1970-01-01 00:00:00 UTC (0)", MessageReview.timeLabel(BigInteger.ZERO));
         assertTrue(MessageReview.timeLabel(BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE)).startsWith("No expiry"));
         assertTrue(MessageReview.timeLabel(BigInteger.valueOf(253402300800L)).startsWith("No practical expiry"));
+    }
+
+    /**
+     * Default-ignorable code points that are NOT category Cf (U+034F, variation selectors, Hangul
+     * fillers, …) force the unreadable-data path in personal_sign and are escaped by visible().
+     */
+    @Test public void invisibleDefaultIgnorableCharactersAreFlagged() throws Exception {
+        String hidden = "I agree\u034F to the terms\uFE0F";
+        MessageRequest b = MessageRequest.parse(new JSONObject().put("id", "b").put("method", "personal_sign")
+                .put("chainId", "0x1").put("message", Numeric.toHexString(hidden.getBytes(StandardCharsets.UTF_8))));
+        assertNull("hidden-char message is not shown as readable text", b.personal.text);
+        assertEquals(MessageReview.Category.UNREADABLE,
+                MessageReview.of(b, "0xcd2a3d9f938e13cd947ec05abc7fe734df8dd826").category);
+
+        assertEquals("Uni\\u{034F}swap", MessageReview.visible("Uni\u034Fswap"));
+        assertEquals("Uni\\u{3164}swap", MessageReview.visible("Uni\u3164swap"));
+        assertEquals("Uni\\u{115F}swap", MessageReview.visible("Uni\u115Fswap"));
+        assertEquals("Uni\\u{FE0F}swap", MessageReview.visible("Uni\uFE0Fswap"));
+        assertEquals("Uni\\u{200B}swap", MessageReview.visible("Uni\u200Bswap"));
+        assertEquals("Uni\\u{E0041}swap", MessageReview.visible("Uni" + new String(Character.toChars(0xE0041)) + "swap"));
+        for (int cp : new int[] {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180F, 0x3164, 0xFE00, 0xFE0F,
+                0xFFA0, 0xE0000, 0xE0FFF, 0x200B, 0x00AD}) {
+            assertFalse(Integer.toHexString(cp), PersonalMessage.printable(cp));
+        }
+        for (int cp : new int[] {'A', 0xE9, 0xAC00 /* Hangul syllable */, 0x1F600 /* emoji */}) {
+            assertTrue(Integer.toHexString(cp), PersonalMessage.printable(cp));
+        }
     }
 }

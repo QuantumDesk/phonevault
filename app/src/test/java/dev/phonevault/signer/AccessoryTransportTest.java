@@ -2,7 +2,9 @@ package dev.phonevault.signer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
 
+import org.json.JSONObject;
 import org.junit.Test;
 
 import java.io.ByteArrayInputStream;
@@ -103,5 +105,24 @@ public final class AccessoryTransportTest {
                 + CLAIM.replace("\"decimals\":6", "\"decimals\":6.0") + "}");
         try { Eip1559Request.parse(r); org.junit.Assert.fail("6.0 accepted as decimals"); }
         catch (org.json.JSONException expected) { org.junit.Assert.assertTrue(expected.getMessage().contains("decimals")); }
+    }
+
+    /**
+     * parseStrictRequest refuses anything after the closing brace (a NUL included) and validates
+     * every \\u escape (no "\\u+041"); only JSON whitespace may follow the object.
+     */
+    @Test public void flatFrameRefusesTrailingDataAndBadUnicodeEscapes() throws Exception {
+        for (String bad : new String[] {
+                "{\"id\":\"a\",\"method\":\"getAddress\"}\u0000{\"method\":\"signEip1559\",\"to\":\"0xevil\"}",
+                "{\"id\":\"a\",\"method\":\"getAddress\"}\u0000",
+                "{\"id\":\"\\u+041\",\"method\":\"getAddress\"}",
+                "{\"id\":\"\\u\uFF10\uFF10\uFF14\uFF11\",\"method\":\"getAddress\"}",
+                "{\"id\":\"a\",/*c*/\"method\":\"getAddress\"}",
+                "{\"id\":\"a\\'\",\"method\":\"getAddress\"}"}) {
+            try { AccessoryTransport.parseStrictRequest(bad); fail("accepted " + bad); } catch (org.json.JSONException expected) { }
+        }
+        JSONObject ok = AccessoryTransport.parseStrictRequest("{\"id\":\"\\u0041\",\"method\":\"getAddress\"} \r");
+        assertEquals("A", ok.getString("id"));
+        assertEquals("getAddress", ok.getString("method"));
     }
 }

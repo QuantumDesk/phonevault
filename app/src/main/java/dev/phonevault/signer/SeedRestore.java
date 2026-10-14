@@ -1,6 +1,5 @@
 package dev.phonevault.signer;
 
-import org.web3j.crypto.Credentials;
 import org.web3j.crypto.MnemonicUtils;
 
 import java.util.ArrayList;
@@ -72,11 +71,6 @@ final class SeedRestore {
     /** Derived EVM address for the normalized phrase (for the confirm-before-commit step). */
     static String deriveAddress(String mnemonic, int accountIndex) {
         return SeedVault.deriveEvm(mnemonic, "", accountIndex).getAddress();
-    }
-
-    /** Convenience for tests. */
-    static Credentials deriveCredentials(String mnemonic, int accountIndex) {
-        return SeedVault.deriveEvm(mnemonic, "", accountIndex);
     }
 
     /** BIP39 prefix autocomplete for the word-entry keyboard (empty prefix → empty). */

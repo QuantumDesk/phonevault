@@ -22,7 +22,7 @@ import java.util.Map;
 
 /** Address book, recipient history and address-poisoning (look-alike) detection. */
 public final class AddressSafetyTest {
-    private static final Credentials KEY = Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials KEY = TestKeys.EVM_KEY;
     private static final String ME = KEY.getAddress().toLowerCase();
     private static final String ALICE = "0xabcd7f3a9c04e2b16d58a41c0f9e6b2d7a8c1234";
     /** A poisoned look-alike of ALICE: same first 4 and last 4 hex characters, different middle. */
@@ -271,5 +271,29 @@ public final class AddressSafetyTest {
         TransactionReview all = review(s, "0x5555555555555555555555555555555555555555", "0x0", setAll);
         assertTrue(SwapReviewTest.has(all, "DANGER", "Looks like"));
         assertTrue(SwapReviewTest.has(all, "WARNING", "First time approving"));
+    }
+
+    /**
+     * Known limitation: look-alike detection needs ≥3 matching characters at EACH end, so a poisoned
+     * address that copies only the last 8 (or first 8) hex characters of a saved contact is not
+     * flagged as a look-alike.
+     * Accepted to keep false alarms rare; such an address is still a new recipient and shown in full.
+     */
+    @Test public void knownLimitation_lopsidedLookAlikesAreNotFlagged() throws Exception {
+        String alice = "0xabcd7f3a9c04e2b16d58a41c0f9e6b2d7a8c1234";
+        String suffix8 = addr("ab", "7a8c1234");   // 0xab…7a8c1234: 2 + 8 matching
+        String prefix8 = addr("abcd7f3a", "5");    // 0xabcd7f3a…: 8 + 0 matching
+        assertFalse(LookAlike.similar(alice, suffix8));
+        assertFalse(LookAlike.similar(alice, prefix8));
+
+        MemoryStore store = new MemoryStore();
+        AddressSafety safety = new AddressSafety(new AddressBook(store), new RecipientHistory(store));
+        safety.book.put(alice, "Alice", 1_790_000_000_000L);
+        for (String poison : new String[] {suffix8, prefix8}) {
+            TransactionReview r = new ApprovalSession(Eip1559Request.parse(SwapReviewTest.request("0x1", poison, "0xde0b6b3a7640000", "0x")),
+                    KEY, TokenListTest.bundled(), safety).review;
+            assertEquals(r.text(), 0, SwapReviewTest.count(r, "DANGER"));
+            assertTrue(r.text(), SwapReviewTest.has(r, "WARNING", "First time sending to this address"));
+        }
     }
 }

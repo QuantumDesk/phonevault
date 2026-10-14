@@ -16,8 +16,7 @@ import java.util.List;
 
 /** Presentation of review rows: levels, topics, danger summary/acknowledgement, grouped addresses, colors. */
 public final class ReviewStyleTest {
-    private static final Credentials KEY = Credentials.create(
-            "4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials KEY = TestKeys.EVM_KEY;
     private static final String USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
     private static final String SPENDER = "0x3333333333333333333333333333333333333333";
     private static final BigInteger MAX = BigInteger.ONE.shiftLeft(256).subtract(BigInteger.ONE);

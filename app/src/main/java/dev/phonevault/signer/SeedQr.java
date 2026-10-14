@@ -32,8 +32,6 @@ import org.web3j.crypto.MnemonicUtils;
  * another form: callers keep it inside the PIN-gated sensitive flow and {@link Modules#wipe} it.
  */
 final class SeedQr {
-    static final String SPEC_URL = "https://github.com/SeedSigner/seedsigner/blob/dev/docs/seed_qr/README.md";
-
     enum Format { COMPACT, STANDARD }
 
     private SeedQr() {}

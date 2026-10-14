@@ -10,16 +10,12 @@ import org.junit.Test;
 /** BIP39 restore validation: count, wordlist membership, checksum, normalization, derivation. */
 public class SeedRestoreTest {
     // Standard BIP39 all-zero-entropy 24-word phrase (what Phone Vault generates the length of).
-    private static final String VALID =
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
-            + "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
-            + "abandon abandon abandon art";
+    private static final String VALID = TestKeys.ABANDON_24;
     // EXTERNAL, independently-published reference vectors (iancoleman / ethers.js / Trezor), so
     // these tests prove our derivation matches the wider ecosystem — not that it agrees with
     // itself. m/44'/60'/0'/0/0, lowercased.
     // Canonical 12-word "abandon×11 about" — one of the most-cited Ethereum test vectors.
-    private static final String KNOWN_12 =
-            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    private static final String KNOWN_12 = TestKeys.ABANDON_12;
     private static final String KNOWN_12_ADDR = "0x9858effd232b4033e47d90003d41ec34ecaeda94";
     // 24-word all-zero entropy → its published account-0 address.
     private static final String KNOWN_24_ADDR = "0xf278cf59f82edcf871d630f28ecc8056f25c1cdb";

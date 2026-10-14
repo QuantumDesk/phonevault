@@ -57,4 +57,38 @@ public final class ApplianceLockdownTest {
         assertEquals(Collections.emptyList(), ApplianceLockdown.permittedInputMethods(""));
         assertNull(ApplianceLockdown.imePackage("not a package/.X"));
     }
+
+    /** Runs under every variant: release must never be dev; dev variants must be. */
+    @Test public void releaseBuildTypeIsNeverDev() {
+        boolean release = "release".equals(BuildConfig.BUILD_TYPE);
+        if (release) {
+            assertFalse(BuildConfig.VAULT_DEV_BUILD);
+            assertFalse(DevTools.SCREENSHOTS);
+            assertFalse(MainActivity.devBuild());
+            assertTrue(ApplianceLockdown.userRestrictions(MainActivity.devBuild(), BuildConfig.VAULT_ALLOW_APP_UPDATES)
+                    .contains(UserManager.DISALLOW_DEBUGGING_FEATURES));
+            assertTrue(ApplianceLockdown.refuseForAdb(MainActivity.devBuild(), 1));
+            assertTrue(BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE);
+        } else {
+            assertTrue(BuildConfig.BUILD_TYPE + " is a dev build", MainActivity.devBuild());
+            assertFalse(ApplianceLockdown.refuseForAdb(MainActivity.devBuild(), 1));
+        }
+    }
+
+    /** Wireless debugging (adb_wifi_enabled) refuses like USB debugging, and is observed too. */
+    @Test public void adbRefusalCoversWirelessDebugging() throws Exception {
+        String src = SourceGuard.mainActivity();
+        String body = SourceGuard.body(src, "private int adbEnabled() {");
+        assertTrue(body.contains("Settings.Global.ADB_ENABLED"));
+        assertTrue(body.contains("ADB_WIFI_ENABLED"));
+        assertEquals("adb_wifi_enabled", MainActivity.ADB_WIFI_ENABLED);
+        assertTrue(src.contains("registerContentObserver(Settings.Global.getUriFor(ADB_WIFI_ENABLED), false, adbObserver)"));
+    }
+
+    /** Bitcoin xpub sharing replies under btcStillOwned, which refuses while debugging is on. */
+    @Test public void btcShareOwnershipChecksAdb() throws Exception {
+        String src = SourceGuard.mainActivity();
+        assertTrue(SourceGuard.body(src, "private boolean btcStillOwned(").contains("!adbRefused()"));
+        assertTrue(SourceGuard.body(src, "private boolean signingStillOwned(").contains("!adbRefused()"));
+    }
 }

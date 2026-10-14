@@ -13,9 +13,9 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.PBEKeySpec;
 
 /**
- * In-app PIN gate (roadmap Tier 1 #1). The seed stays StrongBox-wrapped at rest; the PIN is an
+ * In-app PIN gate. The seed stays StrongBox-wrapped at rest; the PIN is an
  * access gate in front of decrypting it. Because the keyguard is disabled for boot-into-app, the
- * wrapping key's {@code setUnlockedDeviceRequired} no longer gates anything — this does.
+ * wrapping key's {@code setUnlockedDeviceRequired} would gate nothing — this does.
  *
  * <p>Stored as PBKDF2-HMAC-SHA256(pin, salt, iterations) with a per-device random salt. Wrong
  * attempts are counted persistently; at {@link #MAX_ATTEMPTS} the supplied wipe hook runs and the

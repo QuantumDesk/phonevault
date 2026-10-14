@@ -29,6 +29,9 @@ final class VaultTheme {
     static final int WARNING_INK = ReviewStyle.WARNING_INK;
     static final int AMBER = Color.rgb(255, 184, 77);    // test-network banner (Bitcoin TESTNET / SIGNET)
 
+    /** Base body text size in sp, before the Text size scale (one factor for every screen). */
+    static final float BODY_SIZE = 16f;
+
     private static Typeface pixelFace;
     /**
      * The one text-size factor (Display &amp; auto-lock → Text size). Every helper here takes the
@@ -193,19 +196,6 @@ final class VaultTheme {
         } catch (Exception e) {
             return null;
         }
-    }
-
-    /** A small square status indicator: hollow (waiting) or filled (active). */
-    static View statusDot(Context c, boolean active) {
-        View v = new View(c);
-        int s = dp(c, 9);
-        v.setLayoutParams(new LinearLayout.LayoutParams(s, s));
-        GradientDrawable d = new GradientDrawable();
-        d.setColor(active ? INK : BG);
-        d.setStroke(px(c, 2), INK);
-        d.setCornerRadius(0f);
-        v.setBackground(d);
-        return v;
     }
 
     /** Thin hairline used as a row separator (fainter than {@link #divider}). */

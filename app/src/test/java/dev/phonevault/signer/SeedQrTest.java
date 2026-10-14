@@ -52,7 +52,7 @@ public class SeedQrTest {
         for (String[] v : VECTORS) {
             String[] words = v[0].split(" ");
             assertEquals(v[0], v[1], SeedQr.standardDigits(words));
-            assertEquals(v[0], v[2], hex(SeedQr.compactBytes(words)));
+            assertEquals(v[0], v[2], Hex.of(SeedQr.compactBytes(words)));
         }
     }
 
@@ -68,7 +68,7 @@ public class SeedQrTest {
             List<byte[]> segments = r.getByteSegments();
             assertNotNull("byte mode", segments);
             assertEquals(1, segments.size());
-            assertEquals(v[0], v[2], hex(segments.get(0)));
+            assertEquals(v[0], v[2], Hex.of(segments.get(0)));
         }
     }
 
@@ -150,11 +150,5 @@ public class SeedQrTest {
         BitMatrix b = new BitMatrix(m.size);
         for (int r = 0; r < m.size; r++) for (int c = 0; c < m.size; c++) if (m.get(r, c)) b.set(c, r);
         return b;
-    }
-
-    private static String hex(byte[] bytes) {
-        StringBuilder s = new StringBuilder();
-        for (byte b : bytes) s.append(String.format("%02x", b & 0xff));
-        return s.toString();
     }
 }

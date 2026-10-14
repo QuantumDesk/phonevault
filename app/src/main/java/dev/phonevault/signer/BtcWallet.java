@@ -16,7 +16,8 @@ import java.util.Locale;
  */
 final class BtcWallet {
     static final int ACCOUNTS = SeedVault.MAX_ACCOUNT_INDEX + 1; // 20, as for EVM
-    static final int MAX_ADDRESS_INDEX = 9_999;                   // btcShowAddress
+    /** Highest address index btcShowAddress accepts. */
+    static final int MAX_ADDRESS_INDEX = 9_999;
     /** Highest receive/change index accepted in a PSBT derivation (non-hardened). */
     static final int MAX_PSBT_INDEX = 999_999;
 
@@ -39,11 +40,6 @@ final class BtcWallet {
         static Type fromWire(String v) {
             for (Type t : values()) if (t.wire.equals(v)) return t;
             throw new IllegalArgumentException("Unsupported Bitcoin address type (p2wpkh or p2tr)");
-        }
-
-        static Type fromPurpose(int purpose) {
-            for (Type t : values()) if (t.purpose == purpose) return t;
-            return null;
         }
     }
 

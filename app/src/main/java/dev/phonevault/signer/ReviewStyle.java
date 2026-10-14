@@ -226,11 +226,6 @@ final class ReviewStyle {
         return groupEvmIn(value);
     }
 
-    /** True if the text contains a whole EVM address. */
-    static boolean containsEvm(String text) {
-        return text != null && text.indexOf("0x") >= 0 && EVM.matcher(text).find();
-    }
-
     /** "0xAbCd…1234" for every whole address in a text (for one-line sentences like the danger checkbox). */
     static String shortenEvm(String text) {
         if (text == null || text.indexOf("0x") < 0) return text;

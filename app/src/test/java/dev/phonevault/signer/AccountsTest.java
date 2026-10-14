@@ -28,10 +28,9 @@ import java.util.Set;
  */
 public final class AccountsTest {
     /** BIP-39 vector: entropy 00…00 (128 bits), passphrase "TREZOR". */
-    static final String ABOUT = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    static final String ABOUT = TestKeys.ABANDON_12;
     /** BIP-39 vector: entropy 00…00 (256 bits), passphrase "TREZOR" (24 words, the length this phone uses). */
-    static final String ART = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon "
-            + "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art";
+    static final String ART = TestKeys.ABANDON_24;
     /** The Hardhat / Foundry development mnemonic: its first accounts are the best-known ETH derivation vectors. */
     static final String JUNK = "test test test test test test test test test test test junk";
 

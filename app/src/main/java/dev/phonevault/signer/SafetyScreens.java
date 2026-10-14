@@ -31,7 +31,6 @@ final class SafetyScreens {
         boolean ready();
         void showMenu();
         void showHome();
-        float bodySize();
         void harden(View view);
         int dp(int value);
     }
@@ -135,7 +134,7 @@ final class SafetyScreens {
         keyRow(root, "1 2 3 4 5 6 7 8 9 0".split(" "), address, after);
         keyRow(root, new String[] {shift ? "⇧ ON" : "⇧", "space", ".", "-", "'"}, address, after);
         if (error != null) {
-            TextView e = VaultTheme.bodyText(host.context(), error, host.bodySize(), VaultTheme.DANGER_INK);
+            TextView e = VaultTheme.bodyText(host.context(), error, VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
             e.setPadding(0, host.dp(10), 0, host.dp(4));
             root.addView(e);
         }
@@ -198,7 +197,7 @@ final class SafetyScreens {
         String c = AddressKeys.display(address);
         String shown = AddressKeys.isBtc(address) ? BtcScript.grouped(c, 5) + AddressKeys.networkSuffix(address).replace(" · ", "\n")
                 : ReviewStyle.groupEvmTwoLines(c);
-        TextView t = VaultTheme.monoText(host.context(), shown, host.bodySize(), VaultTheme.INK);
+        TextView t = VaultTheme.monoText(host.context(), shown, VaultTheme.BODY_SIZE, VaultTheme.INK);
         t.setPadding(0, host.dp(6), 0, 0);
         box.addView(t);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
