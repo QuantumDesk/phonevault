@@ -152,7 +152,12 @@ final class StrictJson {
         if (at + 4 > text.length()) throw new ParseException("Truncated \\u escape");
         int v = 0;
         for (int i = 0; i < 4; i++) {
-            int d = Character.digit(text.charAt(at + i), 16);
+            // ASCII HEXDIG only (RFC 8259; the companion's is_ascii_hexdigit): Character.digit
+            // would also take Arabic-Indic or fullwidth digits.
+            char c = text.charAt(at + i);
+            int d = c >= '0' && c <= '9' ? c - '0'
+                    : c >= 'a' && c <= 'f' ? c - 'a' + 10
+                    : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
             if (d < 0) throw new ParseException("Invalid \\u escape");
             v = (v << 4) | d;
         }

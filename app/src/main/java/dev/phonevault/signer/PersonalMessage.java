@@ -96,6 +96,7 @@ final class PersonalMessage {
 
     static boolean printable(int cp) {
         if (cp == '\n' || cp == '\t') return true;
+        if (defaultIgnorable(cp)) return false; // renders as nothing even outside category Cf
         switch (Character.getType(cp)) {
             case Character.CONTROL:
             case Character.FORMAT:          // bidi overrides, zero-width joiners, BOM, …
@@ -108,5 +109,31 @@ final class PersonalMessage {
             default:
                 return true;
         }
+    }
+
+    /**
+     * Unicode Default_Ignorable_Code_Point (DerivedCoreProperties): code points a renderer may draw
+     * as nothing. Many are category Cf (caught above) but several are not — U+034F COMBINING
+     * GRAPHEME JOINER and the variation selectors (Mn), the Hangul fillers (Lo) — and would let two
+     * different signed strings look identical.
+     */
+    static boolean defaultIgnorable(int cp) {
+        return cp == 0x00AD
+                || cp == 0x034F
+                || cp == 0x061C
+                || cp == 0x115F || cp == 0x1160
+                || cp == 0x17B4 || cp == 0x17B5
+                || (cp >= 0x180B && cp <= 0x180F)
+                || (cp >= 0x200B && cp <= 0x200F)
+                || (cp >= 0x202A && cp <= 0x202E)
+                || (cp >= 0x2060 && cp <= 0x206F)
+                || cp == 0x3164
+                || (cp >= 0xFE00 && cp <= 0xFE0F)
+                || cp == 0xFEFF
+                || cp == 0xFFA0
+                || (cp >= 0xFFF0 && cp <= 0xFFF8)
+                || (cp >= 0x1BCA0 && cp <= 0x1BCA3)
+                || (cp >= 0x1D173 && cp <= 0x1D17A)
+                || (cp >= 0xE0000 && cp <= 0xE0FFF);
     }
 }

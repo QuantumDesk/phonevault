@@ -60,9 +60,13 @@ final class MessageRequest {
         Object value = json.get("origin");
         if (!(value instanceof String)) throw new JSONException("origin must be a string");
         String o = (String) value;
+        // Length first: the host-name regex must never see an unbounded string.
+        if (o.length() > MAX_ORIGIN_LENGTH) {
+            throw new JSONException("origin must be https://host[:port] (lowercase ASCII) or http://localhost[:port]");
+        }
         java.util.regex.Matcher m = HTTPS_ORIGIN.matcher(o);
         if (!m.matches()) m = LOCAL_ORIGIN.matcher(o);
-        if (o.length() > MAX_ORIGIN_LENGTH || !m.matches()
+        if (!m.matches()
                 || (m.group(2) != null && Integer.parseInt(m.group(2)) > 65535)) {
             throw new JSONException("origin must be https://host[:port] (lowercase ASCII) or http://localhost[:port]");
         }
