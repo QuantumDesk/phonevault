@@ -17,7 +17,6 @@ ADB="${ADB:-adb}"
 # shellcheck source=lib.sh
 source "$(dirname "$0")/lib.sh"
 set +e  # lib.sh enables errexit; this script checks its steps explicitly
-A="$ADB"
 require_throwaway
 require_single_device
 require_dev_image
