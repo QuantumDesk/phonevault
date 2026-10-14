@@ -1802,7 +1802,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void updatePinPolicy(PinScreen gate) {
         gate.setBattery(battery);
         int remaining = pin.attemptsRemaining();
-        gate.setPolicy((DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
+        gate.setPolicy((DevTools.SCREENSHOTS ? DEV_KICKER + "\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
                 + (SystemCredential.willBind(this) && !pin.isSet()
                         ? "Your PIN will be held by the security chip."
                         : remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet."));
@@ -2545,15 +2545,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.SHOW_REVIEW)) return;
         // Rendered from the review built with this exact request in ApprovalSession (same object that is signed).
         TransactionReview review = approval.review;
-        keepScreenOn(true);
-        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
-                review.title, review.subtitle);
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details,
                 approval.hostSimulation != null ? approval.hostSimulation.rows : null);
-        addDangerSummary(root, dangers);
-        if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
-        for (MessageReview.Row row : review.summary) root.addView(detail(row));
-        addDetailsToggle(root, review.details, "technical details");
+        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
+                review.summary, review.details, "technical details");
         if (approval.hostSimulation != null) {
             // The Mac's claim, in its own box BELOW the phone's own review; display only, never signed.
             SimulationCheck.Result sim = approval.hostSimulation;
@@ -2616,6 +2611,28 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                      Runnable afterSigned) {
         addDecisionControls(root, source, decision, s, requestId, prompt, signText, dangers, signer, null, null,
                 doneMessage, receiptLabel, response -> response.optString(receiptField), transaction, afterSigned);
+    }
+
+    /** Kicker of a screenshot build's reviews, in place of the review's own. */
+    static final String DEV_KICKER = "DEVELOPMENT · TEST ASSETS ONLY";
+
+    private static String kicker(String reviewKicker) { return DevTools.SCREENSHOTS ? DEV_KICKER : reviewKicker; }
+
+    /**
+     * The top of every signing review (EVM transaction, message, Bitcoin PSBT), in reading order:
+     * the danger summary, the signing account (EVM only; null for Bitcoin), every summary row, and
+     * the details behind a Show/Hide toggle. Keeps the screen on while the review is up.
+     */
+    private LinearLayout renderReview(String reviewKicker, String title, String subtitle, List<MessageReview.Row> dangers,
+                                      SigningAccount signingAs, List<MessageReview.Row> summary,
+                                      List<MessageReview.Row> details, String detailsWhat) {
+        keepScreenOn(true);
+        LinearLayout root = page(kicker(reviewKicker), title, subtitle);
+        addDangerSummary(root, dangers);
+        if (signingAs != null) root.addView(detail("Signing with", signingAs.signingWith()));
+        for (MessageReview.Row row : summary) root.addView(detail(row));
+        addDetailsToggle(root, details, detailsWhat);
+        return root;
     }
 
     /** The review's secondary rows behind a Show/Hide button; open from the start if one is a DANGER. */
@@ -2803,14 +2820,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                      ApprovalDecision decision, int s) {
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.SHOW_REVIEW)) return;
         MessageReview review = approval.review;
-        keepScreenOn(true);
-        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
-                review.title, review.subtitle);
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
-        addDangerSummary(root, dangers);
-        if (approval.signingAs != null) root.addView(detail("Signing with", approval.signingAs.signingWith()));
-        for (MessageReview.Row row : review.summary) root.addView(detail(row));
-        addDetailsToggle(root, review.details, "details");
+        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
+                review.summary, review.details, "details");
         addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel, dangers,
                 approval::signIfIdentityUnchanged,
                 "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
@@ -3244,12 +3256,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** btcSignPsbt review, rendered from the BtcPsbtReview built once in handleBitcoin. */
     private void showBtcApproval(AccessoryTransport source, BtcRequest r, BtcPsbtReview review, ApprovalDecision decision, int s) {
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
-        keepScreenOn(true);
-        LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker, review.title, review.subtitle);
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
-        addDangerSummary(root, dangers);
-        for (MessageReview.Row row : review.summary) root.addView(detail(row));
-        addDetailsToggle(root, review.details, "technical details");
+        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, null,
+                review.summary, review.details, "technical details");
         final String txid = BtcCrypto.hex(BtcCrypto.reversed(review.psbt.tx.txid()));
         addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, dangers, null,
                 seed -> {
