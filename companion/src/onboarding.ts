@@ -137,8 +137,8 @@ function genuineStep(host: SetupHost) {
   } else if (r.verdict === "fail") {
     body.push(
       h("h3", null, "This phone is not genuine"),
-      r.problems.length ? h("ul", { class: "att-reasons", style: "text-align:left" }, r.problems.map((p) => h("li", null, p))) : null,
-      h("div", { class: "callout", style: "border-color:color-mix(in srgb, var(--danger) 45%, transparent)" },
+      r.problems.length ? h("ul", { class: "att-reasons left" }, r.problems.map((p) => h("li", null, p))) : null,
+      h("div", { class: "callout danger-border" },
         h("strong", null, "Stop here: don't put funds on this phone"),
         h("span", null, "It could not prove it is Phone Vault hardware running Phone Vault's firmware and app, so a modified phone could show you one thing and sign another."),
         h("span", null, "If someone sold you this phone already set up, don't use it. Flash it yourself from phonevault.org, then plug it in again.")),
@@ -246,7 +246,7 @@ function doneStep(host: SetupHost) {
   return h("section", { class: "card setup-card celebrate" }, confetti(),
     h("div", { class: "result-ic ok big" }, icon("check", 32)),
     h("h3", null, "You're set"),
-    h("ul", { class: "verified", style: "text-align:left" },
+    h("ul", { class: "verified left" },
       h("li", null, icon("check", 14), "This Mac is paired with your phone and checks every signature against it"),
       h("li", null, icon("check", 14), "Notifications tell you when funds arrive; Phone Vault keeps watching from the menu bar when the window is closed"),
       h("li", null, icon("check", 14), "Stuck transaction? Activity → Speed up or Cancel")),

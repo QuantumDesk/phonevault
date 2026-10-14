@@ -47,6 +47,7 @@ body { min-width: 380px; overflow-x: hidden; }
 .muted { color: var(--muted); }
 .small { font-size: 12.5px; }
 .center { text-align: center; justify-content: center; }
+.left { text-align: left; }
 .grow { flex: 1; min-width: 0; }
 .break { overflow-wrap: anywhere; }
 h2, h3 { margin: 0; letter-spacing: -0.01em; }
@@ -156,6 +157,8 @@ button.link:hover { text-decoration: underline; }
 .addr-full .mono { overflow-wrap: anywhere; }
 .callout { display: grid; gap: 4px; padding: 14px 16px; border-radius: 14px; border: 1px solid var(--line-2); background: var(--surface); font-size: 13.5px; }
 .callout.accent { border-color: var(--accent-line); background: var(--accent-soft); }
+/* a warning that keeps the plain background: only the border turns red */
+.callout.danger-border { border-color: color-mix(in srgb, var(--danger) 45%, transparent); }
 .callout span { color: var(--muted); }
 
 /* ---------------------------------------------------------------- pairing */

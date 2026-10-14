@@ -10,6 +10,7 @@
 .wc-dapp-name { font-weight: 640; font-size: 16px; overflow-wrap: anywhere; }
 .wc-dapp-name.small { font-size: 13.5px; font-weight: 600; }
 .wc-icon { display: inline-grid; place-items: center; flex: none; border-radius: 10px; overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); color: var(--muted); }
+.wc-icon.sm { width: 28px; height: 28px; }
 .wc-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .wc-desc { margin-top: -4px; }
 

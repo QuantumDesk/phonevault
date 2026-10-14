@@ -90,7 +90,7 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
     const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => change(true, input.value) }, "Turn on") as HTMLButtonElement;
     input.addEventListener("input", () => { turnOn.disabled = devForm.busy || input.value.trim() !== DEV_CONFIRMATION; });
     devControls = [
-      h("div", { class: "callout", style: "border-color:color-mix(in srgb, var(--danger) 45%, transparent)" },
+      h("div", { class: "callout danger-border" },
         h("strong", null, "Only for a phone you flashed yourself"),
         h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
         h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),

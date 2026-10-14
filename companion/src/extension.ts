@@ -181,7 +181,7 @@ export function extSettingsSection(): HTMLElement {
       ") start this app's bridge. No network port is opened."),
     h("div", { class: "set-row" }, h("span", null, "Connected sites"), h("span", { class: "muted small" }, sites.length ? String(sites.length) : "")),
     sites.length ? h("ul", { class: "wc-sessions" }, sites.map((s) => h("li", null,
-      h("span", { class: "wc-icon", style: "width:28px;height:28px" }, icon("external", 14)),
+      h("span", { class: "wc-icon sm" }, icon("external", 14)),
       h("div", { class: "grow" },
         h("div", { class: "wc-dapp-name small" }, s.host, s.local ? h("span", { class: "tag" }, "local") : null),
         h("div", { class: "muted small" }, `${netName(s.active)} · ${s.chains.length} network${s.chains.length > 1 ? "s" : ""} approved`),
