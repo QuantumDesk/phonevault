@@ -12,8 +12,8 @@
 
 import { api, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
 import type { Quote, SendError } from "./api";
-import { NETWORKS, byId } from "./networks";
-import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast } from "./ui";
+import { NETWORKS, byId, netName } from "./networks";
+import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast, fact } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
@@ -116,8 +116,11 @@ export const wcPhoneBusy = () => phoneBusy;
 const inFlight = (it: Item) => ["connecting", "on_phone", "verifying", "broadcasting"].includes(it.stage.s);
 const sessionOf = (topic: string) => sessions.find((s) => s.topic === topic);
 const chainNum = (caip: string) => { const n = Number(caip.split(":")[1]); return Number.isFinite(n) ? n : 0; };
-const netName = (id: number) => NETWORKS.find((n) => n.id === id)?.name ?? `chain ${id}`;
 const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
+const RELAY_CHECK_MS = 500;
+const RELAY_TIMEOUT_MS = 30_000;
+const PAIRING_CHECK_MS = 1000;
+const PENDING_SYNC_MS = 2000;
 
 function notice(text: string) {
   notices.unshift({ text, time: Date.now() });
@@ -460,8 +463,8 @@ async function pair() {
       poll = window.setInterval(() => {
         const e = b.relayError();
         if (e && /project not found|unauthori[sz]ed|invalid.*project/i.test(e)) fail(new Error(`The WalletConnect relay refused the project ID (${e}). Check it in Settings → WalletConnect.`));
-        else if (Date.now() - t0 > 30_000) fail(new Error(`Couldn't reach the WalletConnect relay${e ? ` (${e})` : ""}. Check the internet connection.`));
-      }, 500);
+        else if (Date.now() - t0 > RELAY_TIMEOUT_MS) fail(new Error(`Couldn't reach the WalletConnect relay${e ? ` (${e})` : ""}. Check the internet connection.`));
+      }, RELAY_CHECK_MS);
     });
     try { await Promise.race([b.pair(uri), relayDown]); } finally { clearInterval(poll); }
     if (connect) { connect.busy = false; connect.waiting = true; render(); }
@@ -547,8 +550,6 @@ function notesList(notes: Note[]) {
   if (!notes.length) return null;
   return h("ul", { class: "wc-notes" }, notes.map((n) => h("li", { class: n.level }, icon(n.level === "info" ? "check" : "alert", 14), h("span", null, n.text))));
 }
-
-function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 
 // ------------------------------------------------------------------ rendering: layer
 
@@ -857,7 +858,7 @@ export function mountWalletConnect(h0: WcHost) {
     const p = host.paired();
     if (lastPaired !== undefined && p !== lastPaired) checkSessions();
     lastPaired = p;
-  }, 1000);
+  }, PAIRING_CHECK_MS);
   // the SDK surfaces queued requests only through its pending store
-  window.setInterval(() => { if (backend) sync(true); }, 2000);
+  window.setInterval(() => { if (backend) sync(true); }, PENDING_SYNC_MS);
 }

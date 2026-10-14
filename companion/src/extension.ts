@@ -11,7 +11,7 @@
 //  * What goes back is limited by Rust to a verified hash, a verified signature, or null.
 
 import { isTauri } from "./api";
-import { NETWORKS } from "./networks";
+import { NETWORKS, netName } from "./networks";
 import { h, icon, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 
@@ -26,7 +26,8 @@ export interface BridgeStatus { listening: boolean; error: string | null; socket
 
 const SUPPORTED = ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4", "eth_chainId", "eth_accounts", "eth_requestAccounts", "wallet_switchEthereumChain"];
 const ALL_CHAINS = NETWORKS.map((n) => n.id); // the phone's reviewed networks, app default first
-const netName = (id: number) => NETWORKS.find((n) => n.id === id)?.name ?? `chain ${id}`;
+const BRIDGE_POLL_MS = 2000;
+const NODES_PUSH_MS = 10_000;
 
 // ------------------------------------------------------------------ Rust calls (or the preview mock)
 
@@ -92,8 +93,8 @@ export function createExtBackend(ev: Events, rpcFor: (chainId: number) => string
 
   if (isTauri) import("@tauri-apps/api/event").then(({ listen }) => listen("bridge-changed", () => refresh())).catch(() => {});
   refresh(); pushNodes();
-  window.setInterval(refresh, 2000);
-  window.setInterval(pushNodes, 10_000);
+  window.setInterval(refresh, BRIDGE_POLL_MS);
+  window.setInterval(pushNodes, NODES_PUSH_MS);
   refreshNow = refresh;
 
   const done = async () => { shownProposal = null; await refresh(); };

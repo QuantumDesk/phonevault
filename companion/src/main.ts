@@ -6,7 +6,7 @@ import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, is
 import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance, PairedAccount } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy, capitalize, fact } from "./ui";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
@@ -18,6 +18,14 @@ import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboa
 import { simulationFor, resimulate, simPanel, gatedSendButton, setSimulationAccount } from "./simulation";
 import { btcInit, btcMain, btcGoHome, btcBusy, btcSettingsSection, activeBtc, btcBalanceSats, refreshBtc, reloadAccounts, BTC_NETS, btcNet, fmtBtc, type BtcNet } from "./bitcoin";
 import "./extras.css";
+
+// Poll intervals (ms). The preview has no background watcher, so it polls balances itself.
+const STATUS_POLL_MS = 3000;
+const PREVIEW_BALANCE_POLL_MS = 15_000;
+const PREVIEW_ALL_BALANCES_POLL_MS = 60_000;
+const PRICE_POLL_MS = 60_000;
+const PENDING_POLL_MS = isTauri ? 60_000 : 15_000;
+const RELATIVE_TIME_REFRESH_MS = 60_000;
 
 // ------------------------------------------------------------------ preferences (non-sensitive)
 
@@ -994,7 +1002,6 @@ function replacementReview(quote: Quote) {
 const rerenderReview = (quote: Quote) => () => { if (view === "send" && flow.s === "review" && flow.quote === quote) render(); };
 function reviewSimulation(quote: Quote) { return simulationFor(rpcFor(flowNet.id), quote, rerenderReview(quote)); }
 
-function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 let toChecksum: string | null = null;
 function checksumOf(lower: string) {
   if (status?.paired_checksum && status.paired_checksum.toLowerCase() === lower.toLowerCase()) return status.paired_checksum;
@@ -1093,7 +1100,6 @@ async function getQuote() {
     if (flow.s === "quoting") setFlow({ s: "form" });
   }
 }
-const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 async function sendToPhone(quote: Quote) {
   const ticket = crypto.randomUUID();
@@ -1154,7 +1160,7 @@ function explain(err: SendError): Explained {
     case "connect": return { title: "Couldn't open the USB connection", body: "Unplug the cable and plug it back in, unlock the phone, and try again. Nothing was sent." };
     case "not_delivered": return { title: "The phone didn't take the request", body: "Nothing reached the phone. Wake and unlock it; if that doesn't help, unplug and reconnect the cable. Then try again." };
     case "timeout": return sent
-      ? { title: "No answer from the phone", body: "The request reached the phone, but no answer came back within 5 minutes. If the phone still shows it, reject it there. Then try again." }
+      ? { title: "No answer from the phone", body: `The request reached the phone, but no answer came back within ${REVIEW_LIMIT_MS / 60_000} minutes. If the phone still shows it, reject it there. Then try again.` }
       : { title: "The phone didn't respond", body: "Nothing reached the phone. Wake and unlock it, reconnect the cable, and try again." };
     case "disconnected": return { title: "The USB connection dropped", body: sent ? "The link ended while waiting for the phone. Nothing was broadcast. If you approved on the phone, send it again: the phone signs the same transaction." : "The link ended before the request reached the phone. Reconnect and try again." };
     case "cancelled": return { title: "Cancelled", neutral: true, hideDetail: true, body: sent ? "Stopped waiting on this Mac. If the phone is still showing the request, tap Reject there." : "Stopped before anything reached the phone." };
@@ -1418,7 +1424,7 @@ mountWalletConnect({
   }
   refreshHistory().then(pollPending);
   refreshPrices();
-  setInterval(refreshStatus, 3000);
+  setInterval(refreshStatus, STATUS_POLL_MS);
   pushWatchConfig();
   // The background watcher (Rust) reads balances, finds incoming transfers and settles pending
   // transactions on its own schedule and tells the UI; the preview has no watcher, so it polls.
@@ -1432,10 +1438,10 @@ mountWalletConnect({
   });
   void onEvent("history-changed", () => { void refreshHistory(); });
   if (!isTauri) {
-    setInterval(() => { if (status?.paired) refreshBalance(net()); }, 15_000);
-    setInterval(() => { if (status?.paired) refreshAllBalances(); }, 60_000);
+    setInterval(() => { if (status?.paired) refreshBalance(net()); }, PREVIEW_BALANCE_POLL_MS);
+    setInterval(() => { if (status?.paired) refreshAllBalances(); }, PREVIEW_ALL_BALANCES_POLL_MS);
   }
-  setInterval(refreshPrices, 60_000);
-  setInterval(pollPending, isTauri ? 60_000 : 15_000);
-  setInterval(() => { if (view === "home") renderSoon(); }, 60_000); // relative times
+  setInterval(refreshPrices, PRICE_POLL_MS);
+  setInterval(pollPending, PENDING_POLL_MS);
+  setInterval(() => { if (view === "home") renderSoon(); }, RELATIVE_TIME_REFRESH_MS);
 })();

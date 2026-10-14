@@ -14,3 +14,5 @@ export const NETWORKS: Network[] = [
 
 export const DEFAULT_CHAIN = 8453;
 export const byId = (id: number): Network => NETWORKS.find((n) => n.id === id) ?? NETWORKS[0];
+/** Display name of a chain id; unknown ids read "chain <id>". */
+export const netName = (id: number): string => NETWORKS.find((n) => n.id === id)?.name ?? `chain ${id}`;

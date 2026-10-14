@@ -6,7 +6,7 @@
 
 import { call, onProgress, onEvent, openExternal, errText } from "./api";
 import type { SendError } from "./api";
-import { h, icon, padlock, short, clock, copy, ago, toast } from "./ui";
+import { h, icon, padlock, short, clock, copy, ago, toast, usdFmt, capitalize, fact } from "./ui";
 import { qrSvg } from "./qr";
 import "./bitcoin.css";
 
@@ -85,7 +85,6 @@ export function fmtBtc(sats: number, trim = true): string {
   return `${neg ? "−" : ""}${whole.toLocaleString("en-US")}${f ? "." + f : ""}`;
 }
 const fmtSats = (n: number) => `${Math.abs(n).toLocaleString("en-US")} sat`;
-const usdFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 function usd(sats: number, price: number | null, test: boolean): string | null {
   if (price === null || test) return null;
   const v = (Math.abs(sats) / 1e8) * price;
@@ -420,6 +419,7 @@ let addr: AddrCheck | null = null;
 let addrSeq = 0;
 let tick = 0;
 const REVIEW_LIMIT_MS = 300_000;
+const CONFIRMATION_POLL_MS = 15_000;
 
 const busy = () => sub === "send" && !["form", "quoting", "review", "failed", "signed", "broadcast_failed", "bump_failed"].includes(flow.s);
 
@@ -490,8 +490,6 @@ function sendView(a: BtcAccount) {
   );
 }
 
-function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
-
 function flowBody(a: BtcAccount): Node {
   const n = btcNet(a.network);
   const $ = (sats: number) => usd(sats, host.price(), n.test);
@@ -556,7 +554,7 @@ function flowBody(a: BtcAccount): Node {
       return form;
     }
     case "bumping": return statusCard("Preparing the speed-up…", "Checking the transaction is still unconfirmed and building a replacement with a higher fee.", [], []);
-    case "bump_failed": return h("section", { class: "card result" }, h("div", { class: "result-ic neutral" }, icon("x", 28)), h("h3", null, "Can't speed it up"), h("p", null, cap(flow.message) + "."),
+    case "bump_failed": return h("section", { class: "card result" }, h("div", { class: "result-ic neutral" }, icon("x", 28)), h("h3", null, "Can't speed it up"), h("p", null, capitalize(flow.message) + "."),
       h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => { flow = { s: "form" }; go("home"); } }, "Back")));
     case "review": return review(a, flow.q);
     case "connecting":
@@ -667,7 +665,7 @@ async function getQuote(a: BtcAccount) {
     const q = await btcApi.quote(a.id, draft.to.trim(), amount, draft.max, rate);
     if (flow.s !== "quoting") return;
     setFlow({ s: "review", q });
-  } catch (e) { formError = cap(errText(e)); if (flow.s === "quoting") setFlow({ s: "form" }); }
+  } catch (e) { formError = capitalize(errText(e)); if (flow.s === "quoting") setFlow({ s: "form" }); }
 }
 
 async function startBump(a: BtcAccount, e: BtcHistory) {
@@ -715,7 +713,7 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
     setFlow({ s: "submitted", q, signed: s, t0, confs: 0 });
     void loadWallet(a.id);
     for (;;) {
-      await new Promise((r) => setTimeout(r, 15_000));
+      await new Promise((r) => setTimeout(r, CONFIRMATION_POLL_MS));
       if (flow.s !== "submitted" || flow.signed.txid !== s.txid) return;
       try {
         const st = await btcApi.txStatus(a.id, s.txid);
@@ -730,14 +728,13 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
 function statusCard(title: string, body: string, extra: Node[], actions: Node[]) {
   return h("section", { class: "card result" }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
 }
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function plain(m: string): string {
   if (/no Android device/i.test(m)) return "No phone found on USB. Plug it in and unlock it.";
   if (/held by another program|adb/i.test(m)) return "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server` and try again.";
   if (/did not answer|not reading/i.test(m)) return "The phone didn't answer. Wake and unlock it; if that fails, unplug and reconnect the cable.";
   if (/Unknown method|unknown method|not supported|schema/i.test(m)) return `The phone's app doesn't support Bitcoin yet (${m}). Update Phone Vault on the phone.`;
-  return cap(m);
+  return capitalize(m);
 }
 
 function explain(err: SendError): { title: string; body: string; danger?: boolean; neutral?: boolean; hideDetail?: boolean } {
@@ -746,7 +743,7 @@ function explain(err: SendError): { title: string; body: string; danger?: boolea
     case "no_phone": return { title: "Phone not found", body: "No phone on USB. Plug the vault into this Mac and unlock it, then try again. Nothing was sent." };
     case "usb_busy": return { title: "USB is in use", body: "Another program holds the phone's USB connection, usually the Android adb server. Run `adb kill-server`, then try again." };
     case "connect": case "not_delivered": return { title: "The phone didn't take the request", body: "Nothing reached the phone. Wake and unlock it; if that doesn't help, unplug and reconnect the cable." };
-    case "timeout": return { title: sent ? "No answer from the phone" : "The phone didn't respond", body: sent ? "The request reached the phone, but no answer came back within 5 minutes. If the phone still shows it, reject it there." : "Nothing reached the phone. Wake and unlock it and try again." };
+    case "timeout": return { title: sent ? "No answer from the phone" : "The phone didn't respond", body: sent ? `The request reached the phone, but no answer came back within ${REVIEW_LIMIT_MS / 60_000} minutes. If the phone still shows it, reject it there.` : "Nothing reached the phone. Wake and unlock it and try again." };
     case "disconnected": return { title: "The USB connection dropped", body: "Nothing was broadcast. Reconnect and try again." };
     case "cancelled": return { title: "Cancelled", neutral: true, hideDetail: true, body: sent ? "Stopped waiting on this Mac. If the phone still shows the request, tap Reject there." : "Stopped before anything reached the phone." };
     case "rejected": return { title: "Rejected on the phone", neutral: true, hideDetail: true, body: "You declined on the phone. Nothing was signed or broadcast." };
@@ -754,7 +751,7 @@ function explain(err: SendError): { title: string; body: string; danger?: boolea
     case "verify": return { title: "Signature failed verification", danger: true, body: "What came back is not exactly the transaction you reviewed, or is not signed by your paired account's keys. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
     case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware, so nothing was sent to it. Settings → Device has the details." };
     case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast." };
-    default: return { title: "Something went wrong", body: cap(err.message || "The request didn't complete. Nothing was broadcast.") };
+    default: return { title: "Something went wrong", body: capitalize(err.message || "The request didn't complete. Nothing was broadcast.") };
   }
 }
 

@@ -41,6 +41,7 @@ interface S {
 }
 let s: S = fresh();
 let poll = 0;
+const DEPOSIT_POLL_MS = 6000;
 function fresh(): S { return { step: 0, mismatch: false, pairing: false, pairError: null, baseline: new Map(), since: 0, arrived: null }; }
 
 export function setupStart(host: SetupHost) { s = fresh(); clearInterval(poll); advance(host); }
@@ -58,7 +59,7 @@ function go(host: SetupHost, step: Step) {
     s.since = Date.now() / 1000; s.arrived = null; s.baseline = new Map();
     for (const n of NETWORKS) { const b = host.balanceOf(n.id); if (b !== null) s.baseline.set(n.id, b); }
     // check the shown network often while waiting (the background watcher covers the rest)
-    poll = window.setInterval(() => host.refreshBalance(host.chainId()), 6000);
+    poll = window.setInterval(() => host.refreshBalance(host.chainId()), DEPOSIT_POLL_MS);
     host.refreshBalance(host.chainId());
   }
   host.rerender();
