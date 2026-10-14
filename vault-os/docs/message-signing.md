@@ -1,7 +1,9 @@
 # Message and typed-data signing
 
-Status: implemented and unit-tested (phone JVM, companion Rust, host Python); **not yet tested on
-a phone** (`tools/dev-device/msgsigntest.sh`). Nothing in `path-to-release.md` is ticked by this.
+Status: implemented, unit-tested (phone JVM, companion Rust, host Python) and passing on
+development phones (`tools/dev-device/msgsigntest.sh`: text, sign-in for another address
+rejected, unreadable bytes rejected, EIP-712 Mail, Permit2 UNLIMITED, wrong-chain Permit2
+rejected).
 
 The phone signs two kinds of message besides transactions: `personal_sign` (EIP-191 version 0x45)
 and `eth_signTypedData_v4` (EIP-712). Raw `eth_sign` (signing an arbitrary 32-byte hash) is not

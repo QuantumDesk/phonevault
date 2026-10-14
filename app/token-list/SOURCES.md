@@ -25,7 +25,7 @@ and `tokens.sources.md` would collide with `tokens.json` as `R.raw.tokens`.)
   (second check; last run 2026-09-27: all 30 decimals match; on-chain symbols match except
   USDT0 on Optimism/Arbitrum whose on-chain symbol is `USD₮0` with a non-ASCII ₮, listed as the
   ASCII `USDT0` the Uniswap list and USDT0 docs use).
-- Signed, updatable lists are future work (path-to-release.md §2).
+- Signed, updatable lists are future work ([ROADMAP.md](../../ROADMAP.md), G4).
 
 ## Changing the list
 

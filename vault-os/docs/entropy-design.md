@@ -122,8 +122,8 @@ For every source we say we use, there must be a way to *demonstrate it contribut
   the tradeoff is we must get the remaining sources *provably* right (R3/R4/R7).
 - **The seed must be exportable** (24-word backup), so we cannot use non-exportable StrongBox
   keys *as* the wallet key. We **generate** the seed in-app from the R1 mix, then optionally
-  **wrap it at rest** with a Titan M key. (Interacts with the stateless-mode decision — see
-  `roadmap-product-notes.md`.)
+  **wrap it at rest** with a Titan M key. (Interacts with the stateless-mode option — see
+  [ROADMAP.md](../../ROADMAP.md), "Later".)
 - The msm-4.9 kernel is older; confirm the RNG driver (`qcom-rng`/`hw_random`) is present and
   feeding the pool, and that `getrandom` blocks until the pool is initialized at first boot
   (never read `/dev/urandom` pre-seed).

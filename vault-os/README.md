@@ -1,8 +1,17 @@
-# Vault OS for Pixel 3 XL (crosshatch)
+# Vault OS
 
-Vault OS is a small, auditable LineageOS-derived product for turning a retired
-Pixel into a dedicated offline transaction signer. It is not GrapheneOS and
-does not use GrapheneOS branding or update infrastructure.
+Vault OS is a small, auditable LineageOS-derived product for turning a Pixel
+into a dedicated offline transaction signer. It is not GrapheneOS and does not
+use GrapheneOS branding or update infrastructure.
+
+| Phone | Role | Base | Ladder |
+|---|---|---|---|
+| Pixel 6a (`bluejay`) | launch target | LineageOS 24.0 / Android 17 | [`dev-ladder-bluejay/`](dev-ladder-bluejay/README.md), plan in [`docs/port-bluejay.md`](docs/port-bluejay.md) |
+| Pixel 3 XL (`crosshatch`) | development phone | LineageOS 22.2 / Android 15 | [`dev-ladder/`](dev-ladder/README.md) |
+
+The build outline below and the release scripts in `scripts/` are written for
+crosshatch; the 6a uses the same `vendor/phonevault` product with its own device
+directory (`device/phonevault/bluejay`) and the bluejay ladder scripts.
 
 ## Security boundary
 
@@ -126,16 +135,9 @@ bring-up gate, not a substitute for the locked production and transaction tests.
 
 ## Current status
 
-The product layer targets LineageOS 22.2 and the crosshatch device tree at
-commit `3716221d2f4101155e1b868437f34de343d0e52d`. Static build gates are under
-active validation. A full signed build, boot test, USB test, radio audit,
+The crosshatch product layer targets LineageOS 22.2 and the crosshatch device
+tree at commit `3716221d2f4101155e1b868437f34de343d0e52d`; the 6a port targets
+LineageOS 24.0. Development images of both phones boot and pass their ladders
+on hardware. A full signed `user` build, boot test, USB test, radio audit,
 rollback test, and successful relock still remain mandatory before any image
-can be called a release.
-
-Product-direction notes (stateless vs persistent key modes, first-run wizard,
-entropy mixing, passkeys, licensing) are collected in
-`docs/roadmap-product-notes.md`.
-
-Ubuntu Touch/mobile Linux is tracked as an alternate baseline in
-`docs/ubuntu-touch-evaluation.md`; the supported Pixel 3a XL is different from
-the project's Pixel 3 XL (`crosshatch`).
+can be called a release. Status and open items: [`../ROADMAP.md`](../ROADMAP.md).

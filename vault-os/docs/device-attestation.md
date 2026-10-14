@@ -1,9 +1,9 @@
 # Device attestation: is this phone genuine Phone Vault?
 
 Status: implemented and unit-tested (phone JVM, companion Rust with real Google attestation
-chains, host Python); **not yet run on a phone** (`tools/dev-device/attesttest.sh`). Today's
+chains, host Python) and run on both development phones (see "Hardware results" below). Today's
 phones are unlocked development devices and are reported as DEVELOPMENT, as they should be.
-Nothing in `path-to-release.md` is ticked by this.
+GENUINE needs the release keys and a relocked bootloader ([ROADMAP.md](../../ROADMAP.md), G2).
 
 ## Why
 
