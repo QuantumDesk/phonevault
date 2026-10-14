@@ -232,6 +232,23 @@ export function createMock(): Mock {
         return { hash, signer: activeAcct()?.address ?? ADDRESS } as T;
       }
       case "sign_cancel": cancelled = true; return undefined as T;
+      // signing.rs: personal_sign / eth_signTypedData_v4 (the Sign a message screen and dApp requests)
+      case "sign_message": case "sign_typed_data": {
+        if (!paired) throw "not paired yet";
+        if (![1, 11155111, 8453, 10, 42161, 137].includes(Number(a.chainId))) throw `the phone has no reviewed profile for chain ${a.chainId}`;
+        if (cmd === "sign_message") {
+          const m = String(a.message ?? "");
+          if (a.isHex && !m.trim().startsWith("0x")) throw "hex message must start with 0x";
+          if (a.isHex && !/^(?:[0-9a-fA-F]{2})*$/.test(m.trim().slice(2))) throw "hex message must be an even number of hex digits";
+          if (!(a.isHex ? m.trim().slice(2) : m)) throw "the message is empty";
+        } else {
+          try { JSON.parse(String(a.typedData ?? "")); } catch { throw "typed data is not valid JSON"; }
+        }
+        await sleep(2600);
+        if (outcome === "reject") throw "rejected on the phone";
+        if (outcome === "nophone") throw "no Android device on USB";
+        return { signature: rndHash() + rndHash().slice(2) + "1b", digest: rndHash(), signer: activeAcct()?.address ?? ADDRESS } as T;
+      }
       case "broadcast_verified": {
         await sleep(800);
         if (outcome === "broadcastfail") throw "node error for eth_sendRawTransaction: replacement transaction underpriced";

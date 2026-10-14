@@ -10,12 +10,14 @@
 //    goes to the phone for review and returns only what Rust verified against the pinned signer.
 //  * One request goes to the phone at a time; the rest wait in a visible queue.
 
-import { api, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
+import { api, call, registerPreview, onProgress, onEvent, openExternal, errText, isTauri, REVIEW_LIMIT_MS } from "./api";
 import type { Quote, SendError } from "./api";
 import { NETWORKS, byId, netName } from "./networks";
-import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast, fact } from "./ui";
+import { h, icon, short, shortHash, grouped, fmtAmount, copy, toast, fact } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
+import { explainSendError, explainPlain, asSendError } from "./errors";
+import { clockLine, updateClocks, cancelButton } from "./send-flow";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import "./walletconnect.css";
 
@@ -54,14 +56,8 @@ const INTERNAL = -32603;
 
 // ------------------------------------------------------------------ bridge
 
-let mockMod: Promise<typeof import("./wc-mock")> | null = null;
-const mock = () => (mockMod ??= import("./wc-mock"));
-
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) return (await mock()).mockInvoke<T>(cmd, args);
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
-}
+const mock = () => import("./wc-mock");
+registerPreview((cmd) => cmd.startsWith("wc_") || cmd === "dapp_icon", async () => (await mock()).mockInvoke);
 
 /** The site that asked, only when it is trusted: the browser-reported origin (extension), or
  *  WalletConnect Verify's origin when it says VALID and does not flag it. Rust checks sign-in
@@ -309,7 +305,7 @@ async function sendTransaction(it: Item, quote: Quote, chain: number) {
   try {
     hash = (await api.signStart(ticket, quote)).hash;
   } catch (e) {
-    txFailure(it, e && typeof e === "object" && "kind" in e ? e as SendError : { kind: "internal", message: errText(e), delivered: false });
+    txFailure(it, asSendError(e));
     return;
   } finally { it.ticket = null; }
   if (!backend!.isPending(it.req.id)) {
@@ -333,26 +329,19 @@ async function broadcast(it: Item, hash: string, chain: number) {
 }
 
 function txFailure(it: Item, err: SendError) {
-  const sent = err.delivered;
+  const x = explainSendError(err, { chain: "eth" });
   switch (err.kind) {
     case "busy": it.stage = { s: "review", error: "The phone is still finishing another request. Try again in a few seconds." }; return;
-    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
-    case "cancelled": return finalFail(it, USER_REJECTED, "User cancelled the request.", "Cancelled", sent ? "Stopped waiting on this Mac. If the phone still shows the request, tap Reject there." : "Stopped before anything reached the phone.", "neutral");
-    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", "Signature failed verification", "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
-    case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, "The phone refused this", plainPhone(err.message), "warn", err.message);
-    case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", "Not paired", "Pair this Mac with your phone first.", "warn");
-    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, "It would revert", `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
+    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", x.title, "No signature was created. The dApp was told you declined.", "neutral");
+    case "cancelled": return finalFail(it, USER_REJECTED, "User cancelled the request.", x.title, x.body, "neutral");
+    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", x.title, "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
+    case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, x.title, x.body, "warn", err.message);
+    case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", x.title, x.body, "warn");
+    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, x.title, `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
   }
-  const title = err.kind === "no_phone" ? "Phone not found" : err.kind === "usb_busy" ? "USB is in use" : err.kind === "timeout" ? "No answer from the phone" : err.kind === "disconnected" ? "The USB connection dropped" : "The phone didn't take the request";
-  const body = err.kind === "usb_busy" ? "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server`, then try again."
-    : sent ? "Nothing was broadcast. If the phone still shows the request, reject it there, then try again or reject it here."
-    : "Nothing reached the phone. Plug it in, wake and unlock it, then try again.";
-  it.stage = { s: "failed", title, body, detail: err.message, retry: true, tone: "warn" };
+  // anything else can be tried again, or rejected here
+  it.stage = { s: "failed", title: x.title, body: x.body, detail: err.message, retry: true, tone: x.danger ? "danger" : "warn" };
 }
-
-const plainPhone = (m: string) => /Only canonical transfer|calldata/i.test(m)
-  ? "Your phone signs only plain transfers and token transfer/approve calls, and this transaction is something else. Nothing was signed."
-  : m;
 
 async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_sign" | "typed_data" }>) {
   it.stage = { s: "on_phone", t0: Date.now() }; render();
@@ -371,7 +360,7 @@ async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_s
     const m = errText(e);
     if (m.startsWith("Blocked:")) return finalFail(it, 4100, m, "Blocked: sign-in for another site", m, "danger");
     if (/rejected on the phone/i.test(m)) return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
-    if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused this", m.replace(/^phone error:\s*/i, ""), "warn");
+    if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused the request", explainPlain(m.replace(/^phone error:\s*/i, "")), "warn");
     if (/no Android device|held by another program|did not answer|not reading USB|re-enumerate|USB|timed out/i.test(m))
       { it.stage = { s: "failed", title: "The phone didn't answer", body: "Nothing was signed. Plug the phone in, unlock it, and try again, or reject the request.", detail: m, retry: true, tone: "warn" }; return; }
     if (/digest|recovered signer|claimed address|signature|unexpected fields|correlate/i.test(m))
@@ -566,16 +555,14 @@ function render() {
   }
   layer.replaceChildren(content);
   clearInterval(clockTimer);
-  if (layer.querySelector(".wc-clock")) clockTimer = window.setInterval(() => {
-    layer?.querySelectorAll<HTMLElement>(".wc-clock").forEach((c) => { c.textContent = `Waiting ${clock(Date.now() - Number(c.dataset.t0))} · gives up after 5:00`; });
-  }, 1000);
+  if (layer.querySelector(".clock")) clockTimer = window.setInterval(updateClocks, 1000);
 }
 
 function connectCard() {
   const c = connect!;
   if (engine.s !== "ready") {
     return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
-      h("p", { class: "kicker" }, "WALLETCONNECT"),
+      h("p", { class: "kicker" }, "WalletConnect"),
       h("h3", null, engine.s === "starting" ? "Starting WalletConnect…" : engine.s === "error" ? "WalletConnect didn't start" : "Add a project ID first"),
       engine.s === "error" ? h("p", { class: "inline-error" }, icon("alert", 15), engine.message) : null,
       engine.s === "off" ? h("p", { class: "muted" }, "WalletConnect needs a free project ID from Reown (cloud.reown.com). Paste it in Settings → WalletConnect. It is stored only on this Mac.") : null,
@@ -593,7 +580,7 @@ function connectCard() {
     catch { c.error = "Couldn't read the clipboard. Paste into the field with ⌘V."; render(); }
   };
   return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
-    h("p", { class: "kicker" }, "CONNECT A DAPP"),
+    h("p", { class: "kicker" }, "Connect a dApp"),
     h("h3", null, "Paste the WalletConnect link"),
     h("p", { class: "muted small" }, "In the dApp, choose WalletConnect, then “Copy link” under the QR code. The dApp will see your address and can ask for signatures; each one still needs your phone."),
     h("label", { class: "field" }, input),
@@ -618,7 +605,7 @@ function proposalCard() {
   }) : [h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Checking what it asks for…")];
   const approveOk = !!plan && !plan.blocker && pr.selected.size > 0 && !!paired && !pr.busy;
   return h("section", { class: `card modal wc-modal${danger ? " danger-card" : ""}`, role: "dialog", "aria-modal": "true" },
-    h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "BROWSER CONNECTION REQUEST" : "CONNECTION REQUEST"),
+    h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "Browser connection request" : "Connection request"),
     dappHeader(meta, verify),
     verifyWarning(meta, verify),
     meta.description ? h("p", { class: "muted small wc-desc" }, meta.description) : null,
@@ -661,7 +648,7 @@ function itemView(it: Item): Node {
   const prep = it.prep;
   const chain = chainNum(it.req.chainId);
   const later = h("button", { class: "link wc-later", onclick: () => { requestsHidden = true; render(); }, title: "Hide this; it stays waiting on the main view" }, "Decide later");
-  const head = [h("p", { class: "kicker" }, prep?.kind === "transaction" ? "TRANSACTION REQUEST" : prep?.kind === "switch_chain" ? "NETWORK REQUEST" : "SIGNATURE REQUEST"), dappHeader(meta, v), verifyWarning(meta, v)];
+  const head = [h("p", { class: "kicker" }, prep?.kind === "transaction" ? "Transaction request" : prep?.kind === "switch_chain" ? "Network request" : "Signature request"), dappHeader(meta, v), verifyWarning(meta, v)];
 
   switch (it.stage.s) {
     case "waiting": case "preparing":
@@ -681,15 +668,15 @@ function itemView(it: Item): Node {
     }
     case "connecting":
       return h("div", { class: "wc-item" }, head, statusLine("Reaching your phone…", "Opening the USB connection. The request is not on the phone yet."),
-        h("p", { class: "clock wc-clock", "data-t0": it.stage.t0 }, ""),
-        h("div", { class: "actions" }, h("button", { class: "big", disabled: it.cancelling, onclick: () => cancel(it) }, it.cancelling ? "Cancelling…" : "Cancel")));
+        clockLine(it.stage.t0, REVIEW_LIMIT_MS),
+        h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it))));
     case "on_phone":
       return h("div", { class: "wc-item wc-center" }, head,
         h("div", { class: "phone-art" }, h("div", { class: "phone-screen" }, icon("phone", 22))),
         h("h3", null, "Review on your phone"),
         h("p", { class: "muted" }, prep?.kind === "transaction" ? "The request is on your phone. Unlock it, check the details, and approve or reject." : "Sent to your phone. Unlock it, read the review, and approve or reject."),
-        h("p", { class: "clock wc-clock", "data-t0": it.stage.t0 }, ""),
-        prep?.kind === "transaction" ? h("div", { class: "actions" }, h("button", { class: "big", disabled: it.cancelling, onclick: () => cancel(it) }, it.cancelling ? "Cancelling…" : "Cancel")) : null);
+        clockLine(it.stage.t0, REVIEW_LIMIT_MS),
+        prep?.kind === "transaction" ? h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it))) : null);
     case "verifying":
       return h("div", { class: "wc-item" }, head, statusLine("Checking the signature…", "Decoding what the phone returned and comparing every field with this request."));
     case "broadcasting":

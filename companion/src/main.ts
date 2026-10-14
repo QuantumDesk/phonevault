@@ -2,11 +2,12 @@
 // Phone Vault Companion UI. One main view (account, balances, Send, Receive, activity), a send
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
-import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri } from "./api";
+import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri, REVIEW_LIMIT_MS } from "./api";
 import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance, PairedAccount } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy, capitalize, fact } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, fmtInt, blockRange, copy, capitalize, fact, statusCard } from "./ui";
+import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
@@ -15,6 +16,7 @@ import { backupCardSection } from "./backup-card";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
 import { nftSection, resetNfts, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
+import { explainSendError, explainPlain, asSendError } from "./errors";
 import { simulationFor, resimulate, simPanel, gatedSendButton, setSimulationAccount } from "./simulation";
 import { btcInit, btcMain, btcGoHome, btcBusy, btcSettingsSection, activeBtc, btcBalanceSats, refreshBtc, reloadAccounts, BTC_NETS, btcNet, fmtBtc, type BtcNet } from "./bitcoin";
 import "./extras.css";
@@ -276,12 +278,12 @@ async function selectAccount(address: string) {
 function accountSelect() {
   const list = pairedAccounts();
   const onPhone = (a: PairedAccount) => phoneAddress?.toLowerCase() === a.address.toLowerCase() && identity.s !== "unreadable";
-  if (list.length < 2) return h("p", { class: "kicker" }, activeLabel().toUpperCase());
+  if (list.length < 2) return h("p", { class: "kicker" }, activeLabel());
   const sel = h("select", { class: "net-select", "aria-label": "Account" },
     list.map((a) => h("option", { value: a.address, selected: a.active }, `${a.label} · ${short(a.checksum)}${onPhone(a) ? " · on the phone" : ""}`)));
   sel.addEventListener("change", () => { void selectAccount(sel.value); });
   return h("label", { class: "net-chip acct-chip", title: "Accounts paired with this Mac. Requests are pinned to the one shown; the phone must be on the same account." },
-    h("span", { class: "kicker" }, activeLabel().toUpperCase()), icon("chevron", 14), sel);
+    h("span", { class: "kicker" }, activeLabel()), icon("chevron", 14), sel);
 }
 
 function homeTabs() {
@@ -394,7 +396,7 @@ function receiveView() {
   return h("div", { class: "stack fade" },
     topbar("Receive", () => go("home")),
     h("section", { class: "card receive" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, "YOUR ADDRESS"), networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, "Your address"), networkSelect()),
       h("div", { class: "qr-tile" }, qr),
       h("button", { class: "addr-full", onclick: () => copy(addr), title: "Click to copy" }, h("span", { class: "mono" }, grouped(addr)), icon("copy", 16)),
       h("div", { class: "row center" }, h("button", { class: "primary", onclick: () => copy(addr) }, icon("copy", 16), "Copy address")),
@@ -449,7 +451,7 @@ function pairView() {
       if (!labelInput.value) labelInput.value = cmp.label;
     });
     body = h("div", { class: "stack" }, h("section", { class: "card" },
-      h("p", { class: "kicker" }, "COMPARE"),
+      h("p", { class: "kicker" }, "Compare"),
       h("h3", null, "Does this match your phone?"),
       h("p", { class: "muted" }, "On the phone, open Wallet. Compare every group of four characters below with the address it shows."),
       h("p", { class: "addr-compare mono" }, grouped(address)),
@@ -464,7 +466,7 @@ function pairView() {
     ), verdictCard(device, () => identifyPhone()));
   } else if (pair.s === "mismatch") {
     body = h("section", { class: "card danger-card" },
-      h("p", { class: "kicker danger" }, "NOT PAIRED"),
+      h("p", { class: "kicker danger" }, "Not paired"),
       h("h3", null, "Stop here"),
       h("p", null, "If the phone shows a different address, something between this Mac and the phone is changing data. Nothing was saved. Use another cable and port, and don't send funds until the addresses match."),
       h("div", { class: "actions" }, h("button", { onclick: () => { pair = { s: "idle" }; render(); } }, "Start over")),
@@ -565,7 +567,7 @@ function renderPhoneNotice() {
     const close = () => { if (identity.s === "other") identity.dismissed = true; renderPhoneNotice(); };
     noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
       h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-        h("p", { class: "kicker" }, "OTHER ACCOUNT ON THE PHONE"),
+        h("p", { class: "kicker" }, "Other account on the phone"),
         h("h3", null, `The phone is using ${label}`),
         h("p", { class: "muted" }, `This Mac shows ${activeLabel()}. Requests from this Mac are pinned to the account it shows, and the phone refuses a request for an account that is not active on it. Show ${label} here, or switch accounts on the phone (☰ → Accounts).`),
         h("div", { class: "set-row" }, h("span", { class: "muted" }, "This Mac shows"), h("span", { class: "mono" }, `${activeLabel()} · ${short(status?.paired_checksum ?? "")}`)),
@@ -583,7 +585,7 @@ function renderPhoneNotice() {
   const close = () => { if (identity.s === "different") identity.dismissed = true; renderPhoneNotice(); };
   noticeEl = h("div", { class: "modal-scrim fade", onclick: (e: Event) => { if (e.target === noticeEl) close(); } },
     h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-      h("p", { class: "kicker" }, "UNPAIRED ACCOUNT ON USB"),
+      h("p", { class: "kicker" }, "Unpaired account on USB"),
       h("h3", null, "The phone is using an account this Mac hasn't paired"),
       h("p", { class: "muted" }, "That happens when you switch to a new account or a passphrase wallet on the phone, after the phone was reset or restored, or with a different phone. Sending from it stays blocked until you pair it; your other paired accounts stay as they are."),
       h("div", { class: "set-row" }, h("span", { class: "muted" }, "Paired with"), h("span", { class: "mono" }, short(status?.paired_checksum ?? ""))),
@@ -640,15 +642,6 @@ function openDeviceSettings() {
   requestAnimationFrame(() => document.getElementById("device-section")?.scrollIntoView({ block: "start", behavior: "smooth" }));
 }
 
-/** Plain wording for common transport errors (pairing and elsewhere). */
-function explainPlain(m: string): string {
-  if (/no Android device/i.test(m)) return "No phone found on USB. Plug it in and unlock it.";
-  if (/held by another program|adb/i.test(m)) return "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server` and try again.";
-  if (/did not answer|not reading/i.test(m)) return "The phone didn't answer. Wake and unlock it; if that fails, unplug and reconnect the cable.";
-  if (/not ready/i.test(m)) return "The phone isn't ready: unlock it and finish the backup check first.";
-  return m;
-}
-
 // ------------------------------------------------------------------ send flow
 //
 // Every state below is entered only from a real result: a command returning, a command failing,
@@ -680,13 +673,11 @@ let formError: string | null = null;
 const draft = { to: "", amount: "", asset: "" };
 const draftToken = () => (draft.asset ? tokenAt(flowNet.id, draft.asset) : undefined);
 let fee: FeeEstimate | null = null;
-let tick = 0;
-const REVIEW_LIMIT_MS = 300_000;
+const tickFor = clockTicker();
 
 function setFlow(f: Flow) {
   flow = f;
-  clearInterval(tick);
-  if (f.s === "on_phone" || f.s === "connecting" || f.s === "submitted") tick = window.setInterval(updateClock, 1000);
+  tickFor(f.s);
   if (view === "send") render();
 }
 
@@ -704,7 +695,6 @@ async function loadFee() {
   try { const f = await api.feeEstimate(rpcFor(n.id)); if (n === flowNet) { fee = f; updateFormExtras(); } } catch { fee = null; updateFormExtras(); }
 }
 
-const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
     case "form": case "quoting": case "review": case "replacing": case "prep_failed": return 0;
@@ -713,13 +703,6 @@ function stepOf(f: Flow): number {
     default: return 3;
   }
 }
-function stepper() {
-  const at = stepOf(flow);
-  const bad = flow.s === "failed" || flow.s === "broadcast_failed" || (flow.s === "done" && !flow.ok);
-  return h("ol", { class: "stepper", "aria-label": "Progress" }, STEPS.map((label, i) =>
-    h("li", { class: i < at || (i === at && flow.s === "done" && flow.ok) ? "done" : i === at ? (bad ? "now bad" : "now") : "" },
-      h("span", { class: "bullet" }, i < at || (i === at && flow.s === "done" && flow.ok) ? icon("check", 12) : String(i + 1)), h("span", { class: "lbl" }, label))));
-}
 
 function sendView() {
   const busy = ["connecting", "on_phone", "verifying", "broadcasting", "submitted"].includes(flow.s);
@@ -727,7 +710,7 @@ function sendView() {
   const back = busy ? null : () => { if (flow.s === "review" && !repl) { setFlow({ s: "form" }); } else go("home"); };
   return h("div", { class: "stack fade" },
     topbar(repl ? `${repl === "cancel" ? "Cancel" : "Speed up"} on ${flowNet.name}` : `Send on ${flowNet.name}`, back),
-    stepper(),
+    stepper(stepOf(flow), flow.s === "done" && flow.ok, flow.s === "failed" || flow.s === "broadcast_failed" || (flow.s === "done" && !flow.ok)),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody()),
   );
 }
@@ -793,7 +776,7 @@ function flowBody(): Node {
       return form;
     }
     case "replacing":
-      return statusCard("connecting", flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], []);
+      return statusCard(flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], [], "connecting");
     case "prep_failed":
       return h("section", { class: "card result" },
         h("div", { class: "result-ic neutral" }, icon("x", 28)),
@@ -809,7 +792,7 @@ function flowBody(): Node {
       if (quote.replaces) return replacementReview(quote);
       const sim = reviewSimulation(quote);
       return h("section", { class: "card" },
-        h("p", { class: "kicker" }, "CHECK, THEN SEND TO YOUR PHONE"),
+        h("p", { class: "kicker" }, "Check, then send to your phone"),
         quote.token ? h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtExact(quote.token.amount), h("span", { class: "unit" }, quote.token.symbol)))
           : h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtAmount(quote.amount_eth, 8), h("span", { class: "unit" }, n.symbol)), usd(quote.amount_eth) ? h("span", { class: "fiat" }, usd(quote.amount_eth)) : null),
         h("dl", { class: "facts" },
@@ -833,10 +816,10 @@ function flowBody(): Node {
       );
     }
     case "connecting":
-      if (flow.waiting) return statusCard("connecting", "Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
-      return statusCard("connecting", "Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
+      if (flow.waiting) return statusCard("Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
+      return statusCard("Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
     case "on_phone":
       return h("section", { class: "card phone-wait" },
         h("div", { class: "phone-art" }, h("div", { class: "phone-screen" }, padlock(3))),
@@ -849,12 +832,12 @@ function flowBody(): Node {
           h("li", null, h("span", { class: "muted" }, "Network"), h("strong", null, q!.network)),
         ),
         clockLine(flow.t0, REVIEW_LIMIT_MS),
-        h("div", { class: "actions" }, cancelBtn(flow.cancelling)),
+        h("div", { class: "actions" }, cancelButton(flow.cancelling, cancelSign)),
       );
     case "verifying":
-      return statusCard("connecting", "Checking the signature…", "Decoding what the phone returned and comparing every field with what you entered.", [], []);
+      return statusCard("Checking the signature…", "Decoding what the phone returned and comparing every field with what you entered.", [], [], "connecting");
     case "failed": {
-      const x = explain(flow.err);
+      const x = explainSendError(flow.err, { chain: "eth" });
       const quote = flow.quote;
       return h("section", { class: `card result ${x.danger ? "danger-card" : ""}` },
         h("div", { class: `result-ic ${x.danger ? "bad" : x.neutral ? "neutral" : "warn"}` }, icon(x.danger ? "alert" : "x", 28)),
@@ -873,7 +856,7 @@ function flowBody(): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        quote.replaces ? h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(quote.replaces.hash).toUpperCase()}`) : null,
+        quote.replaces ? h("p", { class: "kicker" }, `Replacement for tx ${shortHash(quote.replaces.hash)}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
           h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
@@ -916,13 +899,13 @@ function flowBody(): Node {
       if (r && r.kind === "cancel" && flow.ok) return h("section", { class: "card result" },
         h("div", { class: "result-ic ok big" }, icon("check", 32)),
         h("h3", null, "Cancelled"),
-        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${flow.block.toLocaleString("en-US")}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
+        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${fmtInt(flow.block)}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
-        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${flow.block.toLocaleString("en-US")}.` : `The network ran it in block ${flow.block.toLocaleString("en-US")} and it reverted. The amount was not sent, but the fee was paid.`),
+        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${fmtInt(flow.block)}.` : `The network ran it in block ${fmtInt(flow.block)} and it reverted. The amount was not sent, but the fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" },
           h("button", { class: "big primary", onclick: () => go("home") }, "Done"),
@@ -973,7 +956,7 @@ function replacementReview(quote: Quote) {
   const usd = (eth: string) => fmtUsd(eth, price(n));
   const sim = reviewSimulation(quote);
   return h("section", { class: "card replace-card" },
-    h("p", { class: "kicker" }, `REPLACEMENT FOR TX ${shortHash(r.hash).toUpperCase()}`),
+    h("p", { class: "kicker" }, `Replacement for tx ${shortHash(r.hash)}`),
     h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
     h("p", { class: "muted" }, cancel
       ? "This sends 0 to your own address with the same nonce and a higher fee. If it is included first, the original can never be included. You pay only the network fee."
@@ -1014,22 +997,6 @@ function hashLinks(hash: string) {
     h("button", { class: "link mono", title: hash, onclick: () => copy(hash, "Hash") }, shortHash(hash), icon("copy", 14)),
     h("button", { class: "link", onclick: () => openExternal(url) }, `View on ${hostOf(flowNet.explorer)}`, icon("external", 14)),
   );
-}
-function statusCard(kind: string, title: string, body: string, extra: Node[], actions: Node[]) {
-  return h("section", { class: `card result ${kind}` }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
-}
-function clockLine(t0: number, limit: number | null) {
-  return h("p", { class: "clock", "data-t0": t0, "data-limit": limit ?? "" }, clockText(t0, limit));
-}
-function clockText(t0: number, limit: number | null) {
-  const el = Date.now() - t0;
-  return limit ? `Waiting ${clock(el)} · gives up after ${clock(limit)}` : `${clock(el)} elapsed`;
-}
-function updateClock() {
-  document.querySelectorAll<HTMLElement>(".clock").forEach((c) => { c.textContent = clockText(Number(c.dataset.t0), c.dataset.limit ? Number(c.dataset.limit) : null); });
-}
-function cancelBtn(cancelling?: boolean) {
-  return h("button", { class: "big", disabled: !!cancelling, onclick: cancelSign }, cancelling ? "Cancelling…" : "Cancel");
 }
 
 async function checkAddr() {
@@ -1127,11 +1094,6 @@ async function sendToPhone(quote: Quote) {
   } finally { clearInterval(watchdog); }
 }
 
-function asSendError(e: unknown): SendError {
-  if (e && typeof e === "object" && "kind" in e) return e as SendError;
-  return { kind: "internal", message: errText(e), delivered: false };
-}
-
 async function cancelSign() {
   if (flow.s !== "connecting" && flow.s !== "on_phone") return;
   const ticket = flow.ticket;
@@ -1150,31 +1112,6 @@ onProgress((ticket, stage) => {
   else if (stage === "delivered" && flow.s === "connecting") setFlow({ s: "on_phone", quote: flow.quote, ticket, t0: Date.now(), cancelling: flow.cancelling });
   else if (stage === "verifying" && flow.s === "on_phone") setFlow({ s: "verifying", quote: flow.quote, ticket });
 });
-
-interface Explained { title: string; body: string; danger?: boolean; neutral?: boolean; hideDetail?: boolean }
-function explain(err: SendError): Explained {
-  const sent = err.delivered;
-  switch (err.kind) {
-    case "no_phone": return { title: "Phone not found", body: "No phone on USB. Plug the vault into this Mac and unlock it, then try again. Nothing was sent." };
-    case "usb_busy": return { title: "USB is in use", body: "Another program holds the phone's USB connection, usually the Android adb server. Run `adb kill-server`, then try again. Nothing was sent." };
-    case "connect": return { title: "Couldn't open the USB connection", body: "Unplug the cable and plug it back in, unlock the phone, and try again. Nothing was sent." };
-    case "not_delivered": return { title: "The phone didn't take the request", body: "Nothing reached the phone. Wake and unlock it; if that doesn't help, unplug and reconnect the cable. Then try again." };
-    case "timeout": return sent
-      ? { title: "No answer from the phone", body: `The request reached the phone, but no answer came back within ${REVIEW_LIMIT_MS / 60_000} minutes. If the phone still shows it, reject it there. Then try again.` }
-      : { title: "The phone didn't respond", body: "Nothing reached the phone. Wake and unlock it, reconnect the cable, and try again." };
-    case "disconnected": return { title: "The USB connection dropped", body: sent ? "The link ended while waiting for the phone. Nothing was broadcast. If you approved on the phone, send it again: the phone signs the same transaction." : "The link ended before the request reached the phone. Reconnect and try again." };
-    case "cancelled": return { title: "Cancelled", neutral: true, hideDetail: true, body: sent ? "Stopped waiting on this Mac. If the phone is still showing the request, tap Reject there." : "Stopped before anything reached the phone." };
-    case "rejected": return { title: "Rejected on the phone", neutral: true, hideDetail: true, body: "You declined on the phone. No signature was created and nothing was broadcast." };
-    case "phone_error": return { title: "The phone refused the request", body: explainPlain(err.message) };
-    case "busy": return { title: "Still finishing the last request", body: "The previous request to the phone is still closing. Wait a few seconds and try again." };
-    case "verify": return { title: "Signature failed verification", danger: true, body: "What came back does not match what you entered, or was not signed by your paired phone. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
-    case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast. Reconnect the cable and try again." };
-    case "not_paired": return { title: "Not paired", body: "Pair this Mac with your phone first (Settings → Phone)." };
-    case "reverts": return { title: "It would revert", body: `Simulated on your node, this transaction fails (${err.message}). A failed transaction still costs its fee, so it was not sent to your phone. Edit it, or fix the cause and try again.`, hideDetail: true };
-    case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware holding your paired wallet, so nothing was sent to it. Open Settings → Device for the details." };
-    default: return { title: "Something went wrong", body: "The request didn't complete. Nothing was broadcast. Try again." };
-  }
-}
 
 function explainBroadcast(m: string): string {
   if (/insufficient funds/i.test(m)) return "The balance is too low for the amount plus fee. ";
@@ -1225,7 +1162,7 @@ async function submitted(quote: Quote, hash: string) {
         if (ro.mined) {
           try { history = await api.historyMark(orig, ro.success ? "confirmed" : "failed", ro.block); } catch { /* best effort */ }
           setFlow({ s: "done", quote, hash: orig, block: ro.block, ok: ro.success,
-            note: `${shortHash(orig)} was included in block ${ro.block.toLocaleString("en-US")} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
+            note: `${shortHash(orig)} was included in block ${fmtInt(ro.block)} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
           refreshBalance(n);
           return;
         }
@@ -1267,7 +1204,7 @@ function scanStatusSection() {
   api.scanStatus().then((rows) => {
     list.replaceChildren(...NETWORKS.map((x) => {
       const r = rows.find((s) => s.chain_id === x.id);
-      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : `blocks ${r.from_block.toLocaleString("en-US")}–${(r.to_block ?? 0).toLocaleString("en-US")}`;
+      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : blockRange(r.from_block, r.to_block ?? 0);
       return h("div", { class: "set-row" }, h("span", { class: "muted" }, x.name), h("span", { class: "att-val", title: r?.error ?? "" }, text, r?.error && r.from_block !== null ? " (partial)" : ""));
     }));
   }).catch(() => list.replaceChildren(h("p", { class: "muted small" }, "Unavailable.")));

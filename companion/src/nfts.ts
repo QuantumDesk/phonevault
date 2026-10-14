@@ -5,7 +5,7 @@
 import { api, errText, openExternal } from "./api";
 import type { Nft } from "./api";
 import { byId } from "./networks";
-import { h, icon, short } from "./ui";
+import { h, icon, short, blockRange } from "./ui";
 
 interface ChainView { nfts: Nft[]; scanned: boolean; scanning: boolean; error: string | null; window: string | null }
 const views = new Map<number, ChainView>();
@@ -36,7 +36,7 @@ async function scan(chainId: number, host: NftHost) {
     const r = await api.nftScan(host.rpcFor(chainId));
     if (r.chain_id !== chainId) throw `the node is on chain ${r.chain_id}`;
     v.nfts = r.nfts; v.error = r.error;
-    v.window = r.from_block !== null && r.to_block !== null ? `blocks ${r.from_block.toLocaleString("en-US")}–${r.to_block.toLocaleString("en-US")}` : null;
+    v.window = r.from_block !== null && r.to_block !== null ? blockRange(r.from_block, r.to_block) : null;
   } catch (e) { v.error = errText(e); }
   v.scanning = false; v.scanned = true; host.rerender();
 }
@@ -68,13 +68,13 @@ function card(n: Nft, host: NftHost) {
   const art = h("div", { class: "nft-art" },
     m?.image ? h("img", { src: m.image, alt: m.name ?? `${n.name ?? "Token"} #${n.token_id}` })
       : m?.loading ? h("i", { class: "spinner" })
-      : h("div", { class: "stack", style: "gap:8px;justify-items:center" },
+      : h("div", { class: "stack" },
         h("span", null, (n.symbol ?? "NFT").slice(0, 10)),
         h("button", { class: "chip-btn", onclick: () => loadImage(n, host), title: "Fetch this token's metadata and image (through this app, size-limited). The server hosting it sees the request." }, "Load image"),
-        m?.error ? h("span", { class: "muted small", style: "font-family:var(--sans)", title: m.error }, "No image") : null));
+        m?.error ? h("span", { class: "muted small", title: m.error }, "No image") : null));
   return h("div", { class: `nft${n.owned === false ? " gone" : ""}` }, art,
     h("span", { class: "nft-name", title: m?.name ?? n.name ?? "" }, m?.name ?? `${n.name ?? "Unnamed collection"} #${n.token_id.length > 10 ? n.token_id.slice(0, 8) + "…" : n.token_id}`),
-    h("button", { class: "link nft-sub", style: "justify-content:flex-start;padding:0", title: `${n.contract}\nOpen in explorer`, onclick: () => openExternal(`${net.explorer}/token/${n.contract}?a=${n.token_id}`) }, short(n.contract), icon("external", 12)),
+    h("button", { class: "link nft-sub", title: `${n.contract}\nOpen in explorer`, onclick: () => openExternal(`${net.explorer}/token/${n.contract}?a=${n.token_id}`) }, short(n.contract), icon("external", 12)),
   );
 }
 

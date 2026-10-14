@@ -185,13 +185,6 @@ export async function mockInvoke<T>(cmd: string, a: Record<string, unknown> = {}
     }
     // the preview has no Rust to fetch icons: data: images pass, remote ones show the generic icon
     case "dapp_icon": return (String(a.url ?? "").startsWith("data:image/") ? String(a.url) : "") as T;
-    case "sign_message": case "sign_typed_data": {
-      await sleep(2600);
-      const outcome = params.get("outcome") ?? "approve";
-      if (outcome === "reject") throw "rejected on the phone";
-      if (outcome === "nophone") throw "no Android device on USB";
-      return { signature: rand(65), digest: rand(32), signer: ADDRESS } as T;
-    }
   }
   throw `preview: no mock for ${cmd}`;
 }

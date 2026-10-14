@@ -35,7 +35,7 @@ function reasonList(a: Attestation): HTMLElement | null {
 export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   if (!c.report) {
     return h("section", { class: "card att-card att-pending" },
-      h("p", { class: "kicker" }, "DEVICE CHECK"),
+      h("p", { class: "kicker" }, "Device check"),
       c.checking ? h("p", { class: "row gap" }, h("i", { class: "mini-spin" }), "Checking that this phone is genuine Phone Vault hardware and firmware…")
         : h("p", { class: "muted" }, c.error ? `Not checked yet: ${c.error}` : "Not checked yet."),
       !c.checking ? h("div", { class: "row gap" }, h("button", { onclick: recheck }, icon("refresh", 15), "Check now")) : null,
@@ -44,7 +44,7 @@ export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   const a = c.report;
   const { label, cls } = verdictLabel(a);
   return h("section", { class: `card att-card ${cls}` },
-    h("p", { class: "kicker" }, icon("shield", 13), " DEVICE CHECK · ", label.toUpperCase()),
+    h("p", { class: "kicker" }, icon("shield", 13), " Device check · ", label),
     h("h3", null, a.headline),
     reasonList(a),
     a.verdict === "genuine" ? h("p", { class: "muted small" }, "Google's attestation proves the keys are in the Titan M, the app is Phone Vault's, and the phone booted locked Phone Vault firmware.") : null,
@@ -90,7 +90,7 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
     const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => change(true, input.value) }, "Turn on") as HTMLButtonElement;
     input.addEventListener("input", () => { turnOn.disabled = devForm.busy || input.value.trim() !== DEV_CONFIRMATION; });
     devControls = [
-      h("div", { class: "callout", style: "border-color:color-mix(in srgb, var(--danger) 45%, transparent)" },
+      h("div", { class: "callout danger-border" },
         h("strong", null, "Only for a phone you flashed yourself"),
         h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
         h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),

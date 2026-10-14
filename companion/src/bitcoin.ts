@@ -4,10 +4,12 @@
 // entered only from a real command result or a `send-progress` event carrying this attempt's
 // ticket, exactly like the EVM send.
 
-import { call, onProgress, onEvent, openExternal, errText } from "./api";
+import { call, onProgress, onEvent, openExternal, errText, REVIEW_LIMIT_MS } from "./api";
 import type { SendError } from "./api";
-import { h, icon, padlock, short, clock, copy, ago, toast, usdFmt, capitalize, fact } from "./ui";
+import { h, icon, padlock, short, fmtInt, copy, ago, toast, usdFmt, capitalize, fact, statusCard } from "./ui";
+import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
+import { explainSendError, explainPlain, asSendError } from "./errors";
 import "./bitcoin.css";
 
 export type BtcNet = "bitcoin" | "testnet" | "signet";
@@ -82,9 +84,9 @@ export function fmtBtc(sats: number, trim = true): string {
   const neg = sats < 0; const s = Math.abs(Math.trunc(sats));
   const whole = Math.floor(s / 1e8); const frac = String(s % 1e8).padStart(8, "0");
   const f = trim ? frac.replace(/0+$/, "") : frac;
-  return `${neg ? "−" : ""}${whole.toLocaleString("en-US")}${f ? "." + f : ""}`;
+  return `${neg ? "−" : ""}${fmtInt(whole)}${f ? "." + f : ""}`;
 }
-const fmtSats = (n: number) => `${Math.abs(n).toLocaleString("en-US")} sat`;
+const fmtSats = (n: number) => `${fmtInt(Math.abs(n))} sat`;
 function usd(sats: number, price: number | null, test: boolean): string | null {
   if (price === null || test) return null;
   const v = (Math.abs(sats) / 1e8) * price;
@@ -177,7 +179,7 @@ function emptyView() {
   const n = btcNet(host.net());
   return h("div", { class: "stack fade" },
     h("section", { class: "card account" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, "BITCOIN"), host.networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, "Bitcoin"), host.networkSelect()),
       h("div", { class: "pair-hero" }, padlock(5)),
       h("h3", null, n.test ? `Add a ${n.name} account` : "Add a Bitcoin account"),
       h("p", { class: "muted" }, "Your phone derives Bitcoin keys from the same 24 words and keeps them. This Mac stores only the account's public key (xpub), to show addresses, balance and history and to prepare transactions for the phone to sign."),
@@ -191,10 +193,10 @@ function emptyView() {
 
 function accountChip(a: BtcAccount) {
   const list = accountsOn(a.network);
-  if (list.length < 2) return h("p", { class: "kicker" }, a.label.toUpperCase());
+  if (list.length < 2) return h("p", { class: "kicker" }, a.label);
   const sel = h("select", { class: "net-select", "aria-label": "Bitcoin account" }, list.map((x) => h("option", { value: x.id, selected: x.id === a.id }, `${x.label} · ${x.kind_name}`)));
   sel.addEventListener("change", async () => { try { await btcApi.select(sel.value); await reloadAccounts(); host.renderNow(); } catch (e) { toast(errText(e)); } });
-  return h("label", { class: "net-chip acct-chip", title: "Bitcoin accounts paired with this Mac" }, h("span", { class: "kicker" }, a.label.toUpperCase()), icon("chevron", 14), sel);
+  return h("label", { class: "net-chip acct-chip", title: "Bitcoin accounts paired with this Mac" }, h("span", { class: "kicker" }, a.label), icon("chevron", 14), sel);
 }
 
 function homeView(a: BtcAccount) {
@@ -267,7 +269,7 @@ async function verifyOnPhone(a: BtcAccount, index: number) {
     const r = await btcApi.showAddress(a.id, 0, index);
     recv = r.matches ? { s: "match", index } : { s: "mismatch", index, shown: r.address };
     if (r.matches) await loadWallet(a.id);
-  } catch (e) { recv = { s: "error", message: plain(errText(e)) }; }
+  } catch (e) { recv = { s: "error", message: explainPlain(errText(e), "btc") }; }
   host.renderNow();
 }
 
@@ -288,7 +290,7 @@ function receiveView(a: BtcAccount) {
   return h("div", { class: "stack fade" },
     host.topbar("Receive bitcoin", () => go("home")),
     h("section", { class: "card receive" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, `${a.label.toUpperCase()} · ${a.kind_name.toUpperCase()}`), host.networkSelect()),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, `${a.label} · ${a.kind_name}`), host.networkSelect()),
       h("div", { class: "qr-tile" }, qr),
       h("button", { class: "addr-full", onclick: () => copy(addr), title: "Click to copy" }, h("span", { class: "mono" }, groupedBtc(addr)), icon("copy", 16)),
       h("p", { class: "muted small center" }, `Address #${idx + 1} on the receive chain · a new one after each payment`),
@@ -329,11 +331,11 @@ function pairView() {
       try {
         const r = await btcApi.showAddress(c.id, 0, 0);
         pair = r.matches ? { s: "compare", c, shown: r } : { s: "mismatch", c, shown: r.address };
-      } catch (e) { pair = { s: "compare", c, error: plain(errText(e)) }; }
+      } catch (e) { pair = { s: "compare", c, error: explainPlain(errText(e), "btc") }; }
       host.renderNow();
     };
     body = h("section", { class: "card" },
-      h("p", { class: "kicker" }, "STEP 2 OF 2 · COMPARE ON THE PHONE"),
+      h("p", { class: "kicker" }, "Step 2 of 2 · Compare on the phone"),
       h("h3", null, `${c.kind === "p2tr" ? "Taproot" : "Native SegWit"} account ${c.account}`),
       h("dl", { class: "facts" },
         fact("Fingerprint", h("span", { class: "mono" }, c.fingerprint)),
@@ -358,7 +360,7 @@ function pairView() {
     );
   } else if (pair.s === "mismatch") {
     body = h("section", { class: "card danger-card" },
-      h("p", { class: "kicker danger" }, "NOT PAIRED"),
+      h("p", { class: "kicker danger" }, "Not paired"),
       h("h3", null, "Stop here"),
       h("p", null, "The phone and this Mac disagree about the account's first address, so this Mac would show addresses your phone doesn't control. Nothing was saved. Use another cable and port, and don't receive to this account until they match."),
       pair.shown ? h("p", { class: "mono small" }, `Phone: ${groupedBtc(pair.shown)}`) : null,
@@ -374,11 +376,11 @@ function pairView() {
       if (host.phoneBusy()) { pair = { s: "choose", error: "The phone is answering another request. Finish it first." }; host.renderNow(); return; }
       pair = { s: "reading" }; host.renderNow();
       try { const c = await btcApi.readAccount(host.net(), pairDraft.kind, pairDraft.account); pair = { s: "compare", c }; }
-      catch (e) { pair = { s: "choose", error: plain(errText(e)) }; }
+      catch (e) { pair = { s: "choose", error: explainPlain(errText(e), "btc") }; }
       host.renderNow();
     };
     body = h("section", { class: "card pair" },
-      h("p", { class: "kicker" }, `STEP 1 OF 2 · ${n.name.toUpperCase()}`),
+      h("p", { class: "kicker" }, `Step 1 of 2 · ${n.name}`),
       h("h3", null, "Add a Bitcoin account from your phone"),
       h("p", { class: "muted" }, "The phone shares the account's public key (xpub) once you approve it there. This Mac can then show balances and prepare transactions; only the phone can sign."),
       h("div", { class: "field" }, h("span", { class: "field-label" }, "Address type"),
@@ -417,22 +419,16 @@ let fees: Fees | null = null;
 let formError: string | null = null;
 let addr: AddrCheck | null = null;
 let addrSeq = 0;
-let tick = 0;
-const REVIEW_LIMIT_MS = 300_000;
+const tickFor = clockTicker();
 const CONFIRMATION_POLL_MS = 15_000;
 
 const busy = () => sub === "send" && !["form", "quoting", "review", "failed", "signed", "broadcast_failed", "bump_failed"].includes(flow.s);
 
 function setFlow(f: Flow) {
   flow = f;
-  clearInterval(tick);
-  if (f.s === "on_phone" || f.s === "connecting" || f.s === "submitted") tick = window.setInterval(() => {
-    document.querySelectorAll<HTMLElement>(".btc-clock").forEach((c) => { c.textContent = clockText(Number(c.dataset.t0), c.dataset.limit ? Number(c.dataset.limit) : null); });
-  }, 1000);
+  tickFor(f.s);
   if (sub === "send") host.renderNow();
 }
-const clockText = (t0: number, limit: number | null) => limit ? `Waiting ${clock(Date.now() - t0)} · gives up after ${clock(limit)}` : `${clock(Date.now() - t0)} elapsed`;
-const clockLine = (t0: number, limit: number | null) => h("p", { class: "clock btc-clock", "data-t0": t0, "data-limit": limit ?? "" }, clockText(t0, limit));
 
 function startSend(a: BtcAccount) {
   const blocked = host.phoneBlocked();
@@ -462,7 +458,6 @@ function amountBtc(): string | null {
   return satsToBtcStr(Math.round((usdV / p) * 1e8));
 }
 
-const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
     case "form": case "quoting": case "review": case "bumping": case "bump_failed": return 0;
@@ -471,21 +466,13 @@ function stepOf(f: Flow): number {
     default: return 3;
   }
 }
-function stepper() {
-  const at = stepOf(flow);
-  const bad = flow.s === "failed" || flow.s === "broadcast_failed";
-  const done = flow.s === "submitted" && flow.confs > 0;
-  return h("ol", { class: "stepper", "aria-label": "Progress" }, STEPS.map((label, i) =>
-    h("li", { class: i < at || (i === at && done) ? "done" : i === at ? (bad ? "now bad" : "now") : "" },
-      h("span", { class: "bullet" }, i < at || (i === at && done) ? icon("check", 12) : String(i + 1)), h("span", { class: "lbl" }, label))));
-}
 
 function sendView(a: BtcAccount) {
   const n = btcNet(a.network);
   const back = busy() ? null : () => { if (flow.s === "review" && !draft.bumpOf) setFlow({ s: "form" }); else { flow = { s: "form" }; go("home"); } };
   return h("div", { class: "stack fade" },
     host.topbar(draft.bumpOf ? "Speed up" : `Send ${n.unit === "BTC" ? "bitcoin" : n.unit}`, back),
-    stepper(),
+    stepper(stepOf(flow), flow.s === "submitted" && flow.confs > 0, flow.s === "failed" || flow.s === "broadcast_failed"),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody(a)),
   );
 }
@@ -559,7 +546,7 @@ function flowBody(a: BtcAccount): Node {
     case "review": return review(a, flow.q);
     case "connecting":
       return statusCard(flow.waiting ? "Waiting for your phone…" : "Reaching your phone…", flow.waiting ? "Your phone is answering another request. Your transaction goes to it as soon as that one finishes. Nothing has been sent yet." : "Opening the USB connection. The request is not on the phone yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)]);
     case "on_phone": {
       const q = flow.q;
       return h("section", { class: "card phone-wait" },
@@ -573,12 +560,12 @@ function flowBody(a: BtcAccount): Node {
           q.change_sats ? h("li", null, h("span", { class: "muted" }, "Change (yours)"), h("strong", null, `${fmtBtc(q.change_sats)} ${n.unit}`)) : null,
         ),
         clockLine(flow.t0, REVIEW_LIMIT_MS),
-        h("div", { class: "actions" }, cancelBtn(flow.cancelling)),
+        h("div", { class: "actions" }, cancelButton(flow.cancelling, cancelSign)),
       );
     }
     case "verifying": return statusCard("Checking the signatures…", "Comparing the signed transaction with what you reviewed and verifying every signature on this Mac.", [], []);
     case "failed": {
-      const x = explain(flow.err);
+      const x = explainSendError(flow.err, { chain: "btc" });
       const q = flow.q;
       return h("section", { class: `card result ${x.danger ? "danger-card" : ""}` },
         h("div", { class: `result-ic ${x.danger ? "bad" : x.neutral ? "neutral" : "warn"}` }, icon(x.danger ? "alert" : "x", 28)),
@@ -594,7 +581,7 @@ function flowBody(a: BtcAccount): Node {
       const sending = flow.s === "broadcasting";
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        q.replaces ? h("p", { class: "kicker" }, `REPLACES ${short(q.replaces).toUpperCase()}`) : null,
+        q.replaces ? h("p", { class: "kicker" }, `Replaces ${short(q.replaces)}`) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" }, s.checks.map((c) => h("li", null, icon("check", 14), c))),
         h("dl", { class: "facts" },
@@ -633,7 +620,7 @@ function review(a: BtcAccount, q: BtcQuote) {
   const change = q.outputs.find((o) => o.change);
   const big = q.fee_sats > q.amount_sats * 0.1 && q.fee_sats > 5_000;
   return h("section", { class: "card" },
-    h("p", { class: "kicker" }, q.replaces ? `REPLACEMENT FOR ${short(q.replaces).toUpperCase()} · HIGHER FEE` : "CHECK, THEN SEND TO YOUR PHONE"),
+    h("p", { class: "kicker" }, q.replaces ? `Replacement for ${short(q.replaces)} · higher fee` : "Check, then send to your phone"),
     h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtBtc(q.amount_sats), h("span", { class: "unit" }, n.unit)), $(q.amount_sats) ? h("span", { class: "fiat" }, $(q.amount_sats)) : null),
     h("dl", { class: "facts" },
       fact("To", h("span", { class: "mono break" }, groupedBtc(q.recipient))),
@@ -691,17 +678,14 @@ async function sendToPhone(q: BtcQuote) {
     if (activeTicket === ticket) setFlow({ s: "signed", q, signed });
   } catch (e) {
     if (activeTicket !== ticket) return;
-    const err: SendError = e && typeof e === "object" && "kind" in e ? (e as SendError) : { kind: "internal", message: errText(e), delivered: false };
-    setFlow({ s: "failed", q, err });
+    setFlow({ s: "failed", q, err: asSendError(e) });
   }
 }
 
-function cancelBtn(cancelling?: boolean) {
-  return h("button", { class: "big", disabled: !!cancelling, onclick: async () => {
-    if (flow.s !== "connecting" && flow.s !== "on_phone") return;
-    const t = flow.ticket; setFlow({ ...flow, cancelling: true });
-    try { await btcApi.signCancel(t); } catch { /* the command result says */ }
-  } }, cancelling ? "Cancelling…" : "Cancel");
+async function cancelSign() {
+  if (flow.s !== "connecting" && flow.s !== "on_phone") return;
+  const t = flow.ticket; setFlow({ ...flow, cancelling: true });
+  try { await btcApi.signCancel(t); } catch { /* the command result says */ }
 }
 
 async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
@@ -723,36 +707,6 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
       if (Date.now() - t0 > 3 * 3600_000) return;
     }
   } catch (e) { setFlow({ s: "broadcast_failed", q, signed: s, message: errText(e) }); }
-}
-
-function statusCard(title: string, body: string, extra: Node[], actions: Node[]) {
-  return h("section", { class: "card result" }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
-}
-
-function plain(m: string): string {
-  if (/no Android device/i.test(m)) return "No phone found on USB. Plug it in and unlock it.";
-  if (/held by another program|adb/i.test(m)) return "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server` and try again.";
-  if (/did not answer|not reading/i.test(m)) return "The phone didn't answer. Wake and unlock it; if that fails, unplug and reconnect the cable.";
-  if (/Unknown method|unknown method|not supported|schema/i.test(m)) return `The phone's app doesn't support Bitcoin yet (${m}). Update Phone Vault on the phone.`;
-  return capitalize(m);
-}
-
-function explain(err: SendError): { title: string; body: string; danger?: boolean; neutral?: boolean; hideDetail?: boolean } {
-  const sent = err.delivered;
-  switch (err.kind) {
-    case "no_phone": return { title: "Phone not found", body: "No phone on USB. Plug the vault into this Mac and unlock it, then try again. Nothing was sent." };
-    case "usb_busy": return { title: "USB is in use", body: "Another program holds the phone's USB connection, usually the Android adb server. Run `adb kill-server`, then try again." };
-    case "connect": case "not_delivered": return { title: "The phone didn't take the request", body: "Nothing reached the phone. Wake and unlock it; if that doesn't help, unplug and reconnect the cable." };
-    case "timeout": return { title: sent ? "No answer from the phone" : "The phone didn't respond", body: sent ? `The request reached the phone, but no answer came back within ${REVIEW_LIMIT_MS / 60_000} minutes. If the phone still shows it, reject it there.` : "Nothing reached the phone. Wake and unlock it and try again." };
-    case "disconnected": return { title: "The USB connection dropped", body: "Nothing was broadcast. Reconnect and try again." };
-    case "cancelled": return { title: "Cancelled", neutral: true, hideDetail: true, body: sent ? "Stopped waiting on this Mac. If the phone still shows the request, tap Reject there." : "Stopped before anything reached the phone." };
-    case "rejected": return { title: "Rejected on the phone", neutral: true, hideDetail: true, body: "You declined on the phone. Nothing was signed or broadcast." };
-    case "phone_error": return { title: "The phone refused it", body: plain(err.message) };
-    case "verify": return { title: "Signature failed verification", danger: true, body: "What came back is not exactly the transaction you reviewed, or is not signed by your paired account's keys. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
-    case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware, so nothing was sent to it. Settings → Device has the details." };
-    case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast." };
-    default: return { title: "Something went wrong", body: capitalize(err.message || "The request didn't complete. Nothing was broadcast.") };
-  }
 }
 
 function explainBroadcast(m: string): string {
@@ -783,7 +737,7 @@ function exportModal(): HTMLElement | null {
     : x.error ? h("p", { class: "inline-error" }, x.error) : h("div", { class: "boot" }, h("div", { class: "spinner" }));
   return h("div", { id: "btc-export", class: "modal-scrim fade", onclick: (e: Event) => { if ((e.target as HTMLElement).id === "btc-export") close(); } },
     h("section", { class: "card modal", role: "dialog", "aria-modal": "true" },
-      h("div", { class: "row between" }, h("p", { class: "kicker" }, `EXPORT TO SPARROW · ${x.a.label.toUpperCase()}`), h("button", { class: "icon-btn", onclick: close, "aria-label": "Close" }, icon("close", 18))),
+      h("div", { class: "row between" }, h("p", { class: "kicker" }, `Export to Sparrow · ${x.a.label}`), h("button", { class: "icon-btn", onclick: close, "aria-label": "Close" }, icon("close", 18))),
       body));
 }
 
