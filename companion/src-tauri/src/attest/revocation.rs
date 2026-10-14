@@ -102,11 +102,15 @@ fn fetch() -> Result<String, String> {
     if resp.content_length().is_some_and(|l| l > MAX_BYTES) {
         return Err("status list is unexpectedly large".into());
     }
-    let body = resp.text().map_err(|_| "status list download failed".to_string())?;
-    if body.len() as u64 > MAX_BYTES {
-        return Err("status list is unexpectedly large".into());
-    }
-    Ok(body)
+    // Read at most MAX_BYTES + 1 so a body without a Content-Length is never buffered whole.
+    let bytes = crate::eth::read_capped(resp, MAX_BYTES).map_err(|e| {
+        if e.contains("larger than") {
+            "status list is unexpectedly large".to_string()
+        } else {
+            "status list download failed".to_string()
+        }
+    })?;
+    String::from_utf8(bytes).map_err(|_| "status list download failed".to_string())
 }
 
 /// The current status list: cache if fresh, else the network, else a recent cache, else unknown.
