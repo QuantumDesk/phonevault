@@ -10,7 +10,8 @@ import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, fmtInt,
 import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
-import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
+import { wcPhoneBusy } from "./walletconnect";
+import { mountWalletConnect, wcHomeSlot, wcSettingsSection } from "./wc-view";
 import { extSettingsSection } from "./extension";
 import { backupCardSection } from "./backup-card";
 import { activitySection, type ActivityHost, type ActivityFilter } from "./activity";
