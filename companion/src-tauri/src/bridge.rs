@@ -1348,11 +1348,7 @@ fn proxy_call(
     params: &Value,
 ) -> Result<(Value, Option<u64>), Value> {
     let fail = |m: String| json!({"code": wc::INTERNAL, "message": m});
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| fail(e.to_string()))?;
+    let client = crate::http::client(Duration::from_secs(20), crate::http::Policy::none()).map_err(fail)?;
     let post = |method: &str, params: &Value| -> Result<Value, Value> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         // never the reqwest error text: it contains the node URL, often with the user's API key

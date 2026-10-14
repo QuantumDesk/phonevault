@@ -91,8 +91,10 @@ fn write_cache(fetched: u64, body: &str) {
 }
 
 fn fetch() -> Result<String, String> {
-    let client =
-        reqwest::blocking::Client::builder().timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
+    // No redirects, like every other fetch whose answer decides something: the list is trusted
+    // because it comes over TLS from STATUS_URL itself (it answers 200 directly). A redirect is
+    // answered as a failed fetch (cache, else unknown), never followed to another host or to http.
+    let client = crate::http::client(Duration::from_secs(8), crate::http::Policy::none())?;
     let resp = client.get(STATUS_URL).send().map_err(|_| "Google's status list could not be reached".to_string())?;
     if !resp.status().is_success() {
         return Err(format!("Google's status list answered HTTP {}", resp.status().as_u16()));

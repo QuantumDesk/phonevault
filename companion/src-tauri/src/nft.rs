@@ -341,11 +341,7 @@ fn safe_url(url: &str) -> Result<reqwest::Url, String> {
 }
 
 fn fetch(url: &str, cap: u64) -> Result<(Vec<u8>, String), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(12))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::http::client(Duration::from_secs(12), crate::http::Policy::none())?;
     let resp = client
         .get(safe_url(url)?)
         .header("accept", "application/json, image/*")

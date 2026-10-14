@@ -194,9 +194,7 @@ impl Client {
             Some(c) => vec![check_server(c)?],
             None => defaults(net).iter().map(ToString::to_string).collect(),
         };
-        let http = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            .redirect(reqwest::redirect::Policy::none())
+        let http = crate::http::builder(Duration::from_secs(20), crate::http::Policy::none())
             .user_agent("PhoneVault")
             .build()
             .map_err(|e| e.to_string())?;

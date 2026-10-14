@@ -6,6 +6,8 @@ mod aoa;
 // device attestation: is the phone genuine Phone Vault hardware + firmware + app?
 pub mod attest;
 mod eth;
+// every HTTP client: explicit timeout and redirect policy
+mod http;
 mod message;
 mod pairing;
 mod signing;

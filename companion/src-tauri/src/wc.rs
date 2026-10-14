@@ -732,11 +732,7 @@ fn node_call(url: &str, method: &str, params: Value) -> Result<Value, String> {
     if !url.starts_with("https://") {
         return Err("the node URL must use https://".into());
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::http::client(Duration::from_secs(20), crate::http::Policy::none())?;
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     let http = client.post(url).json(&body).send().map_err(|e| eth::transport_error(&e))?;
     let bytes = eth::read_capped(http, eth::MAX_RESPONSE)?;
