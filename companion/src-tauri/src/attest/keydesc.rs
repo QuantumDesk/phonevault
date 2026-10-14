@@ -37,26 +37,55 @@ use serde::Serialize;
 pub const OID_KEY_DESCRIPTION: &str = "1.3.6.1.4.1.11129.2.1.17";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum SecurityLevel { Software, TrustedEnvironment, StrongBox }
+pub enum SecurityLevel {
+    Software,
+    TrustedEnvironment,
+    StrongBox,
+}
 
 impl SecurityLevel {
     fn from(v: u64) -> Result<Self, String> {
-        match v { 0 => Ok(Self::Software), 1 => Ok(Self::TrustedEnvironment), 2 => Ok(Self::StrongBox), _ => Err(format!("attestation extension: unknown security level {v}")) }
+        match v {
+            0 => Ok(Self::Software),
+            1 => Ok(Self::TrustedEnvironment),
+            2 => Ok(Self::StrongBox),
+            _ => Err(format!("attestation extension: unknown security level {v}")),
+        }
     }
     pub fn name(self) -> &'static str {
-        match self { Self::Software => "Software", Self::TrustedEnvironment => "TrustedEnvironment", Self::StrongBox => "StrongBox" }
+        match self {
+            Self::Software => "Software",
+            Self::TrustedEnvironment => "TrustedEnvironment",
+            Self::StrongBox => "StrongBox",
+        }
     }
     pub fn parse_name(s: &str) -> Option<Self> {
-        match s { "Software" => Some(Self::Software), "TrustedEnvironment" => Some(Self::TrustedEnvironment), "StrongBox" => Some(Self::StrongBox), _ => None }
+        match s {
+            "Software" => Some(Self::Software),
+            "TrustedEnvironment" => Some(Self::TrustedEnvironment),
+            "StrongBox" => Some(Self::StrongBox),
+            _ => None,
+        }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum BootState { Verified, SelfSigned, Unverified, Failed }
+pub enum BootState {
+    Verified,
+    SelfSigned,
+    Unverified,
+    Failed,
+}
 
 impl BootState {
     fn from(v: u64) -> Result<Self, String> {
-        match v { 0 => Ok(Self::Verified), 1 => Ok(Self::SelfSigned), 2 => Ok(Self::Unverified), 3 => Ok(Self::Failed), _ => Err(format!("attestation extension: unknown verified boot state {v}")) }
+        match v {
+            0 => Ok(Self::Verified),
+            1 => Ok(Self::SelfSigned),
+            2 => Ok(Self::Unverified),
+            3 => Ok(Self::Failed),
+            _ => Err(format!("attestation extension: unknown verified boot state {v}")),
+        }
     }
     pub fn describe(self) -> &'static str {
         match self {
@@ -77,10 +106,16 @@ pub struct RootOfTrust {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageInfo { pub name: String, pub version: u64 }
+pub struct PackageInfo {
+    pub name: String,
+    pub version: u64,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AppId { pub packages: Vec<PackageInfo>, pub signature_digests: Vec<Vec<u8>> }
+pub struct AppId {
+    pub packages: Vec<PackageInfo>,
+    pub signature_digests: Vec<Vec<u8>>,
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthList {
@@ -142,7 +177,16 @@ pub fn parse(ext: &[u8]) -> Result<KeyDescription, String> {
     let software = auth_list(&mut s.sequence("softwareEnforced")?, "softwareEnforced")?;
     let hardware = auth_list(&mut s.sequence("hardwareEnforced")?, "hardwareEnforced")?;
     s.end("KeyDescription")?;
-    Ok(KeyDescription { attestation_version, attestation_security_level, keymint_version, keymint_security_level, challenge, unique_id, software, hardware })
+    Ok(KeyDescription {
+        attestation_version,
+        attestation_security_level,
+        keymint_version,
+        keymint_security_level,
+        challenge,
+        unique_id,
+        software,
+        hardware,
+    })
 }
 
 fn auth_list(r: &mut Reader, which: &str) -> Result<AuthList, String> {
@@ -154,7 +198,12 @@ fn auth_list(r: &mut Reader, which: &str) -> Result<AuthList, String> {
             return Err(format!("attestation extension: {which} holds an untagged field"));
         }
         if let Some(prev) = last {
-            if field.tag <= prev { return Err(format!("attestation extension: {which} tags are not in ascending order ([{}] after [{prev}])", field.tag)); }
+            if field.tag <= prev {
+                return Err(format!(
+                    "attestation extension: {which} tags are not in ascending order ([{}] after [{prev}])",
+                    field.tag
+                ));
+            }
         }
         last = Some(field.tag);
         let mut inner = Reader::new(field.value);
@@ -162,12 +211,17 @@ fn auth_list(r: &mut Reader, which: &str) -> Result<AuthList, String> {
         match field.tag {
             TAG_PURPOSE => {
                 let mut set = inner.set(&name)?;
-                while !set.is_empty() { list.purposes.push(set.uint(&name)?); }
+                while !set.is_empty() {
+                    list.purposes.push(set.uint(&name)?);
+                }
             }
             TAG_ALGORITHM => list.algorithm = Some(inner.uint(&name)?),
             TAG_KEY_SIZE => list.key_size = Some(inner.uint(&name)?),
             TAG_EC_CURVE => list.ec_curve = Some(inner.uint(&name)?),
-            TAG_NO_AUTH_REQUIRED => { inner.expect(CLASS_UNIVERSAL, false, TAG_NULL, &name)?; list.no_auth_required = true; }
+            TAG_NO_AUTH_REQUIRED => {
+                inner.expect(CLASS_UNIVERSAL, false, TAG_NULL, &name)?;
+                list.no_auth_required = true;
+            }
             TAG_CREATION_DATETIME => list.creation_datetime = Some(inner.uint(&name)?),
             TAG_ORIGIN => list.origin = Some(inner.uint(&name)?),
             TAG_ROOT_OF_TRUST => list.root_of_trust = Some(root_of_trust(&mut inner.sequence(&name)?)?),
@@ -176,7 +230,9 @@ fn auth_list(r: &mut Reader, which: &str) -> Result<AuthList, String> {
             TAG_APP_ID => list.app_id = Some(app_id(inner.octets(&name)?)?),
             TAG_VENDOR_PATCH_LEVEL => list.vendor_patch_level = Some(inner.uint(&name)?),
             TAG_BOOT_PATCH_LEVEL => list.boot_patch_level = Some(inner.uint(&name)?),
-            _ => { inner.read()?; } // a field we don't rely on: one well-formed element, nothing else
+            _ => {
+                inner.read()?;
+            } // a field we don't rely on: one well-formed element, nothing else
         }
         inner.end(&name)?;
     }
@@ -200,26 +256,42 @@ fn app_id(bytes: &[u8]) -> Result<AppId, String> {
     let mut infos = s.set("attestationApplicationId.package_infos")?;
     while !infos.is_empty() {
         let mut p = infos.sequence("AttestationPackageInfo")?;
-        let name = std::str::from_utf8(p.octets("package_name")?).map_err(|_| "attestation extension: package name is not UTF-8".to_string())?.to_string();
+        let name = std::str::from_utf8(p.octets("package_name")?)
+            .map_err(|_| "attestation extension: package name is not UTF-8".to_string())?
+            .to_string();
         let version = p.uint("package version")?;
         p.end("AttestationPackageInfo")?;
         packages.push(PackageInfo { name, version });
     }
     let mut signature_digests = Vec::new();
     let mut digests = s.set("attestationApplicationId.signature_digests")?;
-    while !digests.is_empty() { signature_digests.push(digests.octets("signature digest")?.to_vec()); }
+    while !digests.is_empty() {
+        signature_digests.push(digests.octets("signature digest")?.to_vec());
+    }
     s.end("attestationApplicationId")?;
     Ok(AppId { packages, signature_digests })
 }
 
 /// "15.0.0" from 150000 (MMmmpp).
-pub fn os_version_text(v: u64) -> String { format!("{}.{}.{}", v / 10000, (v / 100) % 100, v % 100) }
+pub fn os_version_text(v: u64) -> String {
+    format!("{}.{}.{}", v / 10000, (v / 100) % 100, v % 100)
+}
 
 /// "2026-09" from 202609, "2026-09-05" from 20260905; anything else as the raw number.
 pub fn patch_level_text(v: u64) -> String {
     let s = v.to_string();
-    match s.len() { 6 => format!("{}-{}", &s[..4], &s[4..]), 8 => format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..]), _ => s }
+    match s.len() {
+        6 => format!("{}-{}", &s[..4], &s[4..]),
+        8 => format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..]),
+        _ => s,
+    }
 }
 
 /// YYYYMM from a YYYYMM or YYYYMMDD value (for comparisons).
-pub fn patch_month(v: u64) -> u64 { if v > 999_999 { v / 100 } else { v } }
+pub fn patch_month(v: u64) -> u64 {
+    if v > 999_999 {
+        v / 100
+    } else {
+        v
+    }
+}

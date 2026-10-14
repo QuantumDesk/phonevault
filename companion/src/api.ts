@@ -116,8 +116,6 @@ export const api = {
   checkAddress: (address: string) => call<AddressCheck>("check_address", { address }),
   history: () => call<HistoryEntry[]>("history_list"),
   historyMark: (hash: string, status: string, block: number | null) => call<HistoryEntry[]>("history_mark", { hash, status, block }),
-  historyAddIncoming: (chainId: number, amountWei: string) => call<HistoryEntry[]>("history_add_incoming", { chainId, amountWei }),
-  spotUsd: (symbol: string) => call<number>("spot_usd", { symbol }),
   prices: () => call<Prices>("prices_usd"),
   historyReconcile: (rpcUrl: string) => call<HistoryEntry[]>("history_reconcile", { rpcUrl }),
   /** Speed up (same transaction, higher fees) or cancel (0 to yourself, higher fees) a pending transaction. */

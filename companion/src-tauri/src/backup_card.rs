@@ -22,10 +22,7 @@ pub fn card_file(paper: &str, grid: &str) -> Result<&'static str, String> {
 #[tauri::command]
 pub fn open_backup_card(app: AppHandle, paper: String, grid: String) -> Result<(), String> {
     let name = card_file(&paper, &grid)?;
-    let path = app
-        .path()
-        .resolve(format!("backup-card/{name}"), BaseDirectory::Resource)
-        .map_err(|e| e.to_string())?;
+    let path = app.path().resolve(format!("backup-card/{name}"), BaseDirectory::Resource).map_err(|e| e.to_string())?;
     if !path.is_file() {
         return Err("The backup card is missing from this installation.".into());
     }
@@ -40,8 +37,7 @@ mod tests {
 
     #[test]
     fn every_offered_card_is_bundled_and_a_pdf() {
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let conf: serde_json::Value = serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
         let resources = conf["bundle"]["resources"].as_object().unwrap();
         for paper in ["a4", "letter"] {
             for grid in ["compact", "standard"] {

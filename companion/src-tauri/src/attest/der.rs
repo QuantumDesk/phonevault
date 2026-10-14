@@ -33,15 +33,23 @@ pub struct Reader<'a> {
     buf: &'a [u8],
 }
 
-fn err<T>(m: &str) -> Result<T, String> { Err(format!("attestation extension: {m}")) }
+fn err<T>(m: &str) -> Result<T, String> {
+    Err(format!("attestation extension: {m}"))
+}
 
 impl<'a> Reader<'a> {
-    pub fn new(buf: &'a [u8]) -> Self { Reader { buf } }
-    pub fn is_empty(&self) -> bool { self.buf.is_empty() }
+    pub fn new(buf: &'a [u8]) -> Self {
+        Reader { buf }
+    }
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
 
     pub fn read(&mut self) -> Result<Tlv<'a>, String> {
         let b = &self.buf;
-        if b.len() < 2 { return err("truncated element"); }
+        if b.len() < 2 {
+            return err("truncated element");
+        }
         let first = b[0];
         let class = first >> 6;
         let constructed = first & 0x20 != 0;
@@ -53,13 +61,22 @@ impl<'a> Reader<'a> {
             let mut n = 0;
             loop {
                 let byte = *b.get(pos).ok_or("attestation extension: truncated tag")?;
-                if n == 0 && byte == 0x80 { return err("non-minimal tag encoding"); }
+                if n == 0 && byte == 0x80 {
+                    return err("non-minimal tag encoding");
+                }
                 tag = (tag << 7) | (byte & 0x7f) as u32;
-                pos += 1; n += 1;
-                if byte & 0x80 == 0 { break; }
-                if n >= 4 { return err("tag number too large"); }
+                pos += 1;
+                n += 1;
+                if byte & 0x80 == 0 {
+                    break;
+                }
+                if n >= 4 {
+                    return err("tag number too large");
+                }
             }
-            if tag < 0x1f { return err("non-minimal tag encoding"); }
+            if tag < 0x1f {
+                return err("non-minimal tag encoding");
+            }
         }
         let lb = *b.get(pos).ok_or("attestation extension: truncated length")?;
         pos += 1;
@@ -69,16 +86,26 @@ impl<'a> Reader<'a> {
             return err("indefinite length is not DER");
         } else {
             let n = (lb & 0x7f) as usize;
-            if n > 3 { return err("length too large"); }
+            if n > 3 {
+                return err("length too large");
+            }
             let bytes = b.get(pos..pos + n).ok_or("attestation extension: truncated length")?;
-            if bytes[0] == 0 { return err("non-minimal length encoding"); }
+            if bytes[0] == 0 {
+                return err("non-minimal length encoding");
+            }
             let mut l = 0usize;
-            for &x in bytes { l = (l << 8) | x as usize; }
-            if l < 0x80 { return err("non-minimal length encoding"); }
+            for &x in bytes {
+                l = (l << 8) | x as usize;
+            }
+            if l < 0x80 {
+                return err("non-minimal length encoding");
+            }
             pos += n;
             l
         };
-        if len > MAX_LEN { return err("element too large"); }
+        if len > MAX_LEN {
+            return err("element too large");
+        }
         let value = b.get(pos..pos + len).ok_or("attestation extension: element runs past its container")?;
         self.buf = &b[pos + len..];
         Ok(Tlv { class, constructed, tag, value })
@@ -112,17 +139,29 @@ impl<'a> Reader<'a> {
         boolean(self.expect(CLASS_UNIVERSAL, false, TAG_BOOLEAN, what)?, what)
     }
     pub fn end(&self, what: &str) -> Result<(), String> {
-        if self.buf.is_empty() { Ok(()) } else { Err(format!("attestation extension: trailing data in {what}")) }
+        if self.buf.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("attestation extension: trailing data in {what}"))
+        }
     }
 }
 
 /// A non-negative INTEGER/ENUMERATED body that fits in u64, minimally encoded.
 pub fn uint(v: &[u8], what: &str) -> Result<u64, String> {
-    if v.is_empty() { return Err(format!("attestation extension: {what} is an empty integer")); }
-    if v[0] & 0x80 != 0 { return Err(format!("attestation extension: {what} is negative")); }
-    if v.len() > 1 && v[0] == 0 && v[1] & 0x80 == 0 { return Err(format!("attestation extension: {what} is not minimally encoded")); }
+    if v.is_empty() {
+        return Err(format!("attestation extension: {what} is an empty integer"));
+    }
+    if v[0] & 0x80 != 0 {
+        return Err(format!("attestation extension: {what} is negative"));
+    }
+    if v.len() > 1 && v[0] == 0 && v[1] & 0x80 == 0 {
+        return Err(format!("attestation extension: {what} is not minimally encoded"));
+    }
     let body = if v[0] == 0 && v.len() > 1 { &v[1..] } else { v };
-    if body.len() > 8 { return Err(format!("attestation extension: {what} is too large")); }
+    if body.len() > 8 {
+        return Err(format!("attestation extension: {what} is too large"));
+    }
     Ok(body.iter().fold(0u64, |a, &b| (a << 8) | b as u64))
 }
 
@@ -148,7 +187,7 @@ mod tests {
         assert_eq!(Reader::new(t.value).octets("x").unwrap(), b"ab");
         assert!(r.is_empty());
         let mut long = vec![0x04, 0x81, 0x80];
-        long.extend(std::iter::repeat(7u8).take(0x80));
+        long.extend(std::iter::repeat_n(7u8, 0x80));
         assert_eq!(Reader::new(&long).octets("x").unwrap().len(), 0x80);
     }
 

@@ -40,17 +40,32 @@ pub struct StoredAccount {
 
 impl StoredAccount {
     pub fn from_account(a: &Account, label: &str) -> StoredAccount {
-        StoredAccount { id: a.id(), network: a.net, kind: a.kind, account: a.number, fingerprint: a.fingerprint.to_string(), xpub: a.xpub.to_string(),
-            descriptor: a.descriptor(), label: label.to_string(), paired_at: crate::history::now().to_string() }
+        StoredAccount {
+            id: a.id(),
+            network: a.net,
+            kind: a.kind,
+            account: a.number,
+            fingerprint: a.fingerprint.to_string(),
+            xpub: a.xpub.to_string(),
+            descriptor: a.descriptor(),
+            label: label.to_string(),
+            paired_at: crate::history::now().to_string(),
+        }
     }
     /// Rebuild and re-check the account from the stored fields.
     pub fn account(&self) -> Result<Account, String> {
-        if !(1..=super::wallet::MAX_ACCOUNT).contains(&self.account) { return Err("account number out of range".into()); }
+        if !(1..=super::wallet::MAX_ACCOUNT).contains(&self.account) {
+            return Err("account number out of range".into());
+        }
         let xpub = Xpub::from_str(&self.xpub).map_err(|_| "invalid xpub".to_string())?;
         let fingerprint = Fingerprint::from_str(&self.fingerprint).map_err(|_| "invalid fingerprint".to_string())?;
         let a = Account { net: self.network, kind: self.kind, number: self.account, fingerprint, xpub };
-        if xpub.network != self.network.kind() || xpub.depth != 3 { return Err("xpub does not fit the account".into()); }
-        if a.descriptor() != self.descriptor || a.id() != self.id { return Err("descriptor or id does not match the xpub".into()); }
+        if xpub.network != self.network.kind() || xpub.depth != 3 {
+            return Err("xpub does not fit the account".into());
+        }
+        if a.descriptor() != self.descriptor || a.id() != self.id {
+            return Err("descriptor or id does not match the xpub".into());
+        }
         Ok(a)
     }
 }
@@ -67,25 +82,42 @@ pub struct Accounts {
     #[serde(default)]
     pub servers: BTreeMap<String, String>,
 }
-impl Default for Accounts { fn default() -> Self { Accounts { version: VERSION, active: BTreeMap::new(), accounts: Vec::new(), servers: BTreeMap::new() } } }
+impl Default for Accounts {
+    fn default() -> Self {
+        Accounts { version: VERSION, active: BTreeMap::new(), accounts: Vec::new(), servers: BTreeMap::new() }
+    }
+}
 
 impl Accounts {
-    pub fn find(&self, id: &str) -> Option<&StoredAccount> { self.accounts.iter().find(|a| a.id == id) }
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn active_for(&self, net: Net) -> Option<&StoredAccount> { self.active.get(net.wire()).and_then(|id| self.find(id)) }
-    pub fn server(&self, net: Net) -> Option<String> { self.servers.get(net.wire()).cloned() }
+    pub fn find(&self, id: &str) -> Option<&StoredAccount> {
+        self.accounts.iter().find(|a| a.id == id)
+    }
+    pub fn server(&self, net: Net) -> Option<String> {
+        self.servers.get(net.wire()).cloned()
+    }
 }
 
 static LOCK: Mutex<()> = Mutex::new(());
 
-pub fn valid_id(id: &str) -> bool { id.len() <= 48 && !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-') }
+pub fn valid_id(id: &str) -> bool {
+    id.len() <= 48 && !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
 
-fn dir() -> Result<PathBuf, String> { crate::pairing::dir().map_err(|e| e.0) }
+fn dir() -> Result<PathBuf, String> {
+    crate::pairing::dir().map_err(|e| e.0)
+}
 
 pub fn check_file(p: &Path) -> Result<Option<String>, String> {
-    let meta = match fs::symlink_metadata(p) { Ok(m) => m, Err(_) => return Ok(None) };
-    if !meta.is_file() { return Err(format!("{} is not a regular file", p.display())); }
-    if meta.permissions().mode() & 0o077 != 0 { return Err(format!("{} is readable by others — refusing to use it", p.display())); }
+    let meta = match fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    if !meta.is_file() {
+        return Err(format!("{} is not a regular file", p.display()));
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(format!("{} is readable by others — refusing to use it", p.display()));
+    }
     fs::read_to_string(p).map(Some).map_err(|e| e.to_string())
 }
 
@@ -94,7 +126,8 @@ pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String>
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| e.to_string())?;
     let tmp = dir.join(format!(".{name}.{}.tmp", std::process::id()));
     let _ = fs::remove_file(&tmp);
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
+    let mut f =
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
     f.write_all(bytes).map_err(|e| e.to_string())?;
     f.sync_all().map_err(|e| e.to_string())?;
     drop(f);
@@ -103,37 +136,58 @@ pub fn write_private(dir: &Path, name: &str, bytes: &[u8]) -> Result<(), String>
 
 fn parse(text: &str) -> Result<Accounts, String> {
     let mut p: Accounts = serde_json::from_str(text).map_err(|_| "Bitcoin accounts file is not valid".to_string())?;
-    if p.version != VERSION { return Err("Bitcoin accounts file has an unknown version".into()); }
-    if p.accounts.len() > MAX_ACCOUNTS { return Err("Bitcoin accounts file lists too many accounts".into()); }
+    if p.version != VERSION {
+        return Err("Bitcoin accounts file has an unknown version".into());
+    }
+    if p.accounts.len() > MAX_ACCOUNTS {
+        return Err("Bitcoin accounts file lists too many accounts".into());
+    }
     for a in p.accounts.iter_mut() {
         a.account().map_err(|e| format!("Bitcoin accounts file: {e}"))?;
         a.label = crate::pairing::clean_label(&a.label).ok_or("Bitcoin accounts file holds an empty label")?;
     }
     let mut seen = std::collections::HashSet::new();
-    if !p.accounts.iter().all(|a| seen.insert(a.id.clone())) { return Err("Bitcoin accounts file lists an account twice".into()); }
+    if !p.accounts.iter().all(|a| seen.insert(a.id.clone())) {
+        return Err("Bitcoin accounts file lists an account twice".into());
+    }
     for (net, id) in &p.active {
         let n = Net::parse(net)?;
-        if p.find(id).map(|a| a.network) != Some(n) { return Err("Bitcoin accounts file: shown account is not paired".into()); }
+        if p.find(id).map(|a| a.network) != Some(n) {
+            return Err("Bitcoin accounts file: shown account is not paired".into());
+        }
     }
-    for (net, url) in &p.servers { Net::parse(net)?; super::esplora::check_server(url)?; }
+    for (net, url) in &p.servers {
+        Net::parse(net)?;
+        super::esplora::check_server(url)?;
+    }
     Ok(p)
 }
 
 pub fn load_in(dir: &Path) -> Result<Accounts, String> {
     let _g = LOCK.lock().map_err(|_| "lock poisoned")?;
-    match check_file(&dir.join(FILE))? { Some(t) => parse(&t), None => Ok(Accounts::default()) }
+    match check_file(&dir.join(FILE))? {
+        Some(t) => parse(&t),
+        None => Ok(Accounts::default()),
+    }
 }
 
 pub fn modify_in(dir: &Path, f: impl FnOnce(&mut Accounts) -> Result<(), String>) -> Result<Accounts, String> {
     let _g = LOCK.lock().map_err(|_| "lock poisoned")?;
-    let mut p = match check_file(&dir.join(FILE))? { Some(t) => parse(&t)?, None => Accounts::default() };
+    let mut p = match check_file(&dir.join(FILE))? {
+        Some(t) => parse(&t)?,
+        None => Accounts::default(),
+    };
     f(&mut p)?;
     write_private(dir, FILE, serde_json::to_string_pretty(&p).map_err(|e| e.to_string())?.as_bytes())?;
     Ok(p)
 }
 
-pub fn load() -> Result<Accounts, String> { load_in(&dir()?) }
-pub fn modify(f: impl FnOnce(&mut Accounts) -> Result<(), String>) -> Result<Accounts, String> { modify_in(&dir()?, f) }
+pub fn load() -> Result<Accounts, String> {
+    load_in(&dir()?)
+}
+pub fn modify(f: impl FnOnce(&mut Accounts) -> Result<(), String>) -> Result<Accounts, String> {
+    modify_in(&dir()?, f)
+}
 
 /// Add (or re-pair) an account and show it for its network.
 pub fn add_in(dir: &Path, a: &Account, label: Option<&str>) -> Result<Accounts, String> {
@@ -142,7 +196,9 @@ pub fn add_in(dir: &Path, a: &Account, label: Option<&str>) -> Result<Accounts, 
         match p.accounts.iter_mut().find(|x| x.id == a.id()) {
             Some(x) => x.label = label,
             None => {
-                if p.accounts.len() >= MAX_ACCOUNTS { return Err("too many Bitcoin accounts".into()); }
+                if p.accounts.len() >= MAX_ACCOUNTS {
+                    return Err("too many Bitcoin accounts".into());
+                }
                 p.accounts.push(StoredAccount::from_account(a, &label));
             }
         }
@@ -152,8 +208,13 @@ pub fn add_in(dir: &Path, a: &Account, label: Option<&str>) -> Result<Accounts, 
 }
 
 pub fn default_label(a: &Account) -> String {
-    let base = if a.kind == Kind::P2tr { format!("Bitcoin {} · Taproot", a.number) } else { format!("Bitcoin {}", a.number) };
-    match a.net { Net::Bitcoin => base, Net::Testnet => format!("{base} · testnet"), Net::Signet => format!("{base} · signet") }
+    let base =
+        if a.kind == Kind::P2tr { format!("Bitcoin {} · Taproot", a.number) } else { format!("Bitcoin {}", a.number) };
+    match a.net {
+        Net::Bitcoin => base,
+        Net::Testnet => format!("{base} · testnet"),
+        Net::Signet => format!("{base} · signet"),
+    }
 }
 
 pub fn remove_in(dir: &Path, id: &str) -> Result<Accounts, String> {
@@ -161,7 +222,14 @@ pub fn remove_in(dir: &Path, id: &str) -> Result<Accounts, String> {
         let net = p.find(id).map(|a| a.network).ok_or("that Bitcoin account is not paired")?;
         p.accounts.retain(|a| a.id != id);
         if p.active.get(net.wire()).map(String::as_str) == Some(id) {
-            match p.accounts.iter().find(|a| a.network == net) { Some(n) => { p.active.insert(net.wire().into(), n.id.clone()); } None => { p.active.remove(net.wire()); } }
+            match p.accounts.iter().find(|a| a.network == net) {
+                Some(n) => {
+                    p.active.insert(net.wire().into(), n.id.clone());
+                }
+                None => {
+                    p.active.remove(net.wire());
+                }
+            }
         }
         Ok(())
     })
@@ -239,29 +307,43 @@ pub struct Cache {
 }
 
 impl Cache {
-    pub fn confirmed(&self) -> u64 { self.addrs.values().map(|a| a.confirmed).sum() }
-    pub fn unconfirmed(&self) -> i64 { self.addrs.values().map(|a| a.mempool).sum() }
+    pub fn confirmed(&self) -> u64 {
+        self.addrs.values().map(|a| a.confirmed).sum()
+    }
+    pub fn unconfirmed(&self) -> i64 {
+        self.addrs.values().map(|a| a.mempool).sum()
+    }
 }
 
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 
-fn cache_name(id: &str) -> String { format!("btc-wallet-{id}.json") }
+fn cache_name(id: &str) -> String {
+    format!("btc-wallet-{id}.json")
+}
 
 pub fn load_cache(id: &str) -> Result<Cache, String> {
-    if !valid_id(id) { return Err("bad account id".into()); }
+    if !valid_id(id) {
+        return Err("bad account id".into());
+    }
     let _g = CACHE_LOCK.lock().map_err(|_| "lock poisoned")?;
     Ok(check_file(&dir()?.join(cache_name(id)))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default())
 }
 
 pub fn update_cache<T>(id: &str, f: impl FnOnce(&mut Cache) -> T) -> Result<(T, Cache), String> {
-    if !valid_id(id) { return Err("bad account id".into()); }
+    if !valid_id(id) {
+        return Err("bad account id".into());
+    }
     let _g = CACHE_LOCK.lock().map_err(|_| "lock poisoned")?;
     let d = dir()?;
-    let mut c: Cache = check_file(&d.join(cache_name(id)))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let mut c: Cache =
+        check_file(&d.join(cache_name(id)))?.and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
     let r = f(&mut c);
     c.history.sort_by_key(|e| std::cmp::Reverse(e.time));
     c.history.truncate(1000);
-    if c.sent.len() > 200 { let n = c.sent.len() - 200; c.sent.drain(..n); }
+    if c.sent.len() > 200 {
+        let n = c.sent.len() - 200;
+        c.sent.drain(..n);
+    }
     write_private(&d, &cache_name(id), &serde_json::to_vec_pretty(&c).map_err(|e| e.to_string())?)?;
     Ok((r, c))
 }
@@ -269,7 +351,14 @@ pub fn update_cache<T>(id: &str, f: impl FnOnce(&mut Cache) -> T) -> Result<(T, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::btc::wallet::test_account;
+    use crate::btc::wallet::tests::account as test_account;
+
+    impl Accounts {
+        /// The account shown for `net`.
+        fn active_for(&self, net: Net) -> Option<&StoredAccount> {
+            self.active.get(net.wire()).and_then(|id| self.find(id))
+        }
+    }
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("pv-btc-test-{}", uuid::Uuid::new_v4()));

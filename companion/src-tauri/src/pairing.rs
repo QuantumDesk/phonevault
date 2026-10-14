@@ -20,7 +20,9 @@ use std::sync::Mutex;
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct PairingError(pub String);
-fn err(m: impl Into<String>) -> PairingError { PairingError(m.into()) }
+fn err(m: impl Into<String>) -> PairingError {
+    PairingError(m.into())
+}
 
 const FILE: &str = "paired-accounts.json";
 const LEGACY_FILE: &str = "paired-signer.json";
@@ -53,8 +55,12 @@ pub struct Pairings {
 }
 
 impl Pairings {
-    pub fn find(&self, address: &str) -> Option<&Paired> { self.accounts.iter().find(|p| p.address.eq_ignore_ascii_case(address)) }
-    pub fn active_account(&self) -> Option<&Paired> { self.active.as_deref().and_then(|a| self.find(a)) }
+    pub fn find(&self, address: &str) -> Option<&Paired> {
+        self.accounts.iter().find(|p| p.address.eq_ignore_ascii_case(address))
+    }
+    pub fn active_account(&self) -> Option<&Paired> {
+        self.active.as_deref().and_then(|a| self.find(a))
+    }
 }
 
 /// Serialises read-modify-write of the file within this process.
@@ -66,17 +72,23 @@ pub fn dir() -> Result<PathBuf, PairingError> {
 }
 
 /// The pairing file. Other stores live next to it (`with_file_name`).
-pub fn path() -> Result<PathBuf, PairingError> { Ok(dir()?.join(FILE)) }
+pub fn path() -> Result<PathBuf, PairingError> {
+    Ok(dir()?.join(FILE))
+}
 
 /// `<stem>-<address>.json` next to the pairing file: per-account history, NFTs.
 pub fn account_file(stem: &str, address: &str) -> Result<PathBuf, PairingError> {
     Ok(dir()?.join(account_file_name(stem, &valid_address(address)?)))
 }
 
-fn account_file_name(stem: &str, address: &str) -> String { format!("{stem}-{}.json", address.to_ascii_lowercase()) }
+fn account_file_name(stem: &str, address: &str) -> String {
+    format!("{stem}-{}.json", address.to_ascii_lowercase())
+}
 
 pub fn valid_address(addr: &str) -> Result<String, PairingError> {
-    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) { return Err(err("invalid address")); }
+    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(err("invalid address"));
+    }
     Ok(addr.to_ascii_lowercase())
 }
 
@@ -90,47 +102,85 @@ pub fn clean_label(label: &str) -> Option<String> {
 /// "Account 2", "Account 2 · passphrase", or "Account N" (N = next) when the phone did not say.
 pub fn default_label(existing: &Pairings, account: Option<u32>, wallet: Option<&str>) -> String {
     let n = account.unwrap_or(existing.accounts.len() as u32 + 1);
-    if wallet == Some("passphrase") { format!("Account {n} · passphrase") } else { format!("Account {n}") }
+    if wallet == Some("passphrase") {
+        format!("Account {n} · passphrase")
+    } else {
+        format!("Account {n}")
+    }
 }
 
 // ---------------------------------------------------------------- public API (config dir)
 
 /// The ACTIVE paired address (lowercase), if any. Every signing path pins to this.
-pub fn load() -> Result<Option<String>, PairingError> { Ok(load_in(&dir()?)?.active) }
-pub fn list() -> Result<Pairings, PairingError> { load_in(&dir()?) }
+pub fn load() -> Result<Option<String>, PairingError> {
+    Ok(load_in(&dir()?)?.active)
+}
+pub fn list() -> Result<Pairings, PairingError> {
+    load_in(&dir()?)
+}
 /// Pair (or re-pair) an address and make it active.
-pub fn add(address: &str, label: Option<&str>, wallet: Option<&str>, account: Option<u32>) -> Result<PathBuf, PairingError> {
+pub fn add(
+    address: &str,
+    label: Option<&str>,
+    wallet: Option<&str>,
+    account: Option<u32>,
+) -> Result<PathBuf, PairingError> {
     add_in(&dir()?, address, label, wallet, account).map(|_| path().unwrap_or_default())
 }
-pub fn select(address: &str) -> Result<Pairings, PairingError> { select_in(&dir()?, address) }
-pub fn rename(address: &str, label: &str) -> Result<Pairings, PairingError> { rename_in(&dir()?, address, label) }
-pub fn remove(address: &str) -> Result<Pairings, PairingError> { remove_in(&dir()?, address) }
+pub fn select(address: &str) -> Result<Pairings, PairingError> {
+    select_in(&dir()?, address)
+}
+pub fn rename(address: &str, label: &str) -> Result<Pairings, PairingError> {
+    rename_in(&dir()?, address, label)
+}
+pub fn remove(address: &str) -> Result<Pairings, PairingError> {
+    remove_in(&dir()?, address)
+}
 /// Forget every paired address.
-pub fn forget() -> Result<(), PairingError> { forget_in(&dir()?) }
+pub fn forget() -> Result<(), PairingError> {
+    forget_in(&dir()?)
+}
 
 // ---------------------------------------------------------------- directory-scoped (tested)
 
 fn check_file(p: &Path) -> Result<Option<String>, PairingError> {
-    let meta = match fs::symlink_metadata(p) { Ok(m) => m, Err(_) => return Ok(None) };
-    if !meta.is_file() { return Err(err("pairing file is not a regular file")); }
-    if meta.permissions().mode() & 0o077 != 0 { return Err(err(format!("pairing file {} is readable by others — refusing to use it", p.display()))); }
+    let meta = match fs::symlink_metadata(p) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    if !meta.is_file() {
+        return Err(err("pairing file is not a regular file"));
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        return Err(err(format!("pairing file {} is readable by others — refusing to use it", p.display())));
+    }
     fs::read_to_string(p).map(Some).map_err(|e| err(e.to_string()))
 }
 
 fn parse(text: &str) -> Result<Pairings, PairingError> {
     let mut p: Pairings = serde_json::from_str(text).map_err(|_| err("pairing file is not valid"))?;
-    if p.version != VERSION { return Err(err("pairing file has an unknown version")); }
-    if p.accounts.len() > MAX_ACCOUNTS { return Err(err("pairing file lists too many accounts")); }
+    if p.version != VERSION {
+        return Err(err("pairing file has an unknown version"));
+    }
+    if p.accounts.len() > MAX_ACCOUNTS {
+        return Err(err("pairing file lists too many accounts"));
+    }
     for a in p.accounts.iter_mut() {
         a.address = valid_address(&a.address).map_err(|_| err("pairing file holds an invalid address"))?;
         a.label = clean_label(&a.label).ok_or_else(|| err("pairing file holds an empty label"))?;
-        if a.wallet.as_deref().is_some_and(|w| w != "standard" && w != "passphrase") { return Err(err("pairing file holds an unknown wallet kind")); }
+        if a.wallet.as_deref().is_some_and(|w| w != "standard" && w != "passphrase") {
+            return Err(err("pairing file holds an unknown wallet kind"));
+        }
     }
     let mut seen = std::collections::HashSet::new();
-    if !p.accounts.iter().all(|a| seen.insert(a.address.clone())) { return Err(err("pairing file lists an address twice")); }
+    if !p.accounts.iter().all(|a| seen.insert(a.address.clone())) {
+        return Err(err("pairing file lists an address twice"));
+    }
     if let Some(a) = &p.active {
         let a = valid_address(a).map_err(|_| err("pairing file holds an invalid active address"))?;
-        if p.find(&a).is_none() { return Err(err("pairing file's active address is not paired")); }
+        if p.find(&a).is_none() {
+            return Err(err("pairing file's active address is not paired"));
+        }
         p.active = Some(a);
     } else if !p.accounts.is_empty() {
         return Err(err("pairing file has accounts but none active"));
@@ -145,19 +195,34 @@ pub fn load_in(dir: &Path) -> Result<Pairings, PairingError> {
 }
 
 fn load_locked(dir: &Path) -> Result<Pairings, PairingError> {
-    if let Some(text) = check_file(&dir.join(FILE))? { return parse(&text); }
-    let Some(legacy) = check_file(&dir.join(LEGACY_FILE))? else { return Ok(Pairings { version: VERSION, ..Default::default() }) };
+    if let Some(text) = check_file(&dir.join(FILE))? {
+        return parse(&text);
+    }
+    let Some(legacy) = check_file(&dir.join(LEGACY_FILE))? else {
+        return Ok(Pairings { version: VERSION, ..Default::default() });
+    };
     let v: serde_json::Value = serde_json::from_str(&legacy).map_err(|_| err("pairing file is not JSON"))?;
     let addr = v.get("address").and_then(|a| a.as_str()).ok_or_else(|| err("pairing file lacks an address"))?;
     let addr = valid_address(addr).map_err(|_| err("pairing file holds an invalid address"))?;
     let paired_at = v.get("pairedAt").and_then(|a| a.as_str()).unwrap_or("").to_string();
-    let migrated = Pairings { version: VERSION, active: Some(addr.clone()),
-        accounts: vec![Paired { address: addr.clone(), label: "Account 1".into(), wallet: None, account: None, paired_at }] };
+    let migrated = Pairings {
+        version: VERSION,
+        active: Some(addr.clone()),
+        accounts: vec![Paired {
+            address: addr.clone(),
+            label: "Account 1".into(),
+            wallet: None,
+            account: None,
+            paired_at,
+        }],
+    };
     write(dir, &migrated)?;
     // Per-account stores: the old single history belongs to the one address that was paired.
     let old_history = dir.join("history.json");
     let new_history = dir.join(account_file_name("history", &addr));
-    if old_history.exists() && !new_history.exists() { let _ = fs::rename(&old_history, &new_history); }
+    if old_history.exists() && !new_history.exists() {
+        let _ = fs::rename(&old_history, &new_history);
+    }
     let _ = fs::rename(dir.join(LEGACY_FILE), dir.join(format!("{LEGACY_FILE}.migrated")));
     Ok(migrated)
 }
@@ -167,8 +232,10 @@ fn write(dir: &Path, p: &Pairings) -> Result<(), PairingError> {
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).map_err(|e| err(e.to_string()))?;
     let tmp = dir.join(format!(".paired-accounts.{}.tmp", std::process::id()));
     let _ = fs::remove_file(&tmp);
-    let mut f = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| err(e.to_string()))?;
-    f.write_all(serde_json::to_string_pretty(p).map_err(|e| err(e.to_string()))?.as_bytes()).map_err(|e| err(e.to_string()))?;
+    let mut f =
+        fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp).map_err(|e| err(e.to_string()))?;
+    f.write_all(serde_json::to_string_pretty(p).map_err(|e| err(e.to_string()))?.as_bytes())
+        .map_err(|e| err(e.to_string()))?;
     f.sync_all().map_err(|e| err(e.to_string()))?;
     drop(f);
     fs::rename(&tmp, dir.join(FILE)).map_err(|e| err(e.to_string()))
@@ -182,20 +249,38 @@ fn modify(dir: &Path, f: impl FnOnce(&mut Pairings) -> Result<(), PairingError>)
     Ok(p)
 }
 
-pub fn add_in(dir: &Path, address: &str, label: Option<&str>, wallet: Option<&str>, account: Option<u32>) -> Result<Pairings, PairingError> {
+pub fn add_in(
+    dir: &Path,
+    address: &str,
+    label: Option<&str>,
+    wallet: Option<&str>,
+    account: Option<u32>,
+) -> Result<Pairings, PairingError> {
     let address = valid_address(address)?;
-    let wallet = match wallet { None => None, Some(w @ ("standard" | "passphrase")) => Some(w.to_string()), Some(_) => return Err(err("unknown wallet kind")) };
-    if account.is_some_and(|n| n == 0 || n > 20) { return Err(err("account number out of range")); }
+    let wallet = match wallet {
+        None => None,
+        Some(w @ ("standard" | "passphrase")) => Some(w.to_string()),
+        Some(_) => return Err(err("unknown wallet kind")),
+    };
+    if account.is_some_and(|n| n == 0 || n > 20) {
+        return Err(err("account number out of range"));
+    }
     modify(dir, |p| {
         let label = label.and_then(clean_label).unwrap_or_else(|| default_label(p, account, wallet.as_deref()));
         match p.accounts.iter_mut().find(|a| a.address == address) {
             Some(existing) => {
                 existing.label = label;
-                if wallet.is_some() { existing.wallet = wallet; }
-                if account.is_some() { existing.account = account; }
+                if wallet.is_some() {
+                    existing.wallet = wallet;
+                }
+                if account.is_some() {
+                    existing.account = account;
+                }
             }
             None => {
-                if p.accounts.len() >= MAX_ACCOUNTS { return Err(err("too many paired accounts")); }
+                if p.accounts.len() >= MAX_ACCOUNTS {
+                    return Err(err("too many paired accounts"));
+                }
                 p.accounts.push(Paired { address: address.clone(), label, wallet, account, paired_at: now() });
             }
         }
@@ -207,7 +292,9 @@ pub fn add_in(dir: &Path, address: &str, label: Option<&str>, wallet: Option<&st
 pub fn select_in(dir: &Path, address: &str) -> Result<Pairings, PairingError> {
     let address = valid_address(address)?;
     modify(dir, |p| {
-        if p.find(&address).is_none() { return Err(err("that address is not paired with this Mac")); }
+        if p.find(&address).is_none() {
+            return Err(err("that address is not paired with this Mac"));
+        }
         p.active = Some(address);
         Ok(())
     })
@@ -217,7 +304,11 @@ pub fn rename_in(dir: &Path, address: &str, label: &str) -> Result<Pairings, Pai
     let address = valid_address(address)?;
     let label = clean_label(label).ok_or_else(|| err("the name is empty"))?;
     modify(dir, |p| {
-        let a = p.accounts.iter_mut().find(|a| a.address == address).ok_or_else(|| err("that address is not paired with this Mac"))?;
+        let a = p
+            .accounts
+            .iter_mut()
+            .find(|a| a.address == address)
+            .ok_or_else(|| err("that address is not paired with this Mac"))?;
         a.label = label;
         Ok(())
     })
@@ -227,7 +318,9 @@ pub fn remove_in(dir: &Path, address: &str) -> Result<Pairings, PairingError> {
     let address = valid_address(address)?;
     modify(dir, |p| {
         p.accounts.retain(|a| a.address != address);
-        if p.active.as_deref() == Some(address.as_str()) { p.active = p.accounts.first().map(|a| a.address.clone()); }
+        if p.active.as_deref() == Some(address.as_str()) {
+            p.active = p.accounts.first().map(|a| a.address.clone());
+        }
         Ok(())
     })
 }
@@ -235,7 +328,11 @@ pub fn remove_in(dir: &Path, address: &str) -> Result<Pairings, PairingError> {
 pub fn forget_in(dir: &Path) -> Result<(), PairingError> {
     let _g = LOCK.lock().map_err(|_| err("pairing lock poisoned"))?;
     for f in [FILE, LEGACY_FILE] {
-        match fs::remove_file(dir.join(f)) { Ok(()) => {}, Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}, Err(e) => return Err(err(e.to_string())) }
+        match fs::remove_file(dir.join(f)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(err(e.to_string())),
+        }
     }
     Ok(())
 }
@@ -316,7 +413,10 @@ mod tests {
         let p = select_in(&d, A1).unwrap();
         assert_eq!(p.active.as_deref(), Some(A1));
         assert_eq!(load_in(&d).unwrap().active.as_deref(), Some(A1));
-        assert!(select_in(&d, "0x0000000000000000000000000000000000000001").is_err(), "only paired addresses can be selected");
+        assert!(
+            select_in(&d, "0x0000000000000000000000000000000000000001").is_err(),
+            "only paired addresses can be selected"
+        );
         // re-pairing an address keeps one entry and updates it
         let p = add_in(&d, A2, Some("Savings"), None, None).unwrap();
         assert_eq!(p.accounts.len(), 3);
@@ -370,7 +470,10 @@ mod tests {
 
     #[test]
     fn account_files_are_per_address() {
-        assert_eq!(account_file_name("history", &A1.to_ascii_uppercase().replace("0X", "0x")), format!("history-{A1}.json"));
+        assert_eq!(
+            account_file_name("history", &A1.to_ascii_uppercase().replace("0X", "0x")),
+            format!("history-{A1}.json")
+        );
         assert!(account_file("history", "../../etc/passwd").is_err());
     }
 }

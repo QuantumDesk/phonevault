@@ -34,34 +34,77 @@ const SEL_BALANCE_OF: &str = "70a08231";
 const SEL_TOKEN_OF_OWNER_BY_INDEX: &str = "2f745c59";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct Nft { pub chain_id: u64, pub contract: String, pub token_id: String, pub name: Option<String>, pub symbol: Option<String>, pub owned: Option<bool>, pub checked_at: u64 }
+pub struct Nft {
+    pub chain_id: u64,
+    pub contract: String,
+    pub token_id: String,
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub owned: Option<bool>,
+    pub checked_at: u64,
+}
 
 #[derive(Serialize)]
-pub struct Scan { chain_id: u64, nfts: Vec<Nft>, from_block: Option<u128>, to_block: Option<u128>, error: Option<String> }
+pub struct Scan {
+    chain_id: u64,
+    nfts: Vec<Nft>,
+    from_block: Option<u128>,
+    to_block: Option<u128>,
+    error: Option<String>,
+}
 
 #[derive(Serialize)]
-pub struct Meta { name: Option<String>, description: Option<String>, image: Option<String>, error: Option<String> }
+pub struct Meta {
+    name: Option<String>,
+    description: Option<String>,
+    image: Option<String>,
+    error: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Default)]
-struct Store { owner: Option<String>, nfts: Vec<Nft> }
+struct Store {
+    owner: Option<String>,
+    nfts: Vec<Nft>,
+}
 static LOCK: Mutex<()> = Mutex::new(());
 
 /// One store per paired account (`nfts-<address>.json`).
-fn store_path(owner: &str) -> Result<std::path::PathBuf, String> { pairing::account_file("nfts", owner).map_err(|e| e.0) }
+fn store_path(owner: &str) -> Result<std::path::PathBuf, String> {
+    pairing::account_file("nfts", owner).map_err(|e| e.0)
+}
 /// The single store of versions before accounts; read for the address it belonged to.
-fn legacy_store_path() -> Result<std::path::PathBuf, String> { Ok(pairing::path().map_err(|e| e.0)?.with_file_name("nfts.json")) }
+fn legacy_store_path() -> Result<std::path::PathBuf, String> {
+    Ok(pairing::path().map_err(|e| e.0)?.with_file_name("nfts.json"))
+}
 
 fn load(owner: &str) -> Vec<Nft> {
-    let read = |p: std::path::PathBuf| -> Option<Store> { fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok()) };
-    let s = store_path(owner).ok().and_then(read).or_else(|| legacy_store_path().ok().and_then(read)).unwrap_or_default();
-    if s.owner.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(owner)) { s.nfts } else { Vec::new() }
+    let read = |p: std::path::PathBuf| -> Option<Store> {
+        fs::read_to_string(p).ok().and_then(|t| serde_json::from_str(&t).ok())
+    };
+    let s =
+        store_path(owner).ok().and_then(read).or_else(|| legacy_store_path().ok().and_then(read)).unwrap_or_default();
+    if s.owner.as_deref().is_some_and(|o| o.eq_ignore_ascii_case(owner)) {
+        s.nfts
+    } else {
+        Vec::new()
+    }
 }
 
 fn save(owner: &str, nfts: &[Nft]) -> Result<(), String> {
     let p = store_path(owner)?;
     let tmp = p.with_extension("json.tmp");
-    let mut f = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&tmp).map_err(|e| e.to_string())?;
-    f.write_all(&serde_json::to_vec_pretty(&Store { owner: Some(owner.into()), nfts: nfts.to_vec() }).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    let mut f = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    f.write_all(
+        &serde_json::to_vec_pretty(&Store { owner: Some(owner.into()), nfts: nfts.to_vec() })
+            .map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     fs::rename(&tmp, &p).map_err(|e| e.to_string())
 }
 
@@ -76,7 +119,9 @@ fn word_u256_hex(id: &str) -> Result<String, String> {
 fn abi_usize(ret: &[u8], at: usize) -> Option<usize> {
     let w = ret.get(at..at.checked_add(32)?)?;
     let (high, low) = w.split_at(16);
-    if high.iter().any(|b| *b != 0) { return None; }
+    if high.iter().any(|b| *b != 0) {
+        return None;
+    }
     usize::try_from(u128::from_be_bytes(low.try_into().ok()?)).ok()
 }
 
@@ -88,7 +133,9 @@ pub fn decode_string(ret: &[u8]) -> Option<String> {
     } else {
         let off = abi_usize(ret, 0)?;
         let len = abi_usize(ret, off)?;
-        if len > 4096 { return None; }
+        if len > 4096 {
+            return None;
+        }
         let start = off.checked_add(32)?;
         ret.get(start..start.checked_add(len)?)?.to_vec()
     };
@@ -99,15 +146,21 @@ pub fn decode_string(ret: &[u8]) -> Option<String> {
 }
 
 fn address_word(ret: &[u8]) -> Option<String> {
-    if ret.len() != 32 { return None; }
+    if ret.len() != 32 {
+        return None;
+    }
     let (pad, addr) = ret.split_at(12);
     pad.iter().all(|b| *b == 0).then(|| format!("0x{}", hex::encode(addr)))
 }
 
 fn uint_word(ret: &[u8]) -> Option<u128> {
-    if ret.len() != 32 { return None; }
+    if ret.len() != 32 {
+        return None;
+    }
     let (high, low) = ret.split_at(16);
-    if high.iter().any(|b| *b != 0) { return None; }
+    if high.iter().any(|b| *b != 0) {
+        return None;
+    }
     Some(u128::from_be_bytes(low.try_into().ok()?))
 }
 
@@ -127,17 +180,27 @@ fn refresh(rpc: &eth::Rpc, chain: u64, owner: &str, candidates: Vec<(String, Str
     let mut all = load(owner);
     for (contract, id) in candidates {
         if !all.iter().any(|n| n.chain_id == chain && n.contract.eq_ignore_ascii_case(&contract) && n.token_id == id) {
-            all.push(Nft { chain_id: chain, contract: verify::checksum(&contract), token_id: id, name: None, symbol: None, owned: None, checked_at: 0 });
+            all.push(Nft {
+                chain_id: chain,
+                contract: verify::checksum(&contract),
+                token_id: id,
+                name: None,
+                symbol: None,
+                owned: None,
+                checked_at: 0,
+            });
         }
     }
-    let mut labels: std::collections::HashMap<String, (Option<String>, Option<String>)> = std::collections::HashMap::new();
+    let mut labels: std::collections::HashMap<String, (Option<String>, Option<String>)> =
+        std::collections::HashMap::new();
     let now = crate::history::now();
     for n in all.iter_mut().filter(|n| n.chain_id == chain).take(MAX_CANDIDATES) {
         n.owned = owns(rpc, &n.contract, &n.token_id, owner);
         n.checked_at = now;
         if n.name.is_none() && n.symbol.is_none() {
             let l = labels.entry(n.contract.to_ascii_lowercase()).or_insert_with(|| label(rpc, &n.contract)).clone();
-            n.name = l.0; n.symbol = l.1;
+            n.name = l.0;
+            n.symbol = l.1;
         }
     }
     // tokens sent away stay out of the list
@@ -152,15 +215,25 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
     for l in logs {
         let Some(t) = l.get("topics").and_then(Value::as_array) else { continue };
         let [t0, _, t2, t3] = t.as_slice() else { continue };
-        if t0.as_str() != Some(watcher::TRANSFER_TOPIC) || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic)) { continue; }
+        if t0.as_str() != Some(watcher::TRANSFER_TOPIC)
+            || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic))
+        {
+            continue;
+        }
         let Some(id_hex) = t3.as_str().and_then(|s| s.strip_prefix("0x")) else { continue };
-        if id_hex.len() != 64 || !id_hex.bytes().all(|b| b.is_ascii_hexdigit()) { continue; }
+        if id_hex.len() != 64 || !id_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+            continue;
+        }
         let (Some(high), Some(low)) = (id_hex.get(..32), id_hex.get(32..)) else { continue };
-        if !high.bytes().all(|b| b == b'0') { continue; } // ids beyond u128 are not shown
+        if !high.bytes().all(|b| b == b'0') {
+            continue;
+        } // ids beyond u128 are not shown
         let Ok(id) = u128::from_str_radix(low, 16) else { continue };
         let Some(c) = l.get("address").and_then(Value::as_str).filter(|c| watcher::is_address(c)) else { continue };
         let item = (c.to_ascii_lowercase(), id.to_string());
-        if !out.contains(&item) { out.push(item); }
+        if !out.contains(&item) {
+            out.push(item);
+        }
     }
     out
 }
@@ -178,7 +251,8 @@ pub(crate) async fn nft_list(chain_id: u64) -> CmdResult<Vec<Nft>> {
     blocking(move || {
         let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
         Ok(load(&owner).into_iter().filter(|n| n.chain_id == chain_id).collect())
-    }).await
+    })
+    .await
 }
 
 /// Search the recent window for ERC-721 transfers to this address (any contract).
@@ -229,29 +303,63 @@ pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdRe
 // ---------------------------------------------------------------- metadata, on request only
 
 fn safe_url(url: &str) -> Result<reqwest::Url, String> {
-    let u = if let Some(rest) = url.strip_prefix("ipfs://") { format!("https://ipfs.io/ipfs/{}", rest.trim_start_matches("ipfs/")) } else { url.to_string() };
+    let u = if let Some(rest) = url.strip_prefix("ipfs://") {
+        format!("https://ipfs.io/ipfs/{}", rest.trim_start_matches("ipfs/"))
+    } else {
+        url.to_string()
+    };
     let parsed = reqwest::Url::parse(&u).map_err(|_| "not a URL".to_string())?;
-    if parsed.scheme() != "https" { return Err("only https:// (and ipfs://) links are fetched".into()); }
+    if parsed.scheme() != "https" {
+        return Err("only https:// (and ipfs://) links are fetched".into());
+    }
     let host = parsed.host_str().ok_or("no host")?.trim_matches(|c| c == '[' || c == ']').to_ascii_lowercase();
-    if host == "localhost" || host.ends_with(".local") || host.ends_with(".localhost") { return Err("refusing a local address".into()); }
+    if host == "localhost" || host.ends_with(".local") || host.ends_with(".localhost") {
+        return Err("refusing a local address".into());
+    }
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         let private = match ip {
-            std::net::IpAddr::V4(v) => v.is_private() || v.is_loopback() || v.is_link_local() || v.is_unspecified() || v.is_broadcast() || v.octets()[0] == 100 && (64..128).contains(&v.octets()[1]),
-            std::net::IpAddr::V6(v) => v.is_loopback() || v.is_unspecified() || (v.segments()[0] & 0xfe00) == 0xfc00 || (v.segments()[0] & 0xffc0) == 0xfe80,
+            std::net::IpAddr::V4(v) => {
+                v.is_private()
+                    || v.is_loopback()
+                    || v.is_link_local()
+                    || v.is_unspecified()
+                    || v.is_broadcast()
+                    || v.octets()[0] == 100 && (64..128).contains(&v.octets()[1])
+            }
+            std::net::IpAddr::V6(v) => {
+                v.is_loopback()
+                    || v.is_unspecified()
+                    || (v.segments()[0] & 0xfe00) == 0xfc00
+                    || (v.segments()[0] & 0xffc0) == 0xfe80
+            }
         };
-        if private { return Err("refusing a private network address".into()); }
+        if private {
+            return Err("refusing a private network address".into());
+        }
     }
     Ok(parsed)
 }
 
 fn fetch(url: &str, cap: u64) -> Result<(Vec<u8>, String), String> {
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(12)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string())?;
-    let resp = client.get(safe_url(url)?).header("accept", "application/json, image/*").send().map_err(|e| format!("fetch failed: {e}"))?;
-    if !resp.status().is_success() { return Err(format!("the server answered HTTP {}", resp.status())); }
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get(safe_url(url)?)
+        .header("accept", "application/json, image/*")
+        .send()
+        .map_err(|e| format!("fetch failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("the server answered HTTP {}", resp.status()));
+    }
     let ctype = resp.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("").to_ascii_lowercase();
     let mut body = Vec::new();
     resp.take(cap + 1).read_to_end(&mut body).map_err(|e| e.to_string())?;
-    if body.len() as u64 > cap { return Err(format!("larger than {} KiB; not loaded", cap / 1024)); }
+    if body.len() as u64 > cap {
+        return Err(format!("larger than {} KiB; not loaded", cap / 1024));
+    }
     Ok((body, ctype))
 }
 
@@ -260,19 +368,32 @@ fn data_url(url: &str) -> Option<(Vec<u8>, String)> {
     let rest = url.strip_prefix("data:")?;
     let (head, body) = rest.split_once(',')?;
     let ctype = head.split(';').next().unwrap_or("").to_ascii_lowercase();
-    let bytes = if head.ends_with(";base64") { base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()? } else { body.as_bytes().to_vec() };
+    let bytes = if head.ends_with(";base64") {
+        base64::engine::general_purpose::STANDARD.decode(body.trim()).ok()?
+    } else {
+        body.as_bytes().to_vec()
+    };
     Some((bytes, ctype))
 }
 
 const IMAGE_TYPES: [&str; 5] = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"];
 
-fn image_data_url(url: &str) -> Result<String, String> { image_data_url_capped(url, MAX_IMAGE) }
+fn image_data_url(url: &str) -> Result<String, String> {
+    image_data_url_capped(url, MAX_IMAGE)
+}
 
 fn image_data_url_capped(url: &str, cap: u64) -> Result<String, String> {
-    let (bytes, ctype) = match data_url(url) { Some(d) => d, None => fetch(url, cap)? };
-    if bytes.len() as u64 > cap { return Err(format!("image larger than {} KiB; not loaded", cap / 1024)); }
+    let (bytes, ctype) = match data_url(url) {
+        Some(d) => d,
+        None => fetch(url, cap)?,
+    };
+    if bytes.len() as u64 > cap {
+        return Err(format!("image larger than {} KiB; not loaded", cap / 1024));
+    }
     let ctype = ctype.split(';').next().unwrap_or("").trim().to_string();
-    if !IMAGE_TYPES.contains(&ctype.as_str()) { return Err(format!("not a supported image type ({})", if ctype.is_empty() { "unknown" } else { &ctype })); }
+    if !IMAGE_TYPES.contains(&ctype.as_str()) {
+        return Err(format!("not a supported image type ({})", if ctype.is_empty() { "unknown" } else { &ctype }));
+    }
     Ok(format!("data:{ctype};base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes)))
 }
 
@@ -288,14 +409,21 @@ static ICONS: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
 #[tauri::command]
 pub(crate) async fn dapp_icon(url: String) -> CmdResult<String> {
     blocking(move || {
-        if url.len() > 2048 { return Ok(String::new()); }
-        if let Some((_, v)) = ICONS.lock().map_err(|_| "poisoned")?.iter().find(|(u, _)| *u == url) { return Ok(v.clone()); }
+        if url.len() > 2048 {
+            return Ok(String::new());
+        }
+        if let Some((_, v)) = ICONS.lock().map_err(|_| "poisoned")?.iter().find(|(u, _)| *u == url) {
+            return Ok(v.clone());
+        }
         let v = image_data_url_capped(&url, MAX_ICON).unwrap_or_default();
         let mut c = ICONS.lock().map_err(|_| "poisoned")?;
-        if c.len() >= MAX_ICON_CACHE { c.remove(0); }
+        if c.len() >= MAX_ICON_CACHE {
+            c.remove(0);
+        }
         c.push((url, v.clone()));
         Ok(v)
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
@@ -303,21 +431,43 @@ pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: St
     blocking(move || {
         let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
         let c = contract.trim().to_ascii_lowercase();
-        if !watcher::is_address(&c) { return Err("bad contract".into()); }
+        if !watcher::is_address(&c) {
+            return Err("bad contract".into());
+        }
         let empty = |e: String| Meta { name: None, description: None, image: None, error: Some(e) };
-        let Some(uri) = rpc.eth_call(&c, &format!("0x{SEL_TOKEN_URI}{}", word_u256_hex(&token_id)?)).ok().and_then(|r| decode_string(&r)) else {
+        let Some(uri) = rpc
+            .eth_call(&c, &format!("0x{SEL_TOKEN_URI}{}", word_u256_hex(&token_id)?))
+            .ok()
+            .and_then(|r| decode_string(&r))
+        else {
             return Ok(empty("the contract has no tokenURI for this token".into()));
         };
         let uri = uri.replace("{id}", &format!("{:064x}", token_id.parse::<u128>().unwrap_or(0)));
-        let json_bytes = match data_url(&uri) { Some((b, _)) => b, None => match fetch(&uri, MAX_JSON) { Ok((b, _)) => b, Err(e) => return Ok(empty(e)) } };
-        let Ok(v) = serde_json::from_slice::<Value>(&json_bytes) else { return Ok(empty("the metadata is not JSON".into())) };
-        let text = |k: &str| v.get(k).and_then(Value::as_str).map(|s| s.chars().filter(|c| !c.is_control() || *c == '\n').take(500).collect::<String>());
+        let json_bytes = match data_url(&uri) {
+            Some((b, _)) => b,
+            None => match fetch(&uri, MAX_JSON) {
+                Ok((b, _)) => b,
+                Err(e) => return Ok(empty(e)),
+            },
+        };
+        let Ok(v) = serde_json::from_slice::<Value>(&json_bytes) else {
+            return Ok(empty("the metadata is not JSON".into()));
+        };
+        let text = |k: &str| {
+            v.get(k)
+                .and_then(Value::as_str)
+                .map(|s| s.chars().filter(|c| !c.is_control() || *c == '\n').take(500).collect::<String>())
+        };
         let (image, error) = match text("image").or_else(|| text("image_url")) {
-            Some(u) => match image_data_url(&u) { Ok(d) => (Some(d), None), Err(e) => (None, Some(e)) },
+            Some(u) => match image_data_url(&u) {
+                Ok(d) => (Some(d), None),
+                Err(e) => (None, Some(e)),
+            },
             None => (None, Some("no image in the metadata".into())),
         };
         Ok(Meta { name: text("name"), description: text("description"), image, error })
-    }).await
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -328,9 +478,12 @@ mod tests {
     #[test]
     fn strings_decode_abi_and_bytes32() {
         let mut abi = vec![0u8; 96];
-        abi[31] = 32; abi[63] = 5; abi[64..69].copy_from_slice(b"Pixel");
+        abi[31] = 32;
+        abi[63] = 5;
+        abi[64..69].copy_from_slice(b"Pixel");
         assert_eq!(decode_string(&abi).as_deref(), Some("Pixel"));
-        let mut b32 = [0u8; 32]; b32[..3].copy_from_slice(b"MKR");
+        let mut b32 = [0u8; 32];
+        b32[..3].copy_from_slice(b"MKR");
         assert_eq!(decode_string(&b32).as_deref(), Some("MKR"));
         abi[63] = 200; // length past the end
         assert!(decode_string(&abi).is_none());
@@ -361,13 +514,38 @@ mod tests {
 
     #[test]
     fn images_must_be_images() {
-        let png = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G']));
+        let png = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode([0x89, b'P', b'N', b'G'])
+        );
         assert!(image_data_url(&png).unwrap().starts_with("data:image/png;base64,"));
         assert!(image_data_url("data:text/html;base64,PGgxPg==").is_err());
         // dApp icons: same rules, smaller cap
-        let big = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_ICON as usize + 1]));
+        let big = format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(vec![0u8; MAX_ICON as usize + 1])
+        );
         assert!(image_data_url_capped(&big, MAX_ICON).is_err());
         assert!(image_data_url_capped(&png, MAX_ICON).is_ok());
         assert!(image_data_url_capped("http://dapp.example/icon.png", MAX_ICON).is_err(), "https only");
+    }
+
+    /// `decode_string` (name(), symbol() and tokenURI() of any contract that sends the user an NFT)
+    /// refuses an ABI offset or length that overflows or points past the return data.
+    #[test]
+    fn abi_string_offsets_that_overflow_are_refused() {
+        use std::panic::catch_unwind;
+        let mut ret = vec![0u8; 64];
+        ret[16..32].copy_from_slice(&((u64::MAX - 15) as u128).to_be_bytes());
+        assert_eq!(catch_unwind(|| decode_string(&ret)).ok(), Some(None));
+        // the length word overflowing the end, and the largest offsets
+        for (off, len) in
+            [(32u128, u64::MAX as u128), (u128::MAX, 1), (usize::MAX as u128 - 31, 0), (usize::MAX as u128, 0)]
+        {
+            let mut r = vec![0u8; 96];
+            r[16..32].copy_from_slice(&off.to_be_bytes());
+            r[48..64].copy_from_slice(&len.to_be_bytes());
+            assert_eq!(catch_unwind(|| decode_string(&r)).ok(), Some(None), "off {off} len {len}");
+        }
     }
 }

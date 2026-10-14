@@ -36,65 +36,145 @@ pub fn explorer_tx(net: Net, txid: &str) -> String {
 /// A server URL the user typed: https, or http only to this Mac / the local network (an own node).
 pub fn check_server(url: &str) -> Result<String, String> {
     let u = url.trim().trim_end_matches('/');
-    let rest = if let Some(r) = u.strip_prefix("https://") { r } else if let Some(r) = u.strip_prefix("http://") {
-        let host = r.split(['/', ':']).next().unwrap_or("");
-        let local = host == "localhost" || host.ends_with(".local") || host.starts_with("127.") || host.starts_with("10.") || host.starts_with("192.168.")
-            || host.strip_prefix("172.").and_then(|x| x.split('.').next()).and_then(|x| x.parse::<u8>().ok()).is_some_and(|x| (16..=31).contains(&x));
-        if !local { return Err("Use https://, or http:// only for a server on this Mac or your local network".into()); }
+    let rest = if let Some(r) = u.strip_prefix("https://") {
         r
-    } else { return Err("The server URL starts with https://".into()) };
-    if rest.is_empty() || rest.len() > 200 || rest.chars().any(|c| c.is_whitespace() || c == '?' || c == '#' || c == '@') { return Err("That is not a server URL".into()); }
+    } else if let Some(r) = u.strip_prefix("http://") {
+        let host = r.split(['/', ':']).next().unwrap_or("");
+        let local = host == "localhost"
+            || host.ends_with(".local")
+            || host.starts_with("127.")
+            || host.starts_with("10.")
+            || host.starts_with("192.168.")
+            || host
+                .strip_prefix("172.")
+                .and_then(|x| x.split('.').next())
+                .and_then(|x| x.parse::<u8>().ok())
+                .is_some_and(|x| (16..=31).contains(&x));
+        if !local {
+            return Err("Use https://, or http:// only for a server on this Mac or your local network".into());
+        }
+        r
+    } else {
+        return Err("The server URL starts with https://".into());
+    };
+    if rest.is_empty()
+        || rest.len() > 200
+        || rest.chars().any(|c| c.is_whitespace() || c == '?' || c == '#' || c == '@')
+    {
+        return Err("That is not a server URL".into());
+    }
     Ok(u.to_string())
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct Stats { pub funded_txo_count: u64, pub funded_txo_sum: u64, pub spent_txo_count: u64, pub spent_txo_sum: u64, pub tx_count: u64 }
+pub struct Stats {
+    pub funded_txo_count: u64,
+    pub funded_txo_sum: u64,
+    pub spent_txo_count: u64,
+    pub spent_txo_sum: u64,
+    pub tx_count: u64,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct AddressInfo { pub address: String, pub chain_stats: Stats, pub mempool_stats: Stats }
+pub struct AddressInfo {
+    pub address: String,
+    pub chain_stats: Stats,
+    pub mempool_stats: Stats,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
-pub struct TxStatus { pub confirmed: bool, #[serde(default)] pub block_height: Option<u64>, #[serde(default)] pub block_time: Option<u64> }
+pub struct TxStatus {
+    pub confirmed: bool,
+    #[serde(default)]
+    pub block_height: Option<u64>,
+    #[serde(default)]
+    pub block_time: Option<u64>,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct Utxo { pub txid: String, pub vout: u32, pub value: u64, pub status: TxStatus }
+pub struct Utxo {
+    pub txid: String,
+    pub vout: u32,
+    pub value: u64,
+    pub status: TxStatus,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct Vout { pub scriptpubkey: String, #[serde(default)] pub scriptpubkey_address: Option<String>, pub value: u64 }
+pub struct Vout {
+    pub scriptpubkey: String,
+    #[serde(default)]
+    pub scriptpubkey_address: Option<String>,
+    pub value: u64,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct Vin { pub txid: String, pub vout: u32, #[serde(default)] pub prevout: Option<Vout>, #[serde(default)] pub is_coinbase: bool, #[serde(default)] pub sequence: u32 }
+pub struct Vin {
+    pub txid: String,
+    pub vout: u32,
+    #[serde(default)]
+    pub prevout: Option<Vout>,
+    #[serde(default)]
+    pub is_coinbase: bool,
+    #[serde(default)]
+    pub sequence: u32,
+}
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
-pub struct Tx { pub txid: String, pub vin: Vec<Vin>, pub vout: Vec<Vout>, #[serde(default)] pub weight: u64, #[serde(default)] pub fee: u64, pub status: TxStatus }
+pub struct Tx {
+    pub txid: String,
+    pub vin: Vec<Vin>,
+    pub vout: Vec<Vout>,
+    #[serde(default)]
+    pub weight: u64,
+    #[serde(default)]
+    pub fee: u64,
+    pub status: TxStatus,
+}
 
-fn hex64(s: &str) -> bool { s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()) }
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
 
 pub fn parse_address(body: &str, expected: &str) -> Result<AddressInfo, String> {
     let a: AddressInfo = serde_json::from_str(body).map_err(|e| format!("server: unexpected address answer ({e})"))?;
-    if a.address != expected { return Err("server answered for a different address".into()); }
+    if a.address != expected {
+        return Err("server answered for a different address".into());
+    }
     // (mempool stats may spend confirmed coins, so only the confirmed side must balance on its own)
-    if a.chain_stats.spent_txo_sum > a.chain_stats.funded_txo_sum { return Err("server: spent more than funded".into()); }
+    if a.chain_stats.spent_txo_sum > a.chain_stats.funded_txo_sum {
+        return Err("server: spent more than funded".into());
+    }
     Ok(a)
 }
 
 pub fn parse_utxos(body: &str) -> Result<Vec<Utxo>, String> {
     let u: Vec<Utxo> = serde_json::from_str(body).map_err(|e| format!("server: unexpected utxo answer ({e})"))?;
-    if u.iter().any(|x| !hex64(&x.txid) || x.value == 0 || x.value > 21_000_000 * 100_000_000) { return Err("server: malformed utxo".into()); }
+    if u.iter().any(|x| !hex64(&x.txid) || x.value == 0 || x.value > 21_000_000 * 100_000_000) {
+        return Err("server: malformed utxo".into());
+    }
     Ok(u)
 }
 
 pub fn parse_txs(body: &str) -> Result<Vec<Tx>, String> {
     let t: Vec<Tx> = serde_json::from_str(body).map_err(|e| format!("server: unexpected transaction list ({e})"))?;
-    if t.iter().any(|x| !hex64(&x.txid) || x.vout.len() > 100_000) { return Err("server: malformed transaction".into()); }
+    if t.iter().any(|x| !hex64(&x.txid) || x.vout.len() > 100_000) {
+        return Err("server: malformed transaction".into());
+    }
     Ok(t)
 }
 
 /// `/fee-estimates`: {"1": 87.88, "6": 21.3, "144": 1.02, …} (sat/vB per confirmation target).
 pub fn parse_fees(body: &str) -> Result<std::collections::BTreeMap<u32, f64>, String> {
-    let m: std::collections::HashMap<String, f64> = serde_json::from_str(body).map_err(|e| format!("server: unexpected fee answer ({e})"))?;
-    let out: std::collections::BTreeMap<u32, f64> = m.into_iter().filter_map(|(k, v)| Some((k.parse().ok()?, v))).filter(|(_, v)| v.is_finite() && *v > 0.0 && *v < 100_000.0).collect();
-    if out.is_empty() { return Err("server gave no fee estimates".into()); }
+    let m: std::collections::HashMap<String, f64> =
+        serde_json::from_str(body).map_err(|e| format!("server: unexpected fee answer ({e})"))?;
+    let out: std::collections::BTreeMap<u32, f64> = m
+        .into_iter()
+        .filter_map(|(k, v)| Some((k.parse().ok()?, v)))
+        .filter(|(_, v)| v.is_finite() && *v > 0.0 && *v < 100_000.0)
+        .collect();
+    if out.is_empty() {
+        return Err("server gave no fee estimates".into());
+    }
     Ok(out)
 }
 
@@ -103,22 +183,36 @@ pub fn rate_for(fees: &std::collections::BTreeMap<u32, f64>, target: u32) -> Opt
     fees.range(target..).next().or_else(|| fees.iter().next_back()).map(|(_, v)| *v)
 }
 
-pub struct Client { bases: Vec<String>, http: reqwest::blocking::Client }
+pub struct Client {
+    bases: Vec<String>,
+    http: reqwest::blocking::Client,
+}
 
 impl Client {
     pub fn new(net: Net, custom: Option<&str>) -> Result<Client, String> {
-        let bases = match custom { Some(c) => vec![check_server(c)?], None => defaults(net).iter().map(|s| s.to_string()).collect() };
-        let http = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none())
-            .user_agent("PhoneVault").build().map_err(|e| e.to_string())?;
+        let bases = match custom {
+            Some(c) => vec![check_server(c)?],
+            None => defaults(net).iter().map(ToString::to_string).collect(),
+        };
+        let http = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
+            .user_agent("PhoneVault")
+            .build()
+            .map_err(|e| e.to_string())?;
         Ok(Client { bases, http })
     }
-    pub fn host(&self) -> String { self.bases.first().map(|b| b.split('/').nth(2).unwrap_or(b).to_string()).unwrap_or_default() }
+    pub fn host(&self) -> String {
+        self.bases.first().map(|b| b.split('/').nth(2).unwrap_or(b).to_string()).unwrap_or_default()
+    }
 
     fn read(resp: reqwest::blocking::Response) -> Result<String, String> {
         let status = resp.status();
         let mut body = String::new();
         resp.take(MAX_BODY).read_to_string(&mut body).map_err(|e| e.to_string())?;
-        if !status.is_success() { return Err(format!("HTTP {}: {}", status.as_u16(), body.chars().take(200).collect::<String>())); }
+        if !status.is_success() {
+            return Err(format!("HTTP {}: {}", status.as_u16(), body.chars().take(200).collect::<String>()));
+        }
         Ok(body)
     }
 
@@ -132,30 +226,61 @@ impl Client {
                     Err(e) if e.starts_with("HTTP 5") || e.starts_with("HTTP 429") => last = e,
                     Err(e) => return Err(e),
                 },
-                Err(e) => last = if e.is_timeout() { "the server timed out".into() } else { format!("the server is unreachable ({})", base.split('/').nth(2).unwrap_or(base)) },
+                Err(e) => {
+                    last = if e.is_timeout() {
+                        "the server timed out".into()
+                    } else {
+                        format!("the server is unreachable ({})", base.split('/').nth(2).unwrap_or(base))
+                    }
+                }
             }
         }
         Err(last)
     }
 
-    pub fn address(&self, a: &str) -> Result<AddressInfo, String> { parse_address(&self.get(&format!("/address/{a}"))?, a) }
-    pub fn utxos(&self, a: &str) -> Result<Vec<Utxo>, String> { parse_utxos(&self.get(&format!("/address/{a}/utxo"))?) }
-    pub fn txs(&self, a: &str) -> Result<Vec<Tx>, String> { parse_txs(&self.get(&format!("/address/{a}/txs"))?) }
-    pub fn fees(&self) -> Result<std::collections::BTreeMap<u32, f64>, String> { parse_fees(&self.get("/fee-estimates")?) }
-    pub fn tip(&self) -> Result<u64, String> { self.get("/blocks/tip/height")?.trim().parse().map_err(|_| "server: bad tip height".to_string()) }
-    pub fn tx_status(&self, txid: &str) -> Result<TxStatus, String> { serde_json::from_str(&self.get(&format!("/tx/{txid}/status"))?).map_err(|e| format!("server: {e}")) }
+    pub fn address(&self, a: &str) -> Result<AddressInfo, String> {
+        parse_address(&self.get(&format!("/address/{a}"))?, a)
+    }
+    pub fn utxos(&self, a: &str) -> Result<Vec<Utxo>, String> {
+        parse_utxos(&self.get(&format!("/address/{a}/utxo"))?)
+    }
+    pub fn txs(&self, a: &str) -> Result<Vec<Tx>, String> {
+        parse_txs(&self.get(&format!("/address/{a}/txs"))?)
+    }
+    pub fn fees(&self) -> Result<std::collections::BTreeMap<u32, f64>, String> {
+        parse_fees(&self.get("/fee-estimates")?)
+    }
+    pub fn tip(&self) -> Result<u64, String> {
+        self.get("/blocks/tip/height")?.trim().parse().map_err(|_| "server: bad tip height".to_string())
+    }
+    pub fn tx_status(&self, txid: &str) -> Result<TxStatus, String> {
+        serde_json::from_str(&self.get(&format!("/tx/{txid}/status"))?).map_err(|e| format!("server: {e}"))
+    }
     /// A raw transaction; the caller checks it hashes to the txid it asked for.
     pub fn tx_hex(&self, txid: &str) -> Result<String, String> {
         let h = self.get(&format!("/tx/{txid}/hex"))?;
         let h = h.trim().to_string();
-        if h.len() % 2 != 0 || !h.bytes().all(|b| b.is_ascii_hexdigit()) { return Err("server: malformed transaction hex".into()); }
+        if h.len() % 2 != 0 || !h.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("server: malformed transaction hex".into());
+        }
         Ok(h)
     }
     /// POST /tx to the first server only (a broadcast is not retried elsewhere behind the user's back).
     pub fn broadcast(&self, hex: &str) -> Result<String, String> {
         let base = self.bases.first().ok_or("no server")?;
-        let r = self.http.post(format!("{base}/tx")).header("content-type", "text/plain").body(hex.to_string()).send()
-            .map_err(|e| if e.is_timeout() { "the server timed out".to_string() } else { "the server is unreachable".to_string() })?;
+        let r = self
+            .http
+            .post(format!("{base}/tx"))
+            .header("content-type", "text/plain")
+            .body(hex.to_string())
+            .send()
+            .map_err(|e| {
+                if e.is_timeout() {
+                    "the server timed out".to_string()
+                } else {
+                    "the server is unreachable".to_string()
+                }
+            })?;
         Ok(Self::read(r)?.trim().to_string())
     }
 }
@@ -177,8 +302,18 @@ mod tests {
     #[test]
     fn parses_server_answers() {
         let a = parse_address(ADDRESS, "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu").unwrap();
-        assert_eq!((a.chain_stats.tx_count, a.chain_stats.funded_txo_sum - a.chain_stats.spent_txo_sum, a.mempool_stats.funded_txo_sum), (4, 150_000, 5_000));
-        assert!(parse_address(ADDRESS, "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g").is_err(), "answer for another address");
+        assert_eq!(
+            (
+                a.chain_stats.tx_count,
+                a.chain_stats.funded_txo_sum - a.chain_stats.spent_txo_sum,
+                a.mempool_stats.funded_txo_sum
+            ),
+            (4, 150_000, 5_000)
+        );
+        assert!(
+            parse_address(ADDRESS, "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g").is_err(),
+            "answer for another address"
+        );
         let u = parse_utxos(UTXOS).unwrap();
         assert_eq!(u.len(), 2);
         assert_eq!((u[0].value, u[0].status.confirmed, u[0].status.block_height), (150_000, true, Some(860_001)));

@@ -28,7 +28,9 @@ pub struct Replacement {
 }
 
 /// ⌈x × 1.125⌉, and always at least x + 1.
-pub fn bump(x: u128) -> u128 { (x.saturating_mul(1125).saturating_add(999) / 1000).max(x.saturating_add(1)) }
+pub fn bump(x: u128) -> u128 {
+    (x.saturating_mul(1125).saturating_add(999) / 1000).max(x.saturating_add(1))
+}
 
 /// New (priority, maxFee): each bumped from the previous, or the current network value if higher.
 pub fn new_fees(previous: (u128, u128), current: (u128, u128)) -> (u128, u128) {
@@ -37,12 +39,18 @@ pub fn new_fees(previous: (u128, u128), current: (u128, u128)) -> (u128, u128) {
     (priority, max_fee)
 }
 
-fn q(v: &str, what: &str) -> Result<u128, String> { verify::quantity(v).map_err(|e| format!("{what}: {}", e.0)) }
+fn q(v: &str, what: &str) -> Result<u128, String> {
+    verify::quantity(v).map_err(|e| format!("{what}: {}", e.0))
+}
 
 /// The highest fees among the transactions this Mac sent for (chain, nonce), if any were recorded.
 fn group_fees(entries: &[history::Entry], chain_id: u128, nonce: u128) -> Result<Option<(u128, u128)>, String> {
     let mut best: Option<(u128, u128)> = None;
-    for t in entries.iter().filter(|x| x.kind == "out" && x.chain_id == chain_id && x.nonce == Some(nonce)).filter_map(|x| x.tx.as_ref()) {
+    for t in entries
+        .iter()
+        .filter(|x| x.kind == "out" && x.chain_id == chain_id && x.nonce == Some(nonce))
+        .filter_map(|x| x.tx.as_ref())
+    {
         let f = (q(&t.max_priority_fee_per_gas, "priority fee")?, q(&t.max_fee_per_gas, "max fee")?);
         best = Some(best.map_or(f, |b| (b.0.max(f.0), b.1.max(f.1))));
     }
@@ -51,28 +59,45 @@ fn group_fees(entries: &[history::Entry], chain_id: u128, nonce: u128) -> Result
 
 fn pending_original(hash: &str) -> Result<(history::Entry, Vec<history::Entry>), String> {
     let all = history::list()?;
-    let e = all.iter().find(|x| x.hash.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(hash))).cloned()
+    let e = all
+        .iter()
+        .find(|x| x.hash.as_deref().is_some_and(|h| h.eq_ignore_ascii_case(hash)))
+        .cloned()
         .ok_or("this transaction is not in this Mac's history")?;
-    if e.kind != "out" { return Err("only a transaction sent from this Mac can be sped up or cancelled".into()); }
-    if e.status != "pending" { return Err(format!("this transaction is no longer pending ({})", e.status)); }
-    if e.nonce.is_none() { return Err("this transaction has no recorded nonce".into()); }
+    if e.kind != "out" {
+        return Err("only a transaction sent from this Mac can be sped up or cancelled".into());
+    }
+    if e.status != "pending" {
+        return Err(format!("this transaction is no longer pending ({})", e.status));
+    }
+    if e.nonce.is_none() {
+        return Err("this transaction has no recorded nonce".into());
+    }
     Ok((e, all))
 }
 
 /// Rebuild the token intent of a recorded token transfer from the built-in list and its calldata.
 fn token_intent(chain_id: u128, contract: &str, data: &str) -> Result<tokens::TokenIntent, String> {
-    let t = tokens::lookup(u64::try_from(chain_id).map_err(|_| "chain id out of range")?, contract).ok_or("the token is not in the built-in list for this network")?;
+    let t = tokens::lookup(u64::try_from(chain_id).map_err(|_| "chain id out of range")?, contract)
+        .ok_or("the token is not in the built-in list for this network")?;
     let (recipient, amount) = verify::decode_erc20_transfer(data).map_err(|e| e.0)?;
     Ok(tokens::TokenIntent {
-        contract: t.address.to_ascii_lowercase(), symbol: t.symbol.clone(), name: t.name.clone(), decimals: t.decimals,
-        recipient, amount_raw: amount.to_string(), amount: tokens::format_units(amount, t.decimals),
+        contract: t.address.to_ascii_lowercase(),
+        symbol: t.symbol.clone(),
+        name: t.name.clone(),
+        decimals: t.decimals,
+        recipient,
+        amount_raw: amount.to_string(),
+        amount: tokens::format_units(amount, t.decimals),
     })
 }
 
 /// Quote a speed-up or cancel for a pending transaction sent from this Mac.
 #[tauri::command]
 pub(crate) async fn replacement_quote(rpc_url: String, hash: String, kind: String) -> CmdResult<Quote> {
-    if !matches!(kind.as_str(), "speedup" | "cancel") { return Err("kind must be speedup or cancel".into()); }
+    if !matches!(kind.as_str(), "speedup" | "cancel") {
+        return Err("kind must be speedup or cancel".into());
+    }
     blocking(move || {
         let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
         let (e, all) = pending_original(&hash)?;
@@ -121,13 +146,25 @@ pub fn check(quote: &Quote, owner: &str) -> Result<(), String> {
     check_against(quote, r, &e, &all, owner)
 }
 
-fn check_against(quote: &Quote, r: &Replacement, e: &history::Entry, all: &[history::Entry], owner: &str) -> Result<(), String> {
+fn check_against(
+    quote: &Quote,
+    r: &Replacement,
+    e: &history::Entry,
+    all: &[history::Entry],
+    owner: &str,
+) -> Result<(), String> {
     let chain = q(&quote.chain_id, "chainId")?;
-    if chain != e.chain_id { return Err("the replacement is for a different network than the original".into()); }
+    if chain != e.chain_id {
+        return Err("the replacement is for a different network than the original".into());
+    }
     let nonce = q(&quote.nonce, "nonce")?;
-    if Some(nonce) != e.nonce { return Err("the replacement does not use the original's nonce".into()); }
+    if Some(nonce) != e.nonce {
+        return Err("the replacement does not use the original's nonce".into());
+    }
     if let Some((p, m)) = group_fees(all, chain, nonce)? {
-        if q(&quote.max_priority_fee_per_gas, "priority fee")? < bump(p) || q(&quote.max_fee_per_gas, "max fee")? < bump(m) {
+        if q(&quote.max_priority_fee_per_gas, "priority fee")? < bump(p)
+            || q(&quote.max_fee_per_gas, "max fee")? < bump(m)
+        {
             return Err("the replacement's fees are not at least 12.5 % above the original's".into());
         }
     }
@@ -135,7 +172,11 @@ fn check_against(quote: &Quote, r: &Replacement, e: &history::Entry, all: &[hist
     match r.kind.as_str() {
         "speedup" => {
             let t = e.tx.as_ref().ok_or("the original's details are not recorded")?;
-            if to != t.to.to_ascii_lowercase() || value != q(&t.value, "value")? || data != t.data.to_ascii_lowercase() || quote.gas_limit != t.gas_limit {
+            if to != t.to.to_ascii_lowercase()
+                || value != q(&t.value, "value")?
+                || data != t.data.to_ascii_lowercase()
+                || quote.gas_limit != t.gas_limit
+            {
                 return Err("a speed-up must send exactly what the original sent".into());
             }
         }
@@ -172,16 +213,44 @@ mod tests {
         let mut e: history::Entry = serde_json::from_value(serde_json::json!({
             "kind": "out", "hash": "0xaa", "chain_id": 8453, "counterparty": TO, "amount_eth": "0.01", "fee_max_eth": null,
             "nonce": 7, "time": 1, "status": "pending", "block": null })).unwrap();
-        e.tx = Some(history::TxParams { to: TO.into(), value: "0x2386f26fc10000".into(), data: "0x".into(), gas_limit: "0x5208".into(),
-            max_fee_per_gas: "0x3e8".into(), max_priority_fee_per_gas: "0x64".into() });
+        e.tx = Some(history::TxParams {
+            to: TO.into(),
+            value: "0x2386f26fc10000".into(),
+            data: "0x".into(),
+            gas_limit: "0x5208".into(),
+            max_fee_per_gas: "0x3e8".into(),
+            max_priority_fee_per_gas: "0x64".into(),
+        });
         e
     }
 
     fn quote(to: &str, value: &str, nonce: &str, prio: &str, max: &str, kind: &str) -> (Quote, Replacement) {
-        let r = Replacement { hash: "0xaa".into(), kind: kind.into(), previous_max_fee_per_gas: None, previous_max_priority_fee_per_gas: None };
-        (Quote { chain_id: "0x2105".into(), nonce: nonce.into(), max_priority_fee_per_gas: prio.into(), max_fee_per_gas: max.into(), gas_limit: "0x5208".into(),
-            to: to.into(), value: value.into(), data: "0x".into(), amount_eth: "0".into(), max_fee_eth: "0".into(), total_eth: "0".into(),
-            balance_eth: "0".into(), network: "Base".into(), token: None, replaces: Some(r.clone()) }, r)
+        let r = Replacement {
+            hash: "0xaa".into(),
+            kind: kind.into(),
+            previous_max_fee_per_gas: None,
+            previous_max_priority_fee_per_gas: None,
+        };
+        (
+            Quote {
+                chain_id: "0x2105".into(),
+                nonce: nonce.into(),
+                max_priority_fee_per_gas: prio.into(),
+                max_fee_per_gas: max.into(),
+                gas_limit: "0x5208".into(),
+                to: to.into(),
+                value: value.into(),
+                data: "0x".into(),
+                amount_eth: "0".into(),
+                max_fee_eth: "0".into(),
+                total_eth: "0".into(),
+                balance_eth: "0".into(),
+                network: "Base".into(),
+                token: None,
+                replaces: Some(r.clone()),
+            },
+            r,
+        )
     }
 
     #[test]

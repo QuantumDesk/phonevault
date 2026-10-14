@@ -1,5 +1,5 @@
-//! The send flow behind the redesigned UI. Same request, same verifier and same pinned signer as
-//! the original `sign`/`broadcast` commands, with three differences the UI needs to be honest:
+//! The send flow: the transaction request goes to the phone, the answer is checked by the verifier
+//! against the pinned signer, and only then is it broadcast. Three properties the UI relies on:
 //!
 //! * progress events (`send-progress`) say when the phone was reached and when the request was
 //!   actually delivered, so "Review on your phone" is only shown once it is true;
@@ -21,7 +21,12 @@ use tauri::{AppHandle, Emitter, State};
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
 
 struct VerifiedTx {
-    raw: String, chain_id: u128, value_wei: u128, max_fee_wei: u128, nonce: u128, token: Option<tokens::TokenIntent>,
+    raw: String,
+    chain_id: u128,
+    value_wei: u128,
+    max_fee_wei: u128,
+    nonce: u128,
+    token: Option<tokens::TokenIntent>,
     /// the signed fields, kept in history so a stuck transaction can be sped up or cancelled
     params: history::TxParams,
     /// (hash, "speedup" | "cancel") when this replaces a pending transaction
@@ -38,27 +43,54 @@ pub struct SendState {
 
 /// A failure the UI can explain: `kind` picks the plain-language text, `message` is the detail.
 #[derive(Serialize, Debug)]
-pub struct SendError { kind: &'static str, message: String, delivered: bool }
-fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> SendError { SendError { kind, message: message.into(), delivered } }
+pub struct SendError {
+    kind: &'static str,
+    message: String,
+    delivered: bool,
+}
+fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> SendError {
+    SendError { kind, message: message.into(), delivered }
+}
 
 #[derive(Serialize, Clone)]
-struct Progress { ticket: String, stage: &'static str }
+struct Progress {
+    ticket: String,
+    stage: &'static str,
+}
 
 #[derive(Serialize)]
-pub struct Signed { hash: String, signer: String }
+pub struct Signed {
+    hash: String,
+    signer: String,
+}
 
 /// Forgets the ticket however the command ends.
 struct TicketGuard(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>, String);
-impl Drop for TicketGuard { fn drop(&mut self) { if let Ok(mut m) = self.0.lock() { m.remove(&self.1); } } }
+impl Drop for TicketGuard {
+    fn drop(&mut self) {
+        if let Ok(mut m) = self.0.lock() {
+            m.remove(&self.1);
+        }
+    }
+}
 
-fn q(v: &str, what: &str) -> Result<u128, SendError> { verify::quantity(v).map_err(|e| fail("internal", format!("{what}: {e}"), false)) }
+fn q(v: &str, what: &str) -> Result<u128, SendError> {
+    verify::quantity(v).map_err(|e| fail("internal", format!("{what}: {e}"), false))
+}
 
 #[tauri::command]
-pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, ticket: String, quote: Quote) -> Result<Signed, SendError> {
+pub(crate) async fn sign_start(
+    app: AppHandle,
+    state: State<'_, SendState>,
+    ticket: String,
+    quote: Quote,
+) -> Result<Signed, SendError> {
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut m = state.cancels.lock().map_err(|_| fail("internal", "state poisoned", false))?;
-        if m.contains_key(&ticket) { return Err(fail("busy", "this request is already running", false)); }
+        if m.contains_key(&ticket) {
+            return Err(fail("busy", "this request is already running", false));
+        }
         m.insert(ticket.clone(), cancel.clone());
     }
     let guard = TicketGuard(state.cancels.clone(), ticket.clone());
@@ -160,13 +192,21 @@ pub(crate) async fn sign_start(app: AppHandle, state: State<'_, SendState>, tick
 #[tauri::command]
 pub(crate) fn sign_cancel(state: State<'_, SendState>, ticket: Option<String>) {
     if let Ok(m) = state.cancels.lock() {
-        for (t, c) in m.iter() { if ticket.as_deref().is_none_or(|x| x == t) { c.store(true, Ordering::SeqCst); } }
+        for (t, c) in m.iter() {
+            if ticket.as_deref().is_none_or(|x| x == t) {
+                c.store(true, Ordering::SeqCst);
+            }
+        }
     }
 }
 
 /// Broadcast a transaction this session verified, by hash. Records it in the local history.
 #[tauri::command]
-pub(crate) async fn broadcast_verified(state: State<'_, SendState>, rpc_url: String, hash: String) -> CmdResult<String> {
+pub(crate) async fn broadcast_verified(
+    state: State<'_, SendState>,
+    rpc_url: String,
+    hash: String,
+) -> CmdResult<String> {
     let store = state.verified.clone();
     blocking(move || {
         let key = hash.to_ascii_lowercase();
@@ -186,7 +226,14 @@ pub(crate) async fn broadcast_verified(state: State<'_, SendState>, rpc_url: Str
 }
 
 #[derive(Serialize)]
-pub struct FeeEstimate { chain_id: u128, gas: u128, typical_fee_wei: String, typical_fee_eth: String, max_fee_wei: String, max_fee_eth: String }
+pub struct FeeEstimate {
+    chain_id: u128,
+    gas: u128,
+    typical_fee_wei: String,
+    typical_fee_eth: String,
+    max_fee_wei: String,
+    max_fee_eth: String,
+}
 
 /// Fee for a plain transfer at current prices: typical (base + tip) and the ceiling the phone signs.
 #[tauri::command]
@@ -199,12 +246,23 @@ pub(crate) async fn fee_estimate(rpc_url: String) -> CmdResult<FeeEstimate> {
         let gas = 21_000u128;
         let typical = gas * (base + priority);
         let ceiling = gas * max_fee;
-        Ok(FeeEstimate { chain_id, gas, typical_fee_wei: typical.to_string(), typical_fee_eth: eth::format_eth(typical), max_fee_wei: ceiling.to_string(), max_fee_eth: eth::format_eth(ceiling) })
-    }).await
+        Ok(FeeEstimate {
+            chain_id,
+            gas,
+            typical_fee_wei: typical.to_string(),
+            typical_fee_eth: eth::format_eth(typical),
+            max_fee_wei: ceiling.to_string(),
+            max_fee_eth: eth::format_eth(ceiling),
+        })
+    })
+    .await
 }
 
 #[derive(Serialize)]
-pub struct MaxAmount { amount_eth: String, amount_wei: String }
+pub struct MaxAmount {
+    amount_eth: String,
+    amount_wei: String,
+}
 
 /// The largest amount the quote will accept: balance − gas × maxFee with headroom for fee drift,
 /// and on rollups a small reserve for the L1 data fee nobody can bound in advance.
@@ -217,7 +275,9 @@ pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResu
         let balance = rpc.balance(&from).map_err(|e| e.0)?;
         let (_, max_fee) = rpc.fees().map_err(|e| e.0)?;
         let gas = match to.as_deref().map(str::trim) {
-            Some(t) if t.len() == 42 && t.starts_with("0x") && t[2..].bytes().all(|b| b.is_ascii_hexdigit()) => rpc.estimate_gas(&from, t, 1).unwrap_or(21_000).max(21_000),
+            Some(t) if t.len() == 42 && t.starts_with("0x") && t[2..].bytes().all(|b| b.is_ascii_hexdigit()) => {
+                rpc.estimate_gas(&from, t, 1).unwrap_or(21_000).max(21_000)
+            }
             _ => 21_000,
         };
         let cost = gas.saturating_mul(max_fee).saturating_mul(5) / 4;
@@ -226,22 +286,35 @@ pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResu
         // round down to what format_eth shows (8 decimals) so the field and the quote agree
         let shown = eth::parse_eth(&eth::format_eth(amount)).map_err(|e| e.0)?;
         Ok(MaxAmount { amount_eth: eth::format_eth(shown), amount_wei: shown.to_string() })
-    }).await
+    })
+    .await
 }
 
 #[derive(Serialize)]
-pub struct AddressCheck { ok: bool, checksum: Option<String>, error: Option<String> }
+pub struct AddressCheck {
+    ok: bool,
+    checksum: Option<String>,
+    error: Option<String>,
+}
 
 /// Same recipient rules as `quote`, for live feedback while typing.
 #[tauri::command]
 pub(crate) fn check_address(address: String) -> AddressCheck {
     let a = address.trim();
     let bad = |m: &str| AddressCheck { ok: false, checksum: None, error: Some(m.into()) };
-    if !a.starts_with("0x") { return bad("An address starts with 0x"); }
-    if a.len() != 42 || !a[2..].bytes().all(|b| b.is_ascii_hexdigit()) { return bad("An address is 0x followed by 40 hex characters"); }
-    if a[2..].bytes().all(|b| b == b'0') { return bad("That is the zero address; funds sent there are lost"); }
+    if !a.starts_with("0x") {
+        return bad("An address starts with 0x");
+    }
+    if a.len() != 42 || !a[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
+        return bad("An address is 0x followed by 40 hex characters");
+    }
+    if a[2..].bytes().all(|b| b == b'0') {
+        return bad("That is the zero address; funds sent there are lost");
+    }
     let mixed = a[2..].bytes().any(|b| b.is_ascii_uppercase()) && a[2..].bytes().any(|b| b.is_ascii_lowercase());
     let sum = verify::checksum(a);
-    if mixed && sum != a { return bad("Checksum mismatch: one character is probably wrong"); }
+    if mixed && sum != a {
+        return bad("Checksum mismatch: one character is probably wrong");
+    }
     AddressCheck { ok: true, checksum: Some(sum), error: None }
 }

@@ -47,7 +47,10 @@ const GOOGLE_RSA_ROOT_SPKI: &str = "MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEA
 const GOOGLE_EC_ROOT_SPKI: &str = "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEI9ojcU7fPlsFCjxy6IRqzgeOoK0b+YsV9FPQywiyw8EQRTkJ9u3qwfnI4DGoSLlBqClTXJfgfCcZvs60FikNMHnu4fkRzObfgDkU2KNXezT9/RQ+XvNslxPHrHCowhGr";
 
 #[derive(Debug, Clone)]
-pub struct TrustedRoot { pub name: &'static str, pub spki: Vec<u8> }
+pub struct TrustedRoot {
+    pub name: &'static str,
+    pub spki: Vec<u8>,
+}
 
 pub fn google_roots() -> Vec<TrustedRoot> {
     let d = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).expect("embedded root key is valid base64");
@@ -59,7 +62,11 @@ pub fn google_roots() -> Vec<TrustedRoot> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Provisioning { Factory, Remote, Unknown }
+pub enum Provisioning {
+    Factory,
+    Remote,
+    Unknown,
+}
 
 #[derive(Debug, Clone)]
 pub struct ChainInfo {
@@ -91,7 +98,10 @@ fn curve(spki: &SubjectPublicKeyInfo) -> Option<String> {
     spki.algorithm.parameters.as_ref()?.as_oid().ok().map(|o| o.to_id_string())
 }
 
-fn verification_alg(sig_oid: &str, issuer: &SubjectPublicKeyInfo) -> Result<&'static dyn signature::VerificationAlgorithm, String> {
+fn verification_alg(
+    sig_oid: &str,
+    issuer: &SubjectPublicKeyInfo,
+) -> Result<&'static dyn signature::VerificationAlgorithm, String> {
     let key = issuer.algorithm.algorithm.to_id_string();
     let c = curve(issuer);
     Ok(match (sig_oid, key.as_str(), c.as_deref()) {
@@ -111,7 +121,7 @@ fn has_attestation_ext(c: &X509Certificate) -> bool {
 }
 
 fn names_strongbox(c: &X509Certificate) -> bool {
-    c.subject().iter_attributes().any(|a| a.as_str().map(|s| s.to_ascii_lowercase().contains("strongbox")).unwrap_or(false))
+    c.subject().iter_attributes().any(|a| a.as_str().is_ok_and(|s| s.to_ascii_lowercase().contains("strongbox")))
 }
 
 fn has_serial_number_attr(c: &X509Certificate) -> bool {
@@ -121,7 +131,11 @@ fn has_serial_number_attr(c: &X509Certificate) -> bool {
 pub fn serial_hex(raw: &[u8]) -> String {
     let s: String = raw.iter().map(|b| format!("{b:02x}")).collect();
     let t = s.trim_start_matches('0');
-    if t.is_empty() { "0".into() } else { t.into() }
+    if t.is_empty() {
+        "0".into()
+    } else {
+        t.into()
+    }
 }
 
 /// YYYY-MM-DD (UTC) for a unix time; civil-from-days (Howard Hinnant).
@@ -142,21 +156,34 @@ pub fn day_text(ts: i64) -> String {
 /// Verify `ders` (leaf first, root last) against `roots` at unix time `now`, and parse the
 /// leaf's KeyDescription. Any error is a reason to fail the device.
 pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<ChainInfo, String> {
-    if ders.len() < 2 { return Err("the attestation chain is too short".into()); }
-    if ders.len() > MAX_CHAIN { return Err(format!("the attestation chain has {} certificates (at most {MAX_CHAIN})", ders.len())); }
+    if ders.len() < 2 {
+        return Err("the attestation chain is too short".into());
+    }
+    if ders.len() > MAX_CHAIN {
+        return Err(format!("the attestation chain has {} certificates (at most {MAX_CHAIN})", ders.len()));
+    }
     let mut certs = Vec::with_capacity(ders.len());
     for (i, der) in ders.iter().enumerate() {
-        if der.len() > MAX_CERT_BYTES { return Err(format!("certificate {i} is too large")); }
-        let (rest, cert) = X509Certificate::from_der(der).map_err(|e| format!("certificate {i} is not valid DER X.509: {e}"))?;
-        if !rest.is_empty() { return Err(format!("certificate {i} has trailing bytes")); }
-        if cert.version() != X509Version::V3 { return Err(format!("certificate {i} is not X.509 v3")); }
+        if der.len() > MAX_CERT_BYTES {
+            return Err(format!("certificate {i} is too large"));
+        }
+        let (rest, cert) =
+            X509Certificate::from_der(der).map_err(|e| format!("certificate {i} is not valid DER X.509: {e}"))?;
+        if !rest.is_empty() {
+            return Err(format!("certificate {i} has trailing bytes"));
+        }
+        if cert.version() != X509Version::V3 {
+            return Err(format!("certificate {i} is not X.509 v3"));
+        }
         certs.push(cert);
     }
     let last = certs.len() - 1;
 
     // 2. root key pinned
     let root_spki = certs[last].public_key().raw;
-    let root = roots.iter().find(|r| r.spki.as_slice() == root_spki)
+    let root = roots
+        .iter()
+        .find(|r| r.spki.as_slice() == root_spki)
         .ok_or("the chain does not end in a Google hardware attestation root key (unknown or software root)")?;
 
     // 3. links
@@ -167,11 +194,16 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
         }
         let outer = &cert.signature_algorithm;
         let inner = &cert.tbs_certificate.signature;
-        if outer.algorithm != inner.algorithm || outer.parameters.as_ref().map(|p| p.as_bytes()) != inner.parameters.as_ref().map(|p| p.as_bytes()) {
+        if outer.algorithm != inner.algorithm
+            || outer.parameters.as_ref().map(|p| p.as_bytes()) != inner.parameters.as_ref().map(|p| p.as_bytes())
+        {
             return Err(format!("certificate {i} names two different signature algorithms"));
         }
-        let alg = verification_alg(&outer.algorithm.to_id_string(), issuer.public_key()).map_err(|e| format!("certificate {i}: {e}"))?;
-        if cert.signature_value.unused_bits != 0 { return Err(format!("certificate {i}'s signature is not whole bytes")); }
+        let alg = verification_alg(&outer.algorithm.to_id_string(), issuer.public_key())
+            .map_err(|e| format!("certificate {i}: {e}"))?;
+        if cert.signature_value.unused_bits != 0 {
+            return Err(format!("certificate {i}'s signature is not whole bytes"));
+        }
         signature::UnparsedPublicKey::new(alg, &issuer.public_key().subject_public_key.data)
             .verify(cert.tbs_certificate.as_ref(), &cert.signature_value.data)
             .map_err(|_| format!("certificate {i}'s signature does not verify under certificate {}", i + 1))?;
@@ -180,24 +212,40 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
     // 3b. every certificate that signs another (below the pinned root) must be a CA allowed to
     // sign certificates, and its path length constraint must cover the CAs under it
     for (i, cert) in certs.iter().enumerate().take(last).skip(1) {
-        let bc = cert.basic_constraints().map_err(|e| format!("certificate {i}'s basic constraints are malformed: {e}"))?
-            .ok_or_else(|| format!("certificate {i} signs a certificate but is not marked as a CA (no basic constraints)"))?;
-        if !bc.value.ca { return Err(format!("certificate {i} signs a certificate but is not a CA (basic constraints cA=FALSE)")); }
+        let bc = cert
+            .basic_constraints()
+            .map_err(|e| format!("certificate {i}'s basic constraints are malformed: {e}"))?
+            .ok_or_else(|| {
+                format!("certificate {i} signs a certificate but is not marked as a CA (no basic constraints)")
+            })?;
+        if !bc.value.ca {
+            return Err(format!("certificate {i} signs a certificate but is not a CA (basic constraints cA=FALSE)"));
+        }
         // CA certificates between this one and the leaf
         let below = (i - 1) as u32;
         if let Some(max) = bc.value.path_len_constraint {
-            if below > max { return Err(format!("certificate {i} allows {max} CA certificates under it, the chain has {below}")); }
+            if below > max {
+                return Err(format!("certificate {i} allows {max} CA certificates under it, the chain has {below}"));
+            }
         }
-        let ku = cert.key_usage().map_err(|e| format!("certificate {i}'s key usage is malformed: {e}"))?
+        let ku = cert
+            .key_usage()
+            .map_err(|e| format!("certificate {i}'s key usage is malformed: {e}"))?
             .ok_or_else(|| format!("certificate {i} signs a certificate but has no key usage"))?;
-        if !ku.value.key_cert_sign() { return Err(format!("certificate {i} signs a certificate but its key usage lacks keyCertSign")); }
+        if !ku.value.key_cert_sign() {
+            return Err(format!("certificate {i} signs a certificate but its key usage lacks keyCertSign"));
+        }
     }
 
     // provisioning (as the reference verifier decides it: the certificate right under the root)
     let top = &certs[last - 1];
-    let provisioning = if has_serial_number_attr(top) { Provisioning::Factory }
-        else if top.subject().iter_common_name().any(|cn| cn.as_str().ok() == Some("Droid CA2")) { Provisioning::Remote }
-        else { Provisioning::Unknown };
+    let provisioning = if has_serial_number_attr(top) {
+        Provisioning::Factory
+    } else if top.subject().iter_common_name().any(|cn| cn.as_str().ok() == Some("Droid CA2")) {
+        Provisioning::Remote
+    } else {
+        Provisioning::Unknown
+    };
 
     // 4. validity
     let mut notes = Vec::new();
@@ -216,21 +264,30 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
     }
     let leaf_validity = certs[0].validity();
     if leaf_validity.not_after.timestamp() < now {
-        notes.push(format!("The attested key's certificate says it expired on {} (set from the phone's clock; not enforced)", day_text(leaf_validity.not_after.timestamp())));
+        notes.push(format!(
+            "The attested key's certificate says it expired on {} (set from the phone's clock; not enforced)",
+            day_text(leaf_validity.not_after.timestamp())
+        ));
     }
 
     // 5. extension only in the leaf
     for (i, cert) in certs.iter().enumerate().skip(1) {
-        if has_attestation_ext(cert) { return Err(format!("certificate {i} also carries an attestation extension (chain-extension attack)")); }
+        if has_attestation_ext(cert) {
+            return Err(format!("certificate {i} also carries an attestation extension (chain-extension attack)"));
+        }
     }
-    let exts: Vec<_> = certs[0].extensions().iter().filter(|e| e.oid.to_id_string() == keydesc::OID_KEY_DESCRIPTION).collect();
-    if exts.len() != 1 { return Err("the leaf certificate has no attestation extension".into()); }
+    let exts: Vec<_> =
+        certs[0].extensions().iter().filter(|e| e.oid.to_id_string() == keydesc::OID_KEY_DESCRIPTION).collect();
+    if exts.len() != 1 {
+        return Err("the leaf certificate has no attestation extension".into());
+    }
     let description = keydesc::parse(exts[0].value)?;
 
     let chain_names_strongbox = certs[1..last].iter().any(names_strongbox);
     let leaf_spki = certs[0].public_key();
-    let leaf_p256_point = (leaf_spki.algorithm.algorithm.to_id_string() == OID_EC && curve(leaf_spki).as_deref() == Some(OID_P256))
-        .then(|| leaf_spki.subject_public_key.data.to_vec());
+    let leaf_p256_point = (leaf_spki.algorithm.algorithm.to_id_string() == OID_EC
+        && curve(leaf_spki).as_deref() == Some(OID_P256))
+    .then(|| leaf_spki.subject_public_key.data.to_vec());
     Ok(ChainInfo {
         description,
         root: root.name,
@@ -242,4 +299,3 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
         notes,
     })
 }
-

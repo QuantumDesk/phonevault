@@ -31,19 +31,25 @@ struct PolicyFile {
 }
 
 fn digests(list: &[String], what: &str) -> Result<Vec<Vec<u8>>, String> {
-    list.iter().map(|h| {
-        if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-            return Err(format!("attestation policy: {what} entry must be 64 lowercase hex characters"));
-        }
-        hex::decode(h).map_err(|e| e.to_string())
-    }).collect()
+    list.iter()
+        .map(|h| {
+            if h.len() != 64 || !h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+                return Err(format!("attestation policy: {what} entry must be 64 lowercase hex characters"));
+            }
+            hex::decode(h).map_err(|e| e.to_string())
+        })
+        .collect()
 }
 
 impl Policy {
     pub fn parse(json: &str) -> Result<Policy, String> {
         let f: PolicyFile = serde_json::from_str(json).map_err(|e| format!("attestation policy: {e}"))?;
-        if f.package.is_empty() { return Err("attestation policy: package is empty".into()); }
-        if !(201_601..=209_912).contains(&f.min_os_patch_level) { return Err("attestation policy: minOsPatchLevel must be YYYYMM".into()); }
+        if f.package.is_empty() {
+            return Err("attestation policy: package is empty".into());
+        }
+        if !(201_601..=209_912).contains(&f.min_os_patch_level) {
+            return Err("attestation policy: minOsPatchLevel must be YYYYMM".into());
+        }
         let p = Policy {
             package: f.package,
             release_signers: digests(&f.release_signer_sha256, "releaseSignerSha256")?,
@@ -57,12 +63,18 @@ impl Policy {
         Ok(p)
     }
     /// The policy compiled into this build.
-    pub fn builtin() -> Policy { Policy::parse(POLICY_JSON).expect("attestation-policy.json is checked by a unit test") }
+    pub fn builtin() -> Policy {
+        Policy::parse(POLICY_JSON).expect("attestation-policy.json is checked by a unit test")
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Verdict { Genuine, Development, Fail }
+pub enum Verdict {
+    Genuine,
+    Development,
+    Fail,
+}
 
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct Details {
@@ -121,10 +133,24 @@ pub const UNLOCKED_PROBLEM: &str = "The phone's bootloader is unlocked, so its s
 
 pub fn fail(problem: impl Into<String>) -> Assessment {
     let p = problem.into();
-    Assessment { verdict: Verdict::Fail, headline: "Not genuine: this phone failed the device check".into(), problems: vec![p], cautions: vec![], notes: vec![], details: None }
+    Assessment {
+        verdict: Verdict::Fail,
+        headline: "Not genuine: this phone failed the device check".into(),
+        problems: vec![p],
+        cautions: vec![],
+        notes: vec![],
+        details: None,
+    }
 }
 
-fn short(b: &[u8]) -> String { let h = hex::encode(b); if h.len() > 16 { format!("{}…", &h[..16]) } else { h } }
+fn short(b: &[u8]) -> String {
+    let h = hex::encode(b);
+    if h.len() > 16 {
+        format!("{}…", &h[..16])
+    } else {
+        h
+    }
+}
 
 pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     let kd = &ev.chain.description;
@@ -152,15 +178,24 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
 
     // freshness: the certificate must answer THIS challenge
     if kd.challenge != ev.challenge {
-        problems.push("The attestation answers a different challenge than the one this Mac sent (replayed or substituted).".into());
+        problems.push(
+            "The attestation answers a different challenge than the one this Mac sent (replayed or substituted)."
+                .into(),
+        );
     }
 
     // revocation
     match ev.revocation {
         revocation::Status::Checked { revoked, as_of } => {
-            let hits: Vec<String> = ev.chain.serials.iter().filter_map(|s| revoked.get(s).map(|r| format!("{s} ({r})"))).collect();
-            if hits.is_empty() { d.revocation = format!("Not revoked (Google status list of {as_of})"); }
-            else { d.revocation = "REVOKED".into(); problems.push(format!("Google has revoked an attestation certificate in this chain: {}.", hits.join(", "))); }
+            let hits: Vec<String> =
+                ev.chain.serials.iter().filter_map(|s| revoked.get(s).map(|r| format!("{s} ({r})"))).collect();
+            if hits.is_empty() {
+                d.revocation = format!("Not revoked (Google status list of {as_of})");
+            } else {
+                d.revocation = "REVOKED".into();
+                problems
+                    .push(format!("Google has revoked an attestation certificate in this chain: {}.", hits.join(", ")));
+            }
         }
         revocation::Status::Unknown(why) => {
             d.revocation = format!("Unknown ({why})");
@@ -175,13 +210,21 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     } else if level != kd.keymint_security_level {
         problems.push("The attestation reports two different security levels.".into());
     } else if ev.phone_level != level {
-        problems.push(format!("The phone said its key is in {}, but the attestation says {}.", ev.phone_level.name(), level.name()));
+        problems.push(format!(
+            "The phone said its key is in {}, but the attestation says {}.",
+            ev.phone_level.name(),
+            level.name()
+        ));
     } else if level == SecurityLevel::StrongBox && !ev.chain.chain_names_strongbox {
         problems.push("The attestation claims StrongBox, but its certificate chain is not a StrongBox chain.".into());
     } else if level != SecurityLevel::StrongBox && ev.chain.chain_names_strongbox {
-        problems.push("The certificate chain is a StrongBox chain, but the key claims a different security level.".into());
+        problems
+            .push("The certificate chain is a StrongBox chain, but the key claims a different security level.".into());
     } else if level == SecurityLevel::TrustedEnvironment {
-        cautions.push("The key was attested by the phone's TEE, not the Titan M security chip (StrongBox was unavailable).".into());
+        cautions.push(
+            "The key was attested by the phone's TEE, not the Titan M security chip (StrongBox was unavailable)."
+                .into(),
+        );
     }
     if hw.origin != Some(keydesc::ORIGIN_GENERATED) {
         problems.push("The attested key was not generated inside the secure hardware.".into());
@@ -199,10 +242,17 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
             d.app_package = Some(app.packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
             d.app_version = app.packages.first().map(|p| p.version);
             if app.packages.len() != 1 || app.packages[0].name != policy.package {
-                problems.push(format!("The attested key belongs to {}, not the Phone Vault app ({}).", d.app_package.as_deref().filter(|s| !s.is_empty()).unwrap_or("no package"), policy.package));
+                problems.push(format!(
+                    "The attested key belongs to {}, not the Phone Vault app ({}).",
+                    d.app_package.as_deref().filter(|s| !s.is_empty()).unwrap_or("no package"),
+                    policy.package
+                ));
             }
             if app.signature_digests.len() != 1 {
-                problems.push(format!("The app has {} signing certificates; Phone Vault has exactly one.", app.signature_digests.len()));
+                problems.push(format!(
+                    "The app has {} signing certificates; Phone Vault has exactly one.",
+                    app.signature_digests.len()
+                ));
             } else {
                 let digest = &app.signature_digests[0];
                 d.app_signer = Some(hex::encode(digest));
@@ -232,7 +282,11 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
             d.verified_boot_key = Some(hex::encode(&rot.verified_boot_key));
             d.verified_boot_key_known = key_known;
             d.verified_boot_hash = rot.verified_boot_hash.as_ref().map(hex::encode);
-            let pinned_note = if policy.avb_keys.is_empty() { " (this companion build has no Phone Vault release boot key pinned yet)" } else { "" };
+            let pinned_note = if policy.avb_keys.is_empty() {
+                " (this companion build has no Phone Vault release boot key pinned yet)"
+            } else {
+                ""
+            };
             match (rot.device_locked, rot.verified_boot_state) {
                 (_, BootState::Failed) => problems.push("Verified boot reports FAILED (red).".into()),
                 (true, BootState::Verified) | (true, BootState::SelfSigned) if key_known => {
@@ -256,7 +310,11 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
             if !rot.device_locked {
                 if let Some(p) = hw.os_patch_level {
                     if keydesc::patch_month(p) < policy.min_os_patch_level {
-                        notes.push(format!("Security patch level {} is older than {}.", keydesc::patch_level_text(p), keydesc::patch_level_text(policy.min_os_patch_level)));
+                        notes.push(format!(
+                            "Security patch level {} is older than {}.",
+                            keydesc::patch_level_text(p),
+                            keydesc::patch_level_text(policy.min_os_patch_level)
+                        ));
                     }
                 }
             }
@@ -267,9 +325,15 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
         (Verdict::Fail, "Not genuine: this phone failed the device check".to_string())
     } else if !cautions.is_empty() {
         let unlocked = cautions.iter().any(|c| c == UNLOCKED_HEADLINE);
-        (Verdict::Development, if unlocked { UNLOCKED_HEADLINE.into() } else { "Development device — not safe for real funds".into() })
+        (
+            Verdict::Development,
+            if unlocked { UNLOCKED_HEADLINE.into() } else { "Development device — not safe for real funds".into() },
+        )
     } else {
-        (Verdict::Genuine, "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M".into())
+        (
+            Verdict::Genuine,
+            "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M".into(),
+        )
     };
     Assessment { verdict, headline, problems, cautions, notes, details: Some(d) }
 }
