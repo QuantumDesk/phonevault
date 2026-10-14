@@ -20,11 +20,8 @@ require_throwaway
 require_dev_appliance
 require_pin
 wake   # stay awake on USB: a screen-off relock would drop the USB session mid-case
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
 VECTORS="${PV_SWAP_VECTORS:-$(cd "$(dirname "$0")/../.." && pwd)/app/src/test/resources/swap-vectors.json}"
-OUT="${PV_SAFETY_OUT:-/tmp/safetytest}"
+OUT="${PV_SAFETY_OUT:-$PV_LOG_DIR/safetytest}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"
 [[ -s "$VECTORS" ]] || die "swap vectors not found: $VECTORS"

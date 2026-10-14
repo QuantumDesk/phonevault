@@ -8,10 +8,7 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
-OUT="${PV_SIGN_OUT:-/tmp/usbsign.out}"
+OUT="${PV_SIGN_OUT:-$PV_LOG_DIR/usbsign.out}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 TO=0x7F3A9C04e2b16d58a41C0f9E6b2D7a8c5e1f4B93   # example recipient (checksummed, not a real wallet)
 

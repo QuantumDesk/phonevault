@@ -17,9 +17,6 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
 VERIFY="${PV_ATTEST_VERIFIER:-}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"

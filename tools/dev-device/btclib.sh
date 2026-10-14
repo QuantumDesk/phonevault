@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Bitcoin helpers shared by btctest.sh and btc-signet-e2e.sh. Source AFTER lib.sh, with OUT (host
 # client logs) set and, optionally, WORK (a scratch directory removed on exit).
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-TOOL="${PV_BTC_TOOL:-/root/pv-host/tools/btc_psbt_tool.py}"
 [[ -x "$PY" && -s "$CLIENT" && -s "$TOOL" ]] || die "host tools not staged ($PY / $CLIENT / $TOOL)"
 "$PY" -c 'import embit, usb' 2>/dev/null || die "$PY needs pyusb and embit==0.8.0"
 mkdir -p "$OUT"

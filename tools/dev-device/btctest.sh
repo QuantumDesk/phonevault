@@ -16,7 +16,7 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-OUT="${PV_BTC_OUT:-/tmp/btctest}"
+OUT="${PV_BTC_OUT:-$PV_LOG_DIR/btctest}"
 WORK="$(mktemp -d)"
 source "$(dirname "$0")/btclib.sh"
 
