@@ -27,8 +27,8 @@ echo "=== BLUEJAY RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} var
 # active `overrides` (if such a module really is still installed, ninja re-creates it and
 # check-build.sh fails as it should).
 PV_PRODUCT_OUT="out/target/product/bluejay"
-mapfile -t PV_OVERRIDES < <(awk '/^[[:space:]]*\/\//{next} /overrides:[[:space:]]*\[/{f=1;next}
-  f && /^[[:space:]]*\]/{f=0} f' vendor/phonevault/prebuilt/Android.bp | grep -o '"[^"]*"' | tr -d '"')
+mapfile -t PV_OVERRIDES < <(python3 "${SCRIPT_DIR}/../scripts/vaultgate.py" overrides list \
+  vendor/phonevault/prebuilt/Android.bp)
 for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-app}/*/; do
   [[ -d "${d}" ]] || continue
   name="$(basename "${d}")"

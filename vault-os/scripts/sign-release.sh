@@ -122,8 +122,9 @@ done
   "${INPUT_TARGET_FILES}" "vendor/phonevault/keys/avb.pem" \
   "${expected_app_cert}" "${input_app_sha}"
 # Every release override must really be absent from the image: an override is
-# silently defeated when an installed module `required`s its target.
-"${PROJECT}/vault-os/dev-ladder/check-overrides.sh" release "${INPUT_TARGET_FILES}"
+# silently defeated when an installed module `required`s its target. An empty
+# (unparsed) release list fails too.
+"${SCRIPT_DIR}/verify-release-overrides.sh" "${INPUT_TARGET_FILES}" "${PROJECT}"
 
 # AVB anti-rollback: the image carries the project-owned index and it is
 # strictly greater than the previous signed production release's.
