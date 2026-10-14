@@ -1,17 +1,10 @@
-# RUNG 4b (= rung 4a board/kernel; Android.bp also overrides system-side apps and the device diff
-# drops the Bluetooth / NFC / OMAPI feature declarations).
-# RUNG 3 (= 2d-d kernel/board; the rung's change is in its device diff + common.mk: USB lock-down in the
-# USB HALs and init usb rc — gadget allowlist {adb, accessory}, Type-C port sink/UFP-only, no host role).
-# RUNG 2d-d (2d-c3 + slice D of the kernel fragment: USB gadget functions — only adb FunctionFS and Android Open Accessory remain; DWC3 gadget-only, no host/OTG). The release BoardConfigVault.mk with the
-# no doze; the device diff also drops the NFC HAL, camera provider and CHRE daemon services).
-# RUNG 2d-c2 (= 2d-c; the rung's change is in its device/vendor diffs: services for removed hardware are
-# not installed). 2d-c: 2d-b + slice C of the kernel fragment: camera / media / sensors / DSP, with kernel patch 0002. The release BoardConfigVault.mk with the
-# kernel fragment reintroduced in slices, each its own boot test (the full fragment was the
-# August boot-blocker):
-#   2b  remove `--flags 3` (verity + hashtree enforcement ON)
-#   2c  appliance VINTF manifest / matrices
-#   2d  kernel appliance config fragment
-# Active here: WITH_AVB, our AVB key + algorithm for vbmeta and vbmeta_system, board-info.
+# RUNG 4b board config (the crosshatch development baseline). Same board/kernel as rungs 2d-d,
+# 3 and 4a; those rungs changed only the device/vendor diffs, common.mk and Android.bp.
+# Active here: WITH_AVB, our AVB key + algorithm for vbmeta and vbmeta_system, verity and
+# hashtree enforcement (no `--flags 3`, rung 2b), board-info, the appliance VINTF manifest and
+# matrices (rung 2c), and the kernel appliance fragment in slices A-D (rungs 2d-a … 2d-d; DWC3
+# stays dual-role). The release BoardConfigVault.mk carries the same, with the fragment as one
+# file. Archived rungs: vault-os/docs/hardening-ladder.md.
 WITH_AVB := true
 BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS := $(filter-out --flags 3,$(BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS))
 BOARD_AVB_ALGORITHM := SHA256_RSA4096
@@ -26,7 +19,7 @@ DEVICE_MANIFEST_FILE := vendor/phonevault/vintf/manifest.xml
 DEVICE_MATRIX_FILE := vendor/phonevault/vintf/compatibility_matrix.xml
 DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := vendor/phonevault/vintf/device_framework_matrix.xml
 
-# 2d-a: connectivity drivers only (BT/NFC/WLAN/CNSS/IPA/RMNET). Later slices: 2d-b modem/GLINK,
-# 2d-c camera/media/sensors/DSP, 2d-d USB gadget functions. The fragment file is installed into
-# kernel/google/msm-4.9/arch/arm64/configs/ by dev-ladder-sync.sh.
+# Kernel fragment slices: a connectivity (BT/NFC/WLAN/CNSS/IPA/RMNET), b modem/GLINK,
+# c camera/media/sensors/DSP (needs kernel-0002-*.patch), d USB gadget functions. The fragment
+# files are installed into kernel/google/msm-4.9/arch/arm64/configs/ by dev-ladder-sync.sh.
 TARGET_KERNEL_CONFIG += phonevault-a.config phonevault-b.config phonevault-c.config phonevault-d.config
