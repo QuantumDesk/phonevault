@@ -1,40 +1,29 @@
 package dev.phonevault.signer;
 
 import android.app.Activity;
-import android.app.ActivityManager;
 import android.app.KeyguardManager;
 import android.app.admin.DevicePolicyManager;
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.res.ColorStateList;
 import android.database.ContentObserver;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
-import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.BatteryManager;
-import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.provider.Settings;
-import android.security.KeyStoreException;
-import android.security.keystore.UserNotAuthenticatedException;
-import android.text.Layout;
 import android.util.Log;
 import android.view.Gravity;
-import android.view.MotionEvent;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
-import android.widget.CheckBox;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -43,28 +32,17 @@ import android.widget.TextView;
 import org.json.JSONObject;
 import org.web3j.crypto.Credentials;
 import org.web3j.crypto.Keys;
-import org.web3j.crypto.MnemonicUtils;
 
-import java.io.ByteArrayOutputStream;
-import java.io.InputStream;
-import java.nio.CharBuffer;
-import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
-import java.time.LocalDate;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.function.Function;
 
 public final class MainActivity extends Activity implements AccessoryTransport.Listener {
     private static final String TAG = "Vault";
@@ -84,8 +62,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private volatile Credentials credentials;
     private volatile AccessoryTransport transport;
     private volatile boolean operational;
-    private TextView addressView;
-    private ImageView qrView;
     private TextView statusView;
     private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
     /** The live state behind every "does this request still own its slot" re-check (RequestOwnership). */
@@ -348,7 +324,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         DevicePolicyManager policy = (DevicePolicyManager) getSystemService(
                 Context.DEVICE_POLICY_SERVICE);
         boolean managed = policy.isDeviceOwnerApp(getPackageName());
-        if (isPhoneVaultApplianceBuild() && !managed) {
+        if (ApplianceProvisioning.applianceImage() && !managed) {
             deactivate("FATAL POLICY ERROR: Phone Vault is not device owner");
             return;
         }
@@ -700,10 +676,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private boolean replacementActive() { return replacement.active(); }
-    private int beginReplacement() { return replacement.begin(); }
-    private boolean markPrepared(int op) { return replacement.markPrepared(op); }
-    private boolean beginCommit(int op) { return replacement.beginCommit(op); }
-    private void endReplacement(int op) { replacement.end(op); }
 
     /** OLED burn-in mitigation: cycle the content through a 2 px square every PIXEL_SHIFT_MS. */
     private void shiftPixels() {
@@ -718,56 +690,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         ui.postDelayed(pixelShift, PIXEL_SHIFT_MS);
     }
 
-    /** Device owner: idle screen-off (burn-in + walk-away). Best effort; never fatal. */
-    private void applyIdlePolicy(DevicePolicyManager policy) {
-        try {
-            ComponentName admin = null;
-            List<ComponentName> admins = policy.getActiveAdmins();
-            if (admins != null) {
-                for (ComponentName c : admins) {
-                    if (getPackageName().equals(c.getPackageName())) admin = c;
-                }
-            }
-            if (admin == null) return;
-            policy.setSystemSetting(admin, Settings.System.SCREEN_OFF_TIMEOUT,
-                    String.valueOf(display != null ? display.screenTimeoutMs() : SCREEN_OFF_TIMEOUT_MS));
-        } catch (Exception e) {
-            Log.w(TAG, "idle policy not applied", e);
-        }
-    }
-
-    private static boolean isPhoneVaultApplianceBuild() {
-        return "PhoneVault".equals(Build.BRAND);
-    }
-
+    /** Self-provisioning, lockdown and lock task (ApplianceProvisioning); a refused step is a policy error. */
     private boolean enterVaultMode(DevicePolicyManager policy) {
         try {
-            // Self-provisioning (HOME preference, keyguard off, lock-task packages, setup
-            // wizards hidden). Also runs from the admin receiver on first boot; idempotent.
-            if (!ApplianceProvisioning.apply(this, policy)) return false;
-            if (isPhoneVaultApplianceBuild()) {
-                enforceApplianceRestrictions(policy);
-            }
-            if (!policy.isLockTaskPermitted(getPackageName())) return false;
-            getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                            | View.SYSTEM_UI_FLAG_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-                            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
-            ActivityManager activityManager = (ActivityManager) getSystemService(
-                    Context.ACTIVITY_SERVICE);
-            if (activityManager.getLockTaskModeState()
-                    == ActivityManager.LOCK_TASK_MODE_NONE) {
-                startLockTask();
-            }
-            return activityManager.getLockTaskModeState()
-                    != ActivityManager.LOCK_TASK_MODE_NONE;
+            return ApplianceProvisioning.enterVaultMode(this, policy, devBuild());
         } catch (RuntimeException exception) {
             statusView.setText("Vault policy error: " + exception.getMessage());
             return false;
         }
+    }
+
+    /** Device owner: idle screen-off (burn-in + walk-away). Best effort; never fatal. */
+    private void applyIdlePolicy(DevicePolicyManager policy) {
+        ApplianceProvisioning.applyIdlePolicy(this, policy, () -> display != null ? display.screenTimeoutMs() : SCREEN_OFF_TIMEOUT_MS);
     }
 
     /**
@@ -789,37 +724,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Release build with USB or wireless debugging on: nothing is shown or approved (ApplianceLockdown). */
     private boolean adbRefused() {
         return ApplianceLockdown.refuseForAdb(devBuild(), adbEnabled());
-    }
-
-    private void enforceApplianceRestrictions(DevicePolicyManager policy) {
-        ComponentName admin = VaultDeviceAdminReceiver.component(this);
-        boolean dev = devBuild();
-        // ApplianceLockdown: the base set, the frozen app set (release), and in a release build
-        // also debugging features, date/time, physical media and system error dialogs.
-        for (String restriction : ApplianceLockdown.userRestrictions(dev, BuildConfig.VAULT_ALLOW_APP_UPDATES)) {
-            policy.addUserRestriction(admin, restriction);
-        }
-        if (ApplianceLockdown.restrictsCameraAndInput(dev)) {
-            policy.setCameraDisabled(admin, true);
-            // System services/keyboards are always permitted by Android; these lists refuse the rest.
-            if (!policy.setPermittedAccessibilityServices(admin, Collections.emptyList())) {
-                throw new IllegalStateException("Accessibility services could not be restricted");
-            }
-            String ime = Settings.Secure.getString(getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
-            if (!policy.setPermittedInputMethods(admin, new ArrayList<>(ApplianceLockdown.permittedInputMethods(ime)))) {
-                throw new IllegalStateException("Input methods could not be restricted");
-            }
-        }
-        // Only the power menu (long-press Power: power off / restart) works inside the kiosk.
-        // Without it the sole way off is a forced hardware restart. The OS image trims the menu
-        // to power + restart (config_globalActionsList); nothing else of lock task is opened up.
-        policy.setLockTaskFeatures(VaultDeviceAdminReceiver.component(this),
-                DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS);
-        policy.setScreenCaptureDisabled(VaultDeviceAdminReceiver.component(this),
-                !DevTools.SCREENSHOTS);
-        if (!policy.setStatusBarDisabled(VaultDeviceAdminReceiver.component(this), true)) {
-            throw new IllegalStateException("Status bar could not be disabled");
-        }
     }
 
     private void deactivate(String reason) {
@@ -946,7 +850,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
             box.setGravity(Gravity.CENTER_HORIZONTAL);
-            qrView = new ImageView(this);
+            ImageView qrView = new ImageView(this);
             qrView.setContentDescription("Receiving address QR. Full address follows.");
             qrView.setImageBitmap(walletQr);
             // Shown at the bitmap's own pixel size: integer-scaled modules stay perfectly square.
@@ -956,7 +860,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             box.addView(qrView, qlp);
             box.addView(VaultTheme.bodyText(this, accountName.toUpperCase(Locale.ROOT)
                     + (passphraseWallet ? " · PASSPHRASE" : "") + " · RECEIVE", 13, VaultTheme.FAINT));
-            addressView = VaultTheme.monoText(this, ReviewStyle.groupEvmTwoLines(
+            TextView addressView = VaultTheme.monoText(this, ReviewStyle.groupEvmTwoLines(
                     Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
             Pages.keepGroupsWhole(addressView);
             addressView.setPadding(0, pages.dp(12), 0, pages.dp(8));
@@ -1483,7 +1387,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             MainActivity.this.armIdleLock();
         }
         @Override public void armIdleLock() { MainActivity.this.armIdleLock(); }
-        @Override public boolean appliancePolicyActive() { return isPhoneVaultApplianceBuild() && operational; }
+        @Override public boolean appliancePolicyActive() { return ApplianceProvisioning.applianceImage() && operational; }
         @Override public boolean credentialMode() { return MainActivity.this.credentialMode(); }
         @Override public SigningAccount activeAccount() { return activeAccount; }
         @Override public HeldRequest heldRequest() { return heldRequest; }

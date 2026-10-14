@@ -1,12 +1,22 @@
 package dev.phonevault.signer;
 
+import android.app.Activity;
+import android.app.ActivityManager;
 import android.app.admin.DevicePolicyManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
+import android.os.Build;
+import android.provider.Settings;
 import android.util.Log;
+import android.view.View;
+
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.IntSupplier;
 
 /**
  * Everything a factory-fresh unit needs once the OS has made this app device owner on first
@@ -83,5 +93,91 @@ final class ApplianceProvisioning {
             }
         }
         return true;
+    }
+
+    // ------------------------------------------------------------------ every activity start (MainActivity)
+
+    /** A PhoneVault appliance image, as opposed to a development phone running the app. */
+    static boolean applianceImage() {
+        return "PhoneVault".equals(Build.BRAND);
+    }
+
+    /**
+     * Self-provisioning, the appliance lockdown (appliance image only), immersive full screen and
+     * lock task. A lockdown step the system refuses throws.
+     *
+     * @return whether lock task is now active
+     */
+    static boolean enterVaultMode(Activity activity, DevicePolicyManager policy, boolean devBuild) {
+        // Self-provisioning (HOME preference, keyguard off, lock-task packages, setup
+        // wizards hidden). Also runs from the admin receiver on first boot; idempotent.
+        if (!apply(activity, policy)) return false;
+        if (applianceImage()) {
+            enforceApplianceRestrictions(activity, policy, devBuild);
+        }
+        if (!policy.isLockTaskPermitted(activity.getPackageName())) return false;
+        activity.getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        | View.SYSTEM_UI_FLAG_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                        | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+        ActivityManager activityManager = (ActivityManager) activity.getSystemService(
+                Context.ACTIVITY_SERVICE);
+        if (activityManager.getLockTaskModeState()
+                == ActivityManager.LOCK_TASK_MODE_NONE) {
+            activity.startLockTask();
+        }
+        return activityManager.getLockTaskModeState()
+                != ActivityManager.LOCK_TASK_MODE_NONE;
+    }
+
+    private static void enforceApplianceRestrictions(Context context, DevicePolicyManager policy, boolean dev) {
+        ComponentName admin = VaultDeviceAdminReceiver.component(context);
+        // ApplianceLockdown: the base set, the frozen app set (release), and in a release build
+        // also debugging features, date/time, physical media and system error dialogs.
+        for (String restriction : ApplianceLockdown.userRestrictions(dev, BuildConfig.VAULT_ALLOW_APP_UPDATES)) {
+            policy.addUserRestriction(admin, restriction);
+        }
+        if (ApplianceLockdown.restrictsCameraAndInput(dev)) {
+            policy.setCameraDisabled(admin, true);
+            // System services/keyboards are always permitted by Android; these lists refuse the rest.
+            if (!policy.setPermittedAccessibilityServices(admin, Collections.emptyList())) {
+                throw new IllegalStateException("Accessibility services could not be restricted");
+            }
+            String ime = Settings.Secure.getString(context.getContentResolver(), Settings.Secure.DEFAULT_INPUT_METHOD);
+            if (!policy.setPermittedInputMethods(admin, new ArrayList<>(ApplianceLockdown.permittedInputMethods(ime)))) {
+                throw new IllegalStateException("Input methods could not be restricted");
+            }
+        }
+        // Only the power menu (long-press Power: power off / restart) works inside the kiosk.
+        // Without it the sole way off is a forced hardware restart. The OS image trims the menu
+        // to power + restart (config_globalActionsList); nothing else of lock task is opened up.
+        policy.setLockTaskFeatures(VaultDeviceAdminReceiver.component(context),
+                DevicePolicyManager.LOCK_TASK_FEATURE_GLOBAL_ACTIONS);
+        policy.setScreenCaptureDisabled(VaultDeviceAdminReceiver.component(context),
+                !DevTools.SCREENSHOTS);
+        if (!policy.setStatusBarDisabled(VaultDeviceAdminReceiver.component(context), true)) {
+            throw new IllegalStateException("Status bar could not be disabled");
+        }
+    }
+
+    /** Device owner: idle screen-off (burn-in + walk-away). Best effort; never fatal. */
+    static void applyIdlePolicy(Context context, DevicePolicyManager policy, IntSupplier screenOffMs) {
+        try {
+            ComponentName admin = null;
+            List<ComponentName> admins = policy.getActiveAdmins();
+            if (admins != null) {
+                for (ComponentName c : admins) {
+                    if (context.getPackageName().equals(c.getPackageName())) admin = c;
+                }
+            }
+            if (admin == null) return;
+            policy.setSystemSetting(admin, Settings.System.SCREEN_OFF_TIMEOUT,
+                    String.valueOf(screenOffMs.getAsInt()));
+        } catch (Exception e) {
+            Log.w("Vault", "idle policy not applied", e);
+        }
     }
 }
