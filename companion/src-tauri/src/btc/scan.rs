@@ -219,7 +219,7 @@ mod tests {
         let mut honest = Cache::default();
         scan(&a, &Liar { used: BTreeSet::new() }, &mut honest, true, 1_800_000_000).unwrap();
         assert_eq!(honest.next[1], 0);
-        assert!(900 > GAP);
+        const { assert!(900 > GAP) };
     }
 
     #[test]

@@ -671,7 +671,7 @@ mod tests {
     fn a_swap_nets_out_the_routers_internal_moves() {
         // 0.5 ETH → USDC through SwapRouter02: the wrap and the pool's WETH are the router's, not ours
         let j = v(SWAP_ETH_USDC);
-        let t = tx(HOLDER, "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", 500_000_000_000_000_000, &j["call"]["data"].as_str().unwrap().to_string(), 300_000);
+        let t = tx(HOLDER, "0x68b3465833fb72a70ecdf485e0e4c7bd8665fc45", 500_000_000_000_000_000, j["call"]["data"].as_str().unwrap(), 300_000);
         let s = interpret_simulate_v1(&response(SWAP_ETH_USDC), &t, BASE_FEE, "n", Some(BLOCK)).unwrap();
         assert_eq!(s.changes.len(), 2);
         assert_eq!(s.changes[0].asset, "native");
@@ -822,7 +822,7 @@ mod tests {
         let long = format!("0x{}", "a".repeat(80));
         for bad_asset in ["0x1", long.as_str(), "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "0xéééééééééééééééééééé"] {
             let log = json!({"address": bad_asset, "topics": [transfer, topic(me), topic(other)], "data": five});
-            let r = catch_unwind(AssertUnwindSafe(|| changes_from_logs(&[log.clone()], me, 1, 0)));
+            let r = catch_unwind(AssertUnwindSafe(|| changes_from_logs(std::slice::from_ref(&log), me, 1, 0)));
             assert_eq!(r.ok().and_then(Result::ok), Some(vec![]), "asset {bad_asset} must be ignored, not panic");
         }
         let good = json!({"address": "0x2222222222222222222222222222222222222222", "topics": [transfer, topic(me), topic(other)], "data": five});
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(c[0].delta, "-5");
         for t in ["0x1234", "0xéééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"] {
             let log = json!({"address": "0x2222222222222222222222222222222222222222", "topics": [transfer, t, topic(other)], "data": five});
-            assert!(catch_unwind(AssertUnwindSafe(|| { let _ = changes_from_logs(&[log.clone()], me, 1, 0); })).is_ok(), "topic {t}");
+            assert!(catch_unwind(AssertUnwindSafe(|| { let _ = changes_from_logs(std::slice::from_ref(&log), me, 1, 0); })).is_ok(), "topic {t}");
         }
         // the same path through the interpreter of a full eth_simulateV1 answer
         let resp = json!({"result": [{"calls": [{"status": "0x1", "gasUsed": "0x5208",

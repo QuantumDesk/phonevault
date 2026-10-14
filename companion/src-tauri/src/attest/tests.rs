@@ -183,7 +183,7 @@ fn unknown_root_tampering_and_broken_links_fail() {
     short.remove(1);
     assert!(chain::verify(&short, &roots(), NOW).unwrap_err().contains("issuer"));
     // the root alone, garbage, and trailing bytes
-    assert!(chain::verify(&chain_[3..].to_vec(), &roots(), NOW).is_err());
+    assert!(chain::verify(&chain_[3..], &roots(), NOW).is_err());
     assert!(chain::verify(&[vec![0x30, 0x00], chain_[3].clone()], &roots(), NOW).is_err());
     let mut trailing = chain_.clone();
     trailing[0].push(0);
@@ -555,7 +555,7 @@ mod synthetic {
         let challenge = [0x42u8; 32];
         let b = build(&genuine_spec(&challenge), true, false);
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
-        let r = run(&b, &challenge, &resp, &test_policy(), &[b.root.clone()]);
+        let r = run(&b, &challenge, &resp, &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Genuine, "{:?}", r);
         assert_eq!(r.address.as_deref(), Some("0x52908400098527886E0F7030069857D2E4169EE7"));
         let d = r.assessment.details.unwrap();
@@ -581,12 +581,12 @@ mod synthetic {
         // the phone signs one address but reports another (a substituted address)
         let mut resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         resp["address"] = json!("0xde709f2102306220921060314715629080e2fb77");
-        let r = run(&b, &challenge, &resp, &test_policy(), &[b.root.clone()]);
+        let r = run(&b, &challenge, &resp, &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems.iter().any(|p| p.contains("not signed by the attested key")));
         // an old attestation replayed against a new challenge
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
-        let r = run(&b, &[0x43u8; 32], &resp, &test_policy(), &[b.root.clone()]);
+        let r = run(&b, &[0x43u8; 32], &resp, &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems.iter().any(|p| p.contains("different challenge")), "{:?}", r.assessment.problems);
     }
@@ -634,11 +634,11 @@ mod synthetic {
     fn chain_extension_attack_and_fake_strongbox_fail() {
         let challenge = [0x42u8; 32];
         let b = build(&genuine_spec(&challenge), true, true);
-        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), &[b.root.clone()]);
+        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems[0].contains("chain-extension"), "{:?}", r.assessment.problems);
         let b = build(&genuine_spec(&challenge), false, false);
-        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), &[b.root.clone()]);
+        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems.iter().any(|p| p.contains("not a StrongBox chain")));
     }
@@ -651,11 +651,11 @@ mod synthetic {
         let b = build(&s, true, false);
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         let req = request("t1", &challenge);
-        let r = assess(&test_policy(), &[b.root.clone()], NOW, &challenge, &req, &resp, unchecked, true).unwrap();
+        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, true).unwrap();
         assert_eq!(r.verdict(), Verdict::Development, "{:?}", r);
         assert_eq!(r.assessment.headline, policy::UNLOCKED_HEADLINE);
         assert!(r.dev_mode);
-        let r = assess(&test_policy(), &[b.root.clone()], NOW, &challenge, &req, &resp, unchecked, false).unwrap();
+        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, false).unwrap();
         assert_eq!(r.verdict(), Verdict::Fail);
     }
 

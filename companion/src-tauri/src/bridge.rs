@@ -1317,7 +1317,7 @@ mod tests {
         let d = tmp("sites");
         let p = d.join("browser-sites.json");
         let good = site(&[8453], 8453);
-        save_sites(&p, &[good.clone()]).unwrap();
+        save_sites(&p, std::slice::from_ref(&good)).unwrap();
         assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
         assert_eq!(load_sites(&p), vec![good.clone()]);
         let mut bad = good.clone(); bad.origin = "http://evil.org".into();

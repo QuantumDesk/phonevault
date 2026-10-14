@@ -489,7 +489,7 @@ pub mod tests {
     #[test]
     fn size_limits_fit_the_phone_and_the_way_back() {
         // phone: PSBT ≤ 200 KiB, btcSignPsbt line ≤ 288 KiB (AccessoryTransport / Psbt.java)
-        assert!(MAX_PSBT_BYTES <= 200 * 1024);
+        const { assert!(MAX_PSBT_BYTES <= 200 * 1024) };
         let line = r#"{"id":"00000000-0000-0000-0000-000000000000","method":"btcSignPsbt","network":"testnet4","psbt":""}"#.len() + MAX_PSBT_BYTES.div_ceil(3) * 4 + 1;
         assert!(line <= 288 * 1024, "{line}");
         assert!(line <= crate::btc::MAX_REQUEST_BYTES);

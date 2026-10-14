@@ -229,38 +229,6 @@ pub fn take_turn(on_wait: impl FnOnce(), cancelled: impl Fn() -> bool) -> Result
     }
 }
 
-#[cfg(test)]
-mod turn_tests {
-    use super::*;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-    use std::sync::Arc;
-
-    #[test]
-    fn turns_serialize_reenter_and_cancel() {
-        let first = take_turn(|| panic!("free phone must not wait"), || false).unwrap();
-        // re-entrant on the same thread
-        let inner = take_turn(|| panic!("same thread must not wait"), || false).unwrap();
-        drop(inner);
-        // another thread waits, says so once, and can be cancelled
-        let waited = Arc::new(AtomicUsize::new(0));
-        let cancel = Arc::new(AtomicBool::new(false));
-        let (w, c) = (waited.clone(), cancel.clone());
-        let t = std::thread::spawn(move || take_turn(|| { w.fetch_add(1, Ordering::SeqCst); }, || c.load(Ordering::SeqCst)).map(|_| ()));
-        std::thread::sleep(Duration::from_millis(400));
-        cancel.store(true, Ordering::SeqCst);
-        assert!(matches!(t.join().unwrap(), Err(AoaError::Protocol(ref m)) if m == CANCELLED));
-        assert_eq!(waited.load(Ordering::SeqCst), 1);
-        // and gets the phone once the holder lets go
-        let w2 = waited.clone();
-        let t2 = std::thread::spawn(move || take_turn(|| { w2.fetch_add(1, Ordering::SeqCst); }, || false).map(|_| ()));
-        std::thread::sleep(Duration::from_millis(300));
-        drop(first);
-        assert!(t2.join().unwrap().is_ok());
-        assert_eq!(waited.load(Ordering::SeqCst), 2);
-        assert!(take_turn(|| panic!("released"), || false).is_ok());
-    }
-}
-
 // ---------------------------------------------------------------- observed exchange (UI progress)
 //
 // Same framing, caps and id check as `exchange`, plus two hooks the send flow needs so the UI can
@@ -314,5 +282,37 @@ impl Session {
             }
         }
         Err(AoaError::Timeout(timeout.as_secs()))
+    }
+}
+
+#[cfg(test)]
+mod turn_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    #[test]
+    fn turns_serialize_reenter_and_cancel() {
+        let first = take_turn(|| panic!("free phone must not wait"), || false).unwrap();
+        // re-entrant on the same thread
+        let inner = take_turn(|| panic!("same thread must not wait"), || false).unwrap();
+        drop(inner);
+        // another thread waits, says so once, and can be cancelled
+        let waited = Arc::new(AtomicUsize::new(0));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let (w, c) = (waited.clone(), cancel.clone());
+        let t = std::thread::spawn(move || take_turn(|| { w.fetch_add(1, Ordering::SeqCst); }, || c.load(Ordering::SeqCst)).map(|_| ()));
+        std::thread::sleep(Duration::from_millis(400));
+        cancel.store(true, Ordering::SeqCst);
+        assert!(matches!(t.join().unwrap(), Err(AoaError::Protocol(ref m)) if m == CANCELLED));
+        assert_eq!(waited.load(Ordering::SeqCst), 1);
+        // and gets the phone once the holder lets go
+        let w2 = waited.clone();
+        let t2 = std::thread::spawn(move || take_turn(|| { w2.fetch_add(1, Ordering::SeqCst); }, || false).map(|_| ()));
+        std::thread::sleep(Duration::from_millis(300));
+        drop(first);
+        assert!(t2.join().unwrap().is_ok());
+        assert_eq!(waited.load(Ordering::SeqCst), 2);
+        assert!(take_turn(|| panic!("released"), || false).is_ok());
     }
 }

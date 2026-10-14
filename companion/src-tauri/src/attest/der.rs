@@ -148,7 +148,7 @@ mod tests {
         assert_eq!(Reader::new(t.value).octets("x").unwrap(), b"ab");
         assert!(r.is_empty());
         let mut long = vec![0x04, 0x81, 0x80];
-        long.extend(std::iter::repeat(7u8).take(0x80));
+        long.extend(std::iter::repeat_n(7u8, 0x80));
         assert_eq!(Reader::new(&long).octets("x").unwrap().len(), 0x80);
     }
 

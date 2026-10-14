@@ -235,8 +235,8 @@ mod tests {
             type Tamper = Box<dyn Fn(&mut Psbt)>;
             let cases: Vec<(&str, Tamper)> = vec![
                 ("recipient address", Box::new(move |p: &mut Psbt| p.unsigned_tx.output[ri].script_pubkey = attacker.script_pubkey())),
-                ("amount up", Box::new(move |p: &mut Psbt| p.unsigned_tx.output[ri].value = p.unsigned_tx.output[ri].value + Amount::from_sat(1))),
-                ("change down = higher fee", Box::new(move |p: &mut Psbt| p.unsigned_tx.output[ci].value = p.unsigned_tx.output[ci].value - Amount::from_sat(5_000))),
+                ("amount up", Box::new(move |p: &mut Psbt| p.unsigned_tx.output[ri].value += Amount::from_sat(1))),
+                ("change down = higher fee", Box::new(move |p: &mut Psbt| p.unsigned_tx.output[ci].value -= Amount::from_sat(5_000))),
                 ("extra output", Box::new(|p: &mut Psbt| { p.unsigned_tx.output.push(TxOut { value: Amount::from_sat(1000), script_pubkey: p.unsigned_tx.output[0].script_pubkey.clone() }); p.outputs.push(Default::default()); })),
                 ("dropped input", Box::new(|p: &mut Psbt| { p.unsigned_tx.input.pop(); p.inputs.pop(); })),
                 ("no RBF", Box::new(|p: &mut Psbt| p.unsigned_tx.input[0].sequence = bitcoin::Sequence::MAX)),
@@ -333,10 +333,10 @@ mod tests {
         let (b, key) = built(Kind::P2wpkh);
         let v = verify_signed(&b, &psbt_base64(&phone_sign(&b.psbt, &key))).unwrap();
         let mut tx = signed_tx(&v);
-        tx.output[0].value = tx.output[0].value - Amount::from_sat(1);
+        tx.output[0].value -= Amount::from_sat(1);
         assert!(consensus_check(&tx, &b.prevouts()).is_err());
         let mut wrong_amount = b.prevouts();
-        wrong_amount[0].value = wrong_amount[0].value + Amount::from_sat(1);
+        wrong_amount[0].value += Amount::from_sat(1);
         assert!(consensus_check(&signed_tx(&v), &wrong_amount).is_err(), "BIP-143 commits to the amount");
     }
 
