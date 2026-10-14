@@ -223,7 +223,7 @@ final class SwapReview {
 
     /** Step text with lower-case token addresses replaced by their symbol (or EIP-55 address when unknown). */
     static String readable(String step, SwapPlan.TokenNames names) {
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("0x[0-9a-f]{40}").matcher(step);
+        java.util.regex.Matcher m = Addresses.EVM_LOWERCASE.matcher(step);
         StringBuffer out = new StringBuffer();
         while (m.find()) {
             String a = m.group();

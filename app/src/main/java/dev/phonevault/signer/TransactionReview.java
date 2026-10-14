@@ -110,7 +110,7 @@ final class TransactionReview {
             addMaximumFee(rows, r);
             addFeeDetails(details, r);
             details.add(row("Contract data", "None"));
-            String locked = r.transactionTypeLabel() + " · " + r.valueEth() + " to " + shortAddress(r.displayedRecipientLabel())
+            String locked = r.transactionTypeLabel() + " · " + r.valueEth() + " to " + Addresses.shorten(r.displayedRecipientLabel(), 8, 6)
                     + " · " + network + ". Unlock to review every field before anything is signed.";
             List<Party> parties = new ArrayList<>();
             parties.add(new Party(r.to, RecipientHistory.Role.SEND));
@@ -348,10 +348,6 @@ final class TransactionReview {
         details.add(row("Maximum fee per gas", r.maxFeePerGasLabel()));
         details.add(row("Priority fee per gas", r.maxPriorityFeePerGasLabel()));
         details.add(row("Nonce", r.nonce.toString()));
-    }
-
-    static String shortAddress(String address) {
-        return address.length() > 14 ? address.substring(0, 8) + "…" + address.substring(address.length() - 6) : address;
     }
 
     static MessageReview.Row row(String label, String value) { return new MessageReview.Row(label, value); }

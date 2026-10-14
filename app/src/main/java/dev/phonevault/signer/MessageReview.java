@@ -174,7 +174,7 @@ final class MessageReview {
             if (!mine) {
                 rows.add(new Row(DANGER, "The message signs in as " + s.address + ", which is NOT this wallet ("
                         + Keys.toChecksumAddress(signer) + "). Do not sign."));
-            } else if (!Keys.toChecksumAddress(s.address.toLowerCase(Locale.ROOT)).equals(s.address)) {
+            } else if (!Addresses.isChecksummed(s.address)) {
                 rows.add(new Row(WARNING, "The account in the message is not EIP-55 checksummed, as EIP-4361 requires."));
             }
             if (s.statement != null) rows.add(new Row("Statement", s.statement));

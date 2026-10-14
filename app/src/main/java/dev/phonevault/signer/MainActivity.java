@@ -1047,7 +1047,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
         // Whole EVM addresses in groups of four; a card that IS an address is monospace.
         String shown = ReviewStyle.groupEvmIn(value);
-        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK)
+        TextView text = Addresses.isEvm(value) ? VaultTheme.monoText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK)
                 : VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK);
         if (!shown.equals(value)) keepGroupsWhole(text);
         text.setPadding(0, dp(6), 0, 0);

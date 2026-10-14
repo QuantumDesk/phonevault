@@ -81,7 +81,7 @@ final class AddressSafety {
                     : own.containsKey(k) ? "(your " + own.get(k) + " on this phone)"
                     : ke != null && ke.sends > 0 ? "you sent to before" : ke != null ? "you approved before"
                     : "saved in your address book";
-            rows.add(new MessageReview.Row(TransactionReview.DANGER, "Looks like " + LookAlike.shortForm(k)
+            rows.add(new MessageReview.Row(TransactionReview.DANGER, "Looks like " + AddressKeys.shortForm(k)
                     + (kName != null ? " (\"" + kName + "\")" : "") + " " + how + ", but it is a DIFFERENT address ("
                     + LookAlike.differingChunks(k, a) + " of " + LookAlike.chunkCount(k, a) + " chunks differ). This is how address-poisoning scams work: "
                     + "check every character below. Do not sign unless you are sure.", "LOOK-ALIKE ADDRESS"));

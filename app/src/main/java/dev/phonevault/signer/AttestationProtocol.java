@@ -73,7 +73,7 @@ final class AttestationProtocol {
     }
 
     static byte[] addressBytes(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) throw new IllegalArgumentException("address");
+        if (!Addresses.isEvm(address)) throw new IllegalArgumentException("address");
         byte[] out = new byte[20];
         for (int i = 0; i < 20; i++) out[i] = (byte) Integer.parseInt(address.substring(2 + 2 * i, 4 + 2 * i), 16);
         return out;

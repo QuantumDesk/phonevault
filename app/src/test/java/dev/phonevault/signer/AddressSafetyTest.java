@@ -97,7 +97,7 @@ public final class AddressSafetyTest {
         assertTrue(lines[3].endsWith(LookAlike.DIFFERENT_MARK));                                        // chunk 2 differs
         assertEquals("10   " + k.substring(36) + "    " + p.substring(36), lines[11]);
         assertEquals(8, LookAlike.differingChunks(ALICE, POISON));
-        assertEquals("0xABcD…1234".toLowerCase(), LookAlike.shortForm(ALICE).toLowerCase());
+        assertEquals("0xABcD…1234".toLowerCase(), AddressKeys.shortForm(ALICE).toLowerCase());
     }
 
     @Test public void levenshtein() {
@@ -131,7 +131,7 @@ public final class AddressSafetyTest {
         s.record(ME, send(s, ALICE).parties, DAY1);
         TransactionReview r = send(s, POISON);
         String danger = value(r, "DANGER");
-        assertTrue(danger, danger.startsWith("Looks like " + LookAlike.shortForm(ALICE) + " you sent to before, but it is a DIFFERENT address"));
+        assertTrue(danger, danger.startsWith("Looks like " + AddressKeys.shortForm(ALICE) + " you sent to before, but it is a DIFFERENT address"));
         assertEquals(LookAlike.grid(ALICE, POISON), value(r, AddressSafety.COMPARE));
         assertEquals(Keys.toChecksumAddress(ALICE), value(r, "Known address"));
         assertEquals(Keys.toChecksumAddress(POISON), value(r, "This address"));

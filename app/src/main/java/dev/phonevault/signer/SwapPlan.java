@@ -366,7 +366,7 @@ final class SwapPlan {
 
         /** Symbol, or a short address for an unknown token (titles). */
         String symbolOrShort(String asset) {
-            return known(asset) ? symbolOrContract(asset) : LookAlike.shortForm(asset);
+            return known(asset) ? symbolOrContract(asset) : AddressKeys.shortForm(asset);
         }
 
         String amount(String asset, BigInteger raw) {

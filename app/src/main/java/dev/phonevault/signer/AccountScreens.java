@@ -90,7 +90,7 @@ final class AccountScreens {
         SigningAccount active = host.active();
         for (AccountBook.Account a : book.visible()) {
             boolean isActive = active != null && a.index == active.index;
-            host.action(root, (isActive ? "● " : "") + a.name() + " · " + AccountBook.shortAddress(a.address), isActive,
+            host.action(root, (isActive ? "● " : "") + a.name() + " · " + AddressKeys.shortForm(a.address), isActive,
                     () -> showAccount(a.index));
         }
         int next = book.nextIndex();
@@ -147,7 +147,7 @@ final class AccountScreens {
         LinearLayout root = host.page("ACCOUNTS / HIDDEN", "Hidden accounts", "Hidden accounts keep their address. Open one to use it or show it again.");
         for (AccountBook.Account a : host.book().all()) {
             if (!a.hidden) continue;
-            host.action(root, a.name() + " · " + AccountBook.shortAddress(a.address), false, () -> showAccount(a.index));
+            host.action(root, a.name() + " · " + AddressKeys.shortForm(a.address), false, () -> showAccount(a.index));
         }
         host.action(root, "All accounts", false, this::showAccounts);
         host.present(root, "accounts-hidden");

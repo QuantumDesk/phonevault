@@ -93,7 +93,7 @@ final class Erc20Call {
     private static String address(String word, String what) throws JSONException {
         if (!word.startsWith("000000000000000000000000")) throw new JSONException(what + " has non-zero ABI padding");
         String address = "0x" + word.substring(24);
-        if (address.matches("0x0{40}")) throw new JSONException("Zero " + what + " is not allowed");
+        if (Addresses.isZero(address)) throw new JSONException("Zero " + what + " is not allowed");
         return address;
     }
 

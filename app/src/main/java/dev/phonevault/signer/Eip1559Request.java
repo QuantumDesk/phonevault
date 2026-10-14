@@ -117,7 +117,7 @@ final class Eip1559Request {
 
         if (chainId <= 0) throw new JSONException("chainId must be positive");
         if (!supportedChain(chainId)) throw new JSONException("Unsupported network: no reviewed chain profile for " + chainId);
-        if (!to.matches("0x[0-9a-fA-F]{40}")) throw new JSONException("Invalid destination address");
+        if (!Addresses.isEvm(to)) throw new JSONException("Invalid destination address");
         if (nonce.signum() < 0 || priority.signum() < 0 || fee.signum() < 0 || gas.signum() <= 0 || value.signum() < 0) {
             throw new JSONException("Transaction quantities must not be negative");
         }
@@ -177,10 +177,10 @@ final class Eip1559Request {
     static String optionalFrom(JSONObject json) throws JSONException {
         if (!json.has("from")) return null;
         Object value = json.get("from");
-        if (!(value instanceof String) || !((String) value).matches("0x[0-9a-fA-F]{40}")) {
+        if (!(value instanceof String) || !Addresses.isEvm((String) value)) {
             throw new JSONException("from must be a 0x address with 40 hex characters");
         }
-        return ((String) value).toLowerCase(java.util.Locale.ROOT);
+        return Addresses.lowercase((String) value);
     }
 
     static String validatedId(String id) throws JSONException {
@@ -228,7 +228,7 @@ final class Eip1559Request {
 
     private static String normalizeAddress(String address) throws JSONException {
         String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase(java.util.Locale.ROOT);
-        if (normalized.matches("0x0{40}")) throw new JSONException("Zero destination address is not allowed");
+        if (Addresses.isZero(normalized)) throw new JSONException("Zero destination address is not allowed");
         return normalized;
     }
 

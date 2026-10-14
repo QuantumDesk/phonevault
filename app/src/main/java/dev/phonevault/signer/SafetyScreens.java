@@ -58,7 +58,7 @@ final class SafetyScreens {
             host.card(root, "No contacts yet", "After a transfer is signed, the receipt offers \"Save as contact\" for the recipient.");
         }
         for (AddressBook.Contact c : contacts) {
-            host.action(root, c.name + " · " + LookAlike.shortForm(c.address) + AddressKeys.networkSuffix(c.address), false, () -> showContact(c.address));
+            host.action(root, c.name + " · " + AddressKeys.shortForm(c.address) + AddressKeys.networkSuffix(c.address), false, () -> showContact(c.address));
         }
         host.action(root, "Back to menu", true, host::showMenu);
         host.present(root, "address-book");
@@ -107,7 +107,7 @@ final class SafetyScreens {
         for (TransactionReview.Party p : parties) {
             if (book.name(p.address) != null || shown >= 3) continue;
             String label = (p.role == RecipientHistory.Role.SEND ? "Save recipient " : "Save spender ")
-                    + LookAlike.shortForm(p.address) + " as contact";
+                    + AddressKeys.shortForm(p.address) + " as contact";
             host.action(root, label, false, () -> startNameEntry(p.address, "", host::showHome));
             shown++;
         }

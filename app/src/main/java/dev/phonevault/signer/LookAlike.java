@@ -23,7 +23,7 @@ final class LookAlike {
 
     static boolean similar(String a, String b) {
         if (AddressKeys.isBtc(a) || AddressKeys.isBtc(b)) return btcSimilar(a, b);
-        if (!isEvm(a) || !isEvm(b)) return false;
+        if (!Addresses.isEvm(a) || !Addresses.isEvm(b)) return false;
         String x = hex(a), y = hex(b);
         if (x.equals(y)) return false;
         int pre = 0;
@@ -75,10 +75,6 @@ final class LookAlike {
         return Math.max(chunks(AddressKeys.address(a)).length, chunks(AddressKeys.address(b)).length);
     }
 
-    /** 0xAbCd…1234 in checksum casing (bc1qcr8t…306fyu for Bitcoin). */
-    static String shortForm(String address) { return AddressKeys.shortForm(address); }
-
-    private static boolean isEvm(String a) { return a != null && a.matches("0x[0-9a-fA-F]{40}"); }
 
     // ------------------------------------------------------------------ Bitcoin
 
@@ -129,8 +125,8 @@ final class LookAlike {
     }
 
     private static String hex(String address) {
-        if (address == null || !address.matches("0x[0-9a-fA-F]{40}")) throw new IllegalArgumentException("not an address");
-        return address.substring(2).toLowerCase(Locale.ROOT);
+        if (!Addresses.isEvm(address)) throw new IllegalArgumentException("not an address");
+        return Addresses.lowercase(address).substring(2);
     }
 
     static int levenshtein(String a, String b) {
