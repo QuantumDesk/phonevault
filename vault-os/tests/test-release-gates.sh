@@ -5,14 +5,15 @@
 #     *.rel-bak/*.b38-bak copies);
 #   - verify-rollback-index.sh: project-owned AVB rollback index, strictly increasing over the
 #     previous signed release manifest;
-#   - dev-ladder/check-overrides.sh release: no overridden module left in the target-files.
+#   - verify-release-overrides.sh: no overridden module left in the target-files, and the
+#     release overrides list is never empty (an unparsed list proves nothing).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 VAULT="${ROOT}/vault-os"
 SOURCE_GATE="${VAULT}/scripts/verify-release-source.sh"
 ROLLBACK_GATE="${VAULT}/scripts/verify-rollback-index.sh"
-OVERRIDES_GATE="${VAULT}/dev-ladder/check-overrides.sh"
+OVERRIDES_GATE="${VAULT}/scripts/verify-release-overrides.sh"
 work_dir="$(mktemp -d -t phone-vault-release-gates.XXXXXX)"
 trap 'rm -rf -- "${work_dir}"' EXIT
 
@@ -225,11 +226,11 @@ printf 'x' > "${tf}/SYSTEM/app/PhoneVault/PhoneVault.apk"
 printf 'x' > "${tf}/SYSTEM/priv-app/Settings/Settings.apk"
 printf 'x' > "${tf}/PRODUCT/app/LatinIME/LatinIME.apk"
 (cd "${tf}" && zip -qr "${work_dir}/tf-clean.zip" .)
-"${OVERRIDES_GATE}" release "${work_dir}/tf-clean.zip" > /dev/null
+"${OVERRIDES_GATE}" "${work_dir}/tf-clean.zip" > /dev/null
 mkdir -p "${tf}/SYSTEM_EXT/priv-app/TrebuchetQuickStep" "${tf}/PRODUCT/overlay/IconPackKaiLauncher"
 printf 'x' > "${tf}/SYSTEM_EXT/priv-app/TrebuchetQuickStep/TrebuchetQuickStep.apk"
 (cd "${tf}" && zip -qr "${work_dir}/tf-launcher.zip" .)
-if "${OVERRIDES_GATE}" release "${work_dir}/tf-launcher.zip" > "${work_dir}/tf-launcher.out" 2>&1; then
+if "${OVERRIDES_GATE}" "${work_dir}/tf-launcher.zip" > "${work_dir}/tf-launcher.out" 2>&1; then
   echo "release overrides gate passed with a packaged launcher" >&2
   exit 1
 fi
@@ -238,9 +239,46 @@ grep -Fq 'TrebuchetQuickStep: SYSTEM_EXT/priv-app/TrebuchetQuickStep/TrebuchetQu
 rm -rf "${tf}/SYSTEM_EXT"
 printf 'x' > "${tf}/PRODUCT/overlay/IconPackKaiLauncher/IconPackKaiLauncherOverlay.apk"
 (cd "${tf}" && zip -qr "${work_dir}/tf-overlay.zip" .)
-if "${OVERRIDES_GATE}" release "${work_dir}/tf-overlay.zip" > "${work_dir}/tf-overlay.out" 2>&1; then
+if "${OVERRIDES_GATE}" "${work_dir}/tf-overlay.zip" > "${work_dir}/tf-overlay.out" 2>&1; then
   echo "release overrides gate passed with a packaged icon-pack overlay" >&2
   exit 1
 fi
 grep -Fq 'IconPackKaiLauncherOverlay' "${work_dir}/tf-overlay.out"
+# The dev-ladder entry point runs the same release gate.
+if "${VAULT}/dev-ladder/check-overrides.sh" release "${work_dir}/tf-overlay.zip" > /dev/null 2>&1; then
+  echo "check-overrides.sh release passed with a packaged icon-pack overlay" >&2
+  exit 1
+fi
+# The target-files archive is a required argument.
+if "${OVERRIDES_GATE}" > /dev/null 2>&1; then
+  echo "release overrides gate ran without a target-files archive" >&2
+  exit 1
+fi
+# Release lists in another repository root (the gate's optional second argument).
+release_bp() {  # NAME ANDROID_BP_CONTENT
+  mkdir -p "${work_dir}/$1/vault-os/vendor/phonevault/prebuilt"
+  printf '%s\n' "$2" > "${work_dir}/$1/vault-os/vendor/phonevault/prebuilt/Android.bp"
+}
+# Names on the same line as `overrides: [` count (they were once silently dropped).
+release_bp same-line 'android_app_import {
+    name: "PhoneVault",
+    overrides: ["TrebuchetQuickStep", "Launcher3QuickStep",
+        "Gallery2"],
+}'
+if "${OVERRIDES_GATE}" "${work_dir}/tf-launcher.zip" "${work_dir}/same-line" \
+    > "${work_dir}/same-line.out" 2>&1; then
+  echo "release overrides gate dropped a name on the overrides: [ line" >&2
+  exit 1
+fi
+grep -Fq 'TrebuchetQuickStep: SYSTEM_EXT/priv-app/TrebuchetQuickStep/TrebuchetQuickStep.apk' \
+  "${work_dir}/same-line.out"
+"${OVERRIDES_GATE}" "${work_dir}/tf-clean.zip" "${work_dir}/same-line" > /dev/null
+# A release list with no active entry (all commented out) fails instead of passing vacuously.
+release_bp empty-list 'android_app_import {
+    name: "PhoneVault",
+    // overrides: ["TrebuchetQuickStep"],
+    /* overrides: ["Launcher3QuickStep"], */
+}'
+expect_failure empty-list 'no active overrides' \
+  "${OVERRIDES_GATE}" "${work_dir}/tf-clean.zip" "${work_dir}/empty-list"
 echo "Release overrides gate positive and negative fixtures passed."

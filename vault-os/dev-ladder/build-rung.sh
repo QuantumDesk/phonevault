@@ -11,6 +11,7 @@ TREE="${LINEAGE_TREE:?set LINEAGE_TREE to the LineageOS 22.2 crosshatch source t
 # NOTE: lunch exports OUT and OUT_DIR itself — never reuse those names here.
 PV_OTA_DIR="${PV_OUT_DIR:-${HOME}}"   # the tree owner's home: this script must run as the tree owner
 PV_OTA="${PV_OTA_DIR}/rung-${RUNG}-ota.zip"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${TREE}" || exit 9
 export LC_ALL=C
 # shellcheck disable=SC1091
@@ -29,8 +30,8 @@ echo "=== RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} variant=${T
 # rung; the APK is still there until soong_ui's cleaner runs). If an overridden module really is
 # still installed, ninja simply re-creates it and check-overrides.sh fails as it should.
 PV_PRODUCT_OUT="out/target/product/crosshatch"
-mapfile -t PV_OVERRIDES < <(awk '/^[[:space:]]*\/\//{next} /overrides:[[:space:]]*\[/{f=1;next}
-  f && /^[[:space:]]*\]/{f=0} f' vendor/phonevault/prebuilt/Android.bp | grep -o '"[^"]*"' | tr -d '"')
+mapfile -t PV_OVERRIDES < <(python3 "${SCRIPT_DIR}/../scripts/vaultgate.py" overrides list \
+  vendor/phonevault/prebuilt/Android.bp)
 for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-app}/*/; do
   [[ -d "${d}" ]] || continue
   name="$(basename "${d}")"

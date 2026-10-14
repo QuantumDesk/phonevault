@@ -382,7 +382,7 @@ for required_release_evidence in \
     '"${OUTPUT_DIR}" "${SOURCE}/external/avb/avbtool.py"' \
     "printf 'public_key_inventory_sha256=%s\\n'" \
     '"${SCRIPT_DIR}/verify-release-source.sh" "${PROJECT}"' \
-    '"${PROJECT}/vault-os/dev-ladder/check-overrides.sh" release "${INPUT_TARGET_FILES}"' \
+    '"${SCRIPT_DIR}/verify-release-overrides.sh" "${INPUT_TARGET_FILES}" "${PROJECT}"' \
     '"${SCRIPT_DIR}/verify-rollback-index.sh" "${candidate_rollback_index}"' \
     '[[ "${rollback_index}" == "${candidate_rollback_index}" ]]'; do
   grep -Fq -- "${required_release_evidence}" "${release_script}" || {

@@ -18,34 +18,24 @@ A="${ADB:-adb}"; FB="${FASTBOOT:-fastboot}"
 SERIAL="${PV_SERIAL:-${ANDROID_SERIAL:-}}"
 [[ -n "$SERIAL" ]] || { echo "set PV_SERIAL (or ANDROID_SERIAL) to the development phone's serial (adb devices / fastboot devices)" >&2; exit 2; }
 SIDELOAD_LOG="${TMPDIR:-/tmp}/rung-${RUNG}-sideload.log"
-log(){ echo "[$(date +%H:%M:%S)] $*"; }
-# Exactly one phone may be attached: every adb/fastboot call below is pinned to "$SERIAL", and a
-# second phone on the bus is refused outright, so a flash or erase can never land on the wrong
-# device (e.g. the owner's real wallet plugged in for charging).
-only_device_guard() {
-  local seen others
-  seen="$({ "$A" devices 2>/dev/null | awk 'NR>1 && NF>=2 {print $1}'; "$FB" devices 2>/dev/null | awk 'NF>=2 {print $1}'; } | sort -u)"
-  others="$(grep -vxF -- "$SERIAL" <<<"$seen" | grep -v '^$' || true)"
-  if [[ -n "$others" ]]; then
-    log "refusing: other device(s) attached ($(tr '\n' ' ' <<<"$others")); unplug them — this script only touches $SERIAL"
-    exit 1
-  fi
-}
+# log, only_device_guard (exactly one phone attached), adb_state, wait_for_fastboot,
+# erase_userdata_metadata (throwaway only), wait_for_boot.
+# shellcheck source=vault-os/dev-ladder/device-guard.sh
+source "$(dirname "$0")/device-guard.sh"
 only_device_guard
 if [[ $WIPE -eq 1 && "${PV_THROWAWAY_DEVICE:-}" != "1" ]]; then
   log "refusing --wipe: set PV_THROWAWAY_DEVICE=1 only for the dev phone $SERIAL whose wallet holds nothing"
   exit 1
 fi
-state(){ "$A" devices 2>/dev/null | grep "$SERIAL" | awk '{print $2}'; }
 [[ -s "$OTA" ]] || { log "OTA missing: $OTA"; exit 1; }
 log "rung $RUNG OTA $(stat -c%s "$OTA") bytes sha256 $(sha256sum "$OTA" | cut -c1-16)…  wipe=$WIPE"
-[[ "$(state)" == "device" ]] || { log "phone not on adb (state=[$(state)])"; exit 1; }
+[[ "$(adb_state)" == "device" ]] || { log "phone not on adb (state=[$(adb_state)])"; exit 1; }
 log "fingerprint before: $("$A" -s "$SERIAL" shell getprop ro.build.date | tr -d '\r')"
 "$A" -s "$SERIAL" reboot sideload
 rc=1
 for attempt in 1 2 3; do
-  end=$((SECONDS+180)); while [[ $SECONDS -lt $end && "$(state)" != "sideload" ]]; do sleep 3; done
-  [[ "$(state)" == "sideload" ]] || { log "attempt $attempt: no sideload mode (st=[$(state)])"; continue; }
+  end=$((SECONDS+180)); while [[ $SECONDS -lt $end && "$(adb_state)" != "sideload" ]]; do sleep 3; done
+  [[ "$(adb_state)" == "sideload" ]] || { log "attempt $attempt: no sideload mode (st=[$(adb_state)])"; continue; }
   log "attempt $attempt: sideloading (tap 'Install anyway' on the phone when it pauses near 47%)"
   # Long timeout: the transfer finishes in minutes but the recovery waits at ~47% for the
   # physical "Install anyway" tap (unsigned OTA). A short timeout just wastes the session; give
@@ -59,23 +49,14 @@ sleep 3
 if [[ $WIPE -eq 1 ]]; then
   log "WIPE: rebooting to bootloader to erase userdata + metadata (first-boot provisioning test)"
   timeout 15 "$A" -s "$SERIAL" reboot bootloader || true
-  end=$((SECONDS+120)); while [[ $SECONDS -lt $end ]] && ! "$FB" devices | grep -q "$SERIAL"; do sleep 3; done
-  "$FB" devices | grep -q "$SERIAL" || { log "phone did not reach fastboot"; exit 1; }
-  only_device_guard; "$FB" -s "$SERIAL" erase userdata && "$FB" -s "$SERIAL" erase metadata || { log "erase failed"; exit 1; }
+  wait_for_fastboot 120 || { log "phone did not reach fastboot"; exit 1; }
+  erase_userdata_metadata
   "$FB" -s "$SERIAL" reboot
 else
   timeout 15 "$A" -s "$SERIAL" reboot || log "reboot refused; tap Reboot on the phone"
 fi
 log "boot-watch (15 min)"
-end=$((SECONDS+900)); booted=0
-while [[ $SECONDS -lt $end ]]; do
-  if [[ "$(state)" == "device" ]]; then
-    bc=$(timeout 6 "$A" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-    [[ "$bc" == "1" ]] && { booted=1; break; }
-  fi
-  sleep 5
-done
-[[ $booted -eq 1 ]] || { log "did not boot within 15 min (adb state=[$(state)], usb=[$(lsusb 2>/dev/null | grep -iE "google|18d1" | sed "s/.*ID //" | tr "\n" " ")]) — an empty usb field means the phone is OFF THE CABLE, not necessarily hung"; exit 1; }
+wait_for_boot 900 || { log "did not boot within 15 min (adb state=[$(adb_state)], usb=[$(lsusb 2>/dev/null | grep -iE "google|18d1" | sed "s/.*ID //" | tr "\n" " ")]) — an empty usb field means the phone is OFF THE CABLE, not necessarily hung"; exit 1; }
 sleep 22  # never `adb root` here (see tools/dev-device/lib.sh): every check below works as shell
 log "*** BOOTED rung $RUNG: $("$A" -s "$SERIAL" shell getprop ro.build.date | tr -d '\r') ***"
 echo "--- owner / provisioning ---"

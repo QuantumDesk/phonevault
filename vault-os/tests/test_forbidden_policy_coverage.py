@@ -42,17 +42,15 @@ DIAGNOSTICS_PATCH = (
 DEVICE_AUDIT = ROOT / "scripts/audit-development-device.sh"
 PRODUCT_CONFIG = ROOT / "vendor/phonevault/config/common.mk"
 
-blueprint = BLUEPRINT.read_text(encoding="utf-8")
 # Comments may quote module names or brackets (`required: ["TrebuchetQuickStep"]`); only
-# active entries count, exactly as Soong, build-rung.sh and check-overrides.sh read them.
-blueprint_code = "\n".join(
-    line for line in blueprint.splitlines() if not line.strip().startswith("//")
-)
-overrides_block = re.search(r"overrides:\s*\[(.*?)\]", blueprint_code, re.DOTALL)
-if overrides_block is None:
-    raise SystemExit("PhoneVault overrides list was not found")
+# active entries count, read by the same parser as build-rung.sh and the release gate
+# (scripts/vaultgates/overrides.py).
+sys.path.insert(0, str(ROOT / "scripts"))
+from vaultgates.overrides import read_overrides  # noqa: E402
 
-overrides = re.findall(r'"([^"]+)"', overrides_block.group(1))
+overrides = read_overrides(BLUEPRINT)
+if not overrides:
+    raise SystemExit("PhoneVault overrides list was not found")
 if len(overrides) != len(set(overrides)):
     raise SystemExit("PhoneVault overrides list has duplicate entries")
 
