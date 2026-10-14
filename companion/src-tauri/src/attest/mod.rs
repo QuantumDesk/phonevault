@@ -204,12 +204,11 @@ fn cached() -> Option<Report> {
 
 /// Ask the phone on USB for a fresh attestation and verify it.
 pub fn run() -> Result<Report, String> {
-    let allow_dev = devmode::enabled();
     // Queue behind any other request on the phone (re-entrant when a send already holds the turn).
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     if RUNNING.swap(true, Ordering::SeqCst) { return Err("a device check is already running".into()); }
     let _guard = RunGuard;
-    let epoch = STATE.lock().map_err(|_| "state poisoned")?.epoch;
+    let (epoch, allow_dev) = epoch_then_dev_mode(devmode::enabled)?;
     let mut challenge = [0u8; CHALLENGE_BYTES];
     ring::rand::SystemRandom::new().fill(&mut challenge).map_err(|_| "no randomness for the challenge")?;
     let req = request(&uuid::Uuid::new_v4().to_string(), &challenge);
@@ -219,6 +218,15 @@ pub fn run() -> Result<Report, String> {
         if s.epoch == epoch { s.cached = Some(Cached { report: report.clone(), at: Instant::now(), epoch }); }
     }
     Ok(report)
+}
+
+/// The cache epoch, THEN the Developer-mode setting, in that order. `set_developer_mode` writes the
+/// setting and then bumps the epoch, so a check that read the old setting also read the old epoch
+/// and its verdict is not cached; reading the setting first (as before) let a check that started
+/// with Developer mode on cache a DEVELOPMENT verdict after the user had turned it off.
+fn epoch_then_dev_mode(dev_mode: impl FnOnce() -> bool) -> Result<(u64, bool), String> {
+    let epoch = STATE.lock().map_err(|_| "state poisoned")?.epoch;
+    Ok((epoch, dev_mode()))
 }
 
 fn blocked(r: &Report) -> String { format!("attestation: {}", r.summary()) }

@@ -16,13 +16,22 @@ pub const DEFAULT_RPC: &str = "https://ethereum-rpc.publicnode.com";
 /// The most this reads of one node answer (a full block with its transactions fits easily).
 pub const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
 
-/// Read a body, refusing one longer than `max` bytes instead of buffering all of it.
+/// Read a body, refusing one longer than `max` bytes instead of buffering all of it. A read error
+/// is described by its kind only: an HTTP client's error text can carry the request URL.
 pub fn read_capped(r: impl std::io::Read, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut bytes = Vec::new();
-    r.take(max + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    r.take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| format!("the answer could not be read ({:?})", e.kind()))?;
     if bytes.len() as u64 > max { return Err(format!("the answer is larger than {} bytes, refused", max)); }
     Ok(bytes)
+}
+
+/// Why a request to a node failed, WITHOUT the node URL: node URLs routinely carry the user's
+/// provider API key (Infura/Alchemy/QuickNode paths), and these messages reach the UI, connected
+/// sites (bridge.rs) and WalletConnect dApps (wc.rs). reqwest's own Display includes the URL.
+pub fn transport_error(e: &reqwest::Error) -> String {
+    let what = if e.is_timeout() { "timed out" } else if e.is_connect() { "could not connect" } else if e.is_redirect() { "redirect refused" } else { "request failed" };
+    format!("node unreachable: {what}")
 }
 
 /// HTTP client for nodes: bounded time, and no redirects (the node is the URL the user set, not
@@ -42,7 +51,7 @@ impl Rpc {
     /// `Err` when the node cannot be reached, answers too much, or does not answer JSON.
     fn post(&self, method: &str, params: Value) -> Result<Value, EthError> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(format!("node unreachable: {e}")))?;
+        let http = self.client.post(&self.url).json(&body).send().map_err(|e| err(transport_error(&e)))?;
         let code = http.status();
         let bytes = read_capped(http, MAX_RESPONSE).map_err(|e| err(format!("node answer to {method}: {e}")))?;
         // Public nodes answer refusals (rate limits, "archive requests need a token") with an HTTP
@@ -202,6 +211,17 @@ mod tests {
         assert_eq!(read_capped(&b"{}"[..], 2).unwrap(), b"{}");
         assert!(read_capped(&b"{} "[..], 2).is_err());
         assert!(read_capped(std::io::repeat(b' '), 1024).is_err(), "an endless body stops at the cap");
+    }
+
+    /// Security-audit regression (2026-10-13): a failed request's error text used to be reqwest's
+    /// Display, which includes the node URL (and so the user's provider API key); it reaches the
+    /// UI and, through wc.rs, WalletConnect dApps.
+    #[test]
+    fn node_errors_never_contain_the_node_url() {
+        let rpc = Rpc::new("https://127.0.0.1:9/v3/SECRET-API-KEY-1234").unwrap();
+        let e = rpc.chain_id().unwrap_err().0;
+        assert!(e.starts_with("node unreachable"), "{e}");
+        assert!(!e.contains("SECRET") && !e.contains("127.0.0.1"), "{e}");
     }
 
     /// One-shot local HTTP server answering every request with `reply`.

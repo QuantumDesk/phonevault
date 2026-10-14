@@ -14,6 +14,9 @@
 //!
 //! Everything comes from the user's own nodes (Settings → Node). No explorer, no third party.
 
+// Everything here parses node answers (untrusted): no unchecked indexing or slicing.
+#![deny(clippy::indexing_slicing)]
+
 use crate::{eth, history, pairing, price, tokens, verify, CmdResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -167,17 +170,34 @@ pub fn search_logs(rpc: &eth::Rpc, from: u128, to: u128, address: Option<Value>,
     (logs, covered, incomplete.then(|| "searched as far back as the node allows".to_string()))
 }
 
+/// The 64 hex digits of a 32-byte log word written as `0x` + 64 hex; None for anything else.
+fn word_hex(w: &str) -> Option<&str> { w.strip_prefix("0x").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit())) }
+
+/// The address in an address topic (12 zero bytes, then 20 bytes), lowercase; None for anything else.
+pub fn address_of_topic(topic: &str) -> Option<String> {
+    let h = word_hex(topic)?;
+    let (pad, addr) = (h.get(..24)?, h.get(24..)?);
+    pad.bytes().all(|b| b == b'0').then(|| format!("0x{}", addr.to_ascii_lowercase()))
+}
+
+/// `0x` + 40 hex (any case).
+pub fn is_address(a: &str) -> bool { a.len() == 42 && a.starts_with("0x") && a.bytes().skip(2).all(|b| b.is_ascii_hexdigit()) }
+
 /// An ERC-20 Transfer log to `owner`: (contract, from, amount). None for anything else (ERC-721
-/// has a fourth topic; zero amounts are address-poisoning noise).
+/// has a fourth topic; zero amounts are address-poisoning noise). The node's answer is untrusted:
+/// every topic, the data word and the emitting address are checked for shape before use.
 fn parse_erc20_in(log: &Value, owner_topic: &str) -> Option<(String, String, u128)> {
     if log.get("removed").and_then(Value::as_bool) == Some(true) { return None; }
-    let topics = log.get("topics")?.as_array()?;
-    if topics.len() != 3 || topics[0].as_str()? != TRANSFER_TOPIC || !topics[2].as_str()?.eq_ignore_ascii_case(owner_topic) { return None; }
-    let data = log.get("data")?.as_str()?.trim_start_matches("0x");
-    if data.len() != 64 || !data[..32].bytes().all(|b| b == b'0') { return None; }
-    let amount = u128::from_str_radix(&data[32..], 16).ok().filter(|a| *a > 0)?;
-    let from = format!("0x{}", &topics[1].as_str()?.trim_start_matches("0x")[24..]);
-    Some((log.get("address")?.as_str()?.to_ascii_lowercase(), from, amount))
+    let topics: Vec<&str> = log.get("topics")?.as_array()?.iter().map(Value::as_str).collect::<Option<_>>()?;
+    let [t0, t1, t2] = topics.as_slice() else { return None };
+    if *t0 != TRANSFER_TOPIC || !t2.eq_ignore_ascii_case(owner_topic) { return None; }
+    let data = word_hex(log.get("data")?.as_str()?)?;
+    let (high, low) = (data.get(..32)?, data.get(32..)?);
+    if !high.bytes().all(|b| b == b'0') { return None; }
+    let amount = u128::from_str_radix(low, 16).ok().filter(|a| *a > 0)?;
+    let from = address_of_topic(t1)?;
+    let contract = log.get("address")?.as_str().filter(|a| is_address(a))?;
+    Some((contract.to_ascii_lowercase(), from, amount))
 }
 
 // ---------------------------------------------------------------- one pass over one network
@@ -287,7 +307,7 @@ fn describe(e: &history::Entry) -> String {
     let net = network(e.chain_id as u64);
     let (name, symbol) = net.map(|n| (n.1, n.2)).unwrap_or(("this network", "ETH"));
     let what = match (&e.token_symbol, &e.token_amount) { (Some(s), Some(a)) => format!("{a} {s}"), _ => format!("{} {symbol}", e.amount_eth) };
-    match &e.counterparty { Some(from) => format!("Received {what} on {name} from {}…{}.", &from[..6], &from[from.len() - 4..]), None => format!("Received {what} on {name}.") }
+    match &e.counterparty { Some(from) => format!("Received {what} on {name} from {}.", verify::short_address(from)), None => format!("Received {what} on {name}.") }
 }
 
 pub static WAKE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -328,6 +348,7 @@ pub fn start(app: AppHandle) {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     const ME: &str = "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3";
@@ -409,21 +430,45 @@ mod tests {
     }
 }
 
-/// Security-audit proof (2026-10-13): the background watcher parses eth_getLogs answers from the
-/// configured node. `parse_erc20_in` slices `topics[1]` at byte 24 without checking its length,
-/// so a node answering a Transfer log with a short (or non-ASCII) sender topic panics the
-/// "watcher" thread; with panic=abort (release) the whole app dies on every poll.
+/// Security-audit regression (2026-10-13): the background watcher parses eth_getLogs answers from
+/// the configured node. `parse_erc20_in` used to slice `topics[1]` at byte 24 without checking its
+/// length, so a node answering a Transfer log with a short (or non-ASCII) sender topic panicked
+/// the "watcher" thread (with panic=abort, the whole app on every poll). Malformed logs are now
+/// ignored, and a malformed counterparty never panics the notification text.
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod audit_proof {
     use super::*;
     #[test]
-    fn proof_malicious_node_log_panics_the_watcher() {
+    fn malicious_node_logs_are_ignored_not_fatal() {
         let me = topic_address("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3");
         let data = format!("0x{:064x}", 5u8);
-        for sender in ["0x1234", "0xaéééééééééééé"] {
-            let log = json!({"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "topics": [TRANSFER_TOPIC, sender, me], "data": data});
-            let r = std::panic::catch_unwind(|| parse_erc20_in(&log, &me));
-            assert!(r.is_err(), "sender topic {sender:?} should panic");
+        let good_sender = topic_address("0x1111111111111111111111111111111111111111");
+        let usdc = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+        let log = |address: &str, sender: &str, data: &str| json!({"address": address, "topics": [TRANSFER_TOPIC, sender, me], "data": data});
+        let non_ascii_word = format!("0x{}é{}", "0".repeat(31), "0".repeat(31));
+        let cases = [
+            log(usdc, "0x1234", &data),
+            log(usdc, "0xaéééééééééééé", &data),
+            log(usdc, &format!("0x{}", "g".repeat(64)), &data),
+            log(usdc, &format!("{:0>66}", "1"), &data), // 66 chars, no 0x
+            log(usdc, &good_sender, &non_ascii_word),
+            log(usdc, &good_sender, &format!("0x{}", "z".repeat(64))),
+            log("0x1", &good_sender, &data),
+            log(&format!("0x{}", "a".repeat(80)), &good_sender, &data),
+            json!({"address": usdc, "topics": [TRANSFER_TOPIC, good_sender, me, 5], "data": data}),
+            json!({"address": usdc, "topics": [TRANSFER_TOPIC, 7, me], "data": data}),
+        ];
+        for l in &cases {
+            let r = std::panic::catch_unwind(|| parse_erc20_in(l, &me));
+            assert!(matches!(r, Ok(None)), "malformed log must be ignored without a panic: {l}");
         }
+        // the well-formed log still parses
+        assert_eq!(parse_erc20_in(&log(usdc, &good_sender, &data), &me), Some((usdc.to_string(), "0x1111111111111111111111111111111111111111".to_string(), 5)));
+        // the notification's shortened counterparty does not panic on odd text either
+        for from in ["0x1", "", "éééééééééééé", "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3"] {
+            assert!(std::panic::catch_unwind(|| verify::short_address(from)).is_ok(), "{from:?}");
+        }
+        assert_eq!(verify::short_address("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3"), "0x7A3B…b2C3");
     }
 }

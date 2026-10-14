@@ -21,7 +21,7 @@
 //!   checks as WalletConnect, plus read-only node calls forwarded to the user's node for that network;
 //! * native host manifests ("Install browser connection"), pinned to the extension ID.
 
-use crate::{pairing, verify, wc};
+use crate::{eth, pairing, verify, wc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -57,6 +57,13 @@ pub const MAX_PENDING_TOTAL: usize = 16;
 /// rejection up to the maximum; an approved connection resets it.
 pub const CONNECT_BACKOFF_START: Duration = Duration::from_secs(30);
 pub const CONNECT_BACKOFF_MAX: Duration = Duration::from_secs(600);
+/// A connection request the site withdraws itself before the user answers (the extension sends
+/// "cancel" when the tab reloads or navigates) counts towards the same backoff, starting shorter:
+/// otherwise a page that reloads in a loop could raise the window and notify without limit.
+pub const CONNECT_WITHDRAWN_BACKOFF_START: Duration = Duration::from_secs(10);
+/// A waiting request brings the window forward and posts a notification (Alert::Queued) at most
+/// this often per registrable domain, until the user answers one of that domain's requests.
+pub const QUEUED_ALERT_EVERY: Duration = Duration::from_secs(30);
 /// A refused sign-in for another site is shown in the app at most this often per site.
 const BLOCKED_NOTICE_EVERY: Duration = Duration::from_secs(10);
 /// The extension popup's "Open Phone Vault Companion" brings the window forward at most this often.
@@ -181,15 +188,21 @@ pub fn registrable_domain(origin: &str) -> String {
     labels[labels.len().saturating_sub(keep)..].join(".")
 }
 
-/// Connection backoff for one registrable domain after the user rejected a connection.
+/// Connection backoff for one registrable domain after the user rejected a connection (or the
+/// site withdrew one before the user answered).
 #[derive(Clone, Copy, Debug)]
-pub struct Backoff { pub until: Instant, pub next: Duration }
+pub struct Backoff { pub until: Instant, pub next: Duration, pub withdrawn: bool }
 
 impl Backoff {
     /// The user rejected a connection: blocked for the current penalty, doubled for next time.
     pub fn after_rejection(previous: Option<Backoff>, now: Instant) -> Backoff {
-        let penalty = previous.map(|b| b.next).unwrap_or(CONNECT_BACKOFF_START);
-        Backoff { until: now + penalty, next: (penalty * 2).min(CONNECT_BACKOFF_MAX) }
+        let penalty = previous.map(|b| b.next).unwrap_or(CONNECT_BACKOFF_START).max(CONNECT_BACKOFF_START);
+        Backoff { until: now + penalty, next: (penalty * 2).min(CONNECT_BACKOFF_MAX), withdrawn: false }
+    }
+    /// The site withdrew its own waiting connection request: the same doubling, from a shorter start.
+    pub fn after_withdrawal(previous: Option<Backoff>, now: Instant) -> Backoff {
+        let penalty = previous.map(|b| b.next).unwrap_or(CONNECT_WITHDRAWN_BACKOFF_START);
+        Backoff { until: now + penalty, next: (penalty * 2).min(CONNECT_BACKOFF_MAX), withdrawn: true }
     }
     /// Time left, if still blocked.
     pub fn remaining(&self, now: Instant) -> Option<Duration> { (self.until > now).then(|| self.until - now) }
@@ -363,6 +376,8 @@ struct Inner {
     backoff: HashMap<String, Backoff>,
     /// origin → when a refused sign-in was last shown in the app
     blocked_shown: HashMap<String, Instant>,
+    /// registrable domain → when a waiting request last raised the window and notified
+    queued_alerted: HashMap<String, Instant>,
     last_show_window: Option<Instant>,
 }
 
@@ -462,7 +477,22 @@ impl Bridge {
             }
             Some("cancel") => {
                 let Some(ext_id) = msg.get("id").and_then(Value::as_u64) else { return };
-                let removed = { let mut g = self.lock(); let n = g.pending.len(); g.pending.retain(|p| !(p.conn == conn && p.ext_id == ext_id)); n != g.pending.len() };
+                let removed = {
+                    let mut g = self.lock();
+                    let gone: Vec<Pending> = g.pending.iter().filter(|p| p.conn == conn && p.ext_id == ext_id).cloned().collect();
+                    g.pending.retain(|p| !(p.conn == conn && p.ext_id == ext_id));
+                    // A connection request withdrawn before the user answered (tab reload) counts
+                    // towards the domain's connection backoff, so a reload loop cannot keep
+                    // re-queueing it.
+                    let now = Instant::now();
+                    for p in gone.iter().filter(|p| p.kind == PendingKind::Connect) {
+                        let domain = registrable_domain(&p.origin);
+                        let next = Backoff::after_withdrawal(g.backoff.get(&domain).copied(), now);
+                        g.backoff.insert(domain, next);
+                    }
+                    if g.backoff.len() > MAX_SITES { g.backoff.retain(|_, b| b.remaining(now).is_some()); }
+                    !gone.is_empty()
+                };
                 if removed { (self.notify)(); }
             }
             Some("site_status") => {
@@ -534,10 +564,14 @@ impl Bridge {
                 let mut g = self.lock();
                 if kind == PendingKind::Connect {
                     let now = Instant::now();
-                    if let Some(left) = g.backoff.get(&domain).and_then(|b| b.remaining(now)) {
+                    if let Some((left, withdrawn)) = g.backoff.get(&domain).and_then(|b| Some((b.remaining(now)?, b.withdrawn))) {
                         drop(g);
-                        return self.reply_err(conn, ext_id, rpc(USER_REJECTED, format!(
-                            "You rejected a connection from {domain} in Phone Vault. Try again in {} s.", left.as_secs().max(1))));
+                        let secs = left.as_secs().max(1);
+                        return self.reply_err(conn, ext_id, rpc(USER_REJECTED, if withdrawn {
+                            format!("A connection request from {domain} was withdrawn before you answered it in Phone Vault. Try again in {secs} s.")
+                        } else {
+                            format!("You rejected a connection from {domain} in Phone Vault. Try again in {secs} s.")
+                        }));
                     }
                 }
                 if kind == PendingKind::Connect && g.pending.iter().any(|p| p.origin == origin && p.kind == PendingKind::Connect) {
@@ -553,11 +587,17 @@ impl Bridge {
                 let id = self.next_id.fetch_add(1, Ordering::SeqCst);
                 g.pending.push(Pending { id, conn, ext_id, origin: origin.clone(), method: method.to_string(), params, chain, kind, created: now_secs() });
                 let writer = g.conns.get(&conn).map(|c| c.writer.clone());
+                // Window + notification at most once per QUEUED_ALERT_EVERY per site family (the
+                // request still waits in the app's list either way).
+                let now = Instant::now();
+                let alert = g.queued_alerted.get(&domain).is_none_or(|t| now.saturating_duration_since(*t) >= QUEUED_ALERT_EVERY);
+                if alert { g.queued_alerted.insert(domain.clone(), now); }
+                if g.queued_alerted.len() > MAX_SITES { g.queued_alerted.retain(|_, t| now.saturating_duration_since(*t) < QUEUED_ALERT_EVERY); }
                 drop(g);
                 // Tell the extension this one waits for the user (badge), and bring the app forward.
                 if let Some(w) = writer { Self::send_to(&w, &json!({"type": "queued", "id": ext_id})); }
                 (self.notify)();
-                (self.alerts)(Alert::Queued { origin: origin.clone(), connect: kind == PendingKind::Connect, method: method.to_string() });
+                if alert { (self.alerts)(Alert::Queued { origin: origin.clone(), connect: kind == PendingKind::Connect, method: method.to_string() }); }
             }
             Decision::Proxy { chain } => {
                 let url = self.lock().nodes.get(&chain).cloned();
@@ -598,6 +638,8 @@ impl Bridge {
     /// verified pipeline produces for that method (see `check_result`).
     pub fn respond(&self, id: u64, result: Option<Value>, error: Option<wc::RpcError>) -> Result<(), String> {
         let p = { let g = self.lock(); g.pending.iter().find(|p| p.id == id).cloned() }.ok_or("the site is no longer waiting for this request")?;
+        // The user answered this site family: its next request may alert again at once.
+        self.lock().queued_alerted.remove(&registrable_domain(&p.origin));
         match (result, error) {
             (_, Some(e)) => {
                 let code = if (-32768..=4999).contains(&e.code) { e.code } else { wc::INTERNAL };
@@ -652,6 +694,7 @@ impl Bridge {
             g.sites.push(Site { origin: p.origin.clone(), address: paired.clone(), active: list[0], chains: list.clone(), connected_at: now_secs() });
             g.pending.retain(|x| x.id != id);
             g.backoff.remove(&registrable_domain(&p.origin));
+            g.queued_alerted.remove(&registrable_domain(&p.origin));
             self.persist(&g);
         }
         let account = verify::checksum(&paired);
@@ -828,9 +871,10 @@ fn proxy_call(url: &str, chain: u64, known_chain: Option<u64>, method: &str, par
     let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| fail(e.to_string()))?;
     let post = |method: &str, params: &Value| -> Result<Value, Value> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-        let resp = client.post(url).json(&body).send().map_err(|e| fail(format!("node unreachable: {e}")))?;
+        // never the reqwest error text: it contains the node URL, often with the user's API key
+        let resp = client.post(url).json(&body).send().map_err(|e| fail(eth::transport_error(&e)))?;
         let mut bytes = vec![];
-        resp.take(MAX_OUT_FRAME as u64 + 1).read_to_end(&mut bytes).map_err(|e| fail(e.to_string()))?;
+        resp.take(MAX_OUT_FRAME as u64 + 1).read_to_end(&mut bytes).map_err(|e| fail(format!("the node's answer could not be read ({:?})", e.kind())))?;
         if bytes.len() > MAX_OUT_FRAME - 1024 { return Err(json!({"code": LIMITED, "message": "The node's answer is too large to pass to the browser."})); }
         let v: Value = serde_json::from_slice(&bytes).map_err(|_| fail("node returned non-JSON".into()))?;
         sanitize_node_reply(&v)
@@ -1527,6 +1571,72 @@ mod tests {
         assert_eq!(c.response()["id"], 9);
         assert!(!bridge.lock().backoff.contains_key(&dom));
         let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn queued_alerts_are_rate_limited_per_domain_until_the_user_answers() {
+        let d = std::env::temp_dir().join(format!("pvq{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let sock = d.join("q.sock");
+        let (log, alerts) = alert_log();
+        let bridge = Bridge::with_alerts(None, Box::new(|| Some(ME.to_string())), Box::new(|| {}), alerts);
+        bridge.serve(&sock).unwrap();
+        let mut c = Client::connect(&sock, &format!("chrome-extension://{CHROME_EXTENSION_ID}/"));
+        let queued = |log: &Arc<Mutex<Vec<Alert>>>| log.lock().unwrap().iter().filter(|a| matches!(a, Alert::Queued { .. })).count();
+        let o = "https://app.loop.example";
+        c.send(json!({"type": "request", "id": 1, "origin": o, "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        bridge.approve_connect(bridge.pending()[0].id, &[8453]).unwrap();
+        assert_eq!(c.response()["id"], 1);
+        assert_eq!(queued(&log), 1);
+
+        // a connected site queues and withdraws sign requests in a loop: one alert, not one each
+        for id in 10..20u64 {
+            c.send(json!({"type": "request", "id": id, "origin": o, "method": "personal_sign", "params": ["0x01", ME]}));
+            wait_for(|| bridge.pending().len() == 1);
+            c.send(json!({"type": "cancel", "id": id}));
+            wait_for(|| bridge.pending().is_empty());
+        }
+        assert_eq!(queued(&log), 2, "one more alert for the whole loop");
+        // another site family is not affected
+        c.send(json!({"type": "request", "id": 30, "origin": "https://other.example", "method": "eth_requestAccounts", "params": []}));
+        wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(queued(&log), 3);
+        bridge.reject(bridge.pending()[0].id, -32603, "x").unwrap();
+        assert_eq!(c.response()["id"], 30);
+
+        // once the user answers one of the site's requests, its next request alerts at once
+        c.send(json!({"type": "request", "id": 40, "origin": o, "method": "personal_sign", "params": ["0x01", ME]}));
+        wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(queued(&log), 3, "still within the window");
+        bridge.reject(bridge.pending()[0].id, 4001, "no").unwrap();
+        assert_eq!(c.response()["id"], 40);
+        c.send(json!({"type": "request", "id": 41, "origin": o, "method": "personal_sign", "params": ["0x01", ME]}));
+        wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(queued(&log), 4);
+        // and the window expires on its own
+        c.send(json!({"type": "cancel", "id": 41}));
+        wait_for(|| bridge.pending().is_empty());
+        bridge.lock().queued_alerted.insert(registrable_domain(o), Instant::now() - QUEUED_ALERT_EVERY);
+        c.send(json!({"type": "request", "id": 42, "origin": o, "method": "personal_sign", "params": ["0x01", ME]}));
+        wait_for(|| bridge.pending().len() == 1);
+        assert_eq!(queued(&log), 5);
+        let _ = std::fs::remove_dir_all(d);
+    }
+
+    #[test]
+    fn withdrawn_connects_back_off_from_ten_seconds() {
+        let t0 = Instant::now();
+        let w = Backoff::after_withdrawal(None, t0);
+        assert_eq!((w.until - t0, w.next, w.withdrawn), (CONNECT_WITHDRAWN_BACKOFF_START, Duration::from_secs(20), true));
+        let w2 = Backoff::after_withdrawal(Some(w), t0);
+        assert_eq!((w2.until - t0, w2.next), (Duration::from_secs(20), Duration::from_secs(40)));
+        // a rejection after withdrawals never backs off less than a first rejection
+        let r = Backoff::after_rejection(Some(w), t0);
+        assert_eq!((r.until - t0, r.next, r.withdrawn), (CONNECT_BACKOFF_START, Duration::from_secs(60), false));
+        let mut b = None;
+        for _ in 0..10 { b = Some(Backoff::after_withdrawal(b, t0)); }
+        assert_eq!(b.unwrap().next, CONNECT_BACKOFF_MAX);
     }
 
     #[test]

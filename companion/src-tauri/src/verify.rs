@@ -34,42 +34,55 @@ pub fn to_quantity(v: u128) -> String { if v == 0 { "0x0".into() } else { format
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Rlp { Bytes(Vec<u8>), List(Vec<Rlp>) }
 
+#[deny(clippy::indexing_slicing)]
 fn rlp_len(data: &[u8], at: usize, prefix: u8, short_base: u8, long_base: u8) -> Result<(usize, usize), VerifyError> {
+    let body = at.checked_add(1).ok_or_else(|| err("RLP offset overflow"))?;
     if prefix < long_base {
-        return Ok(((prefix - short_base) as usize, at + 1));
+        return Ok((usize::from(prefix.wrapping_sub(short_base)), body));
     }
-    let n = (prefix - long_base + 1) as usize;
-    let end = at + 1 + n;
-    let bytes = data.get(at + 1..end).ok_or_else(|| err("RLP length truncated"))?;
-    if bytes[0] == 0 { return Err(err("RLP length has leading zero")); }
+    let n = usize::from(prefix.wrapping_sub(long_base)) + 1;
+    let end = body.checked_add(n).ok_or_else(|| err("RLP offset overflow"))?;
+    let bytes = data.get(body..end).ok_or_else(|| err("RLP length truncated"))?;
+    if bytes.first() == Some(&0) { return Err(err("RLP length has leading zero")); }
     let mut len = 0usize;
     for &b in bytes { len = len.checked_mul(256).and_then(|l| l.checked_add(b as usize)).ok_or_else(|| err("RLP length overflow"))?; }
     if len < 56 { return Err(err("RLP long form used for short payload")); }
     Ok((len, end))
 }
 
-fn rlp_decode(data: &[u8], at: usize) -> Result<(Rlp, usize), VerifyError> {
+/// Deepest list nesting accepted (an EIP-1559 transaction with an access list needs 3).
+const RLP_MAX_DEPTH: usize = 8;
+
+fn rlp_decode(data: &[u8], at: usize) -> Result<(Rlp, usize), VerifyError> { rlp_decode_depth(data, at, 0) }
+
+#[deny(clippy::indexing_slicing)]
+fn rlp_decode_depth(data: &[u8], at: usize, depth: usize) -> Result<(Rlp, usize), VerifyError> {
+    if depth > RLP_MAX_DEPTH { return Err(err("RLP nested too deeply")); }
     let prefix = *data.get(at).ok_or_else(|| err("RLP truncated"))?;
-    if prefix < 0x80 { return Ok((Rlp::Bytes(vec![prefix]), at + 1)); }
+    if prefix < 0x80 { return Ok((Rlp::Bytes(vec![prefix]), at.checked_add(1).ok_or_else(|| err("RLP offset overflow"))?)); }
     if prefix < 0xC0 {
         let (len, start) = rlp_len(data, at, prefix, 0x80, 0xB8)?;
-        let bytes = data.get(start..start + len).ok_or_else(|| err("RLP string truncated"))?.to_vec();
-        if len == 1 && bytes[0] < 0x80 { return Err(err("RLP single byte should be encoded directly")); }
-        return Ok((Rlp::Bytes(bytes), start + len));
+        let end = start.checked_add(len).ok_or_else(|| err("RLP string length overflow"))?;
+        let bytes = data.get(start..end).ok_or_else(|| err("RLP string truncated"))?.to_vec();
+        if let [b] = bytes.as_slice() { if *b < 0x80 { return Err(err("RLP single byte should be encoded directly")); } }
+        return Ok((Rlp::Bytes(bytes), end));
     }
     let (len, start) = rlp_len(data, at, prefix, 0xC0, 0xF8)?;
-    let end = start + len;
+    let end = start.checked_add(len).ok_or_else(|| err("RLP list length overflow"))?;
     if end > data.len() { return Err(err("RLP list truncated")); }
     let mut items = Vec::new();
     let mut cursor = start;
     while cursor < end {
-        let (item, next) = rlp_decode(data, cursor)?;
+        let (item, next) = rlp_decode_depth(data, cursor, depth + 1)?;
+        // an item must move forward and stay inside its list
+        if next <= cursor || next > end { return Err(err("RLP item overruns its list")); }
         items.push(item);
         cursor = next;
     }
     Ok((Rlp::List(items), end))
 }
 
+#[deny(clippy::indexing_slicing)]
 fn rlp_int(item: &Rlp, label: &str) -> Result<u128, VerifyError> {
     match item {
         Rlp::Bytes(b) => {
@@ -92,39 +105,47 @@ pub struct Signed {
 }
 
 /// Decode `0x02 ‖ rlp([chainId, nonce, maxPrio, maxFee, gas, to, value, data, accessList, yParity, r, s])`.
+#[deny(clippy::indexing_slicing)]
 pub fn decode_signed_eip1559(hex_tx: &str) -> Result<Signed, VerifyError> {
     let raw = hex::decode(hex_tx.strip_prefix("0x").ok_or_else(|| err("signedTransaction without 0x"))?).map_err(|_| err("signedTransaction is not hex"))?;
     if raw.first() != Some(&0x02) { return Err(err("not an EIP-1559 typed transaction")); }
     let (decoded, end) = rlp_decode(&raw, 1)?;
     if end != raw.len() { return Err(err("trailing bytes after the transaction")); }
     let items = match decoded { Rlp::List(v) => v, _ => return Err(err("transaction body is not a list")) };
-    if items.len() != 12 { return Err(err(format!("expected 12 fields, got {}", items.len()))); }
-    let to_bytes = rlp_bytes(&items[5], "to")?;
+    let [chain_id, nonce, max_prio, max_fee, gas, to, value, data, access_list, y_parity, r_item, s_item] = items.as_slice() else {
+        return Err(err(format!("expected 12 fields, got {}", items.len())));
+    };
+    let to_bytes = rlp_bytes(to, "to")?;
     if to_bytes.len() != 20 { return Err(err("to is not 20 bytes")); }
-    match &items[8] { Rlp::List(l) if l.is_empty() => {}, _ => return Err(err("access list must be empty")) }
-    let y = rlp_int(&items[9], "yParity")?;
+    match access_list { Rlp::List(l) if l.is_empty() => {}, _ => return Err(err("access list must be empty")) }
+    let y = rlp_int(y_parity, "yParity")?;
     if y > 1 { return Err(err("yParity must be 0 or 1")); }
-    let mut r = [0u8; 32]; let mut s = [0u8; 32];
-    let rb = rlp_bytes(&items[10], "r")?; let sb = rlp_bytes(&items[11], "s")?;
-    if rb.is_empty() || rb.len() > 32 || sb.is_empty() || sb.len() > 32 || (rb.len() > 1 && rb[0] == 0) || (sb.len() > 1 && sb[0] == 0) {
-        return Err(err("signature components out of range"));
-    }
-    r[32 - rb.len()..].copy_from_slice(rb); s[32 - sb.len()..].copy_from_slice(sb);
+    // 1..=32 bytes, no leading zero (canonical), right-aligned into 32
+    let scalar = |item: &Rlp, label: &str| -> Result<[u8; 32], VerifyError> {
+        let b = rlp_bytes(item, label)?;
+        if b.is_empty() || (b.len() > 1 && b.first() == Some(&0)) { return Err(err("signature components out of range")); }
+        let mut out = [0u8; 32];
+        out.get_mut(32usize.checked_sub(b.len()).ok_or_else(|| err("signature components out of range"))?..)
+            .ok_or_else(|| err("signature components out of range"))?.copy_from_slice(b);
+        Ok(out)
+    };
+    let (r, s) = (scalar(r_item, "r")?, scalar(s_item, "s")?);
     Ok(Signed {
-        chain_id: rlp_int(&items[0], "chainId")?, nonce: rlp_int(&items[1], "nonce")?,
-        max_priority_fee_per_gas: rlp_int(&items[2], "maxPriorityFeePerGas")?, max_fee_per_gas: rlp_int(&items[3], "maxFeePerGas")?,
-        gas_limit: rlp_int(&items[4], "gasLimit")?, to: format!("0x{}", hex::encode(to_bytes)), value: rlp_int(&items[6], "value")?,
-        data: format!("0x{}", hex::encode(rlp_bytes(&items[7], "data")?)), y_parity: y as u8, r, s, raw,
+        chain_id: rlp_int(chain_id, "chainId")?, nonce: rlp_int(nonce, "nonce")?,
+        max_priority_fee_per_gas: rlp_int(max_prio, "maxPriorityFeePerGas")?, max_fee_per_gas: rlp_int(max_fee, "maxFeePerGas")?,
+        gas_limit: rlp_int(gas, "gasLimit")?, to: format!("0x{}", hex::encode(to_bytes)), value: rlp_int(value, "value")?,
+        data: format!("0x{}", hex::encode(rlp_bytes(data, "data")?)), y_parity: y as u8, r, s, raw,
     })
 }
 
 /// The exact bytes the phone signed: the typed payload without the signature.
+#[deny(clippy::indexing_slicing)]
 fn signing_payload(signed: &Signed) -> Result<Vec<u8>, VerifyError> {
     // Re-encode from the decoded fields: 0x02 ‖ rlp(first nine items). Re-encoding the parsed
     // list is simplest and exact because RLP is canonical.
     let (decoded, _) = rlp_decode(&signed.raw, 1)?;
-    let items = match decoded { Rlp::List(v) => v, _ => unreachable!() };
-    let unsigned = Rlp::List(items[..9].to_vec());
+    let items = match decoded { Rlp::List(v) => v, _ => return Err(err("transaction body is not a list")) };
+    let unsigned = Rlp::List(items.get(..9).ok_or_else(|| err("transaction has too few fields"))?.to_vec());
     let mut out = vec![0x02];
     out.extend(rlp_encode(&unsigned));
     Ok(out)
@@ -162,16 +183,36 @@ pub fn recover_signer(signed: &Signed) -> Result<String, VerifyError> {
     Ok(format!("0x{}", hex::encode(&addr[12..])))
 }
 
-/// EIP-55 checksum casing, for display only.
-pub fn checksum(address: &str) -> String {
-    let lower = address.trim_start_matches("0x").to_ascii_lowercase();
-    let hash = hex::encode(keccak256(lower.as_bytes()));
-    let mut out = String::from("0x");
+/// EIP-55 checksum casing of `0x` + 40 hex; None for anything else.
+#[deny(clippy::indexing_slicing)]
+pub fn try_checksum(address: &str) -> Option<String> {
+    let lower = address.strip_prefix("0x").unwrap_or(address).to_ascii_lowercase();
+    if lower.len() != 40 || !lower.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+    let hash = keccak256(lower.as_bytes());
+    let mut out = String::with_capacity(42);
+    out.push_str("0x");
     for (i, c) in lower.chars().enumerate() {
-        let h = u8::from_str_radix(&hash[i..i + 1], 16).unwrap_or(0);
+        // nibble i of the hash: high nibble of byte i/2 for even i, low nibble for odd i
+        let byte = hash.get(i / 2).copied().unwrap_or(0);
+        let h = if i % 2 == 0 { byte >> 4 } else { byte & 0x0f };
         out.push(if c.is_ascii_alphabetic() && h >= 8 { c.to_ascii_uppercase() } else { c });
     }
-    out
+    Some(out)
+}
+
+/// EIP-55 checksum casing, for display only. Never panics: input that is not `0x` + 40 hex (which
+/// callers validate first; a node or dApp may still send anything) comes back unchanged.
+pub fn checksum(address: &str) -> String { try_checksum(address).unwrap_or_else(|| address.to_string()) }
+
+/// "0xAbCd…1234" for display; anything that is not an address is shown shortened by characters.
+#[deny(clippy::indexing_slicing)]
+pub fn short_address(address: &str) -> String {
+    let c = checksum(address);
+    let chars: Vec<char> = c.chars().collect();
+    if chars.len() <= 10 { return c; }
+    let head: String = chars.iter().take(6).collect();
+    let tail: String = chars.iter().skip(chars.len() - 4).collect();
+    format!("{head}…{tail}")
 }
 
 /// A signature that passed `validate_signature`, with the destination, value and calldata as

@@ -452,7 +452,7 @@ fn node_call(url: &str, method: &str, params: Value) -> Result<Value, String> {
     if !url.starts_with("https://") { return Err("the node URL must use https://".into()); }
     let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string())?;
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
-    let http = client.post(url).json(&body).send().map_err(|e| format!("node unreachable: {e}"))?;
+    let http = client.post(url).json(&body).send().map_err(|e| eth::transport_error(&e))?;
     let bytes = eth::read_capped(http, eth::MAX_RESPONSE)?;
     let resp: Value = serde_json::from_slice(&bytes).map_err(|e| format!("node returned non-JSON: {e}"))?;
     if let Some(e) = resp.get("error") { return Err(e.get("message").and_then(Value::as_str).unwrap_or("node error").to_string()); }
