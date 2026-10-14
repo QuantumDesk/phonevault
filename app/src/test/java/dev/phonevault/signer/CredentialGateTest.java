@@ -303,8 +303,9 @@ public class CredentialGateTest {
         String dispatch = SourceGuard.definition("private void dispatchHeldRequest() {");
         assertTrue(dispatch.contains("held = heldRequest.take(transport);"));
         assertTrue(dispatch.contains("onRequest(held.source, held.request)"));
-        assertEquals("held only from the live connection while locked, at both hold sites", 2,
-                SourceGuard.count("synchronized \\(stateLock\\) \\{ heldRequest\\.holdIfLocked\\(unlocked, transport, source, json, b\\); \\}"));
+        assertEquals("held only from the live connection while locked, under stateLock", 1,
+                SourceGuard.count("synchronized \\(stateLock\\) \\{ host\\.heldRequest\\(\\)\\.holdIfLocked\\(host\\.unlocked\\(\\), host\\.transport\\(\\), source, json, body\\); \\}"));
+        assertEquals("no other hold site", 1, SourceGuard.count("\\.holdIfLocked\\("));
         String handle = SourceGuard.definition("private void handleIntent(Intent intent) {");
         assertEquals("cleared on a new connection, locked and unlocked", 2,
                 handle.split("synchronized \\(stateLock\\) \\{ heldRequest\\.clear\\(\\); \\}", -1).length - 1);

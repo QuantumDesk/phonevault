@@ -73,13 +73,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final SecureRandom random = new SecureRandom();
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     /**
-     * Device attestation (USB "attest", AttestationKey) runs on its own thread so a StrongBox key
-     * generation (seconds on the Titan M) never delays signing work on cryptoExecutor; one at a time.
-     */
-    private final ExecutorService attestExecutor = Executors.newSingleThreadExecutor();
-    private final AtomicBoolean attesting = new AtomicBoolean(false);
-    private final AttestationProtocol.ChallengeLog attestChallenges = new AttestationProtocol.ChallengeLog();
-    /**
      * Guards the session-token check + credential publish (and the wallet commit, and signing +
      * send) as one step, so {@link #lock()} on the UI thread can never interleave with a
      * background task between "is my session still current?" and "publish".
@@ -107,7 +100,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public boolean operational() { return operational; }
         @Override public boolean debuggingRefused() { return adbRefused(); } // release: never while debugging is on
     };
-    private TokenList tokenList;
     /** Address book + recipient history for the reviews (AddressSafety); opened on first use. */
     private AddressSafety addressSafety;
     private SafetyScreens safetyScreens;
@@ -158,6 +150,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final BtcScreens btc = new BtcScreens(host, approvals);
     /** ☰ → Security, Display & auto-lock, Device information, Coming next. */
     private final SettingsScreens settings = new SettingsScreens(host, backup, setup, btc);
+    /** USB requests: held behind the lock, readiness, getAddress, attestation, dispatch to a review. */
+    private final RequestRouter router = new RequestRouter(host, approvals, btc);
     /** ☰ → Accounts and ☰ → Passphrase wallet: screens, account lists, the passphrase, switching. */
     private final AccountScreens accounts = new AccountScreens(new AccountScreens.Host() {
         @Override public Context context() { return MainActivity.this; }
@@ -1237,159 +1231,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
+    /** USB reader thread (or the crypto thread for a held request): RequestRouter decides. */
+    @Override public void onRequest(AccessoryTransport source, JSONObject json) { router.onRequest(source, json); }
 
-    @Override public void onRequest(AccessoryTransport source, JSONObject json) {
-        if (source != transport) return;
-        if (!unlocked) {
-            // Gate mode: decode for the lock screen, hold, answer nothing.
-            final String label, body;
-            String l = "INCOMING REQUEST", b;
-            try {
-                if ("getAddress".equals(json.optString("method"))) {
-                    Eip1559Request.requireExactFields(json, "id", "method");
-                    b = "The connected host asks for your receiving address. Unlock to continue.";
-                } else if (AttestationProtocol.handles(json.optString("method"))) {
-                    // Held like getAddress: the answer names the wallet address, and nothing
-                    // leaves a locked phone (device-attestation.md, "Locked phone").
-                    AttestationProtocol.parseChallenge(json);
-                    b = "The connected host asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.";
-                } else if (MessageRequest.handles(json.optString("method"))) {
-                    b = MessageReview.lockedSummary(MessageRequest.parse(json));
-                } else if (BtcRequest.handles(json.optString("method"))) {
-                    b = BtcRequest.lockedSummary(json);
-                } else {
-                    b = TransactionReview.build(Eip1559Request.parse(json), null, tokens()).lockedSummary;
-                }
-                synchronized (stateLock) { heldRequest.holdIfLocked(unlocked, transport, source, json, b); }
-            } catch (Exception e) {
-                b = e instanceof RequestRefusal ? e.getMessage() + " It will be refused after you unlock."
-                        : "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
-                synchronized (stateLock) { heldRequest.holdIfLocked(unlocked, transport, source, json, b); }
-            }
-            label = l; body = b;
-            runOnUiThread(() -> { if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body); });
-            return;
-        }
-        String id = json.optString("id", "unknown");
-        final int s = session.get();
-        synchronized (stateLock) {
-            if (!operational || !unlocked || !walletLoaded || !backupVerified
-                    || sensitive.active() || replacementActive()) {
-                sendError(source, id, "Wallet is not ready: unlock and complete the backup check first");
-                return;
-            }
-            if (passphraseEntry || activeAccount == null) {
-                sendError(source, id, "Wallet is not ready: finish choosing the account on the phone, then try again");
-                return;
-            }
-        }
-        if (BtcRequest.handles(json.optString("method"))) {
-            btc.handleBitcoin(source, json, id, s);
-            return;
-        }
-        if ("getAddress".equals(json.optString("method"))) {
-            try {
-                Eip1559Request.requireExactFields(json, "id", "method");
-                id = Eip1559Request.validatedId(json.getString("id"));
-                synchronized (stateLock) {
-                    if (s != session.get() || source != transport || !unlocked || !backupVerified || sensitive.active()) return;
-                    SigningAccount account = activeAccount;
-                    if (credentials == null || account == null || !account.address.equalsIgnoreCase(credentials.getAddress())) {
-                        throw new IllegalStateException("Wallet is not ready: finish choosing the account on the phone");
-                    }
-                    // The ACTIVE account, plus which one it is (1-based number, standard/passphrase)
-                    // so the companion can label its pairing. No label, no fingerprint, no passphrase.
-                    source.send(Pages.json("id", id, "status", "ok", "address", credentials.getAddress(),
-                            "account", account.accountNumber(), "wallet", account.walletKind()));
-                }
-            } catch (Exception e) { sendError(source, id, e.getMessage()); }
-            return;
-        }
-        if (AttestationProtocol.handles(json.optString("method"))) {
-            answerAttestation(source, json, id, s);
-            return;
-        }
-        final ApprovalDecision decision = claimApproval(source, id);
-        if (decision == null) return;
-        try {
-            // The ACTIVE account signs: key and its description are read together.
-            final Credentials signer;
-            final SigningAccount account;
-            synchronized (stateLock) { signer = credentials; account = activeAccount; }
-            if (signer == null || account == null || !account.address.equalsIgnoreCase(signer.getAddress())) {
-                throw new IllegalStateException("Wallet is not ready: finish choosing the account on the phone");
-            }
-            if (MessageRequest.handles(json.optString("method"))) {
-                // Parsed once: the review and the digest both come from this object.
-                MessageRequest message = MessageRequest.parse(json);
-                RequestRefusal.requireFrom(message.from, account.headline(), account.address);
-                MessageApprovalSession approval = new MessageApprovalSession(message, signer, account);
-                runOnUiThread(() -> approvals.showMessageApproval(source, approval, decision, s));
-                return;
-            }
-            Eip1559Request request = Eip1559Request.parse(json);
-            RequestRefusal.requireFrom(request.from, account.headline(), account.address);
-            AddressSafety safety = safety();
-            safety.setOwnAccounts(accounts.ownAccountNames());
-            ApprovalSession approval = new ApprovalSession(request, signer, tokens(), safety, account);
-            runOnUiThread(() -> approvals.showApproval(source, approval, decision, s));
-        } catch (Exception e) {
-            finishApproval(decision);
-            sendError(source, id, e.getMessage());
-            if (e instanceof RequestRefusal) {
-                RequestRefusal refusal = (RequestRefusal) e;
-                runOnUiThread(() -> {
-                    if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
-                    pages.showInfo(refusal.title, refusal.getMessage(), this::showHome);
-                    Haptics.reject(getWindow().getDecorView());
-                });
-            }
-        }
-    }
-
-    /**
-     * USB "attest": a fresh StrongBox key attests the host's challenge and signs the binding of
-     * that challenge to this wallet's address (AttestationProtocol). No review screen: it signs
-     * nothing with the wallet key and reveals nothing beyond the address getAddress already gives
-     * an unlocked phone. Runs off the signing thread; one at a time; a challenge is answered once.
-     */
-    private void answerAttestation(AccessoryTransport source, JSONObject json, String fallbackId, int s) {
-        final String id;
-        final byte[] challenge;
-        try {
-            challenge = AttestationProtocol.parseChallenge(json);
-            id = json.getString("id");
-        } catch (Exception e) { sendError(source, fallbackId, e.getMessage()); return; }
-        if (!attestChallenges.firstUse(challenge)) { sendError(source, id, "This challenge was already answered"); return; }
-        if (!attesting.compareAndSet(false, true)) { sendError(source, id, "Another attestation is in progress"); return; }
-        final String address;
-        synchronized (stateLock) {
-            if (s != session.get() || source != transport || !unlocked || !walletLoaded || credentials == null) {
-                attesting.set(false);
-                sendError(source, id, "Wallet is not ready: unlock and complete the backup check first");
-                return;
-            }
-            address = credentials.getAddress();
-        }
-        try {
-            attestExecutor.execute(() -> {
-                try {
-                    AttestationKey.Result r = AttestationKey.attest(challenge, address);
-                    JSONObject reply = AttestationProtocol.response(id, address, r.securityLevel, r.chain, r.signature);
-                    synchronized (stateLock) {
-                        if (s != session.get() || source != transport || !unlocked) return;
-                        source.send(reply);
-                    }
-                } catch (Exception e) {
-                    sendError(source, id, "Attestation failed: " + e.getClass().getSimpleName());
-                } finally {
-                    attesting.set(false);
-                }
-            });
-        } catch (RejectedExecutionException closing) {
-            attesting.set(false);
-        }
-    }
 
     /**
      * Window flags belong to the UI thread. A change from any other thread (the USB reader, the
@@ -1451,27 +1295,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         decision.cancel();
         finishApproval(decision);
         return true;
-    }
-
-    /**
-     * The token list built into the APK, checked against its pinned SHA-256 on first use. A list
-     * that fails the check is not used: every contract is then reviewed as unknown, and the review
-     * says the list was refused.
-     */
-    private synchronized TokenList tokens() {
-        if (tokenList != null) return tokenList;
-        try (InputStream in = getResources().openRawResource(R.raw.tokens)) {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            for (int n; (n = in.read(buffer)) > 0; ) {
-                bytes.write(buffer, 0, n);
-                if (bytes.size() > 64 * 1024) break; // loadPinned refuses oversize input
-            }
-            tokenList = TokenList.loadPinned(bytes.toByteArray());
-        } catch (Exception e) {
-            tokenList = TokenList.unavailable(e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage());
-        }
-        return tokenList;
     }
 
     // ------------------------------------------------------------------ accounts + passphrase wallet (AccountScreens)
@@ -1578,12 +1401,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         clearSensitiveUi();
         clearPinEntry();
         cryptoExecutor.shutdownNow();
-        attestExecutor.shutdownNow();
+        router.shutdown();
         super.onDestroy();
     }
 
     /** MainActivity as the flow screens see it: its fields, locks and navigation (VaultHost). */
-    private final class ScreenHost implements BtcScreens.Host, SettingsScreens.Host {
+    private final class ScreenHost implements BtcScreens.Host, SettingsScreens.Host, RequestRouter.Host {
         @Override public Activity activity() { return MainActivity.this; }
         @Override public Pages pages() { return pages; }
         @Override public Handler ui() { return ui; }
@@ -1663,6 +1486,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public boolean appliancePolicyActive() { return isPhoneVaultApplianceBuild() && operational; }
         @Override public boolean credentialMode() { return MainActivity.this.credentialMode(); }
         @Override public SigningAccount activeAccount() { return activeAccount; }
+        @Override public HeldRequest heldRequest() { return heldRequest; }
+        @Override public void showHeldOnGate(AccessoryTransport source, String label, String body) {
+            if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body);
+        }
+        @Override public boolean passphraseEntry() { return passphraseEntry; }
+        @Override public Map<String, String> ownAccountNames() { return accounts.ownAccountNames(); }
         @Override public boolean owns(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need) {
             return MainActivity.this.owns(source, s, decision, need);
         }
