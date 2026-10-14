@@ -88,6 +88,15 @@ export function statusCard(title: string, body: string, extra: Node[] = [], acti
     h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
 }
 
+/** A screen's title bar: Back (or a spacer), the title, and an optional control on the right. */
+export function topbar(title: string, back: (() => void) | null, extra?: Node) {
+  return h("div", { class: "topbar" },
+    back ? h("button", { class: "icon-btn", onclick: back, "aria-label": "Back" }, icon("back", 20)) : h("span", { class: "icon-btn ghosted" }),
+    h("h2", null, title),
+    extra ?? h("span", { class: "icon-btn ghosted" }),
+  );
+}
+
 /** A <dt>/<dd> pair in a `.fact` list. */
 export function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
 
