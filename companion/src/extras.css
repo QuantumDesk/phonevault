@@ -5,6 +5,7 @@
 .act-filters { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .act-filters .segmented { flex: 1; min-width: 260px; }
 .segmented.four { grid-template-columns: repeat(4, 1fr); }
+.segmented.two { grid-template-columns: repeat(2, 1fr); }
 .chip-btn.on { border-color: var(--accent-line); background: var(--accent-soft); color: var(--ink); }
 .chip-btn .net-dot { width: 7px; height: 7px; }
 .badge.pending { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
@@ -83,7 +84,6 @@
 .acct-row input.acct-name:hover, .acct-row input.acct-name:focus { border-color: var(--line-2); background: var(--surface); }
 
 /* backup card picker (Settings → Backup, end of setup) */
-.segmented.two { grid-template-columns: repeat(2, 1fr); }
 .backup-card { display: grid; gap: 8px; }
 .backup-card .row.gap { margin-top: 2px; }
 
