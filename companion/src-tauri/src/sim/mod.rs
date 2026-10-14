@@ -20,6 +20,15 @@
 //! simulation in this session reverted. Uncertainty (the node could not simulate at all) only asks
 //! the user to confirm ("Send anyway").
 
+mod revert;
+mod u256;
+
+pub use revert::revert_reason;
+pub use u256::U256;
+
+use revert::{error_text, is_insufficient_funds, is_revert, printable};
+use u256::format_decimal;
+
 use crate::{blocking, chains, eth, pairing, tokens, verify, CmdResult, Quote};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -45,102 +54,6 @@ const FRESH: Duration = Duration::from_secs(600);
 /// wrapped balance without a Transfer log (WETH9 does not emit one).
 fn wrapped_native(chain: u64) -> Option<&'static str> {
     chains::get(chain).map(|c| c.wrapped_native)
-}
-
-// ---------------------------------------------------------------- 256-bit amounts
-
-/// Unsigned 256-bit integer, most significant limb first (so the derived order is numeric).
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Debug, Hash)]
-pub struct U256([u64; 4]);
-
-impl U256 {
-    pub fn from_u128(v: u128) -> U256 {
-        U256([0, 0, (v >> 64) as u64, v as u64])
-    }
-    #[deny(clippy::indexing_slicing)]
-    fn from_be(bytes: &[u8]) -> Option<U256> {
-        let mut full = [0u8; 32];
-        full.get_mut(32usize.checked_sub(bytes.len())?..)?.copy_from_slice(bytes);
-        let mut l = [0u64; 4];
-        for (limb, chunk) in l.iter_mut().zip(full.as_chunks::<8>().0) {
-            *limb = u64::from_be_bytes(*chunk);
-        }
-        Some(U256(l))
-    }
-    pub fn is_zero(&self) -> bool {
-        self.0 == [0; 4]
-    }
-    fn checked_add(self, o: U256) -> Option<U256> {
-        let mut out = [0u64; 4];
-        let mut carry = 0u128;
-        for i in (0..4).rev() {
-            let s = self.0[i] as u128 + o.0[i] as u128 + carry;
-            out[i] = s as u64;
-            carry = s >> 64;
-        }
-        if carry != 0 {
-            None
-        } else {
-            Some(U256(out))
-        }
-    }
-    /// self − o, for self ≥ o.
-    fn sub(self, o: U256) -> U256 {
-        let mut out = [0u64; 4];
-        let mut borrow = 0i128;
-        for i in (0..4).rev() {
-            let mut d = self.0[i] as i128 - o.0[i] as i128 - borrow;
-            borrow = if d < 0 {
-                d += 1i128 << 64;
-                1
-            } else {
-                0
-            };
-            out[i] = d as u64;
-        }
-        U256(out)
-    }
-    pub fn to_decimal(self) -> String {
-        if self.is_zero() {
-            return "0".into();
-        }
-        let mut limbs = self.0;
-        let mut digits = Vec::new();
-        while limbs != [0; 4] {
-            let mut rem = 0u128;
-            for limb in limbs.iter_mut() {
-                let cur = (rem << 64) | *limb as u128;
-                *limb = (cur / 10) as u64;
-                rem = cur % 10;
-            }
-            digits.push(b'0' + rem as u8);
-        }
-        digits.reverse();
-        String::from_utf8(digits).unwrap_or_default()
-    }
-    fn to_u128(self) -> Option<u128> {
-        if self.0[0] == 0 && self.0[1] == 0 {
-            Some(((self.0[2] as u128) << 64) | self.0[3] as u128)
-        } else {
-            None
-        }
-    }
-}
-
-/// Decimal text of `raw` with `decimals` places, trailing zeros trimmed (exact, any size).
-fn format_decimal(raw: &str, decimals: u32) -> String {
-    let d = decimals as usize;
-    if d == 0 {
-        return raw.to_string();
-    }
-    let padded = if raw.len() <= d { format!("{}{}", "0".repeat(d + 1 - raw.len()), raw) } else { raw.to_string() };
-    let (whole, frac) = padded.split_at(padded.len() - d);
-    let frac = frac.trim_end_matches('0');
-    if frac.is_empty() {
-        whole.to_string()
-    } else {
-        format!("{whole}.{frac}")
-    }
 }
 
 // ---------------------------------------------------------------- the result
@@ -397,94 +310,6 @@ fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256
             display: format!("{sign}{raw} base units of unknown token {}", verify::short_address(asset)),
         },
     }
-}
-
-// ---------------------------------------------------------------- revert reasons
-
-fn printable(s: &str, max: usize) -> String {
-    let t: String = s.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>().trim().to_string();
-    if t.chars().count() > max {
-        format!("{}…", t.chars().take(max).collect::<String>())
-    } else {
-        t
-    }
-}
-
-/// The revert reason in words, from the node's error message and the revert data.
-#[deny(clippy::indexing_slicing)]
-pub fn revert_reason(message: Option<&str>, data: Option<&str>) -> String {
-    let bytes = data.and_then(|d| hex::decode(strip(d)).ok()).unwrap_or_default();
-    if bytes.len() >= 4 {
-        let (sel, body) = bytes.split_at(4);
-        if sel == [0x08, 0xc3, 0x79, 0xa0] {
-            // Error(string)
-            if let Some(off) = word_usize(body, 0) {
-                let start = off.checked_add(32);
-                if let Some(len) = start
-                    .and_then(|s| body.get(off..s))
-                    .and_then(U256::from_be)
-                    .and_then(U256::to_u128)
-                    .and_then(|l| usize::try_from(l).ok())
-                {
-                    let text = start
-                        .and_then(|s| Some((s, s.checked_add(len)?)))
-                        .and_then(|(s, e)| body.get(s..e))
-                        .and_then(|b| std::str::from_utf8(b).ok());
-                    if let Some(text) = text {
-                        let t = printable(text, 160);
-                        return if t.is_empty() { "reverted with an empty reason".into() } else { t };
-                    }
-                }
-            }
-        } else if sel == [0x4e, 0x48, 0x7b, 0x71] {
-            // Panic(uint256)
-            let code = word(body, 0).and_then(U256::to_u128).unwrap_or(u128::MAX);
-            let what = match code {
-                0x01 => "assertion failed",
-                0x11 => "arithmetic overflow or underflow",
-                0x12 => "division by zero",
-                0x21 => "invalid enum value",
-                0x31 => "pop from an empty array",
-                0x32 => "array index out of bounds",
-                0x41 => "out of memory",
-                0x51 => "call to an uninitialised function",
-                _ => "panic",
-            };
-            return format!("{what} (panic 0x{code:x})");
-        } else {
-            return format!("custom error 0x{}", hex::encode(sel));
-        }
-    }
-    let m = message.unwrap_or("").trim();
-    let m = m
-        .strip_prefix("execution reverted:")
-        .or_else(|| m.strip_prefix("execution reverted"))
-        .map(str::trim)
-        .unwrap_or(m);
-    if m.is_empty() {
-        "reverted without a reason".into()
-    } else {
-        printable(m, 160)
-    }
-}
-
-fn is_revert(error: &Value) -> bool {
-    let code = error.get("code").and_then(Value::as_i64);
-    let msg = error.get("message").and_then(Value::as_str).unwrap_or("").to_ascii_lowercase();
-    code == Some(3)
-        || code == Some(-32015)
-        || msg.contains("revert")
-        || msg.contains("out of gas")
-        || msg.contains("invalid opcode")
-}
-
-fn is_insufficient_funds(error: &Value) -> bool {
-    error.get("message").and_then(Value::as_str).is_some_and(|m| m.to_ascii_lowercase().contains("insufficient funds"))
-        || error.get("code").and_then(Value::as_i64) == Some(-38014)
-}
-
-fn error_text(error: &Value) -> String {
-    printable(error.get("message").and_then(Value::as_str).unwrap_or("unknown error"), 160)
 }
 
 // ---------------------------------------------------------------- interpreting a node's answers
@@ -827,15 +652,15 @@ mod tests {
     use super::*;
 
     // Recorded 2026-10-11 from ethereum-rpc.publicnode.com (eth_simulateV1, traceTransfers, validation off).
-    const USDC_TRANSFER: &str = include_str!("../tests/fixtures/sim/usdc_transfer.json");
-    const USDC_REVERT: &str = include_str!("../tests/fixtures/sim/usdc_revert.json");
-    const ETH_SEND: &str = include_str!("../tests/fixtures/sim/eth_send.json");
-    const ETH_INSUFFICIENT: &str = include_str!("../tests/fixtures/sim/eth_insufficient.json");
-    const WETH_DEPOSIT: &str = include_str!("../tests/fixtures/sim/weth_deposit.json");
-    const NFT_TRANSFER: &str = include_str!("../tests/fixtures/sim/nft_transfer.json");
-    const SWAP_ETH_USDC: &str = include_str!("../tests/fixtures/sim/swap_eth_usdc.json");
-    const ERC1155_BATCH: &str = include_str!("../tests/fixtures/sim/erc1155_batch.json");
-    const METHOD_NOT_FOUND: &str = include_str!("../tests/fixtures/sim/method_not_found.json");
+    const USDC_TRANSFER: &str = include_str!("../../tests/fixtures/sim/usdc_transfer.json");
+    const USDC_REVERT: &str = include_str!("../../tests/fixtures/sim/usdc_revert.json");
+    const ETH_SEND: &str = include_str!("../../tests/fixtures/sim/eth_send.json");
+    const ETH_INSUFFICIENT: &str = include_str!("../../tests/fixtures/sim/eth_insufficient.json");
+    const WETH_DEPOSIT: &str = include_str!("../../tests/fixtures/sim/weth_deposit.json");
+    const NFT_TRANSFER: &str = include_str!("../../tests/fixtures/sim/nft_transfer.json");
+    const SWAP_ETH_USDC: &str = include_str!("../../tests/fixtures/sim/swap_eth_usdc.json");
+    const ERC1155_BATCH: &str = include_str!("../../tests/fixtures/sim/erc1155_batch.json");
+    const METHOD_NOT_FOUND: &str = include_str!("../../tests/fixtures/sim/method_not_found.json");
 
     const HOLDER: &str = "0x28c6c06298d514db089934071355e5743bf21d60";
     const OTHER: &str = "0x7f3a9c04e2b16d58a41c0f9e6b2d7a8c5e1f4b93";
@@ -870,20 +695,6 @@ mod tests {
     }
     fn displays(s: &Simulation) -> Vec<&str> {
         s.changes.iter().map(|c| c.display.as_str()).collect()
-    }
-
-    #[test]
-    fn u256_arithmetic_and_decimal() {
-        let max = U256([u64::MAX; 4]);
-        assert_eq!(max.to_decimal(), "115792089237316195423570985008687907853269984665640564039457584007913129639935");
-        assert!(max.checked_add(U256::from_u128(1)).is_none());
-        assert_eq!(U256::from_u128(1000).sub(U256::from_u128(1)).to_decimal(), "999");
-        assert_eq!(
-            U256::from_u128(u128::MAX).checked_add(U256::from_u128(1)).unwrap().to_decimal(),
-            "340282366920938463463374607431768211456"
-        );
-        assert_eq!(format_decimal("1300000000000", 18), "0.0000013");
-        assert_eq!(format_decimal("100000000", 6), "100");
     }
 
     #[test]
@@ -1069,21 +880,6 @@ mod tests {
     }
 
     #[test]
-    fn revert_reasons_are_decoded() {
-        assert_eq!(revert_reason(Some("execution reverted: Too little received"), None), "Too little received");
-        assert_eq!(revert_reason(Some("execution reverted"), None), "reverted without a reason");
-        assert_eq!(
-            revert_reason(None, Some("0x4e487b710000000000000000000000000000000000000000000000000000000000000011")),
-            "arithmetic overflow or underflow (panic 0x11)"
-        );
-        assert_eq!(revert_reason(Some("execution reverted"), Some("0x5bf6f916")), "custom error 0x5bf6f916"); // TransactionDeadlinePassed()
-                                                                                                              // control characters and length are tamed
-        let long = format!("execution reverted: {}\u{7}", "x".repeat(300));
-        let r = revert_reason(Some(&long), None);
-        assert!(r.chars().count() <= 161 && !r.contains('\u{7}'));
-    }
-
-    #[test]
     fn the_phone_claim_matches_the_phones_schema() {
         let t = tx(HOLDER, USDC, 0, "0xa9059cbb", 100_000);
         let mut s = interpret_simulate_v1(
@@ -1126,7 +922,7 @@ mod tests {
     /// (HostSimulationTest.theSharedVectorFromTheMacParsesAndMatches) parses and checks.
     #[test]
     fn the_phone_claim_matches_the_shared_vector() {
-        let vector = v(include_str!("../../../app/src/test/resources/host-simulation-vector.json"));
+        let vector = v(include_str!("../../../../app/src/test/resources/host-simulation-vector.json"));
         let r = &vector["request"];
         let t = Tx {
             from: HOLDER.into(),
