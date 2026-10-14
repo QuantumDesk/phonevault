@@ -1,14 +1,12 @@
-//! Security-audit regressions (2026-10-13), against the real bridge over its socket.
+//! The browser bridge, driven over its real socket.
 //!
-//! 1. An UNCONNECTED site could bring the companion window to the front (set_focus) and post a
-//!    desktop notification as often as it liked: the connection backoff started only when the user
-//!    REJECTED a card, a page that withdrew its own request first (the extension sends
-//!    {"type":"cancel"} when the tab navigates or reloads) was never backed off, and
-//!    `Alert::Queued` (→ lib on_queued → tray::show_main + notification) was not throttled. Now a
-//!    withdrawn connect counts towards the backoff (from 10 s) and Alert::Queued is rate-limited
-//!    per registrable domain.
-//! 2. A failed node request was answered to the SITE with reqwest's error text, which includes the
-//!    full node URL (and so the user's provider API key). Now a fixed message.
+//! 1. An unconnected site cannot bring the companion window to the front or post desktop
+//!    notifications at will: a connect request the page withdraws itself (the extension sends
+//!    {"type":"cancel"} when the tab navigates or reloads) counts towards the connection backoff
+//!    like a rejection (from 10 s), and `Alert::Queued` (→ lib on_queued → tray::show_main +
+//!    notification) is rate-limited per registrable domain.
+//! 2. A failed node request is answered to the site with a fixed message, never the node URL
+//!    (which can carry the user's provider API key).
 
 use companion_lib::bridge::{self, Alert, Bridge, CHROME_EXTENSION_ID, MAX_IN_FRAME};
 use serde_json::{json, Value};

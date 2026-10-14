@@ -807,4 +807,39 @@ mod tests {
         q.value = "0x2".into();
         assert!(recall(&q, a1).is_none());
     }
+
+    /// A node's Transfer log whose emitting address or topics are malformed (short, too long,
+    /// non-hex, non-ASCII) is ignored: it never panics the review (panic=abort in release would
+    /// kill the app) and never shows as a balance change. A well-formed unknown token still counts.
+    #[test]
+    fn malformed_simulation_logs_are_ignored() {
+        use std::panic::{catch_unwind, AssertUnwindSafe};
+        let me = "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3";
+        let other = "0x1111111111111111111111111111111111111111";
+        let transfer = format!("0x{TRANSFER}");
+        let topic = |addr: &str| format!("0x{:0>64}", addr.trim_start_matches("0x"));
+        let five = format!("0x{:064x}", 5u8);
+        let long = format!("0x{}", "a".repeat(80));
+        for bad_asset in ["0x1", long.as_str(), "0xzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz", "0xéééééééééééééééééééé"] {
+            let log = json!({"address": bad_asset, "topics": [transfer, topic(me), topic(other)], "data": five});
+            let r = catch_unwind(AssertUnwindSafe(|| changes_from_logs(&[log.clone()], me, 1, 0)));
+            assert_eq!(r.ok().and_then(Result::ok), Some(vec![]), "asset {bad_asset} must be ignored, not panic");
+        }
+        let good = json!({"address": "0x2222222222222222222222222222222222222222", "topics": [transfer, topic(me), topic(other)], "data": five});
+        let c = changes_from_logs(&[good], me, 1, 0).unwrap();
+        assert_eq!(c.len(), 1);
+        assert_eq!(c[0].delta, "-5");
+        for t in ["0x1234", "0xéééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"] {
+            let log = json!({"address": "0x2222222222222222222222222222222222222222", "topics": [transfer, t, topic(other)], "data": five});
+            assert!(catch_unwind(AssertUnwindSafe(|| { let _ = changes_from_logs(&[log.clone()], me, 1, 0); })).is_ok(), "topic {t}");
+        }
+        // the same path through the interpreter of a full eth_simulateV1 answer
+        let resp = json!({"result": [{"calls": [{"status": "0x1", "gasUsed": "0x5208",
+            "logs": [{"address": "0x1", "topics": [transfer, topic(me), topic(other)], "data": five}]}]}]});
+        let tx = Tx { from: me.into(), to: other.into(), value: 0, data: "0x".into(), gas: 21_000, chain: 1, max_fee: 1, priority: 1 };
+        let s = interpret_simulate_v1(&resp, &tx, 1, "node", None).unwrap();
+        assert_eq!(s.status, "ok");
+        assert_eq!(s.changes.len(), 1, "only the fee: {:?}", s.changes);
+        assert_eq!(s.changes[0].asset, "native");
+    }
 }

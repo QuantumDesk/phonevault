@@ -674,4 +674,48 @@ c001a01236613fa9151ad57d53751c56c08bcd7a5cfca21f201befba28f93b34f1b635a03daf9801
         // keccak256("\x19Ethereum Signed Message:\n5hello")
         assert_eq!(hex::encode(crate::message::personal_digest(b"hello")), "50b2c43fd39106bafbba0da34fc430e1f91e3c96ea2acee2bc34119f92b37750");
     }
+
+    /// `checksum` and `short_address` take any text without panicking; text that is not an
+    /// address has no checksum form and comes back as given.
+    #[test]
+    fn checksum_of_a_non_address_never_panics() {
+        let long = format!("0x{}", "a".repeat(80));
+        for x in ["0x1", long.as_str(), "", "é", "0x", "0xéééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"] {
+            assert!(std::panic::catch_unwind(|| { let _ = checksum(x); let _ = short_address(x); }).is_ok(), "{x:?}");
+            assert!(try_checksum(x).is_none());
+        }
+    }
+
+    /// RLP decoding checks every length addition, refuses an item that does not move forward inside
+    /// its list, and stops at a fixed nesting depth: an error, never a panic or a hang.
+    #[test]
+    fn rlp_length_overflow_is_refused() {
+        use std::panic::catch_unwind;
+        // 0x02 ‖ F8 38 (list of 56 bytes) ‖ FF (list, 8-byte length) ‖ len = 2^64 - 9 ‖ padding
+        let mut raw = vec![0x02u8, 0xf8, 56, 0xff];
+        raw.extend_from_slice(&(u64::MAX - 8).to_be_bytes());
+        raw.resize(3 + 56, 0);
+        let hex_tx = format!("0x{}", hex::encode(&raw));
+        let r = catch_unwind(|| decode_signed_eip1559(&hex_tx).map(|_| ()).map_err(|e| e.0));
+        assert!(matches!(r, Ok(Err(_))), "refused with an error, no panic, no hang");
+        // the same with a string (0xBF: 8-byte string length)
+        let mut s = vec![0x02u8, 0xf8, 56, 0xbf];
+        s.extend_from_slice(&u64::MAX.to_be_bytes());
+        s.resize(3 + 56, 0);
+        assert!(decode_signed_eip1559(&format!("0x{}", hex::encode(&s))).is_err());
+        // lists nested 2000 deep: refused at a fixed depth instead of recursing as deep as the input
+        let mut nested = vec![0xc0u8];
+        for _ in 0..2_000 {
+            let n = nested.len();
+            let mut head = if n < 56 { vec![0xc0 + n as u8] } else {
+                let be: Vec<u8> = n.to_be_bytes().iter().copied().skip_while(|b| *b == 0).collect();
+                let mut h = vec![0xf7 + be.len() as u8]; h.extend(be); h
+            };
+            head.extend(nested);
+            nested = head;
+        }
+        let mut tx = vec![0x02u8]; tx.extend(nested);
+        let r = catch_unwind(|| decode_signed_eip1559(&format!("0x{}", hex::encode(&tx))).map(|_| ()).map_err(|e| e.0));
+        assert_eq!(r.ok(), Some(Err("RLP nested too deeply".to_string())));
+    }
 }

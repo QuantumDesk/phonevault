@@ -370,4 +370,21 @@ mod tests {
         assert!(image_data_url_capped(&png, MAX_ICON).is_ok());
         assert!(image_data_url_capped("http://dapp.example/icon.png", MAX_ICON).is_err(), "https only");
     }
+
+    /// `decode_string` (name(), symbol() and tokenURI() of any contract that sends the user an NFT)
+    /// refuses an ABI offset or length that overflows or points past the return data.
+    #[test]
+    fn abi_string_offsets_that_overflow_are_refused() {
+        use std::panic::catch_unwind;
+        let mut ret = vec![0u8; 64];
+        ret[16..32].copy_from_slice(&((u64::MAX - 15) as u128).to_be_bytes());
+        assert_eq!(catch_unwind(|| decode_string(&ret)).ok(), Some(None));
+        // the length word overflowing the end, and the largest offsets
+        for (off, len) in [(32u128, u64::MAX as u128), (u128::MAX, 1), (usize::MAX as u128 - 31, 0), (usize::MAX as u128, 0)] {
+            let mut r = vec![0u8; 96];
+            r[16..32].copy_from_slice(&off.to_be_bytes());
+            r[48..64].copy_from_slice(&len.to_be_bytes());
+            assert_eq!(catch_unwind(|| decode_string(&r)).ok(), Some(None), "off {off} len {len}");
+        }
+    }
 }

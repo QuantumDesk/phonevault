@@ -428,18 +428,13 @@ mod tests {
             assert!(tokens::ALLOWED_CHAINS.contains(&id));
         }
     }
-}
 
-/// The background watcher parses eth_getLogs answers from the configured node. A Transfer log with
-/// a short, non-hex or non-ASCII topic, address or amount is ignored rather than panicking the
-/// "watcher" thread (with panic=abort, the whole app), and a malformed counterparty never panics
-/// the notification text.
-#[cfg(test)]
-#[allow(clippy::indexing_slicing)]
-mod audit_proof {
-    use super::*;
+    /// The background watcher parses eth_getLogs answers from the configured node. A Transfer log with
+    /// a short, non-hex or non-ASCII topic, address or amount is ignored rather than panicking the
+    /// "watcher" thread (with panic=abort, the whole app), and a malformed counterparty never panics
+    /// the notification text.
     #[test]
-    fn malicious_node_logs_are_ignored_not_fatal() {
+    fn malformed_node_logs_are_ignored_not_fatal() {
         let me = topic_address("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3");
         let data = format!("0x{:064x}", 5u8);
         let good_sender = topic_address("0x1111111111111111111111111111111111111111");
