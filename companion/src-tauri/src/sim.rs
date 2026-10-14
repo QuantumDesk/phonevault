@@ -64,12 +64,12 @@ pub struct U256([u64; 4]);
 
 impl U256 {
     pub fn from_u128(v: u128) -> U256 { U256([0, 0, (v >> 64) as u64, v as u64]) }
+    #[deny(clippy::indexing_slicing)]
     fn from_be(bytes: &[u8]) -> Option<U256> {
-        if bytes.len() > 32 { return None; }
         let mut full = [0u8; 32];
-        full[32 - bytes.len()..].copy_from_slice(bytes);
+        full.get_mut(32usize.checked_sub(bytes.len())?..)?.copy_from_slice(bytes);
         let mut l = [0u64; 4];
-        for (i, limb) in l.iter_mut().enumerate() { *limb = u64::from_be_bytes(full[i * 8..i * 8 + 8].try_into().ok()?); }
+        for (limb, chunk) in l.iter_mut().zip(full.as_chunks::<8>().0) { *limb = u64::from_be_bytes(*chunk); }
         Some(U256(l))
     }
     pub fn is_zero(&self) -> bool { self.0 == [0; 4] }
@@ -178,21 +178,31 @@ struct Flow { inn: U256, out: U256 }
 type Key = (String, Option<U256>);
 
 fn strip(h: &str) -> &str { h.strip_prefix("0x").unwrap_or(h) }
+/// `0x` + 40 hex (any case), the only log `address` this reads.
+fn is_address(a: &str) -> bool { a.len() == 42 && a.starts_with("0x") && a.bytes().skip(2).all(|b| b.is_ascii_hexdigit()) }
+#[deny(clippy::indexing_slicing)]
 fn topic_address(t: &str) -> Option<String> {
     let t = strip(t);
-    if t.len() != 64 || !t[..24].bytes().all(|b| b == b'0') { return None; }
-    Some(format!("0x{}", t[24..].to_ascii_lowercase()))
+    if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) { return None; }
+    let (pad, addr) = (t.get(..24)?, t.get(24..)?);
+    if !pad.bytes().all(|b| b == b'0') { return None; }
+    Some(format!("0x{}", addr.to_ascii_lowercase()))
 }
-fn word(bytes: &[u8], i: usize) -> Option<U256> { U256::from_be(bytes.get(i * 32..i * 32 + 32)?) }
+#[deny(clippy::indexing_slicing)]
+fn word(bytes: &[u8], i: usize) -> Option<U256> {
+    let start = i.checked_mul(32)?;
+    U256::from_be(bytes.get(start..start.checked_add(32)?)?)
+}
 fn word_usize(bytes: &[u8], i: usize) -> Option<usize> { word(bytes, i)?.to_u128().and_then(|v| usize::try_from(v).ok()) }
 
 /// `uint256[]` at a head offset of ABI-encoded data.
+#[deny(clippy::indexing_slicing)]
 fn uint_array(data: &[u8], head: usize) -> Option<Vec<U256>> {
     let at = word_usize(data, head)?;
     if at % 32 != 0 { return None; }
     let n = word_usize(data, at / 32)?;
     if n > MAX_BATCH { return None; }
-    (0..n).map(|i| word(data, at / 32 + 1 + i)).collect()
+    (0..n).map(|i| word(data, (at / 32).checked_add(1)?.checked_add(i)?)).collect()
 }
 
 fn credit(map: &mut BTreeMap<Key, Flow>, key: Key, from: &str, to: &str, amount: U256, wallet: &str) -> Result<(), String> {
@@ -205,46 +215,49 @@ fn credit(map: &mut BTreeMap<Key, Flow>, key: Key, from: &str, to: &str, amount:
 }
 
 /// Apply one log of the simulated call to the wallet's flows. Unrecognised logs are ignored.
+#[deny(clippy::indexing_slicing)]
 fn apply_log(map: &mut BTreeMap<Key, Flow>, log: &Value, wallet: &str, chain: u64) -> Result<(), String> {
-    let address = match log.get("address").and_then(Value::as_str) { Some(a) => a.to_ascii_lowercase(), None => return Ok(()) };
+    // the node's answer is untrusted: a log from something that is not an address is ignored
+    let address = match log.get("address").and_then(Value::as_str) { Some(a) if is_address(a) => a.to_ascii_lowercase(), _ => return Ok(()) };
     let topics: Vec<String> = log.get("topics").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(|t| strip(t).to_ascii_lowercase()).collect()).unwrap_or_default();
     let data = match log.get("data").and_then(Value::as_str).map(|d| hex::decode(strip(d))) { Some(Ok(d)) => d, _ => return Ok(()) };
-    let Some(t0) = topics.first() else { return Ok(()) };
-    match t0.as_str() {
-        TRANSFER if topics.len() == 3 && data.len() == 32 => {
-            let (Some(from), Some(to)) = (topic_address(&topics[1]), topic_address(&topics[2])) else { return Ok(()) };
+    let topics: Vec<&str> = topics.iter().map(String::as_str).collect();
+    match topics.as_slice() {
+        [TRANSFER, t1, t2] if data.len() == 32 => {
+            let (Some(from), Some(to)) = (topic_address(t1), topic_address(t2)) else { return Ok(()) };
             let asset = if address == NATIVE_LOG { "native".to_string() } else { address };
             credit(map, (asset, None), &from, &to, word(&data, 0).unwrap_or_default(), wallet)
         }
-        TRANSFER if topics.len() == 4 && data.is_empty() => {
-            let (Some(from), Some(to)) = (topic_address(&topics[1]), topic_address(&topics[2])) else { return Ok(()) };
-            let id = hex::decode(&topics[3]).ok().and_then(|b| U256::from_be(&b)).unwrap_or_default();
+        [TRANSFER, t1, t2, t3] if data.is_empty() => {
+            let (Some(from), Some(to)) = (topic_address(t1), topic_address(t2)) else { return Ok(()) };
+            let id = hex::decode(t3).ok().and_then(|b| U256::from_be(&b)).unwrap_or_default();
             credit(map, (address, Some(id)), &from, &to, U256::from_u128(1), wallet)
         }
-        TRANSFER_SINGLE if topics.len() == 4 && data.len() == 64 => {
-            let (Some(from), Some(to)) = (topic_address(&topics[2]), topic_address(&topics[3])) else { return Ok(()) };
+        [TRANSFER_SINGLE, _, t2, t3] if data.len() == 64 => {
+            let (Some(from), Some(to)) = (topic_address(t2), topic_address(t3)) else { return Ok(()) };
             let (Some(id), Some(v)) = (word(&data, 0), word(&data, 1)) else { return Ok(()) };
             credit(map, (address, Some(id)), &from, &to, v, wallet)
         }
-        TRANSFER_BATCH if topics.len() == 4 => {
-            let (Some(from), Some(to)) = (topic_address(&topics[2]), topic_address(&topics[3])) else { return Ok(()) };
+        [TRANSFER_BATCH, _, t2, t3] => {
+            let (Some(from), Some(to)) = (topic_address(t2), topic_address(t3)) else { return Ok(()) };
             let (Some(ids), Some(values)) = (uint_array(&data, 0), uint_array(&data, 1)) else { return Ok(()) };
             if ids.len() != values.len() { return Ok(()); }
             for (id, v) in ids.into_iter().zip(values) { credit(map, (address.clone(), Some(id)), &from, &to, v, wallet)?; }
             Ok(())
         }
-        DEPOSIT | WITHDRAWAL if topics.len() == 2 && data.len() == 32 && wrapped_native(chain) == Some(address.as_str()) => {
-            let Some(who) = topic_address(&topics[1]) else { return Ok(()) };
+        [t0 @ (DEPOSIT | WITHDRAWAL), t1] if data.len() == 32 && wrapped_native(chain) == Some(address.as_str()) => {
+            let Some(who) = topic_address(t1) else { return Ok(()) };
             let amount = word(&data, 0).unwrap_or_default();
             // a deposit mints to `who` (as if from the zero address); a withdrawal burns from `who`
             let zero = "0x0000000000000000000000000000000000000000";
-            if t0 == DEPOSIT { credit(map, (address, None), zero, &who, amount, wallet) } else { credit(map, (address, None), &who, zero, amount, wallet) }
+            if *t0 == DEPOSIT { credit(map, (address, None), zero, &who, amount, wallet) } else { credit(map, (address, None), &who, zero, amount, wallet) }
         }
         _ => Ok(()),
     }
 }
 
 /// The wallet's balance changes from the simulated call's logs, with `fee_wei` taken from the native coin.
+#[deny(clippy::indexing_slicing)]
 pub fn changes_from_logs(logs: &[Value], wallet: &str, chain: u64, fee_wei: u128) -> Result<Vec<Change>, String> {
     if logs.len() > MAX_LOGS { return Err(format!("the simulation produced more than {MAX_LOGS} logs")); }
     let wallet = wallet.to_ascii_lowercase();
@@ -256,10 +269,9 @@ pub fn changes_from_logs(logs: &[Value], wallet: &str, chain: u64, fee_wei: u128
     }
     let mut out = Vec::new();
     // native first, then tokens, then NFTs (BTreeMap order within each group)
-    let mut keys: Vec<&Key> = map.keys().collect();
-    keys.sort_by_key(|(asset, id)| (asset != "native", id.is_some(), asset.clone(), *id));
-    for key in keys {
-        let f = map[key];
+    let mut flows: Vec<(&Key, &Flow)> = map.iter().collect();
+    flows.sort_by_key(|((asset, id), _)| (asset != "native", id.is_some(), asset.clone(), *id));
+    for (key, f) in flows {
         if f.inn == f.out { continue; }
         let (negative, magnitude) = if f.inn > f.out { (false, f.inn.sub(f.out)) } else { (true, f.out.sub(f.inn)) };
         out.push(describe(&key.0, key.1, negative, magnitude, chain));
@@ -267,7 +279,7 @@ pub fn changes_from_logs(logs: &[Value], wallet: &str, chain: u64, fee_wei: u128
     Ok(out)
 }
 
-fn short(addr: &str) -> String { let c = verify::checksum(addr); format!("{}…{}", &c[..6], &c[c.len() - 4..]) }
+fn short(addr: &str) -> String { verify::short_address(addr) }
 
 fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256, chain: u64) -> Change {
     let sign = if negative { "−" } else { "+" };
@@ -295,15 +307,18 @@ fn printable(s: &str, max: usize) -> String {
 }
 
 /// The revert reason in words, from the node's error message and the revert data.
+#[deny(clippy::indexing_slicing)]
 pub fn revert_reason(message: Option<&str>, data: Option<&str>) -> String {
     let bytes = data.and_then(|d| hex::decode(strip(d)).ok()).unwrap_or_default();
     if bytes.len() >= 4 {
         let (sel, body) = bytes.split_at(4);
         if sel == [0x08, 0xc3, 0x79, 0xa0] {
             // Error(string)
-            if let (Some(off), Some(_)) = (word_usize(body, 0), word(body, 0)) {
-                if let Some(len) = body.get(off..off + 32).and_then(U256::from_be).and_then(|l| l.to_u128()).map(|l| l as usize) {
-                    if let Some(text) = body.get(off + 32..off + 32 + len).and_then(|b| std::str::from_utf8(b).ok()) {
+            if let Some(off) = word_usize(body, 0) {
+                let start = off.checked_add(32);
+                if let Some(len) = start.and_then(|s| body.get(off..s)).and_then(U256::from_be).and_then(|l| l.to_u128()).and_then(|l| usize::try_from(l).ok()) {
+                    let text = start.and_then(|s| Some((s, s.checked_add(len)?))).and_then(|(s, e)| body.get(s..e)).and_then(|b| std::str::from_utf8(b).ok());
+                    if let Some(text) = text {
                         let t = printable(text, 160);
                         return if t.is_empty() { "reverted with an empty reason".into() } else { t };
                     }

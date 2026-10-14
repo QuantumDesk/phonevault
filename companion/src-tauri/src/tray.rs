@@ -96,7 +96,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
 }
 
 pub fn set_address(_app: &AppHandle, checksum: &str) {
-    if let Some(i) = ITEMS.get() { let _ = i.address.set_text(format!("Account {}…{}", &checksum[..6], &checksum[checksum.len() - 4..])); }
+    if let Some(i) = ITEMS.get() { let _ = i.address.set_text(format!("Account {}", verify::short_address(checksum))); }
 }
 
 pub fn set_unpaired(_app: &AppHandle) {

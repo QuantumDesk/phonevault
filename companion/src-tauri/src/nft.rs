@@ -10,6 +10,9 @@
 //! through the public ipfs.io gateway), no redirects, no private/loopback hosts, 256 KiB of JSON and
 //! 2 MiB of image at most; the image comes back as a data: URL, so the page never loads it itself.
 
+// Contract return data and node answers are untrusted: no unchecked indexing or slicing.
+#![deny(clippy::indexing_slicing)]
+
 use crate::{blocking, eth, pairing, verify, watcher, CmdResult};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -69,17 +72,25 @@ fn word_u256_hex(id: &str) -> Result<String, String> {
     Ok(format!("{v:064x}"))
 }
 
-/// A returned `string` (or a legacy `bytes32`), printable characters only, capped.
+/// A 32-byte ABI word at `at` as a usize; None if it is out of range or past the end.
+fn abi_usize(ret: &[u8], at: usize) -> Option<usize> {
+    let w = ret.get(at..at.checked_add(32)?)?;
+    let (high, low) = w.split_at(16);
+    if high.iter().any(|b| *b != 0) { return None; }
+    usize::try_from(u128::from_be_bytes(low.try_into().ok()?)).ok()
+}
+
+/// A returned `string` (or a legacy `bytes32`), printable characters only, capped. The contract
+/// (anyone's) chooses these bytes: every offset and length is checked, never trusted.
 pub fn decode_string(ret: &[u8]) -> Option<String> {
     let raw: Vec<u8> = if ret.len() == 32 {
         ret.iter().copied().take_while(|b| *b != 0).collect()
     } else {
-        if ret.len() < 64 { return None; }
-        let off = u128::from_be_bytes(ret[16..32].try_into().ok()?) as usize;
-        if off + 32 > ret.len() || ret[off..off + 16].iter().any(|b| *b != 0) { return None; }
-        let len = u128::from_be_bytes(ret[off + 16..off + 32].try_into().ok()?) as usize;
-        if len > 4096 || off + 32 + len > ret.len() { return None; }
-        ret[off + 32..off + 32 + len].to_vec()
+        let off = abi_usize(ret, 0)?;
+        let len = abi_usize(ret, off)?;
+        if len > 4096 { return None; }
+        let start = off.checked_add(32)?;
+        ret.get(start..start.checked_add(len)?)?.to_vec()
     };
     let s = String::from_utf8(raw).ok()?;
     let s: String = s.chars().filter(|c| !c.is_control()).take(200).collect();
@@ -88,11 +99,16 @@ pub fn decode_string(ret: &[u8]) -> Option<String> {
 }
 
 fn address_word(ret: &[u8]) -> Option<String> {
-    (ret.len() == 32 && ret[..12].iter().all(|b| *b == 0)).then(|| format!("0x{}", hex::encode(&ret[12..])))
+    if ret.len() != 32 { return None; }
+    let (pad, addr) = ret.split_at(12);
+    pad.iter().all(|b| *b == 0).then(|| format!("0x{}", hex::encode(addr)))
 }
 
 fn uint_word(ret: &[u8]) -> Option<u128> {
-    (ret.len() == 32 && ret[..16].iter().all(|b| *b == 0)).then(|| u128::from_be_bytes(ret[16..].try_into().unwrap()))
+    if ret.len() != 32 { return None; }
+    let (high, low) = ret.split_at(16);
+    if high.iter().any(|b| *b != 0) { return None; }
+    Some(u128::from_be_bytes(low.try_into().ok()?))
 }
 
 fn owns(rpc: &eth::Rpc, contract: &str, id: &str, owner: &str) -> Option<bool> {
@@ -135,11 +151,14 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
     let mut out: Vec<(String, String)> = Vec::new();
     for l in logs {
         let Some(t) = l.get("topics").and_then(Value::as_array) else { continue };
-        if t.len() != 4 || t[0].as_str() != Some(watcher::TRANSFER_TOPIC) || !t[2].as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic)) { continue; }
-        let Some(id_hex) = t[3].as_str().map(|s| s.trim_start_matches("0x")) else { continue };
-        if id_hex.len() != 64 || !id_hex[..32].bytes().all(|b| b == b'0') { continue; } // ids beyond u128 are not shown
-        let Ok(id) = u128::from_str_radix(&id_hex[32..], 16) else { continue };
-        let Some(c) = l.get("address").and_then(Value::as_str) else { continue };
+        let [t0, _, t2, t3] = t.as_slice() else { continue };
+        if t0.as_str() != Some(watcher::TRANSFER_TOPIC) || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic)) { continue; }
+        let Some(id_hex) = t3.as_str().and_then(|s| s.strip_prefix("0x")) else { continue };
+        if id_hex.len() != 64 || !id_hex.bytes().all(|b| b.is_ascii_hexdigit()) { continue; }
+        let (Some(high), Some(low)) = (id_hex.get(..32), id_hex.get(32..)) else { continue };
+        if !high.bytes().all(|b| b == b'0') { continue; } // ids beyond u128 are not shown
+        let Ok(id) = u128::from_str_radix(low, 16) else { continue };
+        let Some(c) = l.get("address").and_then(Value::as_str).filter(|c| watcher::is_address(c)) else { continue };
         let item = (c.to_ascii_lowercase(), id.to_string());
         if !out.contains(&item) { out.push(item); }
     }
@@ -181,7 +200,7 @@ pub(crate) async fn nft_scan(rpc_url: String) -> CmdResult<Scan> {
 pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdResult<Scan> {
     blocking(move || {
         let c = contract.trim().to_ascii_lowercase();
-        if c.len() != 42 || !c.starts_with("0x") || !c[2..].bytes().all(|b| b.is_ascii_hexdigit()) { return Err("a contract address is 0x followed by 40 hex characters".into()); }
+        if !watcher::is_address(&c) { return Err("a contract address is 0x followed by 40 hex characters".into()); }
         let (rpc, chain, owner, block) = connect(&rpc_url)?;
         let owner_word = format!("{:0>64}", owner.trim_start_matches("0x"));
         let count = rpc.eth_call(&c, &format!("0x{SEL_BALANCE_OF}{owner_word}")).ok().and_then(|r| uint_word(&r))
@@ -284,7 +303,7 @@ pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: St
     blocking(move || {
         let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
         let c = contract.trim().to_ascii_lowercase();
-        if c.len() != 42 || !c.starts_with("0x") { return Err("bad contract".into()); }
+        if !watcher::is_address(&c) { return Err("bad contract".into()); }
         let empty = |e: String| Meta { name: None, description: None, image: None, error: Some(e) };
         let Some(uri) = rpc.eth_call(&c, &format!("0x{SEL_TOKEN_URI}{}", word_u256_hex(&token_id)?)).ok().and_then(|r| decode_string(&r)) else {
             return Ok(empty("the contract has no tokenURI for this token".into()));
@@ -302,6 +321,7 @@ pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: St
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
