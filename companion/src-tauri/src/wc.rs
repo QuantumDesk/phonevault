@@ -447,7 +447,9 @@ pub fn route(method: &str, params: &Value, chain: u64, session_chains: &[u64], p
 
 // ---------------------------------------------------------------- node
 
-/// Minimal JSON-RPC call for the one query `eth::Rpc` has no helper for (gas estimate with calldata).
+/// Minimal JSON-RPC call for the dApp's gas estimate. Not `eth::Rpc::estimate_gas_data`, so that
+/// the node's own refusal text reaches the dApp unprefixed and the answer is parsed with the
+/// strict `dapp_quantity` rather than `eth::Rpc`'s lenient hex parse.
 fn node_call(url: &str, method: &str, params: Value) -> Result<Value, String> {
     if !url.starts_with("https://") { return Err("the node URL must use https://".into()); }
     let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none()).build().map_err(|e| e.to_string())?;
