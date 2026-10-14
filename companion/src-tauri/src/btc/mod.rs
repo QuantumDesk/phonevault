@@ -632,7 +632,7 @@ pub(crate) async fn btc_save_export(id: String) -> CmdResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wallet::test_account;
+    use wallet::tests::account as test_account;
 
     #[test]
     fn export_text_names_everything_sparrow_needs() {

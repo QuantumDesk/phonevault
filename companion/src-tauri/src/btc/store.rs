@@ -71,8 +71,6 @@ impl Default for Accounts { fn default() -> Self { Accounts { version: VERSION, 
 
 impl Accounts {
     pub fn find(&self, id: &str) -> Option<&StoredAccount> { self.accounts.iter().find(|a| a.id == id) }
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn active_for(&self, net: Net) -> Option<&StoredAccount> { self.active.get(net.wire()).and_then(|id| self.find(id)) }
     pub fn server(&self, net: Net) -> Option<String> { self.servers.get(net.wire()).cloned() }
 }
 
@@ -269,7 +267,12 @@ pub fn update_cache<T>(id: &str, f: impl FnOnce(&mut Cache) -> T) -> Result<(T, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::btc::wallet::test_account;
+    use crate::btc::wallet::tests::account as test_account;
+
+    impl Accounts {
+        /// The account shown for `net`.
+        fn active_for(&self, net: Net) -> Option<&StoredAccount> { self.active.get(net.wire()).and_then(|id| self.find(id)) }
+    }
 
     fn tmp() -> PathBuf {
         let d = std::env::temp_dir().join(format!("pv-btc-test-{}", uuid::Uuid::new_v4()));

@@ -279,6 +279,8 @@ pub fn run() {
             // clicking the Dock icon brings the window back
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event { tray::show_main(app); }
+            // no Dock elsewhere: nothing to handle
+            #[cfg(not(target_os = "macos"))]
             let _ = (app, event);
         });
 }

@@ -126,7 +126,7 @@ pub fn entry(t: &Tx, mine: &BTreeSet<String>, now: u64) -> Entry {
 mod tests {
     use super::*;
     use crate::btc::esplora::{parse_txs, Stats, TxStatus, Vin, Vout};
-    use crate::btc::wallet::{test_account, Kind, Net};
+    use crate::btc::wallet::{tests::account as test_account, Kind, Net};
     use std::cell::RefCell;
 
     /// A pretend server: which addresses have which transactions.

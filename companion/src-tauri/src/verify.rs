@@ -298,7 +298,7 @@ pub fn expected_message_digest(request: &Value) -> Result<[u8; 32], VerifyError>
             if bytes.is_empty() || bytes.len() > crate::message::MAX_MESSAGE_BYTES { return Err(err("message length out of range")); }
             Ok(crate::message::personal_digest(&bytes))
         }
-        "eth_signTypedData_v4" => Ok(crate::message::typed_data_digest(field("typedData")?).map_err(|e| err(e.0))?.digest),
+        "eth_signTypedData_v4" => crate::message::typed_data_digest(field("typedData")?).map_err(|e| err(e.0)),
         other => Err(err(format!("not a message-signing method: {other}"))),
     }
 }
@@ -458,9 +458,9 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
         for v in list {
             let name = v["name"].as_str().unwrap();
             if v["kind"] == "typed" {
-                let t = crate::message::typed_data_digest(v["typedData"].as_str().unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
-                assert_eq!(format!("0x{}", hex::encode(t.domain_separator)), v["domainSeparator"], "{name} domain separator");
-                assert_eq!(format!("0x{}", hex::encode(t.message_hash)), v["messageHash"], "{name} message hash");
+                let (separator, hash) = crate::message::typed_data_hashes(v["typedData"].as_str().unwrap()).unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert_eq!(format!("0x{}", hex::encode(separator)), v["domainSeparator"], "{name} domain separator");
+                assert_eq!(format!("0x{}", hex::encode(hash)), v["messageHash"], "{name} message hash");
             }
             let req = message_request(v);
             let digest = expected_message_digest(&req).unwrap();
@@ -485,13 +485,13 @@ a0552f96d381d40f3683e144a7fb52bc9eb92019f4fd5f1835bdbf72b5a6a6a1a9";
     fn mail_matches_the_eip_published_values() {
         let v = vector("eip712-mail");
         let text = v["typedData"].as_str().unwrap();
-        assert_eq!(crate::message::encode_type(text, "Mail"), "Mail(Person from,Person to,string contents)Person(string name,address wallet)");
-        let t = crate::message::typed_data_digest(text).unwrap();
-        assert_eq!(hex::encode(t.domain_separator), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
-        assert_eq!(hex::encode(t.message_hash), "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e");
-        assert_eq!(hex::encode(t.digest), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
+        assert_eq!(crate::message::tests::encode_type(text, "Mail"), "Mail(Person from,Person to,string contents)Person(string name,address wallet)");
+        let (separator, hash) = crate::message::typed_data_hashes(text).unwrap();
+        assert_eq!(hex::encode(separator), "f2cee375fa42b42143804025fc449deafd50cc031ca257e0b194a650a912090f");
+        assert_eq!(hex::encode(hash), "c52c0ee5d84264471806290a3f2c4cecfc5490626bf912d01f240d7a274b371e");
+        assert_eq!(hex::encode(crate::message::typed_data_digest(text).unwrap()), "be609aee343fb3c4b28e1df9e632fca64fcfaede20f02e86244efddf30957bd2");
         let nested = vector("sig-util-v4-nested-arrays");
-        assert_eq!(crate::message::encode_type(nested["typedData"].as_str().unwrap(), "Mail"),
+        assert_eq!(crate::message::tests::encode_type(nested["typedData"].as_str().unwrap(), "Mail"),
             "Mail(Person from,Person[] to,string contents)Person(string name,address[] wallets)");
     }
 

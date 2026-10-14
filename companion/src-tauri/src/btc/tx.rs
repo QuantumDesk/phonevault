@@ -314,7 +314,7 @@ pub fn bump(old: &Built, rate_kvb: u64) -> Result<Built, String> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use crate::btc::wallet::{test_account, Net};
+    use crate::btc::wallet::{tests::account as test_account, Net};
     use bitcoin::hashes::Hash;
     use bitcoin::Txid;
     use std::str::FromStr;

@@ -279,8 +279,6 @@ pub fn changes_from_logs(logs: &[Value], wallet: &str, chain: u64, fee_wei: u128
     Ok(out)
 }
 
-fn short(addr: &str) -> String { verify::short_address(addr) }
-
 fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256, chain: u64) -> Change {
     let sign = if negative { "−" } else { "+" };
     let raw = magnitude.to_decimal();
@@ -291,11 +289,11 @@ fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256
     }
     if let Some(id) = token_id {
         let id = id.to_decimal();
-        return Change { asset: asset.into(), display: format!("{sign}{raw} × NFT #{id} of {}", short(asset)), token_id: Some(id), delta, symbol: None, decimals: None };
+        return Change { asset: asset.into(), display: format!("{sign}{raw} × NFT #{id} of {}", verify::short_address(asset)), token_id: Some(id), delta, symbol: None, decimals: None };
     }
     match tokens::lookup(chain, asset) {
         Some(t) => Change { asset: asset.into(), token_id: None, delta, symbol: Some(t.symbol.clone()), decimals: Some(t.decimals), display: format!("{sign}{} {}", format_decimal(&raw, t.decimals), t.symbol) },
-        None => Change { asset: asset.into(), token_id: None, delta, symbol: None, decimals: None, display: format!("{sign}{raw} base units of unknown token {}", short(asset)) },
+        None => Change { asset: asset.into(), token_id: None, delta, symbol: None, decimals: None, display: format!("{sign}{raw} base units of unknown token {}", verify::short_address(asset)) },
     }
 }
 

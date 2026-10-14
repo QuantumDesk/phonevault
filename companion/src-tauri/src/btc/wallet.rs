@@ -132,15 +132,6 @@ pub fn account_path(kind: Kind, net: Net, number: u32) -> DerivationPath {
     ])
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-/// "1".."20" exactly (no leading zeros, no signs), as the phone writes it.
-pub fn parse_number(s: &str, max: u32) -> Result<u32, String> {
-    if s.is_empty() || s.len() > 7 || s.starts_with('0') && s != "0" || !s.bytes().all(|b| b.is_ascii_digit()) { return Err(format!("malformed number {s:?}")); }
-    let n: u32 = s.parse().map_err(|_| format!("malformed number {s:?}"))?;
-    if n > max { return Err(format!("number {n} out of range")); }
-    Ok(n)
-}
-
 // ---------------------------------------------------------------- BIP-380 descriptor checksum
 
 const INPUT_CHARSET: &str = "0123456789()[],'/*abcdefgh@:$%{}IJKLMNOPQRSTUVWXYZ&+-.;<=>?!^_|~ijklmnopqrstuvwxyzABCDEFGH`#\"\\ ";
@@ -248,7 +239,7 @@ pub fn parse_recipient(s: &str, net: Net) -> Result<Address, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use bitcoin::bip32::Xpriv;
     use serde_json::json;
@@ -373,14 +364,4 @@ mod tests {
         assert!(parse_recipient("bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu?amount=1", Net::Bitcoin).is_err());
         assert!(parse_recipient("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3", Net::Bitcoin).is_err());
     }
-
-    #[test]
-    fn numbers_are_strict() {
-        assert_eq!(parse_number("1", 20).unwrap(), 1);
-        assert_eq!(parse_number("20", 20).unwrap(), 20);
-        for bad in ["", "01", "21", "-1", "+1", "1.0", " 1", "99999999"] { assert!(parse_number(bad, 20).is_err(), "{bad}"); }
-    }
 }
-
-#[cfg(test)]
-pub use tests::account as test_account;

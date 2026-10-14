@@ -30,8 +30,6 @@ use bitcoin::{consensus, taproot, Amount, Transaction, Witness};
 /// A signed transaction that passed every check.
 #[derive(Clone, Debug)]
 pub struct Verified {
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub tx: Transaction,
     pub txid: String,
     pub hex: String,
     pub fee: u64,
@@ -156,7 +154,7 @@ pub fn verify_signed(built: &Built, returned_b64: &str) -> Result<Verified, Stri
     let weight = tx.weight().to_wu();
     let vsize = weight.div_ceil(4);
     if vsize > built.vsize { return Err(format!("signed transaction is {vsize} vB, larger than the {} vB it was priced for", built.vsize)); }
-    Ok(Verified { txid: tx.compute_txid().to_string(), hex: consensus::encode::serialize_hex(&tx), fee, vsize, tx })
+    Ok(Verified { txid: tx.compute_txid().to_string(), hex: consensus::encode::serialize_hex(&tx), fee, vsize })
 }
 
 /// libbitcoinconsensus (Bitcoin Core 26) over every input, with all spent outputs (needed for Taproot).
@@ -183,10 +181,13 @@ impl ByteArray for bitcoin::sighash::TapSighash { fn to_byte_array_compat(self) 
 mod tests {
     use super::*;
     use crate::btc::tx::{plan, tests::coin};
-    use crate::btc::wallet::{test_account, Net};
+    use crate::btc::wallet::{tests::account as test_account, Net};
     use bitcoin::bip32::Xpriv;
     use bitcoin::{Address, TxOut};
     use std::str::FromStr;
+
+    /// The verified transaction itself, decoded from its hex.
+    fn signed_tx(v: &Verified) -> Transaction { consensus::encode::deserialize_hex(&v.hex).unwrap() }
 
     fn built(kind: Kind) -> (Built, Xpriv) {
         let (a, master) = test_account(Net::Bitcoin, kind, 1);
@@ -215,12 +216,12 @@ mod tests {
             assert_eq!(v.txid, b.psbt.unsigned_tx.compute_txid().to_string(), "segwit: txid fixed before signing");
             assert!(v.vsize <= b.vsize && v.vsize + 3 >= b.vsize, "estimate is a tight upper bound ({} vs {})", v.vsize, b.vsize);
             // the result is a complete, valid transaction
-            assert!(v.tx.input.iter().all(|i| !i.witness.is_empty()));
-            consensus_check(&v.tx, &b.prevouts()).unwrap();
+            assert!(signed_tx(&v).input.iter().all(|i| !i.witness.is_empty()));
+            consensus_check(&signed_tx(&v), &b.prevouts()).unwrap();
             // rust-bitcoin's own finalizer agrees with ours
             let mut f = signed.clone();
-            for (i, inp) in f.inputs.iter_mut().enumerate() { inp.final_script_witness = Some(v.tx.input[i].witness.clone()); inp.partial_sigs.clear(); inp.tap_key_sig = None; }
-            assert_eq!(f.extract_tx_unchecked_fee_rate(), v.tx);
+            for (i, inp) in f.inputs.iter_mut().enumerate() { inp.final_script_witness = Some(signed_tx(&v).input[i].witness.clone()); inp.partial_sigs.clear(); inp.tap_key_sig = None; }
+            assert_eq!(f.extract_tx_unchecked_fee_rate(), signed_tx(&v));
         }
     }
 
@@ -315,7 +316,7 @@ mod tests {
             let (b, key) = built(kind);
             let v = verify_signed(&b, &psbt_base64(&phone_sign(&b.psbt, &key))).unwrap();
             let mut fin = b.psbt.clone();
-            for (i, inp) in fin.inputs.iter_mut().enumerate() { inp.final_script_witness = Some(v.tx.input[i].witness.clone()); }
+            for (i, inp) in fin.inputs.iter_mut().enumerate() { inp.final_script_witness = Some(signed_tx(&v).input[i].witness.clone()); }
             assert_eq!(verify_signed(&b, &psbt_base64(&fin)).unwrap().txid, v.txid);
             // a final witness for another key
             let mut bad = fin.clone();
@@ -331,12 +332,12 @@ mod tests {
     fn consensus_check_catches_a_broken_witness() {
         let (b, key) = built(Kind::P2wpkh);
         let v = verify_signed(&b, &psbt_base64(&phone_sign(&b.psbt, &key))).unwrap();
-        let mut tx = v.tx.clone();
+        let mut tx = signed_tx(&v);
         tx.output[0].value = tx.output[0].value - Amount::from_sat(1);
         assert!(consensus_check(&tx, &b.prevouts()).is_err());
         let mut wrong_amount = b.prevouts();
         wrong_amount[0].value = wrong_amount[0].value + Amount::from_sat(1);
-        assert!(consensus_check(&v.tx, &wrong_amount).is_err(), "BIP-143 commits to the amount");
+        assert!(consensus_check(&signed_tx(&v), &wrong_amount).is_err(), "BIP-143 commits to the amount");
     }
 
     #[test]

@@ -317,7 +317,7 @@ fn dependencies(types: &Types, t: &str) -> BTreeSet<String> {
     found
 }
 
-pub fn encode_type_of(types: &Types, t: &str) -> String {
+fn encode_type_of(types: &Types, t: &str) -> String {
     let one = |t: &str| format!("{t}({})", types[t].iter().map(|(n, ft)| format!("{ft} {n}")).collect::<Vec<_>>().join(","));
     let mut out = one(t);
     for dep in dependencies(types, t) { out.push_str(&one(&dep)); }
@@ -451,14 +451,17 @@ fn hash_struct(types: &Types, t: &str, raw: &J, path: &str, budget: &mut i64) ->
     Ok(keccak256(&data))
 }
 
-/// The EIP-712 hashes of one typed-data payload (the separator and message hash are compared
-/// against the shared vectors in tests).
-#[derive(Debug)]
-#[cfg_attr(not(test), allow(dead_code))]
-pub struct TypedDigest { pub domain_separator: [u8; 32], pub message_hash: [u8; 32], pub digest: [u8; 32] }
-
 /// Strictly parse `eth_signTypedData_v4` JSON text and compute its EIP-712 digest.
-pub fn typed_data_digest(text: &str) -> Result<TypedDigest, MessageError> {
+pub fn typed_data_digest(text: &str) -> Result<[u8; 32], MessageError> {
+    let (domain_separator, message_hash) = typed_data_hashes(text)?;
+    let mut pre = vec![0x19, 0x01];
+    pre.extend(domain_separator);
+    pre.extend(message_hash);
+    Ok(keccak256(&pre))
+}
+
+/// Strictly parse `eth_signTypedData_v4` JSON text → (domain separator, message hash).
+pub(crate) fn typed_data_hashes(text: &str) -> Result<([u8; 32], [u8; 32]), MessageError> {
     if text.len() > MAX_TYPED_DATA_BYTES { return Err(err(format!("typed data exceeds {MAX_TYPED_DATA_BYTES} bytes"))); }
     let root = parse_json(text).map_err(|e| err(format!("typed data is not strict JSON: {}", e.0)))?;
     let top = obj(&root, "typed data")?;
@@ -474,22 +477,19 @@ pub fn typed_data_digest(text: &str) -> Result<TypedDigest, MessageError> {
     let mut budget = MAX_VALUES;
     let domain_separator = hash_struct(&types, DOMAIN_TYPE, get(top, "domain").unwrap(), "domain", &mut budget)?;
     let message_hash = hash_struct(&types, primary, get(top, "message").unwrap(), "message", &mut budget)?;
-    let mut pre = vec![0x19, 0x01];
-    pre.extend(domain_separator);
-    pre.extend(message_hash);
-    Ok(TypedDigest { domain_separator, message_hash, digest: keccak256(&pre) })
+    Ok((domain_separator, message_hash))
 }
 
 #[cfg(test)]
-pub fn encode_type(text: &str, t: &str) -> String {
-    let root = parse_json(text).unwrap();
-    let types = parse_types(get(obj(&root, "").unwrap(), "types").unwrap()).unwrap();
-    encode_type_of(&types, t)
-}
-
-#[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// EIP-712 `encodeType` of `t` in the typed data `text`.
+    pub(crate) fn encode_type(text: &str, t: &str) -> String {
+        let root = parse_json(text).unwrap();
+        let types = parse_types(get(obj(&root, "").unwrap(), "types").unwrap()).unwrap();
+        encode_type_of(&types, t)
+    }
 
     #[test]
     fn strict_json_keeps_numbers_exact_and_refuses_ambiguity() {

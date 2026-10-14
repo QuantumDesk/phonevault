@@ -36,19 +36,6 @@ pub fn spot(symbol: &str) -> Result<f64, String> {
     Ok(p)
 }
 
-/// How a listed token is valued, without a price feed per token: USD stablecoins are $1 by
-/// definition (a depeg is not shown), wrapped ETH is the ETH price, wrapped BTC the BTC price.
-/// Anything else has no USD figure.
-#[cfg_attr(not(test), allow(dead_code))] // mirrored by the UI (tokens.ts usdBasis); the test keeps the list covered
-pub fn token_basis(symbol: &str) -> Option<&'static str> {
-    match symbol {
-        "USDC" | "USDT" | "USDT0" | "DAI" => Some("USD"),
-        "WETH" => Some("ETH"),
-        "WBTC" | "cbBTC" => Some("BTC"),
-        _ => None,
-    }
-}
-
 /// USD per coin. `symbol` is limited to the native coins of the networks the app knows, and BTC.
 #[tauri::command]
 pub(crate) async fn spot_usd(symbol: String) -> CmdResult<f64> { blocking(move || spot(&symbol)).await }
@@ -66,6 +53,20 @@ pub(crate) async fn prices_usd() -> CmdResult<Prices> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// How a listed token is valued, without a price feed per token: USD stablecoins are $1 by
+    /// definition (a depeg is not shown), wrapped ETH is the ETH price, wrapped BTC the BTC price.
+    /// Anything else has no USD figure. The UI applies this (tokens.ts usdBasis); this copy keeps
+    /// the built-in token list covered.
+    fn token_basis(symbol: &str) -> Option<&'static str> {
+        match symbol {
+            "USDC" | "USDT" | "USDT0" | "DAI" => Some("USD"),
+            "WETH" => Some("ETH"),
+            "WBTC" | "cbBTC" => Some("BTC"),
+            _ => None,
+        }
+    }
+
     #[test]
     fn parses_coinbase_shape() {
         let v: Value = serde_json::from_str(r#"{"data":{"amount":"3456.78","base":"ETH","currency":"USD"}}"#).unwrap();
