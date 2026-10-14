@@ -1,5 +1,5 @@
 # Phone Vault CI. Every third-party action is pinned to a full commit SHA (the tag it was taken
-# from is in the comment; resolved with `gh api repos/<owner>/<repo>/commits/<tag>` on 2026-10-13).
+# from is in the comment; resolve a tag with `gh api repos/<owner>/<repo>/commits/<tag>`).
 name: CI
 
 on:
@@ -134,3 +134,35 @@ jobs:
         run: |
           shellcheck --version
           git ls-files -z '*.sh' | xargs -0 shellcheck -S warning
+
+  vault-os:
+    name: Vault OS release gates and policy tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Test tools (xmllint, zip, unzip, openssl)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libxml2-utils zip unzip openssl
+      # test-usb-client-policy.sh runs the host-client tests with the project's .venv.
+      - name: Project Python environment (hash-pinned)
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --require-hashes --no-deps -r tools/requirements.txt
+      - name: vault-os/tests/test-*.sh
+        run: |
+          fail=0
+          for t in vault-os/tests/test-*.sh; do
+            echo "::group::${t}"
+            if bash "${t}"; then echo "PASS ${t}"; else echo "::error::${t} failed"; fail=1; fi
+            echo "::endgroup::"
+          done
+          exit "${fail}"
+      - name: Forbidden-policy coverage
+        run: python3 vault-os/tests/test_forbidden_policy_coverage.py
