@@ -43,6 +43,9 @@ jobs:
       - name: Frontend build (tauri::generate_context! embeds ../dist)
         working-directory: companion
         run: npm run build
+      - name: Rustfmt
+        working-directory: companion/src-tauri
+        run: cargo fmt --check
       - name: Clippy
         working-directory: companion/src-tauri
         run: cargo clippy --locked -- -D warnings
