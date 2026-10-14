@@ -370,10 +370,10 @@ final class SwapPlan {
         }
 
         String amount(String asset, BigInteger raw) {
-            if (NATIVE.equals(asset)) return Erc20Call.formatUnits(raw, 18) + " " + nativeSymbol;
+            if (NATIVE.equals(asset)) return Units.format(raw, 18, true) + " " + nativeSymbol;
             TokenList.Token t = tokens.lookup(chainId, asset);
-            if (t != null) return Erc20Call.formatUnits(raw, t.decimals) + " " + t.symbol;
-            if (router != null && router.wrappedNative.equals(asset)) return Erc20Call.formatUnits(raw, 18) + " " + router.wrappedSymbol;
+            if (t != null) return Units.format(raw, t.decimals, true) + " " + t.symbol;
+            if (router != null && router.wrappedNative.equals(asset)) return Units.format(raw, 18, true) + " " + router.wrappedSymbol;
             return Erc20Call.baseUnits(raw) + " of unknown token " + org.web3j.crypto.Keys.toChecksumAddress(asset);
         }
     }

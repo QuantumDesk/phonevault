@@ -123,7 +123,7 @@ final class TransactionReview {
         TokenList.Token token = tokens.lookup(r.chainId, r.to);
         String contract = r.contractLabel();
         String party = Keys.toChecksumAddress(call.party);
-        String amount = token != null ? Erc20Call.formatUnits(call.amount, token.decimals) + " " + token.symbol
+        String amount = token != null ? Units.format(call.amount, token.decimals, true) + " " + token.symbol
                 : Erc20Call.baseUnits(call.amount);
         String assetName = token != null ? token.symbol : "tokens of unknown token contract " + contract;
         // what the Action sentence calls the amount: never a guessed symbol for an unlisted contract
@@ -245,7 +245,7 @@ final class TransactionReview {
     private static String unknownTokenWarning(Erc20Call call, String contract) {
         return "Unknown token contract " + contract + ". It is not in the token list built into this phone, so its "
                 + "name, symbol and decimals can't be verified: the amount is shown in raw base units ("
-                + Erc20Call.formatUnits(call.amount, 0) + " base units could be a tiny fraction of a token or many whole "
+                + Units.format(call.amount, 0, true) + " base units could be a tiny fraction of a token or many whole "
                 + "tokens). The phone also can't verify that this contract behaves like a token"
                 + (call.function == Erc20Call.Function.APPROVE ? "; approve can also hand over an NFT." : ".");
     }
@@ -338,7 +338,7 @@ final class TransactionReview {
     }
 
     private static String coins(BigInteger wei) {
-        return new java.math.BigDecimal(wei).movePointLeft(18).stripTrailingZeros().toPlainString();
+        return Units.format(wei, 18, false);
     }
 
     static void addFeeDetails(List<MessageReview.Row> details, Eip1559Request r) {
