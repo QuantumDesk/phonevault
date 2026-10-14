@@ -92,7 +92,7 @@ pub(crate) async fn btc_accounts() -> CmdResult<AccountsView> {
     blocking(|| {
         let p = store::load()?;
         let accounts = p.accounts.iter().map(|a| view(a, p.active.get(a.network.wire()) == Some(&a.id))).collect();
-        let defaults = [Net::Bitcoin, Net::Testnet, Net::Signet].iter().map(|n| (n.wire().to_string(), esplora::defaults(*n).iter().map(|s| s.to_string()).collect())).collect();
+        let defaults = [Net::Bitcoin, Net::Testnet, Net::Signet].iter().map(|n| (n.wire().to_string(), esplora::defaults(*n).iter().map(ToString::to_string).collect())).collect();
         Ok(AccountsView { accounts, servers: p.servers.clone(), defaults })
     }).await
 }
@@ -440,7 +440,7 @@ pub(crate) async fn btc_bump_quote(id: String, txid: String, fee_rate: String) -
         let cache = store::load_cache(&id)?;
         let s = cache.sent.iter().find(|s| s.txid == txid).ok_or("only transactions sent from this Mac can be sped up here")?.clone();
         let c = client(a.net, server.as_deref())?;
-        if c.tx_status(&txid).map(|st| st.confirmed).unwrap_or(false) { return Err("it is already confirmed".into()); }
+        if c.tx_status(&txid).is_ok_and(|st| st.confirmed) { return Err("it is already confirmed".into()); }
         if rate <= s.rate_kvb { return Err(format!("choose a fee rate above the current {:.1} sat/vB", s.rate_kvb as f64 / 1000.0)); }
         let mut inputs = Vec::new();
         for (t, vout, value, chain, index) in &s.inputs {

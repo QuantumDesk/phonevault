@@ -77,7 +77,7 @@ fn fetch() -> Result<String, String> {
     let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
     let resp = client.get(STATUS_URL).send().map_err(|_| "Google's status list could not be reached".to_string())?;
     if !resp.status().is_success() { return Err(format!("Google's status list answered HTTP {}", resp.status().as_u16())); }
-    if resp.content_length().map(|l| l > MAX_BYTES).unwrap_or(false) { return Err("status list is unexpectedly large".into()); }
+    if resp.content_length().is_some_and(|l| l > MAX_BYTES) { return Err("status list is unexpectedly large".into()); }
     let body = resp.text().map_err(|_| "status list download failed".to_string())?;
     if body.len() as u64 > MAX_BYTES { return Err("status list is unexpectedly large".into()); }
     Ok(body)

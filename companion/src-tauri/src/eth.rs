@@ -21,7 +21,7 @@ pub fn read_capped(r: impl std::io::Read, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     let mut bytes = Vec::new();
     r.take(max.saturating_add(1)).read_to_end(&mut bytes).map_err(|e| format!("the answer could not be read ({:?})", e.kind()))?;
-    if bytes.len() as u64 > max { return Err(format!("the answer is larger than {} bytes, refused", max)); }
+    if bytes.len() as u64 > max { return Err(format!("the answer is larger than {max} bytes, refused")); }
     Ok(bytes)
 }
 
@@ -178,7 +178,7 @@ impl Rpc {
 pub fn format_eth(wei: u128) -> String {
     let whole = wei / 1_000_000_000_000_000_000u128;
     let frac = wei % 1_000_000_000_000_000_000u128;
-    let mut s = format!("{whole}.{:018}", frac);
+    let mut s = format!("{whole}.{frac:018}");
     while s.ends_with('0') { s.pop(); }
     if s.ends_with('.') { s.push('0'); }
     // trim to 8 decimals for the eye; the wei value is what gets signed

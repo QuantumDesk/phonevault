@@ -111,7 +111,7 @@ fn has_attestation_ext(c: &X509Certificate) -> bool {
 }
 
 fn names_strongbox(c: &X509Certificate) -> bool {
-    c.subject().iter_attributes().any(|a| a.as_str().map(|s| s.to_ascii_lowercase().contains("strongbox")).unwrap_or(false))
+    c.subject().iter_attributes().any(|a| a.as_str().is_ok_and(|s| s.to_ascii_lowercase().contains("strongbox")))
 }
 
 fn has_serial_number_attr(c: &X509Certificate) -> bool {

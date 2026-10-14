@@ -107,7 +107,7 @@ pub struct Client { bases: Vec<String>, http: reqwest::blocking::Client }
 
 impl Client {
     pub fn new(net: Net, custom: Option<&str>) -> Result<Client, String> {
-        let bases = match custom { Some(c) => vec![check_server(c)?], None => defaults(net).iter().map(|s| s.to_string()).collect() };
+        let bases = match custom { Some(c) => vec![check_server(c)?], None => defaults(net).iter().map(ToString::to_string).collect() };
         let http = reqwest::blocking::Client::builder().timeout(Duration::from_secs(20)).redirect(reqwest::redirect::Policy::none())
             .user_agent("PhoneVault").build().map_err(|e| e.to_string())?;
         Ok(Client { bases, http })

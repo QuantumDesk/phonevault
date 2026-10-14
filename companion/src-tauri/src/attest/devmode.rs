@@ -22,7 +22,7 @@ pub fn enabled_in(dir: &Path) -> bool {
     }
 }
 
-pub fn enabled() -> bool { dir().map(|d| enabled_in(&d)).unwrap_or(false) }
+pub fn enabled() -> bool { dir().is_ok_and(|d| enabled_in(&d)) }
 
 pub fn set_in(dir: &Path, on: bool, confirmation: Option<&str>) -> Result<(), String> {
     if on {

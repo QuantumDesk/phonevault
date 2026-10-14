@@ -187,9 +187,9 @@ pub fn build_namespaces(required: &Value, optional: &Value, selected: &[u64], pa
         return Err(format!("the dApp requires {}; it must be included", missing.name));
     }
     let r = requested(required, optional);
-    let mut methods: Vec<String> = SUPPORTED_METHODS.iter().map(|s| s.to_string()).collect();
+    let mut methods: Vec<String> = SUPPORTED_METHODS.iter().map(ToString::to_string).collect();
     for (m, req) in &r.methods { if *req && !methods.contains(m) { methods.push(m.clone()); } }
-    let mut events: Vec<String> = EVENTS.iter().map(|s| s.to_string()).collect();
+    let mut events: Vec<String> = EVENTS.iter().map(ToString::to_string).collect();
     for (e, req) in &r.events { if *req && !events.contains(e) { events.push(e.clone()); } }
     let address = verify::checksum(paired);
     Ok(json!({"eip155": {
@@ -267,7 +267,7 @@ pub fn normalize_tx(params: &Value, paired: &str, chain: u64) -> Result<TxDraft,
         if t != 0 && t != 2 { return Err(bad(format!("transaction type {t} is not supported (EIP-1559 only)"))); }
     }
     if let Some(a) = field("accessList") {
-        if !a.as_array().is_some_and(|l| l.is_empty()) { return Err(bad("access lists are not supported: the phone signs with an empty access list")); }
+        if !a.as_array().is_some_and(Vec::is_empty) { return Err(bad("access lists are not supported: the phone signs with an empty access list")); }
     }
     let to = match field("to") {
         Some(v) => dapp_address(v.as_str().ok_or_else(|| bad("to must be an address"))?, "to")?,

@@ -314,7 +314,7 @@ pub fn revert_reason(message: Option<&str>, data: Option<&str>) -> String {
             // Error(string)
             if let Some(off) = word_usize(body, 0) {
                 let start = off.checked_add(32);
-                if let Some(len) = start.and_then(|s| body.get(off..s)).and_then(U256::from_be).and_then(|l| l.to_u128()).and_then(|l| usize::try_from(l).ok()) {
+                if let Some(len) = start.and_then(|s| body.get(off..s)).and_then(U256::from_be).and_then(U256::to_u128).and_then(|l| usize::try_from(l).ok()) {
                     let text = start.and_then(|s| Some((s, s.checked_add(len)?))).and_then(|(s, e)| body.get(s..e)).and_then(|b| std::str::from_utf8(b).ok());
                     if let Some(text) = text {
                         let t = printable(text, 160);
@@ -324,7 +324,7 @@ pub fn revert_reason(message: Option<&str>, data: Option<&str>) -> String {
             }
         } else if sel == [0x4e, 0x48, 0x7b, 0x71] {
             // Panic(uint256)
-            let code = word(body, 0).and_then(|w| w.to_u128()).unwrap_or(u128::MAX);
+            let code = word(body, 0).and_then(U256::to_u128).unwrap_or(u128::MAX);
             let what = match code { 0x01 => "assertion failed", 0x11 => "arithmetic overflow or underflow", 0x12 => "division by zero", 0x21 => "invalid enum value",
                 0x31 => "pop from an empty array", 0x32 => "array index out of bounds", 0x41 => "out of memory", 0x51 => "call to an uninitialised function", _ => "panic" };
             return format!("{what} (panic 0x{code:x})");

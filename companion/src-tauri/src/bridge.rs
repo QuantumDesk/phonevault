@@ -423,7 +423,7 @@ impl Bridge {
         })
     }
 
-    fn lock(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap_or_else(|p| p.into_inner()) }
+    fn lock(&self) -> MutexGuard<'_, Inner> { self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
     fn persist(&self, inner: &Inner) { if let Some(p) = &self.store { let _ = save_sites(p, &inner.sites); } }
     fn paired(&self) -> Option<String> { (self.paired)().map(|p| p.to_ascii_lowercase()) }
 
@@ -1367,7 +1367,7 @@ mod tests {
 
     #[test]
     fn native_host_callers() {
-        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let a = |v: &[&str]| v.iter().map(ToString::to_string).collect::<Vec<_>>();
         let chrome = format!("chrome-extension://{CHROME_EXTENSION_ID}/");
         assert_eq!(native_host_caller(&a(&["companion", &chrome])), Some(chrome.clone()));
         assert!(allowed_caller(&chrome));

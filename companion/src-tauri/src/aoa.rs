@@ -72,7 +72,7 @@ fn google_devices(ctx: &Context) -> Result<Vec<Device<Context>>, AoaError> {
 fn accessory_device(ctx: &Context) -> Result<Option<Device<Context>>, AoaError> {
     let mut found: Vec<Device<Context>> = google_devices(ctx)?
         .into_iter()
-        .filter(|d| d.device_descriptor().map(|x| ACCESSORY_PRODUCTS.contains(&x.product_id())).unwrap_or(false))
+        .filter(|d| d.device_descriptor().is_ok_and(|x| ACCESSORY_PRODUCTS.contains(&x.product_id())))
         .collect();
     if found.len() > 1 { return Err(proto(format!("expected one Phone Vault accessory, found {}", found.len()))); }
     Ok(found.pop())
@@ -133,8 +133,8 @@ impl Session {
                 if (desc.class_code(), desc.sub_class_code(), desc.protocol_code()) != (0xFF, 0xFF, 0x00) { continue; }
                 let eps: Vec<_> = desc.endpoint_descriptors().collect();
                 if eps.len() != 2 || eps.iter().any(|e| e.transfer_type() != TransferType::Bulk) { continue; }
-                let ep_in = eps.iter().find(|e| e.direction() == Direction::In).map(|e| e.address());
-                let ep_out = eps.iter().find(|e| e.direction() == Direction::Out).map(|e| e.address());
+                let ep_in = eps.iter().find(|e| e.direction() == Direction::In).map(rusb::EndpointDescriptor::address);
+                let ep_out = eps.iter().find(|e| e.direction() == Direction::Out).map(rusb::EndpointDescriptor::address);
                 if let (Some(i), Some(o)) = (ep_in, ep_out) { chosen = Some((desc.interface_number(), i, o)); }
             }
         }
@@ -215,7 +215,7 @@ impl Drop for PhoneTurn {
 
 /// Wait for the phone. `on_wait` runs once if someone else has it; `cancelled` is polled while waiting.
 pub fn take_turn(on_wait: impl FnOnce(), cancelled: impl Fn() -> bool) -> Result<PhoneTurn, AoaError> {
-    if HELD.with(|h| h.get()) { return Ok(PhoneTurn { guard: None }); }
+    if HELD.with(Cell::get) { return Ok(PhoneTurn { guard: None }); }
     let mut on_wait = Some(on_wait);
     loop {
         match PHONE.try_lock() {

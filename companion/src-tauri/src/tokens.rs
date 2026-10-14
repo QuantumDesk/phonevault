@@ -63,7 +63,7 @@ fn load_pinned(bytes: &[u8]) -> Result<Vec<Token>, String> {
 /// The built-in list, or why it was refused.
 pub fn list() -> Result<&'static [Token], String> {
     static LIST: OnceLock<Result<Vec<Token>, String>> = OnceLock::new();
-    LIST.get_or_init(|| load_pinned(LIST_BYTES)).as_ref().map(|v| v.as_slice()).map_err(|e| e.clone())
+    LIST.get_or_init(|| load_pinned(LIST_BYTES)).as_ref().map(Vec::as_slice).map_err(Clone::clone)
 }
 
 pub fn lookup(chain_id: u64, address: &str) -> Option<&'static Token> {
@@ -150,7 +150,7 @@ pub fn check_quote(quote: &Quote, t: &TokenIntent) -> Result<(String, String, u1
 // ---------------------------------------------------------------- commands
 
 #[tauri::command]
-pub(crate) fn token_list() -> CmdResult<Vec<Token>> { list().map(|l| l.to_vec()) }
+pub(crate) fn token_list() -> CmdResult<Vec<Token>> { list().map(<[Token]>::to_vec) }
 
 #[derive(Serialize)]
 pub struct TokenBalance { address: String, symbol: String, name: String, decimals: u32, raw: Option<String>, amount: Option<String>, error: Option<String> }

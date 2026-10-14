@@ -149,7 +149,7 @@ mod tests {
 
     fn vout(a: &str, v: u64) -> Vout { Vout { scriptpubkey: "00".into(), scriptpubkey_address: Some(a.into()), value: v } }
     fn tx(id: u8, ins: Vec<Vout>, outs: Vec<Vout>, height: Option<u64>) -> Tx {
-        Tx { txid: format!("{:064x}", id), vin: ins.into_iter().map(|p| Vin { txid: "aa".repeat(32), vout: 0, prevout: Some(p), is_coinbase: false, sequence: 0xffff_fffd }).collect(),
+        Tx { txid: format!("{id:064x}"), vin: ins.into_iter().map(|p| Vin { txid: "aa".repeat(32), vout: 0, prevout: Some(p), is_coinbase: false, sequence: 0xffff_fffd }).collect(),
             vout: outs, weight: 561, fee: 200, status: TxStatus { confirmed: height.is_some(), block_height: height, block_time: height.map(|h| 1_700_000_000 + h) } }
     }
 

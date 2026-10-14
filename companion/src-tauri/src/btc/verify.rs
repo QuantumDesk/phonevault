@@ -320,7 +320,7 @@ mod tests {
             assert_eq!(verify_signed(&b, &psbt_base64(&fin)).unwrap().txid, v.txid);
             // a final witness for another key
             let mut bad = fin.clone();
-            let mut w: Vec<Vec<u8>> = bad.inputs[0].final_script_witness.as_ref().unwrap().iter().map(|x| x.to_vec()).collect();
+            let mut w: Vec<Vec<u8>> = bad.inputs[0].final_script_witness.as_ref().unwrap().iter().map(<[u8]>::to_vec).collect();
             let last = w.len() - 1;
             w[last][5] ^= 1;
             bad.inputs[0].final_script_witness = Some(Witness::from_slice(&w));

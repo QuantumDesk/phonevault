@@ -230,7 +230,7 @@ fn locked_strongbox_phone_with_pinned_app_and_boot_key_is_genuine() {
     let challenge = info.description.challenge.clone();
     let p = policy_for(&info, true);
     let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
-    assert_eq!(a.verdict, Verdict::Genuine, "{:?}", a);
+    assert_eq!(a.verdict, Verdict::Genuine, "{a:?}");
     let d = a.details.unwrap();
     assert_eq!(d.app_signer_kind, "release");
     assert!(d.verified_boot_key_known);
@@ -250,7 +250,7 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
     let challenge = info.description.challenge.clone();
     let good = policy_for(&info, true);
     let fails = |a: policy::Assessment, needle: &str| {
-        assert_eq!(a.verdict, Verdict::Fail, "{needle}: {:?}", a);
+        assert_eq!(a.verdict, Verdict::Fail, "{needle}: {a:?}");
         assert!(a.problems.iter().any(|p| p.contains(needle)), "expected '{needle}' in {:?}", a.problems);
     };
     // challenge mismatch (replay)
@@ -297,7 +297,7 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
     fails(evaluate(&yellow, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not Phone Vault's");
     // ... and yellow WITH our key is genuine (custom-key relock on a Pixel boots yellow)
     let a = evaluate(&yellow, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
-    assert_eq!(a.verdict, Verdict::Genuine, "{:?}", a);
+    assert_eq!(a.verdict, Verdict::Genuine, "{a:?}");
     // red
     let mut red = info.clone();
     red.description.hardware.root_of_trust.as_mut().unwrap().verified_boot_state = BootState::Failed;
@@ -316,12 +316,12 @@ fn unlocked_pixel3_is_development_and_says_so() {
     // release-signed app on an unlocked phone: FAIL without Developer mode (an unlocked bootloader
     // is never accepted from a phone someone else set up) …
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), false);
-    assert_eq!(a.verdict, Verdict::Fail, "{:?}", a);
+    assert_eq!(a.verdict, Verdict::Fail, "{a:?}");
     assert!(a.problems.iter().any(|p| p == policy::UNLOCKED_PROBLEM), "{:?}", a.problems);
     assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
     // … and DEVELOPMENT with it, with the plain headline
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), true);
-    assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
+    assert_eq!(a.verdict, Verdict::Development, "{a:?}");
     assert_eq!(a.headline, policy::UNLOCKED_HEADLINE);
     assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
     // development-signed app: FAIL without Developer mode, DEVELOPMENT with it
@@ -345,7 +345,7 @@ fn tee_attestation_is_never_genuine() {
     let challenge = info.description.challenge.clone();
     // (the sample phone is unlocked: Developer mode on, so the TEE caution is what is tested)
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
-    assert_eq!(a.verdict, Verdict::Development, "{:?}", a);
+    assert_eq!(a.verdict, Verdict::Development, "{a:?}");
     assert!(a.cautions.iter().any(|c| c.contains("TEE")));
     // and claiming StrongBox for a TEE chain fails
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), false);
@@ -556,7 +556,7 @@ mod synthetic {
         let b = build(&genuine_spec(&challenge), true, false);
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         let r = run(&b, &challenge, &resp, &test_policy(), std::slice::from_ref(&b.root));
-        assert_eq!(r.verdict(), Verdict::Genuine, "{:?}", r);
+        assert_eq!(r.verdict(), Verdict::Genuine, "{r:?}");
         assert_eq!(r.address.as_deref(), Some("0x52908400098527886E0F7030069857D2E4169EE7"));
         let d = r.assessment.details.unwrap();
         assert_eq!(d.verified_boot_state.as_deref(), Some("Self-signed (yellow)"));
@@ -652,7 +652,7 @@ mod synthetic {
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         let req = request("t1", &challenge);
         let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, true).unwrap();
-        assert_eq!(r.verdict(), Verdict::Development, "{:?}", r);
+        assert_eq!(r.verdict(), Verdict::Development, "{r:?}");
         assert_eq!(r.assessment.headline, policy::UNLOCKED_HEADLINE);
         assert!(r.dev_mode);
         let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, false).unwrap();

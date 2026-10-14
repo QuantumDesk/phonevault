@@ -173,7 +173,7 @@ pub fn assess(
         Err(e) => return Ok(report(policy::fail(format!("The attestation certificate chain is not valid: {e}.")), Some(&phone.address))),
         Ok(c) => c,
     };
-    let binding_ok = chain.leaf_p256_point.as_deref().map(|p| verify_binding(p, challenge, &phone.address_bytes, &phone.signature)).unwrap_or(false);
+    let binding_ok = chain.leaf_p256_point.as_deref().is_some_and(|p| verify_binding(p, challenge, &phone.address_bytes, &phone.signature));
     let status = revocation();
     let ev = policy::Evidence { chain: &chain, phone_level: phone.security_level, challenge, binding_ok, revocation: &status };
     Ok(report(policy::evaluate(policy, &ev, allow_dev), Some(&phone.address)))
