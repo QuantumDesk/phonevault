@@ -53,16 +53,15 @@ fn parse_list(bytes: &[u8]) -> Result<Vec<Token>, String> {
         if !ALLOWED_CHAINS.contains(&t.chain_id) {
             return Err(format!("{w}: chain {} is not in the phone's allow-list", t.chain_id));
         }
-        let a = &t.address;
-        if a.len() != 42
-            || !a.starts_with("0x")
-            || !a[2..].bytes().all(|b| b.is_ascii_hexdigit())
-            || a[2..].bytes().all(|b| b == b'0')
-        {
+        let a = match verify::parse_address(&t.address, verify::Case::Checksummed) {
+            Ok(a) => a,
+            Err(verify::AddressError::Shape) => return Err(format!("{w}: bad address")),
+            Err(verify::AddressError::Checksum) => {
+                return Err(format!("{w}: address is not in EIP-55 checksum casing"))
+            }
+        };
+        if a.bytes().skip(2).all(|b| b == b'0') {
             return Err(format!("{w}: bad address"));
-        }
-        if verify::checksum(a) != *a {
-            return Err(format!("{w}: address is not in EIP-55 checksum casing"));
         }
         if t.symbol.is_empty() || t.symbol.len() > 11 || !t.symbol.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(format!("{w}: bad symbol"));
@@ -153,11 +152,10 @@ pub fn parse_units(text: &str, decimals: u32) -> Result<u128, String> {
 }
 
 fn word_address(address: &str) -> Result<String, String> {
-    let a = address.trim().to_ascii_lowercase();
-    if a.len() != 42 || !a.starts_with("0x") || !a[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("bad address".into());
-    }
-    Ok(format!("{:0>64}", &a[2..]))
+    // lowercased first: a "0X" prefix is accepted here
+    let a = verify::parse_address(&address.trim().to_ascii_lowercase(), verify::Case::Any)
+        .map_err(|_| "bad address".to_string())?;
+    Ok(format!("{:0>64}", a.trim_start_matches("0x")))
 }
 
 /// `transfer(address,uint256)` calldata, lower-case 0x hex (exactly the phone's canonical form).
@@ -278,30 +276,13 @@ pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> 
     .await
 }
 
-/// Same recipient rules as `quote` (lib.rs).
-fn check_recipient(to: &str) -> Result<String, String> {
-    let t = to.trim();
-    if t.len() != 42 || !t.starts_with("0x") || !t[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("recipient must be a 0x address with 40 hex characters".into());
-    }
-    if t[2..].bytes().all(|b| b == b'0') {
-        return Err("refusing the zero address".into());
-    }
-    if t[2..].bytes().any(|b| b.is_ascii_uppercase())
-        && t[2..].bytes().any(|b| b.is_ascii_lowercase())
-        && verify::checksum(t) != t
-    {
-        return Err("recipient address fails its checksum — one character is wrong".into());
-    }
-    Ok(t.to_ascii_lowercase())
-}
-
 /// Quote an ERC-20 transfer of `amount` (token units) of the listed `token` to `to`.
 #[tauri::command]
 pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amount: String) -> CmdResult<Quote> {
     blocking(move || {
         let from = pairing::load()?.ok_or("not paired yet")?;
-        let recipient = check_recipient(&to)?;
+        // same recipient rules as `quote` (lib.rs)
+        let recipient = verify::recipient(&to)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
         let chain64 = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;

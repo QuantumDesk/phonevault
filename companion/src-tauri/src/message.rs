@@ -7,7 +7,7 @@
 //! serde_json is deliberately not used for the typed data itself: it silently keeps the last of
 //! two duplicate keys and rounds large integers to f64 without `arbitrary_precision`.
 
-use crate::verify::{checksum, keccak256};
+use crate::verify::{keccak256, parse_address, AddressError, Case};
 use std::collections::{BTreeMap, BTreeSet};
 
 // ---- limits: identical to the phone (vault-os/docs/message-signing.md)
@@ -523,16 +523,12 @@ fn encode_value(types: &Types, t: &str, raw: &J, path: &str, budget: &mut i64) -
         }
         (Kind::Bool, _) => Err(err(format!("{path} must be true or false"))),
         (Kind::Address, J::Str(s)) => {
-            let hex = s
-                .strip_prefix("0x")
-                .filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-                .ok_or_else(|| err(format!("{path} must be a 0x-prefixed 20-byte address")))?;
-            let mixed = hex != hex.to_ascii_lowercase() && hex != hex.to_ascii_uppercase();
-            if mixed && checksum(s) != *s {
-                return Err(err(format!("{path} fails its EIP-55 checksum")));
-            }
+            let lower = parse_address(s, Case::ChecksumIfMixed).map_err(|e| match e {
+                AddressError::Shape => err(format!("{path} must be a 0x-prefixed 20-byte address")),
+                AddressError::Checksum => err(format!("{path} fails its EIP-55 checksum")),
+            })?;
             let mut w = [0u8; 32];
-            w[12..].copy_from_slice(&hex::decode(hex).unwrap());
+            w[12..].copy_from_slice(&hex::decode(lower.trim_start_matches("0x")).unwrap());
             Ok(w)
         }
         (Kind::Address, _) => Err(err(format!("{path} must be a 0x-prefixed 20-byte address"))),

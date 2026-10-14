@@ -88,21 +88,12 @@ pub fn parse_caip2(s: &str) -> Option<u64> {
     id.parse().ok()
 }
 
-fn is_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// Address from a dApp: 0x + 40 hex; if written in mixed case it must be a valid EIP-55 checksum.
 pub fn dapp_address(s: &str, what: &str) -> Result<String, RpcError> {
-    if !is_address(s) {
-        return Err(bad(format!("{what} must be a 0x address with 40 hex characters")));
-    }
-    let body = &s[2..];
-    let mixed = body.bytes().any(|b| b.is_ascii_uppercase()) && body.bytes().any(|b| b.is_ascii_lowercase());
-    if mixed && verify::checksum(s) != s {
-        return Err(bad(format!("{what} fails its EIP-55 checksum")));
-    }
-    Ok(s.to_ascii_lowercase())
+    verify::parse_address(s, verify::Case::ChecksumIfMixed).map_err(|e| match e {
+        verify::AddressError::Shape => bad(format!("{what} must be a 0x address with 40 hex characters")),
+        verify::AddressError::Checksum => bad(format!("{what} fails its EIP-55 checksum")),
+    })
 }
 
 /// Hex quantity from a dApp: "0x" + 1…64 hex digits. Leading zeros are tolerated (JSON-RPC
@@ -555,9 +546,9 @@ pub fn personal_sign_params(params: &Value, paired: &str) -> Result<(String, Opt
     let a = list[0].as_str().ok_or_else(|| bad("message must be a string"))?;
     let b = list[1].as_str().ok_or_else(|| bad("address must be a string"))?;
     let paired_l = paired.to_ascii_lowercase();
-    let (msg, addr) = if is_address(b) {
+    let (msg, addr) = if verify::is_address(b) {
         (a, b)
-    } else if is_address(a) && a.eq_ignore_ascii_case(&paired_l) {
+    } else if verify::is_address(a) && a.eq_ignore_ascii_case(&paired_l) {
         (b, a)
     } else {
         return Err(bad("personal_sign takes [message, address]"));

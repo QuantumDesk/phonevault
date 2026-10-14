@@ -229,10 +229,6 @@ type Key = (String, Option<U256>);
 fn strip(h: &str) -> &str {
     h.strip_prefix("0x").unwrap_or(h)
 }
-/// `0x` + 40 hex (any case), the only log `address` this reads.
-fn is_address(a: &str) -> bool {
-    a.len() == 42 && a.starts_with("0x") && a.bytes().skip(2).all(|b| b.is_ascii_hexdigit())
-}
 #[deny(clippy::indexing_slicing)]
 fn topic_address(t: &str) -> Option<String> {
     let t = strip(t);
@@ -295,7 +291,8 @@ fn credit(
 fn apply_log(map: &mut BTreeMap<Key, Flow>, log: &Value, wallet: &str, chain: u64) -> Result<(), String> {
     // the node's answer is untrusted: a log from something that is not an address is ignored
     let address = match log.get("address").and_then(Value::as_str) {
-        Some(a) if is_address(a) => a.to_ascii_lowercase(),
+        // `0x` + 40 hex (any case), the only log `address` this reads
+        Some(a) if verify::is_address(a) => a.to_ascii_lowercase(),
         _ => return Ok(()),
     };
     let topics: Vec<String> = log

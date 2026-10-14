@@ -91,10 +91,7 @@ fn account_file_name(stem: &str, address: &str) -> String {
 }
 
 pub fn valid_address(addr: &str) -> Result<String, PairingError> {
-    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err(err("invalid address"));
-    }
-    Ok(addr.to_ascii_lowercase())
+    crate::verify::parse_address(addr, crate::verify::Case::Any).map_err(|_| err("invalid address"))
 }
 
 /// Printable, trimmed, at most MAX_LABEL characters; empty → None.

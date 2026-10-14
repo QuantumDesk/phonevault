@@ -251,11 +251,6 @@ pub fn address_of_topic(topic: &str) -> Option<String> {
     pad.bytes().all(|b| b == b'0').then(|| format!("0x{}", addr.to_ascii_lowercase()))
 }
 
-/// `0x` + 40 hex (any case).
-pub fn is_address(a: &str) -> bool {
-    a.len() == 42 && a.starts_with("0x") && a.bytes().skip(2).all(|b| b.is_ascii_hexdigit())
-}
-
 /// An ERC-20 Transfer log to `owner`: (contract, from, amount). None for anything else (ERC-721
 /// has a fourth topic; zero amounts are address-poisoning noise). The node's answer is untrusted:
 /// every topic, the data word and the emitting address are checked for shape before use.
@@ -275,7 +270,7 @@ fn parse_erc20_in(log: &Value, owner_topic: &str) -> Option<(String, String, u12
     }
     let amount = u128::from_str_radix(low, 16).ok().filter(|a| *a > 0)?;
     let from = address_of_topic(t1)?;
-    let contract = log.get("address")?.as_str().filter(|a| is_address(a))?;
+    let contract = log.get("address")?.as_str().filter(|a| verify::is_address(a))?;
     Some((contract.to_ascii_lowercase(), from, amount))
 }
 

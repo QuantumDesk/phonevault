@@ -229,7 +229,7 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
             continue;
         } // ids beyond u128 are not shown
         let Ok(id) = u128::from_str_radix(low, 16) else { continue };
-        let Some(c) = l.get("address").and_then(Value::as_str).filter(|c| watcher::is_address(c)) else { continue };
+        let Some(c) = l.get("address").and_then(Value::as_str).filter(|c| verify::is_address(c)) else { continue };
         let item = (c.to_ascii_lowercase(), id.to_string());
         if !out.contains(&item) {
             out.push(item);
@@ -274,7 +274,7 @@ pub(crate) async fn nft_scan(rpc_url: String) -> CmdResult<Scan> {
 pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdResult<Scan> {
     blocking(move || {
         let c = contract.trim().to_ascii_lowercase();
-        if !watcher::is_address(&c) { return Err("a contract address is 0x followed by 40 hex characters".into()); }
+        if !verify::is_address(&c) { return Err("a contract address is 0x followed by 40 hex characters".into()); }
         let (rpc, chain, owner, block) = connect(&rpc_url)?;
         let owner_word = format!("{:0>64}", owner.trim_start_matches("0x"));
         let count = rpc.eth_call(&c, &format!("0x{SEL_BALANCE_OF}{owner_word}")).ok().and_then(|r| uint_word(&r))
@@ -427,7 +427,7 @@ pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: St
     blocking(move || {
         let rpc = eth::Rpc::new(&rpc_url)?;
         let c = contract.trim().to_ascii_lowercase();
-        if !watcher::is_address(&c) {
+        if !verify::is_address(&c) {
             return Err("bad contract".into());
         }
         let empty = |e: String| Meta { name: None, description: None, image: None, error: Some(e) };

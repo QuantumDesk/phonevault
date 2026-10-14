@@ -155,11 +155,9 @@ pub(crate) fn parse_address_response(
         return Err("malformed address response".into());
     }
     let addr = obj["address"].as_str().ok_or("no address")?;
-    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("invalid address from phone".into());
-    }
+    let addr = verify::parse_address(addr, verify::Case::Any).map_err(|_| "invalid address from phone")?;
     if !with_account {
-        return Ok((addr.to_ascii_lowercase(), None, None));
+        return Ok((addr, None, None));
     }
     let n = obj["account"]
         .as_str()
@@ -167,7 +165,7 @@ pub(crate) fn parse_address_response(
         .filter(|n| (1..=20).contains(n))
         .ok_or("malformed account number")?;
     let w = obj["wallet"].as_str().filter(|w| *w == "standard" || *w == "passphrase").ok_or("malformed wallet kind")?;
-    Ok((addr.to_ascii_lowercase(), Some(n), Some(w.to_string())))
+    Ok((addr, Some(n), Some(w.to_string())))
 }
 
 /// Ask the phone for its ACTIVE account. Nothing is pinned until the user confirms it against the phone's screen.
@@ -298,20 +296,8 @@ fn network_name(chain: u128) -> String {
 async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quote> {
     blocking(move || {
         let from = pairing::load()?.ok_or("not paired yet")?;
-        let to_l = to.trim().to_string();
-        if to_l.len() != 42 || !to_l.starts_with("0x") || !to_l[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("recipient must be a 0x address with 40 hex characters".into());
-        }
-        if to_l[2..].bytes().all(|b| b == b'0') {
-            return Err("refusing the zero address".into());
-        }
         // If the recipient is written with mixed case, it must be a valid EIP-55 checksum (typo guard).
-        if to_l[2..].bytes().any(|b| b.is_ascii_uppercase())
-            && to_l[2..].bytes().any(|b| b.is_ascii_lowercase())
-            && verify::checksum(&to_l) != to_l
-        {
-            return Err("recipient address fails its checksum — one character is wrong".into());
-        }
+        let to_l = verify::recipient(&to)?;
         let value = eth::parse_eth(&amount_eth)?;
         if value == 0 {
             return Err("amount must be more than zero".into());
@@ -340,7 +326,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
             max_priority_fee_per_gas: verify::to_quantity(priority),
             max_fee_per_gas: verify::to_quantity(max_fee),
             gas_limit: verify::to_quantity(gas),
-            to: to_l.to_ascii_lowercase(),
+            to: to_l,
             value: verify::to_quantity(value),
             data: "0x".into(),
             amount_eth: eth::format_eth(value),

@@ -333,9 +333,7 @@ pub struct Site {
 impl Site {
     fn valid(&self) -> bool {
         normalize_origin(&self.origin).as_deref() == Ok(self.origin.as_str())
-            && self.address.len() == 42
-            && self.address.starts_with("0x")
-            && self.address[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            && verify::is_address(&self.address)
             && !self.chains.is_empty()
             && self.chains.iter().all(|c| wc::chain_allowed(*c))
             && self.chains.contains(&self.active)

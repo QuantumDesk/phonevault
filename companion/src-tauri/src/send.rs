@@ -203,9 +203,7 @@ pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResu
         let balance = rpc.balance(&from)?;
         let (_, max_fee) = rpc.fees()?;
         let gas = match to.as_deref().map(str::trim) {
-            Some(t) if t.len() == 42 && t.starts_with("0x") && t[2..].bytes().all(|b| b.is_ascii_hexdigit()) => {
-                rpc.estimate_gas(&from, t, 1).unwrap_or(21_000).max(21_000)
-            }
+            Some(t) if verify::is_address(t) => rpc.estimate_gas(&from, t, 1).unwrap_or(21_000).max(21_000),
             _ => 21_000,
         };
         let cost = gas.saturating_mul(max_fee).saturating_mul(5) / 4;
@@ -233,16 +231,11 @@ pub(crate) fn check_address(address: String) -> AddressCheck {
     if !a.starts_with("0x") {
         return bad("An address starts with 0x");
     }
-    if a.len() != 42 || !a[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return bad("An address is 0x followed by 40 hex characters");
+    match verify::parse_address(a, verify::Case::ChecksumIfMixed) {
+        Err(verify::AddressError::Shape) => bad("An address is 0x followed by 40 hex characters"),
+        // the zero address has no letters, so it never fails the checksum
+        Ok(l) if l.bytes().skip(2).all(|b| b == b'0') => bad("That is the zero address; funds sent there are lost"),
+        Err(verify::AddressError::Checksum) => bad("Checksum mismatch: one character is probably wrong"),
+        Ok(_) => AddressCheck { ok: true, checksum: Some(verify::checksum(a)), error: None },
     }
-    if a[2..].bytes().all(|b| b == b'0') {
-        return bad("That is the zero address; funds sent there are lost");
-    }
-    let mixed = a[2..].bytes().any(|b| b.is_ascii_uppercase()) && a[2..].bytes().any(|b| b.is_ascii_lowercase());
-    let sum = verify::checksum(a);
-    if mixed && sum != a {
-        return bad("Checksum mismatch: one character is probably wrong");
-    }
-    AddressCheck { ok: true, checksum: Some(sum), error: None }
 }
