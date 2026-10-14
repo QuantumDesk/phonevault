@@ -173,8 +173,12 @@ applies it with the other release patches.
 checks whether a recorded patch is forward-applicable and repairs it when
 needed. This ordering matters for deletion-only patches: reverse applicability
 alone is not proof that a deletion has already occurred when Git could instead
-insert a duplicate block. Ordered replay tests and artifact residue gates remain
-the authority for the final combined state when later patches overlap context.
+insert a duplicate block. A recorded patch that neither applies nor
+reverse-applies is accepted only when later patches of the same series are
+recorded too, touch the same files, and undoing them (newest first) on a scratch
+copy of those files leaves the patch reverse-applicable; otherwise the installer
+fails instead of trusting the marker (e.g. a tree reset by a sync or the dev
+ladder that lost the hardening).
 
 ## Evaluated but not imported
 

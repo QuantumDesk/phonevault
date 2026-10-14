@@ -42,9 +42,55 @@ apply_versioned_patch() {
       echo "${label} patch recorded as applied"
     else
       # Later patches in the ordered series may modify the same context and
-      # make both standalone checks impossible. The byte-identical marker is
-      # retained, while release/source residue gates verify final invariants.
-      echo "${label} patch recorded as applied (overlapping later context)"
+      # make both standalone checks impossible. The marker alone proves
+      # nothing (bootable/recovery can move under a repo sync and lose the
+      # hardening), so this is accepted only when later patches of the same
+      # series are recorded as applied (their own byte-identical state
+      # markers), touch the same files, and reverse-applying them and then
+      # this patch, in one ordered `git apply --reverse --check`, succeeds.
+      local patch_base state_prefix later later_state touched later_paths
+      local -a overlapping=()
+      patch_base="$(basename "${patch_file}")"
+      state_prefix="$(basename "${state_file}")"
+      touched="$(sed -n -e 's#^--- a/##p' -e 's#^+++ b/##p' "${patch_file}")"
+      if [[ "${state_prefix}" == *"${patch_base}" ]]; then
+        state_prefix="${state_prefix%"${patch_base}"}"
+        for later in "$(dirname "${patch_file}")"/*.patch; do
+          [[ "$(basename "${later}")" > "${patch_base}" ]] || continue
+          later_state="$(dirname "${state_file}")/${state_prefix}$(basename "${later}")"
+          [[ -s "${later_state}" ]] || continue
+          later_paths="$(sed -n -e 's#^--- a/##p' -e 's#^+++ b/##p' "${later_state}")"
+          [[ -n "${later_paths}" ]] \
+            && grep -Fxq -f <(printf '%s\n' "${later_paths}") <<<"${touched}" || continue
+          overlapping=("${later_state}" ${overlapping[@]+"${overlapping[@]}"})
+          touched+=$'\n'"${later_paths}"
+        done
+      fi
+      # Undo the later overlapping patches, newest first, on a scratch copy of
+      # the touched files, then require this patch to reverse-apply there.
+      local scratch touched_path verified=0
+      if (( ${#overlapping[@]} > 0 )); then
+        scratch="$(mktemp -d -t phone-vault-patch-overlap.XXXXXX)"
+        verified=1
+        while IFS= read -r touched_path; do
+          [[ -n "${touched_path}" && -e "${source_root}/${touched_path}" ]] || continue
+          mkdir -p "${scratch}/$(dirname "${touched_path}")"
+          cp -pP "${source_root}/${touched_path}" "${scratch}/${touched_path}"
+        done <<<"${touched}"
+        for later_state in "${overlapping[@]}"; do
+          git -C "${scratch}" apply --reverse "${later_state}" >/dev/null 2>&1 \
+            || { verified=0; break; }
+        done
+        (( verified )) && { git -C "${scratch}" apply --reverse --check "${patch_file}" \
+          >/dev/null 2>&1 || verified=0; }
+        rm -rf -- "${scratch}"
+      fi
+      if (( verified )); then
+        echo "${label} patch recorded as applied (verified under ${#overlapping[@]} later overlapping patch(es))"
+      else
+        echo "${label} patch is recorded as applied but neither applies nor is present in the source tree" >&2
+        exit 1
+      fi
     fi
     return
   fi

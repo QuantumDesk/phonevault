@@ -90,47 +90,218 @@ property_rules = [
     (re.compile(r"\bservice\.adb\.(?:root|tcp\.port)=(\S*)"), lambda v: True,
      "adb root/TCP properties are development settings"),
 ]
+
+
+def check_property(relative, assignment):
+    for pattern, bad, message in property_rules:
+        for match in pattern.finditer(assignment):
+            if bad(match.group(1)):
+                fail(f"{relative}: {message}: {match.group(0)}")
+
+
+# A pre-authorised adb host key, whatever its source file is called: any
+# install destination (PRODUCT_COPY_FILES src:dest, a Soong/Make module
+# filename/stem) named adb_keys.
+adb_keys_destination = re.compile(r":(?:\S*/)?adb_keys(?=\s|:|$)")
+adb_keys_module = re.compile(r"""["'](?:[^"'\s]*/)?adb_keys["']|\bLOCAL_MODULE_STEM\s*:?=\s*adb_keys\b""")
+# Property files the build installs: TARGET_<PARTITION>_PROP lists and
+# PRODUCT_<PARTITION>_PROPERTIES entries that name a file.
+property_file_reference = re.compile(r"^\s*(TARGET_\w*_PROP|PRODUCT_\w*_PROPERTIES)\s*[:+?]?=\s*(.*)$")
+referenced_property_files = set()
+installed_init_sources = set()
 for path in makefiles:
     relative = path.relative_to(root).as_posix()
     for line in logical_lines(text_files[path]):
         if re.search(r"\b(PRODUCT_ADB_KEYS|WITH_ADB_INSECURE|ADB_INSECURE)\b", line):
             fail(f"{relative}: adb key/insecure-adb setting in release configuration: {line}")
-        for pattern, bad, message in property_rules:
-            for match in pattern.finditer(line):
-                if bad(match.group(1)):
-                    fail(f"{relative}: {message}: {match.group(0)}")
+        check_property(relative, line)
         if re.search(r"etc/init/[^\s:]*debug[^\s:]*\.rc", line, re.IGNORECASE):
             fail(f"{relative}: installs a debug init script: {line}")
+        if adb_keys_destination.search(line) or adb_keys_module.search(line):
+            fail(f"{relative}: installs a pre-authorised adb host key: {line}")
+        reference = property_file_reference.match(line)
+        if reference:
+            for word in reference.group(2).split():
+                if word.endswith(".prop"):
+                    referenced_property_files.add((relative, word))
+        for word in line.split():
+            source, colon, destination = word.partition(":")
+            if colon and (re.search(r"(^|/)etc/init/", destination) or destination.endswith(".rc")):
+                installed_init_sources.add(source)
+for path in (p for p in text_files if p.name in ("Android.bp", "Android.mk") or p.suffix == ".bp"):
+    relative = path.relative_to(root).as_posix()
+    body = re.sub(r"//[^\n]*|#[^\n]*", "", text_files[path])
+    if adb_keys_module.search(body):
+        fail(f"{relative}: installs a pre-authorised adb host key")
 
 common = text_files.get(vault / "vendor/phonevault/config/common.mk", "")
 if not re.search(r"(?m)^\s*persist\.sys\.usb\.config=none\s*$", common):
     fail("vendor/phonevault/config/common.mk must set persist.sys.usb.config=none")
 
 
+def source_path(word):
+    """Map a build-tree path (vendor/phonevault/..., device/phonevault/...) into the repository."""
+    word = word.strip()
+    for prefix in ("vendor/phonevault/", "device/phonevault/"):
+        if word.startswith(prefix):
+            return vault / word
+    return None
+
+
+# Property files are parsed the way Android init reads them
+# (property_service.cpp LoadProperties): whitespace around the key, '=' and the
+# value is stripped and '#' starts a comment only at the start of a line.
+property_files = {p for p in text_files if p.suffix == ".prop"}
+for makefile, word in sorted(referenced_property_files):
+    mapped = source_path(word)
+    if mapped is None or not mapped.is_file():
+        fail(f"{makefile}: release property file is not in the release configuration: {word}")
+    else:
+        property_files.add(mapped)
+whitespace = " \t\n\v\f\r"
+for path in sorted(property_files):
+    relative = path.relative_to(root).as_posix()
+    text = text_files.get(path)
+    if text is None:
+        fail(f"{relative}: release property file is not text")
+        continue
+    for number, raw in enumerate(text.split("\n"), 1):
+        key = raw.strip(whitespace)
+        if not key or key.startswith("#"):
+            continue
+        if key.startswith("import "):
+            fail(f"{relative}:{number}: property import in release configuration: {key}")
+            continue
+        name, equals, value = key.partition("=")
+        if not equals:
+            continue
+        check_property(f"{relative}:{number}", f"{name.rstrip(whitespace)}={value.lstrip(whitespace)}")
+
+
+def init_lines(text):
+    """Android init tokenizer (init/tokenizer.cpp): yields (line, args, raw).
+    Backslash-newline continues a line, quotes group, '#' at a token start
+    comments out the rest of the line."""
+    data = text + "\n"
+    n = len(data)
+    pos = 0
+    line = 1
+    start_line = 1
+    args = []
+    line_start = 0
+    while pos < n:
+        c = data[pos]
+        if c == "\n":
+            if args:
+                yield start_line, args, data[line_start:pos]
+            pos += 1
+            line += 1
+            start_line = line
+            args = []
+            line_start = pos
+            continue
+        if c in " \t\r":
+            pos += 1
+            continue
+        if c == "#":
+            while pos < n and data[pos] != "\n":
+                pos += 1
+            continue
+        token = []
+        while pos < n:
+            c = data[pos]
+            if c in " \t\r":
+                pos += 1
+                break
+            if c == "\n":
+                break
+            if c == '"':
+                pos += 1
+                while pos < n and data[pos] != '"':
+                    if data[pos] == "\n":
+                        line += 1
+                    token.append(data[pos])
+                    pos += 1
+                if pos >= n:
+                    return
+                pos += 1
+                continue
+            if c == "\\":
+                pos += 1
+                if pos >= n:
+                    break
+                escaped = data[pos]
+                if escaped in "nrt\\":
+                    token.append({"n": "\n", "r": "\r", "t": "\t", "\\": "\\"}[escaped])
+                    pos += 1
+                elif escaped == "\r" and data[pos + 1: pos + 2] != "\n":
+                    pos += 1
+                elif escaped in "\r\n":
+                    pos += 2 if escaped == "\r" else 1
+                    line += 1
+                    while pos < n and data[pos] in " \t":
+                        pos += 1
+                else:
+                    token.append(escaped)
+                    pos += 1
+                continue
+            token.append(c)
+            pos += 1
+        args.append("".join(token))
+
+
+WRITABLE_MOUNTS = {"data", "cache", "mnt", "metadata", "persist", "sdcard", "storage", "tmp",
+                   "dev", "sys", "proc", "config", "acct", "debug_ramdisk",
+                   "second_stage_resources", "linkerconfig", "data_mirror", "efs"}
+
+
 def init_violations(relative, text):
+    """Section keywords (on/service/import) count at any indentation
+    (init/parser.cpp); `enable`/`exec_start` start a service like `start`; init
+    property-expands every builtin argument, so an expanded service name or USB
+    function value is treated as adbd/adb."""
+    section = ""
     trigger = ""
-    for number, raw in enumerate(text.splitlines(), 1):
-        line = raw.split("#", 1)[0].rstrip()
-        if not line.strip():
-            continue
-        if not line[0].isspace():
-            trigger = line if line.startswith("on ") else ""
-            if line.startswith("service ") and re.search(r"(^|/)adbd(\s|$)", line.split()[2] if len(line.split()) > 2 else ""):
+    trigger_args = []
+    for number, args, raw in init_lines(text):
+        shown = re.sub(r"\\\r?\n[ \t]*", " ", raw).strip()
+        keyword = args[0]
+        if keyword in ("on", "service", "import"):
+            section = keyword
+            trigger, trigger_args = (shown, args) if keyword == "on" else ("", [])
+            if keyword == "service" and len(args) > 2 and re.search(r"(^|/)adbd$", args[2]):
                 yield f"{relative}:{number}: release configuration defines an adbd service"
+            if keyword == "import":
+                target = args[1] if len(args) > 1 else ""
+                top = target.lstrip("/").split("/", 1)[0]
+                if "$" in target or top in WRITABLE_MOUNTS or not target.startswith("/"):
+                    yield f"{relative}:{number}: release init script imports from a writable or unresolved location: {shown}"
             continue
-        debuggable = "property:ro.debuggable=1" in trigger
-        if re.match(r"\s+(start|restart)\s+adbd\b", line):
-            yield f"{relative}:{number}: release init script starts adbd: [{trigger}] {line.strip()}"
-        elif re.search(r"functions/ffs\.adb|/dev/usb-ffs/adb|functionfs\s+adb", line) and not debuggable:
-            yield f"{relative}:{number}: ADB endpoint outside a ro.debuggable=1 trigger: [{trigger}] {line.strip()}"
-        elif re.match(r"\s+setprop\s+(persist\.)?(sys|vendor)\.usb\.config\s+\S*adb", line) and not debuggable:
-            yield f"{relative}:{number}: init selects adb as USB function: [{trigger}] {line.strip()}"
+        if section != "on":
+            continue
+        debuggable = "property:ro.debuggable=1" in trigger_args
+        command = " ".join(args)
+        if keyword in ("start", "restart", "enable", "exec_start") and len(args) > 1 \
+                and (args[1] == "adbd" or "$" in args[1]):
+            yield f"{relative}:{number}: release init script starts adbd: [{trigger}] {shown}"
+        elif keyword in ("exec", "exec_background") and any(re.search(r"(^|/)adbd$", a) for a in args[1:]):
+            yield f"{relative}:{number}: release init script starts adbd: [{trigger}] {shown}"
+        elif re.search(r"functions/ffs\.adb|/dev/usb-ffs/adb|functionfs\s+adb", command) and not debuggable:
+            yield f"{relative}:{number}: ADB endpoint outside a ro.debuggable=1 trigger: [{trigger}] {shown}"
+        elif keyword == "setprop" and len(args) > 2 and not debuggable \
+                and (re.match(r"(persist\.)?(sys|vendor)\.usb\.config$", args[1]) or "$" in args[1]) \
+                and ("adb" in args[2].lower() or "$" in args[2]):
+            yield f"{relative}:{number}: init selects adb as USB function: [{trigger}] {shown}"
 
 
-for path, text in text_files.items():
-    if path.suffix == ".rc":
-        for violation in init_violations(path.relative_to(root).as_posix(), text):
-            fail(violation)
+init_files = {p for p in text_files if p.suffix == ".rc"}
+for word in installed_init_sources:
+    mapped = source_path(word)
+    if mapped is not None and mapped in text_files:
+        init_files.add(mapped)
+for path in sorted(init_files):
+    for violation in init_violations(path.relative_to(root).as_posix(), text_files[path]):
+        fail(violation)
 
 # Project-owned, monotonically increasing AVB rollback index.
 version_mk = text_files.get(vault / "vendor/phonevault/config/release-version.mk", "")
