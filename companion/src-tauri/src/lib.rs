@@ -34,6 +34,9 @@ pub mod bridge;
 mod btc;
 // Settings / setup: open the bundled blank backup card (no secrets on this Mac)
 mod backup_card;
+// security-audit proof tests (test builds only)
+#[cfg(test)]
+mod audit_proofs;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

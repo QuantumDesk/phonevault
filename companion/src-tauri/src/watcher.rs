@@ -408,3 +408,22 @@ mod tests {
         }
     }
 }
+
+/// Security-audit proof (2026-10-13): the background watcher parses eth_getLogs answers from the
+/// configured node. `parse_erc20_in` slices `topics[1]` at byte 24 without checking its length,
+/// so a node answering a Transfer log with a short (or non-ASCII) sender topic panics the
+/// "watcher" thread; with panic=abort (release) the whole app dies on every poll.
+#[cfg(test)]
+mod audit_proof {
+    use super::*;
+    #[test]
+    fn proof_malicious_node_log_panics_the_watcher() {
+        let me = topic_address("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3");
+        let data = format!("0x{:064x}", 5u8);
+        for sender in ["0x1234", "0xaéééééééééééé"] {
+            let log = json!({"address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "topics": [TRANSFER_TOPIC, sender, me], "data": data});
+            let r = std::panic::catch_unwind(|| parse_erc20_in(&log, &me));
+            assert!(r.is_err(), "sender topic {sender:?} should panic");
+        }
+    }
+}
