@@ -82,4 +82,15 @@ final class ApplianceLockdown {
     static boolean refuseForAdb(boolean devBuild, int adbEnabled) {
         return !devBuild && adbEnabled != 0;
     }
+
+    /** Settings.Global.ADB_WIFI_ENABLED (hidden constant): wireless debugging. */
+    static final String ADB_WIFI_ENABLED = "adb_wifi_enabled";
+
+    /**
+     * The debugging value {@link #refuseForAdb} judges: USB debugging ({@code Settings.Global.ADB_ENABLED})
+     * when it is on, else wireless debugging ({@link #ADB_WIFI_ENABLED}). Non-zero when either is on.
+     */
+    static int debuggingSetting(int usbAdbEnabled, int wifiAdbEnabled) {
+        return usbAdbEnabled != 0 ? usbAdbEnabled : wifiAdbEnabled;
+    }
 }

@@ -77,29 +77,38 @@ public final class ApplianceLockdownTest {
 
     /** Wireless debugging (adb_wifi_enabled) refuses like USB debugging, and is observed too. */
     @Test public void adbRefusalCoversWirelessDebugging() throws Exception {
-        String src = SourceGuard.mainActivity();
-        String body = SourceGuard.body(src, "private int adbEnabled() {");
+        assertEquals("adb_wifi_enabled", ApplianceLockdown.ADB_WIFI_ENABLED);
+        assertEquals(0, ApplianceLockdown.debuggingSetting(0, 0));
+        assertEquals("USB debugging", 1, ApplianceLockdown.debuggingSetting(1, 0));
+        assertEquals("wireless debugging alone", 1, ApplianceLockdown.debuggingSetting(0, 1));
+        assertEquals(2, ApplianceLockdown.debuggingSetting(2, 1));
+        assertTrue(ApplianceLockdown.refuseForAdb(false, ApplianceLockdown.debuggingSetting(0, 1)));
+        assertFalse(ApplianceLockdown.refuseForAdb(true, ApplianceLockdown.debuggingSetting(0, 1)));
+        // The phone reads both settings into that decision and observes both (Settings is phone-only).
+        String body = SourceGuard.definition("private int adbEnabled() {");
         assertTrue(body.contains("Settings.Global.ADB_ENABLED"));
-        assertTrue(body.contains("ADB_WIFI_ENABLED"));
-        assertEquals("adb_wifi_enabled", MainActivity.ADB_WIFI_ENABLED);
-        assertTrue(src.contains("registerContentObserver(Settings.Global.getUriFor(ADB_WIFI_ENABLED), false, adbObserver)"));
+        assertTrue(body.contains("ApplianceLockdown.ADB_WIFI_ENABLED"));
+        assertTrue(body.contains("ApplianceLockdown.debuggingSetting(usb, wifi)"));
+        assertTrue(SourceGuard.anyContains("registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver)"));
+        assertTrue(SourceGuard.anyContains("registerContentObserver(Settings.Global.getUriFor(ApplianceLockdown.ADB_WIFI_ENABLED), false, adbObserver)"));
+        assertTrue(SourceGuard.definition("private boolean adbRefused() {")
+                .contains("ApplianceLockdown.refuseForAdb(devBuild(), adbEnabled())"));
     }
 
     /**
      * Bitcoin answers (xpub sharing included) and every signature are re-checked with
      * RequestOwnership sets that refuse while debugging is on, and the live state's
-     * debuggingRefused is MainActivity's adbRefused().
+     * debuggingRefused is MainActivity's adbRefused(). Package-wide: the checks move with the code.
      */
     @Test public void btcShareAndSigningOwnershipChecksAdb() throws Exception {
         assertTrue(RequestOwnership.BTC_UNDECIDED.contains(RequestOwnership.Require.NO_ADB));
         assertTrue(RequestOwnership.BTC_SHOW.contains(RequestOwnership.Require.NO_ADB));
         assertTrue(RequestOwnership.SIGNING.contains(RequestOwnership.Require.NO_ADB));
-        String src = SourceGuard.mainActivity();
-        assertTrue(src.contains("@Override public boolean debuggingRefused() { return adbRefused(); }"));
-        assertTrue(SourceGuard.body(src, "private boolean owns(").contains("RequestOwnership.holds(live, "));
-        String share = SourceGuard.body(src, "private void showBtcShare(");
+        assertTrue(SourceGuard.anyContains("@Override public boolean debuggingRefused() { return adbRefused(); }"));
+        assertTrue(SourceGuard.definition("private boolean owns(").contains("RequestOwnership.holds(live, "));
+        String share = SourceGuard.definition("private void showBtcShare(");
         assertTrue(share.contains("owns(source, s, decision, RequestOwnership.BTC_UNDECIDED) || !decision.beginSigning()"));
         // the Sign worker's three re-checks under stateLock (before the seed opens, before sending, EVM sign)
-        assertEquals(3, SourceGuard.code(src).split("owns\\(source, s, decision, RequestOwnership\\.SIGNING\\)", -1).length - 1);
+        assertEquals(3, SourceGuard.count("owns\\(source, s, decision, RequestOwnership\\.SIGNING\\)"));
     }
 }

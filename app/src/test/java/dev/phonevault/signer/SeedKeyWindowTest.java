@@ -51,15 +51,21 @@ public class SeedKeyWindowTest {
                 init >= 0 && fin > init && fin < probe.indexOf("return true;"));
     }
 
+    /**
+     * The decision itself is behaviour-tested through CredentialGate (CredentialGateTest
+     * withSeedKeyUsesTheWindowDecision); here: the app's one seed-key entry point delegates to it.
+     */
     @Test public void withSeedKeyUsesTheWindowDecision() throws Exception {
-        String gate = SourceGuard.body(SourceGuard.source("MainActivity.java"), "private void withSeedKey(String why, Runnable op) {");
-        assertTrue(gate.contains("SeedKeyWindow.decide("));
-        assertTrue("an own, stale confirmation must prompt, not probe",
-                gate.indexOf("Decision.ASK") < gate.indexOf("seedKeyUsableNow()"));
+        assertTrue(SourceGuard.definition("private void withSeedKey(String why, Runnable op, Runnable onCancel) {")
+                .contains("credentialGate.withSeedKey(why, op, onCancel)"));
+        assertEquals("only CredentialGate decides", 1, SourceGuard.count("SeedKeyWindow\\.decide\\("));
+        assertTrue(SourceGuard.fileWith("SeedKeyWindow.decide(").equals("CredentialGate.java"));
+        assertTrue("the probe reaches the keystore", SourceGuard.definition("public void probeSeedKey(CredentialGate.Probed result) {")
+                .contains("vault.seedKeyUsableNow()"));
     }
 
     @Test public void backupRetryStaysInsideTheOwningFlow() throws Exception {
-        String open = SourceGuard.body(SourceGuard.source("MainActivity.java"), "private void openBackup(int token, int s, boolean checkOnly, boolean retried) {");
+        String open = SourceGuard.definition("private void openBackup(int token, int s, boolean checkOnly, boolean retried) {");
         assertTrue(open.contains("!retried && authLapsed(e)"));
         assertTrue("retry re-opens with the same token", open.contains("openBackup(token, s, checkOnly, true)"));
         assertEquals("re-entering beginSensitive is refused while the flow is active",

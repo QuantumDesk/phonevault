@@ -32,17 +32,53 @@ public class CredentialModeTest {
         } catch (IllegalStateException expected) { }
         assertFalse(prefs.map.containsKey("pin_hash_v1"));
 
-        // SET PIN installs the chip credential FIRST and writes the hash only when that fails.
+        // The mode switch reads the marker, not the hash.
+        assertFalse(CredentialGate.credentialMode(null));
+        VaultPin hashOnly = new VaultPin(new VaultPinTest.FakePrefs(), 1000);
+        hashOnly.set("004217".toCharArray());
+        assertFalse("an app hash alone is not credential mode", CredentialGate.credentialMode(hashOnly));
+        assertTrue(CredentialGate.credentialMode(p));
+        assertTrue(SourceGuard.definition("private boolean credentialMode() {").contains("CredentialGate.credentialMode(pin)"));
+
         String src = SourceGuard.mainActivity();
-        int install = src.indexOf("boolean bound = SystemCredential.install(this, forSystem); // zeroes forSystem");
-        int mark = src.indexOf("pin.markCredentialHeld();", install);
-        int set = src.indexOf("pin.set(chosen);", install);
-        assertTrue(install >= 0 && mark > install && set > mark);
-        assertTrue(src.substring(install, set).contains("} else {"));
-        assertTrue("mode switch reads the marker, not the hash",
-                src.contains("private boolean credentialMode() { return pin != null && pin.credentialHeld(); }"));
         assertTrue("startup reconciliation runs before the first gate",
                 src.indexOf("pin.reconcile(SystemCredential.isSet(this));") < src.indexOf("showPinGate(getIntent());"));
+    }
+
+    /** SET PIN installs the chip credential FIRST and writes the hash only when that fails. */
+    @Test public void newPinGoesToTheChipFirst() throws Exception {
+        VaultPinTest.FakePrefs prefs = new VaultPinTest.FakePrefs();
+        VaultPin p = new VaultPin(prefs, 1000);
+        char[] chosen = "004217".toCharArray(), forSystem = chosen.clone();
+        char[][] installed = {null};
+        assertTrue(CredentialGate.storeNewPin(chosen, forSystem, pin -> { installed[0] = pin.clone(); java.util.Arrays.fill(pin, '0'); return true; }, p));
+        assertEquals("the chip got the PIN", "004217", new String(installed[0]));
+        assertTrue(p.credentialHeld());
+        assertFalse("no hash once the chip holds it", prefs.map.containsKey("pin_hash_v1"));
+        assertEquals("000000", new String(chosen));
+
+        // No chip: the app hash is the fallback, and it verifies.
+        VaultPinTest.FakePrefs fallback = new VaultPinTest.FakePrefs();
+        VaultPin q = new VaultPin(fallback, 1000);
+        char[] chosen2 = "004217".toCharArray();
+        assertFalse(CredentialGate.storeNewPin(chosen2, chosen2.clone(), pin -> false, q));
+        assertFalse(q.credentialHeld());
+        assertTrue(fallback.map.containsKey("pin_hash_v1"));
+        assertEquals("000000", new String(chosen2));
+        assertEquals(VaultPin.Outcome.OK, q.verify("004217".toCharArray(), () -> { }).outcome);
+
+        // The install throws: nothing is stored, the error reaches the caller.
+        VaultPinTest.FakePrefs failing = new VaultPinTest.FakePrefs();
+        VaultPin r = new VaultPin(failing, 1000);
+        try {
+            CredentialGate.storeNewPin("004217".toCharArray(), new char[6], pin -> { throw new IllegalStateException("chip"); }, r);
+            fail();
+        } catch (IllegalStateException expected) { }
+        assertFalse(r.isSet());
+
+        // The activity stores the PIN only through it.
+        assertTrue(SourceGuard.definition("private void onCreatePinEntry(")
+                .contains("CredentialGate.storeNewPin(chosen, forSystem, p -> SystemCredential.install(this, p), pin)"));
     }
 
     /**
@@ -93,12 +129,13 @@ public class CredentialModeTest {
         failing.failAtCommit = 1;
         assertFalse("not recorded => not attempted", new BootUnlockGuard(failing).tryConsume(3));
 
-        String src = SourceGuard.mainActivity();
-        assertFalse("no per-instance flag", src.contains("bootUnlockEligible"));
-        String gate = SourceGuard.body(src, "private void showCredentialGate(int s) {");
-        assertTrue(gate.contains("if (freshBoot && bootUnlock.tryConsume(bootId())) {"));
-        String lock = SourceGuard.body(src, "private void lock() {");
+        // The gate's use of the guard is behaviour-tested in CredentialGateTest
+        // (bootShortcutIsOncePerBootAndOnlyRightAfterBoot); the phone-only wiring is checked here.
+        assertFalse("no per-instance flag", SourceGuard.anyContains("bootUnlockEligible"));
+        assertTrue(SourceGuard.definition("private void showCredentialGate(int s) {").contains("credentialGate.show(s)"));
+        assertTrue(SourceGuard.definition("void show(int s) {").contains("if (freshBoot && env.bootUnlock().tryConsume(env.bootId())) {"));
+        String lock = SourceGuard.definition("private void lock() {");
         assertTrue("lock() disarms the silent path for this boot", lock.contains("bootUnlock.noteLock(bootId());"));
-        assertTrue(src.contains("Settings.Global.BOOT_COUNT"));
+        assertTrue(SourceGuard.definition("private int bootId() {").contains("Settings.Global.BOOT_COUNT"));
     }
 }

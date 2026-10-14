@@ -187,21 +187,39 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** True from the moment a PIN is SET in this unlocked session until it is used once or the
      *  vault locks: the first-run wizard does not ask for the PIN again seconds after setting it. */
     private boolean firstRunPinFresh;
-    /** elapsedRealtime of the last successful device-PIN check (credential mode). */
-    private long lastCredentialConfirm;
-    /** True while a system PIN prompt is on screen, so a re-created gate does not stack another. */
-    private boolean credentialPromptOpen;
     /**
-     * Right after a boot the user has just entered the PIN on Android's lock screen (to unlock
-     * encrypted storage), which also opens the seed key's window. The FIRST credential gate after
-     * a boot therefore tries the key before prompting — once per BOOT, persisted against the boot
-     * id (BootUnlockGuard), so re-creating the activity cannot re-arm it, and never once the vault
-     * has locked since that boot. Any later gate always prompts.
+     * Once-per-boot record of the credential gate's silent unlock (see CredentialGate#show): persisted
+     * against the boot id, so re-creating the activity cannot re-arm it.
      */
     private BootUnlockGuard bootUnlock;
-    /** Session whose boot-time silent unlock attempt is still pending (-1: none). */
-    private int bootAttemptSession = -1;
-    private boolean silentUnlockAttempt;
+    /** Device-PIN prompt, boot unlock and seed-key window decisions (credential mode). */
+    private final CredentialGate credentialGate = new CredentialGate(new CredentialGate.Env() {
+        @Override public int session() { return session.get(); }
+        @Override public boolean unlocked() { return unlocked; }
+        @Override public boolean foreground() { return foreground; }
+        @Override public boolean credentialMode() { return MainActivity.this.credentialMode(); }
+        @Override public long elapsedRealtime() { return SystemClock.elapsedRealtime(); }
+        @Override public int bootId() { return MainActivity.this.bootId(); }
+        @Override public BootUnlockGuard bootUnlock() { return bootUnlock; }
+        @Override public boolean deviceLocked() {
+            KeyguardManager keyguard = getSystemService(KeyguardManager.class);
+            return keyguard != null && keyguard.isDeviceLocked();
+        }
+        @Override public void post(Runnable r) { ui.post(r); }
+        @Override public void postDelayed(Runnable r, long delayMs) { ui.postDelayed(r, delayMs); }
+        @Override public void showLoading(String title, String caption) { MainActivity.this.showLoading(title, caption); }
+        @Override public void showLockedPage(int s) { MainActivity.this.showLockedPage(s); }
+        @Override public void unlock(int s) { MainActivity.this.unlock(s); }
+        @Override public void systemConfirm(String why, CredentialGate.Confirmed result) {
+            SystemCredential.confirm(MainActivity.this, "Phone Vault", why, (ok, message) -> result.done(ok));
+        }
+        @Override public void probeSeedKey(CredentialGate.Probed result) {
+            cryptoExecutor.execute(() -> {
+                boolean ready = vault.seedKeyUsableNow();
+                runOnUiThread(() -> result.done(ready));
+            });
+        }
+    });
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
@@ -225,15 +243,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** True between onStart and onStop. Nothing unlocks or publishes while the activity is hidden. */
     private volatile boolean foreground;
     private Intent pendingUsb;
-    /**
-     * A request that arrived while the vault was LOCKED. The gate reads and decodes it for display
-     * only — the phone answers nothing until the PIN is entered — and hands it to the normal request
-     * path right after unlock. Cleared by lock().
-     */
-    private JSONObject heldRequest;
-    private String heldSummary;
-    /** The connection {@link #heldRequest} arrived on; it is dispatched only to that same, live one. */
-    private AccessoryTransport heldSource;
+    /** A request that arrived while LOCKED, bound to its connection (HeldRequest). Under stateLock; cleared by lock(). */
+    private final HeldRequest heldRequest = new HeldRequest();
     private String gateNotice;
     private int shiftPhase;
     /** Release builds: watches Settings.Global.ADB_ENABLED and adb_wifi_enabled (see adbRefused). */
@@ -253,7 +264,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public void onChange(boolean selfChange) { activateIfPolicyReady(); }
             };
             getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver);
-            getContentResolver().registerContentObserver(Settings.Global.getUriFor(ADB_WIFI_ENABLED), false, adbObserver);
+            getContentResolver().registerContentObserver(Settings.Global.getUriFor(ApplianceLockdown.ADB_WIFI_ENABLED), false, adbObserver);
         }
     }
 
@@ -410,7 +421,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             else onUnlockEntry(entered, s);
         });
         // A request that arrived while locked (or a connected host) is shown on the gate too.
-        synchronized (stateLock) { if (heldSummary != null) pinScreen.setPending("INCOMING REQUEST", heldSummary); }
+        synchronized (stateLock) { if (heldRequest.summary() != null) pinScreen.setPending("INCOMING REQUEST", heldRequest.summary()); }
         if (transport != null && !creating && !sealed) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
         updatePinPolicy(pinScreen);
         screenName = "pin";
@@ -424,7 +435,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * The vault PIN is the Android lock credential; the seed key needs a fresh system check. Decided
      * by VaultPin's persisted credential-mode marker (set once SystemCredential.install succeeded).
      */
-    private boolean credentialMode() { return pin != null && pin.credentialHeld(); }
+    private boolean credentialMode() { return CredentialGate.credentialMode(pin); }
 
     /** Settings.Global.BOOT_COUNT: identifies this boot for BootUnlockGuard (-1 when unknown). */
     private int bootId() {
@@ -438,41 +449,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void withSeedKey(String why, Runnable op) { withSeedKey(why, op, null); }
 
     /** As {@link #withSeedKey(String, Runnable)}; {@code onCancel} (may be null) runs if the PIN prompt is dismissed. */
-    private void withSeedKey(String why, Runnable op, Runnable onCancel) {
-        if (!credentialMode()) { op.run(); return; }
-        SeedKeyWindow.Decision decision = SeedKeyWindow.decide(lastCredentialConfirm, SystemClock.elapsedRealtime());
-        if (decision == SeedKeyWindow.Decision.RUN) { op.run(); return; }
-        // Our own confirmation is near or past the window's end: probing now could pass keystore2
-        // and still fail on the chip a moment later (SeedKeyWindow), so ask.
-        if (decision == SeedKeyWindow.Decision.ASK) { confirmDevicePin(why, op, onCancel); return; }
-        // Ask the chip before asking the person: right after a PIN was set or entered on Android's
-        // own screen the key may already be usable, and a second prompt would be pure friction.
-        final int s = session.get();
-        cryptoExecutor.execute(() -> {
-            boolean ready = vault.seedKeyUsableNow();
-            runOnUiThread(() -> {
-                if (s != session.get()) return;
-                if (ready) { op.run(); return; }
-                confirmDevicePin(why, op, onCancel);
-            });
-        });
-    }
+    private void withSeedKey(String why, Runnable op, Runnable onCancel) { credentialGate.withSeedKey(why, op, onCancel); }
 
-    private void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) {
-        if (credentialPromptOpen) return;
-        credentialPromptOpen = true;
-        final int s = session.get();
-        SystemCredential.confirm(this, "Phone Vault", why, (ok, message) -> {
-            credentialPromptOpen = false;
-            if (s != session.get() && unlocked) return;
-            if (ok) {
-                lastCredentialConfirm = SystemClock.elapsedRealtime();
-                onOk.run();
-            } else if (onCancel != null) {
-                onCancel.run();
-            }
-        });
-    }
+    private void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) { credentialGate.confirmDevicePin(why, onOk, onCancel); }
 
     /** Keystore refused because the PIN window lapsed (the op took longer than the window). */
     private static boolean authLapsed(Throwable t) {
@@ -495,46 +474,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return b.toString();
     }
 
-    /** Locked gate in credential mode: our screen, the system verifies the PIN. */
-    private void showCredentialGate(int s) {
-        // The boot attempt below is still waiting for this session: onCreate and onResume both
-        // show the gate on a cold start, and a second call would replace the attempt's loading
-        // screen with the locked page AND queue the system prompt while the boot lock screen is
-        // still animating away (the PIN would be asked a second time). The
-        // attempt shows the gate itself if the keystore refuses; a new session (lock) passes.
-        if (bootAttemptSession == s) return;
-        boolean freshBoot = SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
-        if (freshBoot && bootUnlock.tryConsume(bootId())) {
-            // The boot lock screen may still be animating away: give it up to 4 s to report the
-            // device unlocked, then try the key; if the keystore refuses we come back and prompt.
-            // tryConsume committed "used for this boot" before we got here.
-            bootAttemptSession = s;
-            KeyguardManager keyguard = getSystemService(KeyguardManager.class);
-            final long deadline = SystemClock.elapsedRealtime() + 4000;
-            Runnable attempt = new Runnable() {
-                @Override public void run() {
-                    if (s != session.get() || unlocked) { bootAttemptSession = -1; return; }
-                    if (keyguard != null && keyguard.isDeviceLocked() && SystemClock.elapsedRealtime() < deadline) {
-                        ui.postDelayed(this, 250);
-                        return;
-                    }
-                    bootAttemptSession = -1;
-                    silentUnlockAttempt = true;
-                    unlock(s);
-                    if (!unlocked) { silentUnlockAttempt = false; showCredentialGate(session.get()); }
-                }
-            };
-            showLoading("Opening your wallet", "Using the PIN you just entered…");
-            ui.post(attempt);
-            return;
-        }
+    /** Locked gate in credential mode: our screen, the system verifies the PIN (CredentialGate#show). */
+    private void showCredentialGate(int s) { credentialGate.show(s); }
+
+    /** The locked page of session {@code s}; CredentialGate then offers the system prompt. */
+    private void showLockedPage(int s) {
         LinearLayout root = page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
-        synchronized (stateLock) { if (heldSummary != null) card(root, "Incoming request", heldSummary); }
+        synchronized (stateLock) { if (heldRequest.summary() != null) card(root, "Incoming request", heldRequest.summary()); }
         if (transport != null) card(root, "USB", "A host is connected. Its request stays unanswered until you unlock and review it.");
         TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
         hardenTouch(unlockButton);
-        unlockButton.setOnClickListener(v -> promptUnlock(s));
+        unlockButton.setOnClickListener(v -> credentialGate.promptUnlock(s));
         root.addView(unlockButton, matchWrap(dp(22)));
         TextView policy = VaultTheme.bodyText(this, SystemCredential.MAX_FAILED_FOR_WIPE
                 + " wrong PINs in a row erase this phone completely.", 14, VaultTheme.FAINT);
@@ -547,13 +498,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         scroll.addView(root);
         setContentView(scroll);
         devDumpUi();
-        ui.post(() -> { if (!unlocked && s == session.get() && foreground) promptUnlock(s); });
-    }
-
-    private void promptUnlock(int s) {
-        confirmDevicePin("Enter your PIN to unlock", () -> {
-            if (s == session.get() && !unlocked) unlock(s);
-        }, null);
     }
 
     private void clearPinEntry() {
@@ -590,16 +534,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         cryptoExecutor.execute(() -> {
             try {
                 // Chip first: once it holds the PIN the app stores only the credential-mode
-                // marker, never a PBKDF2 hash an offline guesser could search. The app hash is
-                // the no-chip fallback only. (A crash after install but before the marker is
-                // repaired at startup: VaultPin.reconcile sees the device credential.)
-                boolean bound = SystemCredential.install(this, forSystem); // zeroes forSystem
-                if (bound) {
-                    Arrays.fill(chosen, '0');
-                    pin.markCredentialHeld();
-                } else {
-                    pin.set(chosen); // zeroes the array
-                }
+                // marker, never a PBKDF2 hash (CredentialGate.storeNewPin; the hash is the
+                // no-chip fallback only).
+                boolean bound = CredentialGate.storeNewPin(chosen, forSystem, p -> SystemCredential.install(this, p), pin);
                 runOnUiThread(() -> {
                     if (!bound) { firstRunPinFresh = true; unlock(s); return; }
                     // The chip now holds the PIN; the next step (creating the wallet) needs it once.
@@ -722,7 +659,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // can never send after this point (send + close are linearized with signing).
             staleTransport = transport;
             transport = null;
-            clearHeldRequest();
+            heldRequest.clear();
             if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
             keepScreenOn(false);
         }
@@ -786,22 +723,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * on the connection it arrived on, and only while that connection is still the live one.
      */
     private void dispatchHeldRequest() {
-        final JSONObject held; final AccessoryTransport source;
+        final HeldRequest.Taken held;
         synchronized (stateLock) {
-            held = heldRequest;
-            source = heldSource;
-            boolean live = source != null && source == transport && !source.isClosed();
-            clearHeldRequest();
-            if (held == null || !live) return;
+            held = heldRequest.take(transport);
+            if (held == null) return;
         }
-        cryptoExecutor.execute(() -> onRequest(source, held));
-    }
-
-    /** Under stateLock (or before any transport runs): forget the held request and its source. */
-    private void clearHeldRequest() {
-        heldRequest = null;
-        heldSummary = null;
-        heldSource = null;
+        cryptoExecutor.execute(() -> onRequest(held.source, held.request));
     }
 
     private void drainPendingUsb() {
@@ -891,14 +818,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return BuildConfig.VAULT_DEV_BUILD && DevTools.SCREENSHOTS;
     }
 
-    /** Settings.Global.ADB_WIFI_ENABLED (hidden constant): wireless debugging. */
-    static final String ADB_WIFI_ENABLED = "adb_wifi_enabled";
-
     /** Non-zero when USB (Settings.Global.ADB_ENABLED) OR wireless (adb_wifi_enabled) debugging is on. */
     private int adbEnabled() {
         int usb = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
-        int wifi = Settings.Global.getInt(getContentResolver(), ADB_WIFI_ENABLED, 0);
-        return usb != 0 ? usb : wifi;
+        int wifi = Settings.Global.getInt(getContentResolver(), ApplianceLockdown.ADB_WIFI_ENABLED, 0);
+        return ApplianceLockdown.debuggingSetting(usb, wifi);
     }
 
     /** Release build with USB or wireless debugging on: nothing is shown or approved (ApplianceLockdown). */
@@ -1843,7 +1767,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (!sensitiveValid(token, s)) return;
                     if (!retried && authLapsed(e)) {
-                        lastCredentialConfirm = 0;
+                        credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to open your backup",
                                 () -> { if (sensitiveValid(token, s)) openBackup(token, s, checkOnly, true); },
                                 this::hideBackup);
@@ -2232,7 +2156,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 saveStandardBook(loadedBook);
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    silentUnlockAttempt = false;
+                    credentialGate.endSilentUnlockAttempt();
                     showHome();
                     drainPendingUsb();
                     if (transport != null) setStatusActive(true); // a session opened behind the gate
@@ -2245,8 +2169,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     clearReceivingIdentity();
                     Log.w(TAG, "wallet load failed: " + chain(e));
                     if (authLapsed(e)) {
-                        if (!silentUnlockAttempt) gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again.";
-                        silentUnlockAttempt = false;
+                        if (!credentialGate.silentUnlockAttempt()) gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again.";
+                        credentialGate.endSilentUnlockAttempt();
                         lock();
                         return;
                     }
@@ -2274,7 +2198,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // is entered and the request has gone through the ordinary review path.
             UsbAccessory gated = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
             if (gated == null) return;
-            synchronized (stateLock) { clearHeldRequest(); } // a new connection never inherits a held request
+            synchronized (stateLock) { heldRequest.clear(); } // a new connection never inherits a held request
             if (pinScreen != null) pinScreen.setPending(null, null);
             if (transport != null) { AccessoryTransport previous = transport; transport = null; previous.close(); }
             try {
@@ -2301,7 +2225,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
         if (accessory == null) return;
-        synchronized (stateLock) { clearHeldRequest(); }
+        synchronized (stateLock) { heldRequest.clear(); }
         if (transport != null) {
             AccessoryTransport previous = transport;
             transport = null;
@@ -2356,11 +2280,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 } else {
                     b = TransactionReview.build(Eip1559Request.parse(json), null, tokens()).lockedSummary;
                 }
-                synchronized (stateLock) { if (!unlocked && source == transport) { heldRequest = json; heldSummary = b; heldSource = source; } }
+                synchronized (stateLock) { heldRequest.holdIfLocked(unlocked, transport, source, json, b); }
             } catch (Exception e) {
                 b = e instanceof RequestRefusal ? e.getMessage() + " It will be refused after you unlock."
                         : "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
-                synchronized (stateLock) { if (!unlocked && source == transport) { heldRequest = json; heldSummary = b; heldSource = source; } }
+                synchronized (stateLock) { heldRequest.holdIfLocked(unlocked, transport, source, json, b); }
             }
             label = l; body = b;
             runOnUiThread(() -> { if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body); });
@@ -3097,7 +3021,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             use.use(derived);
                         } catch (Exception e) {
                             if (authLapsed(e)) {
-                                runOnUiThread(() -> lastCredentialConfirm = 0);
+                                runOnUiThread(credentialGate::forgetConfirmation);
                                 failBitcoin(source, id, decision, s, new RequestRefusal("PIN confirmation expired",
                                         "The PIN confirmation expired before your Bitcoin accounts opened. Send the request again. Nothing was shared or signed."));
                             } else {
@@ -3432,7 +3356,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     if (authLapsed(e) && !retried) {
-                        lastCredentialConfirm = 0;
+                        credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, true), this::showHome);
                         return;
                     }
@@ -3463,7 +3387,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     if (authLapsed(e) && !retried) {
-                        lastCredentialConfirm = 0;
+                        credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> previewWorker(chars, result, true), this::showHome);
                         return;
                     }
@@ -3521,7 +3445,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     if (authLapsed(e) && !retried) {
-                        lastCredentialConfirm = 0;
+                        credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(true),
                                 () -> { synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; } endPassphraseEntry(); showHome(); });
                         return;
@@ -3572,7 +3496,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
                     if (authLapsed(e) && !retried) {
-                        lastCredentialConfirm = 0;
+                        credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to return to the standard wallet", () -> closePassphraseWorker(true), this::showHome);
                         return;
                     }
@@ -3680,8 +3604,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     @Override public void onDisconnected(AccessoryTransport source, String reason) {
         boolean droppedHeld;
         synchronized (stateLock) {
-            droppedHeld = heldSource == source;
-            if (droppedHeld) clearHeldRequest(); // its host is gone
+            droppedHeld = heldRequest.dropIfFrom(source); // its host is gone
         }
         runOnUiThread(() -> {
             if (droppedHeld && !unlocked && pinScreen != null) pinScreen.setPending(null, null);
