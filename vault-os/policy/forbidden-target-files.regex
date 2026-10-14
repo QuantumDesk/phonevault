@@ -8,7 +8,6 @@
 /wpa_supplicant_mainline(\.|/|$)
 /(mediatranscoding|media_provider)(\.|/|$)
 /(AmbientSensePrebuilt|AppDirectedSMSService|CarrierServices|CarrierSettings|CarrierWifi|ConnMO|DCMO|DMService|DeviceIntelligenceNetworkPrebuilt|DevicePersonalizationPrebuiltPixel3|DiagMon|EuiccGoogle|EuiccSupportPixel[^/]*|HardwareInfo|HotwordEnrollment[^/]*|MobileFeliCa[^/]*|MyVerizonServices|OBDM_Permissions|OemDmTrigger|PixelCameraServicesCrosshatch|SprintDM|SprintHM|TetheringEntitlement|USCCDM|VZWAPNLib|WfcActivation)/
-/CarrierSettings/
 
 # Boot-tested app strip (dev ladder rungs 4a/4b): launcher remnants and icon
 # packs, Settings satellites, telephony UI, backup transports, Lineage/Pixel
