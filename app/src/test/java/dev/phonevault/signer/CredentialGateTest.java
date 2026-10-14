@@ -1,35 +1,20 @@
 package dev.phonevault.signer;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 
 import org.junit.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-
 /**
  * Source guard for a phone-only race: on a cold start after the boot PIN, onCreate and onResume
- * both show the credential gate. The second call replaced the boot attempt's loading screen with
- * the locked page and queued the system PIN prompt while Android's lock screen was still going
- * away, so the vault asked for the PIN a second time (credentialtest, rung 4b, 2026-10-11).
+ * both show the credential gate. A second call must not replace the boot attempt's loading screen
+ * with the locked page and queue the system PIN prompt while Android's lock screen is still going
+ * away, or the vault asks for the PIN a second time.
  */
 public class CredentialGateTest {
     private static String gate() throws Exception {
-        for (String path : new String[] {
-                "src/main/java/dev/phonevault/signer/MainActivity.java",
-                "app/src/main/java/dev/phonevault/signer/MainActivity.java"}) {
-            Path p = Paths.get(path);
-            if (!Files.exists(p)) continue;
-            String src = new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
-            int start = src.indexOf("private void showCredentialGate(int s) {");
-            assertTrue(start >= 0);
-            return src.substring(start, src.indexOf("\n    }\n", start));
-        }
-        fail("MainActivity.java not found from " + Paths.get("").toAbsolutePath());
-        return null;
+        return SourceGuard.body(SourceGuard.mainActivity(), "private void showCredentialGate(int s) {");
     }
 
     @Test public void pendingBootAttemptIsNotReplacedByASecondGate() throws Exception {
@@ -43,5 +28,26 @@ public class CredentialGateTest {
         int release = gate.indexOf("bootAttemptSession = -1;\n                    silentUnlockAttempt = true;");
         assertTrue(release >= 0 && release < gate.indexOf("showCredentialGate(session.get())"));
         assertTrue(gate.contains("if (s != session.get() || unlocked) { bootAttemptSession = -1; return; }"));
+    }
+
+    /**
+     * A request held behind the lock is bound to the connection it arrived on: a new connection or
+     * that connection's disconnect drops it, and unlock dispatches it only to that same live session.
+     */
+    @Test public void heldRequestIsBoundToItsConnection() throws Exception {
+        String src = SourceGuard.mainActivity();
+        String dispatch = SourceGuard.body(src, "private void dispatchHeldRequest() {");
+        assertTrue(dispatch.contains("source = heldSource;"));
+        assertTrue(dispatch.contains("source != null && source == transport && !source.isClosed()"));
+        assertFalse("never re-targeted at whatever transport is current", dispatch.contains("source = transport;"));
+        assertEquals("both hold sites record the source", 2,
+                src.split("heldRequest = json; heldSummary = b; heldSource = source;", -1).length - 1);
+        assertEquals("held only from the live connection", 2,
+                src.split("if \\(!unlocked && source == transport\\) \\{ heldRequest = json;", -1).length - 1);
+        String handle = SourceGuard.body(src, "private void handleIntent(Intent intent) {");
+        assertEquals("cleared on a new connection, locked and unlocked", 2,
+                handle.split("clearHeldRequest\\(\\);", -1).length - 1);
+        String disc = SourceGuard.body(src, "public void onDisconnected(AccessoryTransport source, String reason) {");
+        assertTrue(disc.contains("droppedHeld = heldSource == source;") && disc.contains("clearHeldRequest();"));
     }
 }

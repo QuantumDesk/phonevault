@@ -15,8 +15,7 @@ import org.web3j.crypto.transaction.type.TransactionType;
 import org.web3j.utils.Numeric;
 
 public final class EvmSignerTest {
-    private static final Credentials FIXED_TEST_KEY = Credentials.create(
-            "4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials FIXED_TEST_KEY = TestKeys.EVM_KEY;
     private static final Credentials DIFFERENT_TEST_KEY = Credentials.create(
             "6c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
 

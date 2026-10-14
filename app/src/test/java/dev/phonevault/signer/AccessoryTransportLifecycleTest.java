@@ -18,6 +18,7 @@ import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Resource-release behaviour of a USB session: every failure ends it exactly once, fully. */
 public class AccessoryTransportLifecycleTest {
@@ -140,9 +141,9 @@ public class AccessoryTransportLifecycleTest {
     }
 
     @Test public void sendNeverBlocksAndCloseIsPromptWithAStuckHost() throws Exception {
-        // Round-5 P1: signing used to perform blocking USB I/O under the activity's state lock,
-        // so a host that stopped reading could hold up lock(). Now send() only enqueues and
-        // close() returns promptly even while the writer thread is wedged in write().
+        // Signing must not perform blocking USB I/O under the activity's state lock, or a host
+        // that stops reading could hold up lock(). send() only enqueues, and close() returns
+        // promptly even while the writer thread is wedged in write().
         Fd fd = new Fd();
         Recorder listener = new Recorder();
         StuckOutput stuck = new StuckOutput();
@@ -215,7 +216,7 @@ public class AccessoryTransportLifecycleTest {
     }
 
     /**
-     * Regression: the Android accessory device node returns one USB packet per read() and drops
+     * The Android accessory device node returns one USB packet per read() and drops
      * whatever was not requested. Byte-wise reads therefore lose all but the first byte of every
      * request. This fake enforces that contract: a single-byte read() is a bug.
      */
@@ -248,5 +249,25 @@ public class AccessoryTransportLifecycleTest {
         assertTrue("both framed requests must arrive intact from packet-sized reads", got.await(5, java.util.concurrent.TimeUnit.SECONDS));
         assertEquals(java.util.Arrays.asList("a", "b"), ids);
         t.close();
+    }
+
+    /** The reader catches Throwable: even an Error thrown by a listener ends the session and is reported. */
+    @Test public void listenerErrorEndsTheSessionAndIsReported() throws Exception {
+        CountDownLatch disconnected = new CountDownLatch(1);
+        AtomicReference<String> reason = new AtomicReference<>();
+        AccessoryTransport.Listener listener = new AccessoryTransport.Listener() {
+            @Override public void onConnected(AccessoryTransport source) { }
+            @Override public void onRequest(AccessoryTransport source, JSONObject json) {
+                throw new StackOverflowError("listener blew its stack");
+            }
+            @Override public void onDisconnected(AccessoryTransport source, String why) { reason.set(why); disconnected.countDown(); }
+        };
+        byte[] line = (new JSONObject().put("id", "x").put("method", "getAddress").toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        Closeable fd = () -> { };
+        AccessoryTransport t = AccessoryTransport.openForTest(fd, new ByteArrayInputStream(line), new ByteArrayOutputStream(), listener);
+        t.start();
+        assertTrue("session reports the failure", disconnected.await(5, TimeUnit.SECONDS));
+        assertTrue(reason.get(), reason.get().contains("StackOverflowError"));
+        assertTrue("transport closed", t.isClosed());
     }
 }

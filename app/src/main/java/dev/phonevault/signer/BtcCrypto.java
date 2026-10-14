@@ -305,17 +305,6 @@ final class BtcCrypto {
         return s.toString();
     }
 
-    static byte[] unhex(String h) {
-        if (h == null || (h.length() & 1) != 0) throw new IllegalArgumentException("odd hex length");
-        byte[] out = new byte[h.length() / 2];
-        for (int i = 0; i < out.length; i++) {
-            int hi = Character.digit(h.charAt(2 * i), 16), lo = Character.digit(h.charAt(2 * i + 1), 16);
-            if (hi < 0 || lo < 0) throw new IllegalArgumentException("invalid hex");
-            out[i] = (byte) ((hi << 4) | lo);
-        }
-        return out;
-    }
-
     static byte[] reversed(byte[] b) {
         byte[] out = new byte[b.length];
         for (int i = 0; i < b.length; i++) out[i] = b[b.length - 1 - i];

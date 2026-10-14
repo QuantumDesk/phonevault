@@ -39,16 +39,16 @@ public final class BtcSignatureVectorsTest {
             String[] f = lines[i].split(",", -1);
             String index = f[0], sk = f[1], pk = f[2], aux = f[3], msg = f[4], sig = f[5];
             boolean expected = "TRUE".equals(f[6]);
-            byte[] message = BtcCrypto.unhex(msg);
+            byte[] message = Hex.bytes(msg);
             if (!sk.isEmpty()) {
-                byte[] produced = BtcCrypto.signSchnorr(BtcCrypto.unhex(sk), message, BtcCrypto.unhex(aux));
+                byte[] produced = BtcCrypto.signSchnorr(Hex.bytes(sk), message, Hex.bytes(aux));
                 assertEquals("vector " + index, sig.toLowerCase(), BtcCrypto.hex(produced));
                 assertEquals("vector " + index + " public key", pk.toLowerCase(),
-                        BtcCrypto.hex(Arrays.copyOfRange(BtcCrypto.pubCompressed(BtcCrypto.unhex(sk)), 1, 33)));
+                        BtcCrypto.hex(Arrays.copyOfRange(BtcCrypto.pubCompressed(Hex.bytes(sk)), 1, 33)));
                 signed++;
             }
             assertEquals("vector " + index + " verification", expected,
-                    BtcCrypto.verifySchnorr(BtcCrypto.unhex(pk), message, BtcCrypto.unhex(sig)));
+                    BtcCrypto.verifySchnorr(Hex.bytes(pk), message, Hex.bytes(sig)));
             verified++;
         }
         assertEquals(19, verified);
@@ -59,9 +59,9 @@ public final class BtcSignatureVectorsTest {
         JSONArray all = new JSONObject(resource("bip341-wallet-test-vectors.json")).getJSONArray("scriptPubKey");
         for (int i = 0; i < all.length(); i++) {
             JSONObject v = all.getJSONObject(i);
-            byte[] internal = BtcCrypto.unhex(v.getJSONObject("given").getString("internalPubkey"));
+            byte[] internal = Hex.bytes(v.getJSONObject("given").getString("internalPubkey"));
             JSONObject mid = v.getJSONObject("intermediary");
-            byte[] root = mid.isNull("merkleRoot") ? null : BtcCrypto.unhex(mid.getString("merkleRoot"));
+            byte[] root = mid.isNull("merkleRoot") ? null : Hex.bytes(mid.getString("merkleRoot"));
             assertEquals(mid.getString("tweak"), BtcCrypto.hex(BtcCrypto.tapTweak(internal, root)));
             byte[] q = BtcCrypto.taprootOutputKey(internal, root);
             assertEquals(mid.getString("tweakedPubkey"), BtcCrypto.hex(q));
@@ -75,13 +75,13 @@ public final class BtcSignatureVectorsTest {
     @Test public void bip341KeyPathSpendingVectors() throws Exception {
         JSONObject k = new JSONObject(resource("bip341-wallet-test-vectors.json")).getJSONArray("keyPathSpending").getJSONObject(0);
         JSONObject given = k.getJSONObject("given");
-        BtcTx tx = BtcTx.parse(BtcCrypto.unhex(given.getString("rawUnsignedTx")), BtcTx.MAX_PREV_IO);
+        BtcTx tx = BtcTx.parse(Hex.bytes(given.getString("rawUnsignedTx")), BtcTx.MAX_PREV_IO);
         JSONArray utxos = given.getJSONArray("utxosSpent");
         long[] amounts = new long[utxos.length()];
         byte[][] scripts = new byte[utxos.length()][];
         for (int i = 0; i < utxos.length(); i++) {
             amounts[i] = utxos.getJSONObject(i).getLong("amountSats");
-            scripts[i] = BtcCrypto.unhex(utxos.getJSONObject(i).getString("scriptPubKey"));
+            scripts[i] = Hex.bytes(utxos.getJSONObject(i).getString("scriptPubKey"));
         }
         JSONArray inputs = k.getJSONArray("inputSpending");
         byte[] zeroAux = new byte[32];
@@ -89,8 +89,8 @@ public final class BtcSignatureVectorsTest {
             JSONObject in = inputs.getJSONObject(i);
             JSONObject g = in.getJSONObject("given"), mid = in.getJSONObject("intermediary");
             int index = g.getInt("txinIndex"), hashType = g.getInt("hashType");
-            byte[] root = g.isNull("merkleRoot") ? null : BtcCrypto.unhex(g.getString("merkleRoot"));
-            byte[] priv = BtcCrypto.unhex(g.getString("internalPrivkey"));
+            byte[] root = g.isNull("merkleRoot") ? null : Hex.bytes(g.getString("merkleRoot"));
+            byte[] priv = Hex.bytes(g.getString("internalPrivkey"));
             assertEquals("input " + index, mid.getString("internalPubkey"), BtcCrypto.hex(Arrays.copyOfRange(BtcCrypto.pubCompressed(priv), 1, 33)));
             byte[] tweaked = BtcCrypto.taprootTweakedPrivate(priv, root);
             assertEquals("input " + index, mid.getString("tweakedPrivkey"), BtcCrypto.hex(tweaked));
@@ -107,8 +107,8 @@ public final class BtcSignatureVectorsTest {
     }
 
     @Test public void bip143NativeP2wpkhExample() {
-        BtcTx tx = BtcTx.parse(BtcCrypto.unhex("0100000002fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f0000000000eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac11000000"), BtcTx.MAX_IO);
-        byte[] priv = BtcCrypto.unhex("619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
+        BtcTx tx = BtcTx.parse(Hex.bytes("0100000002fff7f7881a8099afa6940d42d1e7f6362bec38171ea3edf433541db4e4ad969f0000000000eeffffffef51e1b804cc89d182d279655c3aa89e815b1b309fe287d9b2b55d57b90ec68a0100000000ffffffff02202cb206000000001976a9148280b37df378db99f66f85c95a783a76ac7a6d5988ac9093510d000000001976a9143bde42dbee7e4dbe6a21b2d50ce2f0167faa815988ac11000000"), BtcTx.MAX_IO);
+        byte[] priv = Hex.bytes("619c335025c7f4012e556c2a58b2506e30b8511b53ade95ea316fd8c3286feb9");
         byte[] pub = BtcCrypto.pubCompressed(priv);
         assertEquals("025476c2e83188368da1ff3e292e7acafcdb3566bb0ad253f62fc70f07aeee6357", BtcCrypto.hex(pub));
         assertEquals("00141d0f172a0ecb48aee1be1f2687d2963ae33f71a1", BtcCrypto.hex(BtcScript.p2wpkh(BtcCrypto.hash160(pub))));
@@ -123,8 +123,8 @@ public final class BtcSignatureVectorsTest {
     }
 
     @Test public void bip143P2shP2wpkhExample() {
-        BtcTx tx = BtcTx.parse(BtcCrypto.unhex("0100000001db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a54770100000000feffffff02b8b4eb0b000000001976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac0008af2f000000001976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac92040000"), BtcTx.MAX_IO);
-        byte[] priv = BtcCrypto.unhex("eb696a065ef48a2192da5b28b694f87544b30fae8327c4510137a922f32c6dcf");
+        BtcTx tx = BtcTx.parse(Hex.bytes("0100000001db6b1b20aa0fd7b23880be2ecbd4a98130974cf4748fb66092ac4d3ceb1a54770100000000feffffff02b8b4eb0b000000001976a914a457b684d7f0d539a46a45bbc043f35b59d0d96388ac0008af2f000000001976a914fd270b1ee6abcaea97fea7ad0402e8bd8ad6d77c88ac92040000"), BtcTx.MAX_IO);
+        byte[] priv = Hex.bytes("eb696a065ef48a2192da5b28b694f87544b30fae8327c4510137a922f32c6dcf");
         byte[] pub = BtcCrypto.pubCompressed(priv);
         assertEquals("03ad1d8e89212f0b92c74d23bb710c00662ad1470198ac48c43f7d6f93a2a26873", BtcCrypto.hex(pub));
         byte[] sighash = tx.sighashSegwitV0(0, BtcScript.p2pkhScript(BtcCrypto.hash160(pub)), 1_000_000_000L, BtcTx.SIGHASH_ALL);
@@ -134,7 +134,7 @@ public final class BtcSignatureVectorsTest {
     }
 
     @Test public void ecdsaIsLowSAndStrictDer() {
-        byte[] priv = BtcCrypto.unhex("0000000000000000000000000000000000000000000000000000000000000001");
+        byte[] priv = Hex.bytes("0000000000000000000000000000000000000000000000000000000000000001");
         for (int i = 0; i < 64; i++) {
             byte[] digest = BtcCrypto.sha256(new byte[] {(byte) i});
             byte[] der = BtcCrypto.signEcdsa(priv, digest);

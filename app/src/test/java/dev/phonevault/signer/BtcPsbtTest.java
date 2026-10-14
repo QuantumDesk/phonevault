@@ -348,7 +348,7 @@ public final class BtcPsbtTest {
         assertTrue(has(far, MessageReview.WARNING, "To your wallet: Account 1 · Native SegWit, path m/84'/0'/0'/1/22, which your wallet app may not show"
                 + " (it is far beyond the addresses your wallet app scans (gap limit))"));
         assertEquals("Send 0.01497567 BTC", far.title);
-        // the old rule's extreme: index 999,999 of account 20
+        // the largest index a PSBT may name (MAX_PSBT_INDEX) on account 20
         BtcPsbtReview extreme = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 19, 1, 999_999), BtcNetwork.BITCOIN);
         assertFalse(extreme.outputs.get(1).change);
         assertTrue(has(extreme, MessageReview.WARNING, "Account 20 · Native SegWit, path m/84'/0'/19'/1/999999"));
@@ -436,7 +436,7 @@ public final class BtcPsbtTest {
 
     @Test public void farFutureLockTimeIsWarned() throws Exception {
         Psbt p = psbt(fixture("p2wpkh-send-with-change"));
-        long oct2026 = 1_791_900_000L; // 2026-10-13
+        long oct2026 = 1_791_900_000L; // mid-October 2026
         long tip = BtcPsbtReview.estimatedTip(BtcNetwork.BITCOIN, oct2026);
         // none, current height (anti fee sniping), a few days out: no warning
         for (long lock : new long[] {0, tip - 3000, tip, tip + 1008}) {
@@ -605,7 +605,7 @@ public final class BtcPsbtTest {
         assertRefused(leaf.parse(), BtcNetwork.BITCOIN, "Taproot script path");
         // a different Taproot internal key
         Maps internal = new Maps(tr);
-        internal.replace(internal.in.get(0), Psbt.IN_TAP_INTERNAL_KEY, Psbt.entry(Psbt.IN_TAP_INTERNAL_KEY, new byte[0], BtcCrypto.unhex("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")));
+        internal.replace(internal.in.get(0), Psbt.IN_TAP_INTERNAL_KEY, Psbt.entry(Psbt.IN_TAP_INTERNAL_KEY, new byte[0], Hex.bytes("79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798")));
         assertRefused(internal.parse(), BtcNetwork.BITCOIN, "different Taproot internal key");
     }
 
@@ -613,20 +613,20 @@ public final class BtcPsbtTest {
         Psbt p = psbt(fixture("p2wpkh-send-with-change"));
         Maps bare = new Maps(p);
         List<BtcTx.Output> outs = new ArrayList<>(p.tx.outputs);
-        outs.set(0, new BtcTx.Output(1_234_567, BtcCrypto.unhex("5121" + "02" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" + "51ae")));
+        outs.set(0, new BtcTx.Output(1_234_567, Hex.bytes("5121" + "02" + "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798" + "51ae")));
         bare.tx(new BtcTx(p.tx.version, new ArrayList<>(p.tx.inputs), outs, p.tx.locktime, false));
         assertRefused(bare.parse(), BtcNetwork.BITCOIN, "Output 1 pays to a script the phone can't show as an address");
 
         Maps future = new Maps(p);
         List<BtcTx.Output> o2 = new ArrayList<>(p.tx.outputs);
-        o2.set(0, new BtcTx.Output(1_234_567, BtcCrypto.unhex("5210751e76e8199196d454941c45d1b3a323")));
+        o2.set(0, new BtcTx.Output(1_234_567, Hex.bytes("5210751e76e8199196d454941c45d1b3a323")));
         future.tx(new BtcTx(p.tx.version, new ArrayList<>(p.tx.inputs), o2, p.tx.locktime, false));
         assertRefused(future.parse(), BtcNetwork.BITCOIN, "can't show as an address");
 
         // burning value in OP_RETURN: allowed, but DANGER
         Maps burn = new Maps(p);
         List<BtcTx.Output> o3 = new ArrayList<>(p.tx.outputs);
-        o3.set(0, new BtcTx.Output(1_234_567, BtcCrypto.unhex("6a0401020304")));
+        o3.set(0, new BtcTx.Output(1_234_567, Hex.bytes("6a0401020304")));
         burn.tx(new BtcTx(p.tx.version, new ArrayList<>(p.tx.inputs), o3, p.tx.locktime, false));
         assertTrue(has(review(burn.parse(), BtcNetwork.BITCOIN), MessageReview.DANGER, "destroyed forever"));
     }
@@ -784,5 +784,119 @@ public final class BtcPsbtTest {
         assertTrue(reloaded.isShared(BtcNetwork.SIGNET, BtcWallet.Type.P2TR, 4));
         reloaded.revokeAll();
         assertTrue(BtcSharing.load(reloaded.encode(), wallet).keys().isEmpty());
+    }
+
+    // ------------------------------------------------------------------ gap limit, relative locks, amount memory
+
+    /**
+     * Change is "✓" only within the gap limit: the companion's scanner (scan.rs GAP = 20) and
+     * standard recovery wallets stop 20 unused addresses past the last used one, so change far
+     * beyond that is invisible to them. An untrusted Esplora can push the companion's change index
+     * there (scan.rs test lying_server_pushes_change_index_far_past_the_gap_limit).
+     */
+    @Test public void changeFarPastTheGapLimitIsWarned() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change")); // spends /0/0 and /0/1
+        BtcPsbtReview r = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 0, 1, 900), BtcNetwork.BITCOIN);
+        assertFalse("index 900 is not verified change", r.outputs.get(1).change);
+        assertTrue(r.outputs.get(1).ownElsewhere);
+        assertNull(value(r, "Change back to your wallet ✓"));
+        assertTrue(has(r, MessageReview.WARNING, "m/84'/0'/0'/1/900, which your wallet app may not show "
+                + "(it is far beyond the addresses your wallet app scans (gap limit))"));
+        // the same for an own receive address of an account the PSBT does not spend from
+        BtcPsbtReview recv = review(ownOutput(p, 1, BtcWallet.Type.P2WPKH, 19, 0, 999), BtcNetwork.BITCOIN);
+        assertFalse(recv.outputs.get(1).ownReceive);
+        assertNull(value(recv, "Your own address ✓"));
+        assertTrue(has(recv, MessageReview.WARNING, "m/84'/0'/19'/0/999, which your wallet app may not show (it is far beyond"));
+    }
+
+    private static Psbt withSequence(Psbt p, long version, long sequence) {
+        Maps m = new Maps(p);
+        List<BtcTx.Input> ins = new ArrayList<>();
+        for (BtcTx.Input in : p.tx.inputs) ins.add(new BtcTx.Input(in.prevTxid, in.vout, in.scriptSig, sequence));
+        m.tx(new BtcTx(version, ins, new ArrayList<>(p.tx.outputs), 0, false));
+        return m.parse();
+    }
+
+    private static boolean anyWarningOrDanger(BtcPsbtReview r) {
+        for (MessageReview.Row row : r.summary) {
+            if (row.label.equals(MessageReview.WARNING) || row.label.equals(MessageReview.DANGER)) return true;
+        }
+        return false;
+    }
+
+    @Test public void relativeTimeLocksAreWarned() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change"));
+        // version 2, nSequence 0x0000ffff: BIP-68 height lock of 65,535 blocks (~455 days) after each coin confirms
+        Psbt blocks = withSequence(p, 2, 0x0000ffffL);
+        assertEquals("Input 1 can't be mined until 65,535 blocks (about 455 days) after the coin it spends was confirmed "
+                + "(a relative lock time, BIP-68). Sign only if you meant to delay it.", BtcPsbtReview.relativeLockWarning(blocks.tx));
+        assertTrue(has(review(blocks, BtcNetwork.BITCOIN), MessageReview.WARNING, "relative lock time"));
+        // nSequence 0x0040ffff: BIP-68 time lock of 65,535 × 512 s (~388 days)
+        BtcPsbtReview rt = review(withSequence(p, 2, 0x0040ffffL), BtcNetwork.BITCOIN);
+        assertTrue(has(rt, MessageReview.WARNING, "can't be mined until about 388 days after"));
+        // a week or less is not warned: 1008 blocks, 1181 × 512 s
+        assertNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 2, 1008).tx));
+        assertNotNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 2, 1009).tx));
+        assertNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 2, (1L << 22) | 1181).tx));
+        assertNotNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 2, (1L << 22) | 1182).tx));
+        // not enforced: version 1, the disable bit, RBF / final sequences
+        assertNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 1, 0x0000ffffL).tx));
+        assertNull(BtcPsbtReview.relativeLockWarning(withSequence(p, 2, (1L << 31) | 0xffff).tx));
+        for (long seq : new long[] {0xfffffffdL, 0xfffffffeL, 0xffffffffL}) {
+            BtcPsbtReview ok = review(withSequence(p, 2, seq), BtcNetwork.BITCOIN);
+            assertFalse(Long.toHexString(seq), anyWarningOrDanger(ok));
+        }
+    }
+
+    @Test public void aTaprootAmountLieIsNotRememberedSoTheHonestPsbtStillSigns() throws Exception {
+        Psbt honest = psbt(fixture("p2tr-send-with-change"));
+        BtcAmountMemory memory = new BtcAmountMemory();
+        BtcTx.Output real = Psbt.witnessUtxo(Psbt.find(honest.inputs.get(0), Psbt.IN_WITNESS_UTXO).value);
+        Maps lie = new Maps(honest);
+        lie.replace(lie.in.get(0), Psbt.IN_WITNESS_UTXO,
+                Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(real.value + 1_000_000, real.script)));
+        // Taproot needs no previous transaction, so the lie is reviewed (its signature is useless on chain)...
+        BtcPsbtReview r = BtcPsbtReview.build(lie.parse(), BtcNetwork.BITCOIN, BtcKeysTest.wallet(BtcNetwork.BITCOIN), null, memory);
+        // ...but its amount is unproven, so the phone does not remember it (as MainActivity records after signing)
+        for (BtcPsbtReview.SignInput in : r.inputs) {
+            assertFalse(in.amountProven);
+            if (in.amountProven) memory.record(r.psbt.tx.inputs.get(in.index).outpoint(), in.amount, in.script);
+        }
+        // ...and the TRUE amount is still reviewed afterwards
+        BtcPsbtReview ok = BtcPsbtReview.build(honest, BtcNetwork.BITCOIN, BtcKeysTest.wallet(BtcNetwork.BITCOIN), null, memory);
+        assertEquals(real.value, ok.inputs.get(0).amount);
+        // SegWit v0 inputs always carry their verified previous transaction: proven, remembered
+        BtcPsbtReview segwit = review(psbt(fixture("p2wpkh-send-with-change")), BtcNetwork.BITCOIN);
+        for (BtcPsbtReview.SignInput in : segwit.inputs) assertTrue(in.amountProven);
+    }
+
+    /** The tip estimate tracks the real ~586 s block average, so the silent window stays about a week. */
+    @Test public void heightLocksAboutAWeekPastTheRealTipAreWarned() throws Exception {
+        Psbt p = psbt(fixture("p2wpkh-send-with-change"));
+        long now = 1_791_900_000L; // mid-October 2026
+        long estimated = BtcPsbtReview.estimatedTip(BtcNetwork.BITCOIN, now);
+        long realAt586 = BtcPsbtReview.MAIN_ANCHOR_HEIGHT + (now - BtcPsbtReview.MAIN_ANCHOR_TIME) / 586;
+        long lock = estimated + BtcPsbtReview.LOCK_WARN_BLOCKS; // the largest lock that is not warned
+        assertNull(BtcPsbtReview.lockTimeWarning(withHeightLock(p, lock).tx, BtcNetwork.BITCOIN, now));
+        assertNotNull(BtcPsbtReview.lockTimeWarning(withHeightLock(p, lock + 1).tx, BtcNetwork.BITCOIN, now));
+        long daysAhead = (lock - realAt586) * 586 / 86_400;
+        assertTrue("silent lock is " + daysAhead + " days past a 586 s/block tip", daysAhead <= 8);
+        // an honest anti-fee-sniping lock at the real tip (586 s, or even 582 s, blocks) is never warned
+        long realAt582 = BtcPsbtReview.MAIN_ANCHOR_HEIGHT + (now - BtcPsbtReview.MAIN_ANCHOR_TIME) / 582;
+        assertNull(BtcPsbtReview.lockTimeWarning(withHeightLock(p, realAt586).tx, BtcNetwork.BITCOIN, now));
+        assertNull(BtcPsbtReview.lockTimeWarning(withHeightLock(p, realAt582).tx, BtcNetwork.BITCOIN, now));
+        // and the window stays about a week a few years on
+        long y2029 = 1_893_456_000L;
+        long silent2029 = BtcPsbtReview.estimatedTip(BtcNetwork.BITCOIN, y2029) + BtcPsbtReview.LOCK_WARN_BLOCKS
+                - (BtcPsbtReview.MAIN_ANCHOR_HEIGHT + (y2029 - BtcPsbtReview.MAIN_ANCHOR_TIME) / 586);
+        assertTrue("2029: " + silent2029 + " blocks", silent2029 * 586 / 86_400 <= 8);
+    }
+
+    private static Psbt withHeightLock(Psbt p, long lock) {
+        Maps m = new Maps(p);
+        List<BtcTx.Input> ins = new ArrayList<>();
+        for (BtcTx.Input in : p.tx.inputs) ins.add(new BtcTx.Input(in.prevTxid, in.vout, in.scriptSig, 0xfffffffdL));
+        m.tx(new BtcTx(2, ins, new ArrayList<>(p.tx.outputs), lock, false));
+        return m.parse();
     }
 }

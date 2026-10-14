@@ -111,7 +111,7 @@ public final class BtcEncodingTest {
             String lower = v[0].toLowerCase(Locale.ROOT);
             String hrp = lower.substring(0, 2);
             Bech32.WitnessProgram w = Bech32.decodeSegwit(hrp, v[0]);
-            byte[] spk = BtcCrypto.unhex(v[1]);
+            byte[] spk = Hex.bytes(v[1]);
             assertEquals(v[0], w.version == 0 ? 0 : 0x50 + w.version, spk[0] & 0xff);
             assertEquals(spk.length - 2, w.program.length);
             assertArrayEquals(java.util.Arrays.copyOfRange(spk, 2, spk.length), w.program);
@@ -129,23 +129,23 @@ public final class BtcEncodingTest {
 
     @Test public void standardScriptsRenderAsAddresses() {
         // BIP-350 / BIP-84 / BIP-86 examples
-        assertEquals("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", BtcScript.address(BtcCrypto.unhex("0014751e76e8199196d454941c45d1b3a323f1433bd6"), BtcNetwork.BITCOIN));
-        assertEquals("bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", BtcScript.address(BtcCrypto.unhex("512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"), BtcNetwork.BITCOIN));
-        assertEquals("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7", BtcScript.address(BtcCrypto.unhex("00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262"), BtcNetwork.SIGNET));
+        assertEquals("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", BtcScript.address(Hex.bytes("0014751e76e8199196d454941c45d1b3a323f1433bd6"), BtcNetwork.BITCOIN));
+        assertEquals("bc1p0xlxvlhemja6c4dqv22uapctqupfhlxm9h8z3k2e72q4k9hcz7vqzk5jj0", BtcScript.address(Hex.bytes("512079be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"), BtcNetwork.BITCOIN));
+        assertEquals("tb1qrp33g0q5c5txsp9arysrx4k6zdkfs4nce4xj0gdcccefvpysxf3q0sl5k7", BtcScript.address(Hex.bytes("00201863143c14c5166804bd19203356da136c985678cd4d27a1b8c6329604903262"), BtcNetwork.SIGNET));
         // P2PKH / P2SH: the Bitcoin wiki's classic examples (hash160 → address)
-        assertEquals("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", BtcScript.address(BtcCrypto.unhex("76a91477bff20c60e522dfaa3350c39b030a5d004e839a88ac"), BtcNetwork.BITCOIN));
-        assertEquals("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", BtcScript.address(BtcCrypto.unhex("a914b472a266d0bd89c13706a4132ccfb16f7c3b9fcb87"), BtcNetwork.BITCOIN));
-        assertEquals(BtcScript.Kind.OP_RETURN, BtcScript.kind(BtcCrypto.unhex("6a0b68656c6c6f20776f726c64")));
-        assertEquals(BtcScript.Kind.OP_RETURN, BtcScript.kind(BtcCrypto.unhex("6a")));
-        assertEquals("pushes must be well formed", BtcScript.Kind.UNKNOWN, BtcScript.kind(BtcCrypto.unhex("6a0b6865")));
-        assertEquals("bare multisig has no address", BtcScript.Kind.UNKNOWN, BtcScript.kind(BtcCrypto.unhex("5121" + "02" + "11".repeat(32) + "51ae")));
-        assertEquals("future witness versions are refused", BtcScript.Kind.UNKNOWN, BtcScript.kind(BtcCrypto.unhex("5210751e76e8199196d454941c45d1b3a323")));
+        assertEquals("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", BtcScript.address(Hex.bytes("76a91477bff20c60e522dfaa3350c39b030a5d004e839a88ac"), BtcNetwork.BITCOIN));
+        assertEquals("3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy", BtcScript.address(Hex.bytes("a914b472a266d0bd89c13706a4132ccfb16f7c3b9fcb87"), BtcNetwork.BITCOIN));
+        assertEquals(BtcScript.Kind.OP_RETURN, BtcScript.kind(Hex.bytes("6a0b68656c6c6f20776f726c64")));
+        assertEquals(BtcScript.Kind.OP_RETURN, BtcScript.kind(Hex.bytes("6a")));
+        assertEquals("pushes must be well formed", BtcScript.Kind.UNKNOWN, BtcScript.kind(Hex.bytes("6a0b6865")));
+        assertEquals("bare multisig has no address", BtcScript.Kind.UNKNOWN, BtcScript.kind(Hex.bytes("5121" + "02" + "11".repeat(32) + "51ae")));
+        assertEquals("future witness versions are refused", BtcScript.Kind.UNKNOWN, BtcScript.kind(Hex.bytes("5210751e76e8199196d454941c45d1b3a323")));
         assertEquals("bc1q w508 d6qe jxtd\ng4y5 r3za rvar y0c5\nxw7k v8f3 t4",
                 BtcScript.grouped("bc1qw508d6qejxtdg4y5r3zarvary0c5xw7kv8f3t4", 4));
     }
 
     @Test public void base58check() {
-        byte[] payload = BtcCrypto.unhex("0077bff20c60e522dfaa3350c39b030a5d004e839a");
+        byte[] payload = Hex.bytes("0077bff20c60e522dfaa3350c39b030a5d004e839a");
         assertEquals("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2", Base58.encodeCheck(payload));
         assertArrayEquals(payload, Base58.decodeCheck("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"));
         try { Base58.decodeCheck("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN3"); fail(); } catch (IllegalArgumentException expected) { }

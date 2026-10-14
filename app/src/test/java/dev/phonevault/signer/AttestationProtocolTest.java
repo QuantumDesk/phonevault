@@ -13,9 +13,6 @@ import org.junit.Test;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.Signature;
@@ -43,12 +40,6 @@ public final class AttestationProtocolTest {
         }
     }
 
-    static byte[] hex(String h) {
-        byte[] out = new byte[h.length() / 2];
-        for (int i = 0; i < out.length; i++) out[i] = (byte) Integer.parseInt(h.substring(2 * i, 2 * i + 2), 16);
-        return out;
-    }
-
     static JSONObject request(String challenge) throws Exception {
         JSONObject r = new JSONObject();
         r.put("id", "a-1");
@@ -64,8 +55,8 @@ public final class AttestationProtocolTest {
         assertEquals(3, list.length());
         for (int i = 0; i < list.length(); i++) {
             JSONObject t = list.getJSONObject(i);
-            byte[] m = AttestationProtocol.bindingMessage(hex(t.getString("challenge")), t.getString("address"));
-            assertArrayEquals(t.getString("name"), hex(t.getString("message")), m);
+            byte[] m = AttestationProtocol.bindingMessage(Hex.bytes(t.getString("challenge")), t.getString("address"));
+            assertArrayEquals(t.getString("name"), Hex.bytes(t.getString("message")), m);
         }
     }
 
@@ -129,7 +120,7 @@ public final class AttestationProtocolTest {
         KeyPairGenerator g = KeyPairGenerator.getInstance("EC");
         g.initialize(new ECGenParameterSpec("secp256r1"));
         KeyPair k = g.generateKeyPair();
-        byte[] challenge = hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
+        byte[] challenge = Hex.bytes("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f");
         byte[] m = AttestationProtocol.bindingMessage(challenge, "0x52908400098527886e0f7030069857d2e4169ee7");
         Signature s = Signature.getInstance("SHA256withECDSA");
         s.initSign(k.getPrivate()); s.update(m);
@@ -153,33 +144,20 @@ public final class AttestationProtocolTest {
 
     // ------------------------------------------------------------------ source guards
 
-    private static String source(String file) throws Exception {
-        for (String prefix : new String[] {"src/main/java/dev/phonevault/signer/", "app/src/main/java/dev/phonevault/signer/"}) {
-            Path p = Paths.get(prefix + file);
-            if (Files.exists(p)) return new String(Files.readAllBytes(p), StandardCharsets.UTF_8);
-        }
-        fail(file + " not found from " + Paths.get("").toAbsolutePath());
-        return null;
-    }
-
     @Test public void attestationNeverUsesTheWalletKeyOrExtraPrivileges() throws Exception {
-        String key = source("AttestationKey.java");
-        String code = key.replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\n]*", "");
+        String code = SourceGuard.code(SourceGuard.source("AttestationKey.java"));
         for (String banned : new String[] {"Credentials", "Sign.", "EvmSigner", "VaultKeyStore", "SeedVault",
                 "setDevicePropertiesAttestationIncluded", "setUniqueIdIncluded", "setAttestKeyAlias", "importKey", "setKeyEntry"}) {
             assertEquals(banned + " in AttestationKey", -1, code.indexOf(banned));
         }
         assertTrue(code.contains("setAttestationChallenge(challenge)"));
         assertTrue(code.contains("deleteEntry(ALIAS)"));
-        String proto = source("AttestationProtocol.java").replaceAll("(?s)/\\*.*?\\*/", "").replaceAll("//[^\n]*", "");
+        String proto = SourceGuard.code(SourceGuard.source("AttestationProtocol.java"));
         assertEquals(-1, proto.indexOf("Credentials"));
     }
 
     @Test public void attestationRunsOffTheSigningThread() throws Exception {
-        String src = source("MainActivity.java");
-        int start = src.indexOf("private void answerAttestation(");
-        assertTrue("answerAttestation is missing", start >= 0);
-        String body = src.substring(start, src.indexOf("\n    }\n", start));
+        String body = SourceGuard.body(SourceGuard.mainActivity(), "private void answerAttestation(");
         assertTrue(body.contains("attestExecutor.execute("));
         assertEquals("attestation must not queue behind signing", -1, body.indexOf("cryptoExecutor"));
         assertTrue("a challenge is answered once", body.contains("attestChallenges.firstUse("));

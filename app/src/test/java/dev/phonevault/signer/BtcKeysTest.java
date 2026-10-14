@@ -15,7 +15,7 @@ import java.util.Arrays;
  * mnemonic: account xpubs, keys and addresses derived from the same BIP-39 seed the EVM path uses.
  */
 public final class BtcKeysTest {
-    static final String MNEMONIC = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    static final String MNEMONIC = TestKeys.ABANDON_12;
     private static final int H = Bip32.HARDENED;
 
     static byte[] seed() { return SeedVault.bip39Seed(MNEMONIC, ""); }
@@ -25,13 +25,13 @@ public final class BtcKeysTest {
     /** zpub → the same key in standard xpub encoding (the phone exports xpub/tpub, not SLIP-132). */
     static String zpubToXpub(String zpub) {
         byte[] b = Base58.decodeCheck(zpub);
-        byte[] v = BtcCrypto.unhex("0488b21e");
+        byte[] v = Hex.bytes("0488b21e");
         System.arraycopy(v, 0, b, 0, 4);
         return Base58.encodeCheck(b);
     }
 
     @Test public void bip32TestVector1() {
-        Bip32.Key m = Bip32.master(BtcCrypto.unhex("000102030405060708090a0b0c0d0e0f"));
+        Bip32.Key m = Bip32.master(Hex.bytes("000102030405060708090a0b0c0d0e0f"));
         int x = 0x0488B21E;
         assertEquals("xpub661MyMwAqRbcFtXgS5sYJABqqG9YLmC4Q1Rdap9gSE8NqtwybGhePY2gZ29ESFjqJoCu1Rupje8YtGqsefD265TMg7usUDFdp6W1EGMcet8", m.serializePublic(x));
         assertEquals("xpub68Gmy5EdvgibQVfPdqkBBCHxA5htiqg55crXYuXoQRKfDBFA1WEjWgP6LHhwBZeNK1VTsfTFUHCdrfp1bgwQ9xv5ski8PX9rL2dZXvgGDnw", Bip32.derive(m, H).serializePublic(x));

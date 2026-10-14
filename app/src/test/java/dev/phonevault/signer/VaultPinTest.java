@@ -2,16 +2,21 @@ package dev.phonevault.signer;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.SharedPreferences;
 
 import org.junit.Test;
 
+import java.security.MessageDigest;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import javax.crypto.SecretKeyFactory;
+import javax.crypto.spec.PBEKeySpec;
 
 /** Adversarial tests for the PIN gate: attempt limit, verified erase, fail-closed erase. */
 public class VaultPinTest {
@@ -159,6 +164,41 @@ public class VaultPinTest {
                 return true;
             }
             @Override public void apply() { commit(); }
+        }
+    }
+
+    /**
+     * The fallback-mode PBKDF2 record is everything an offline guesser needs (hash + salt + work
+     * factor, no attempt counter, no Titan M): shown here with a reduced work factor and a 10^4
+     * slice. This is why credential mode must not keep it (CredentialModeTest).
+     */
+    @Test public void fallbackModePinRecordIsOfflineGuessable() throws Exception {
+        FakePrefs prefs = new FakePrefs();
+        VaultPin p = new VaultPin(prefs, 1000);
+        p.set("004217".toCharArray()); // synthetic test PIN
+
+        String hash = (String) prefs.map.get("pin_hash_v1");
+        String salt = (String) prefs.map.get("pin_salt_v1");
+        Integer iter = (Integer) prefs.map.get("pin_iter_v1");
+        assertNotNull(hash);
+        assertNotNull(salt);
+        assertNotNull(iter);
+
+        byte[] expected = Hex.bytes(hash), saltBytes = Hex.bytes(salt);
+        String recovered = null;
+        for (int i = 0; i < 10_000 && recovered == null; i++) {
+            char[] guess = String.format("%06d", i).toCharArray();
+            if (MessageDigest.isEqual(expected, pbkdf2(guess, saltBytes, iter))) recovered = new String(guess);
+        }
+        assertEquals("offline search recovers the PIN from prefs alone", "004217", recovered);
+    }
+
+    private static byte[] pbkdf2(char[] pin, byte[] salt, int iterations) throws Exception {
+        PBEKeySpec spec = new PBEKeySpec(pin, salt, iterations, 256);
+        try {
+            return SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256").generateSecret(spec).getEncoded();
+        } finally {
+            spec.clearPassword();
         }
     }
 }

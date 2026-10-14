@@ -25,7 +25,7 @@ import java.math.BigInteger;
 import java.util.Arrays;
 
 public final class NftReviewTest {
-    private static final Credentials KEY = Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials KEY = TestKeys.EVM_KEY;
     private static final String ME = KEY.getAddress();
     private static final String UNI_V3_POS = "0xC36442b4a4522E871399CD717aBDD847Ab11FE88"; // listed, Ethereum
     private static final String UNKNOWN_NFT = "0x5555555555555555555555555555555555555555";

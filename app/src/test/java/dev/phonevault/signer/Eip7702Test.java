@@ -56,7 +56,7 @@ public final class Eip7702Test {
     }
 
     @Test public void theSignerOnlyEverEncodesTypeTwo() throws Exception {
-        org.web3j.crypto.Credentials key = org.web3j.crypto.Credentials.create("4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+        org.web3j.crypto.Credentials key = TestKeys.EVM_KEY;
         String signed = EvmSigner.sign(Eip1559Request.parse(tx()), key).getString("signedTransaction");
         assertTrue(signed.startsWith("0x02"));
     }

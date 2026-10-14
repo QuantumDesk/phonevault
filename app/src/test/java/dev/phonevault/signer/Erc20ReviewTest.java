@@ -18,8 +18,7 @@ import org.web3j.utils.Numeric;
 import java.math.BigInteger;
 
 public final class Erc20ReviewTest {
-    private static final Credentials KEY = Credentials.create(
-            "4c0883a69102937d6231471b5dbb6204fe51296170827966f278a5e6f4f4f5f");
+    private static final Credentials KEY = TestKeys.EVM_KEY;
     private static final String USDC_ETH = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48";
     private static final String DAI_ETH = "0x6B175474E89094C44Da98b954EedeAC495271d0F";
     private static final String WBTC_ETH = "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599";
