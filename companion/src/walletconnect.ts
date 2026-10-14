@@ -10,13 +10,14 @@
 //    goes to the phone for review and returns only what Rust verified against the pinned signer.
 //  * One request goes to the phone at a time; the rest wait in a visible queue.
 
-import { api, call, registerPreview, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
+import { api, call, registerPreview, onProgress, onEvent, openExternal, errText, isTauri, REVIEW_LIMIT_MS } from "./api";
 import type { Quote, SendError } from "./api";
 import { NETWORKS, byId, netName } from "./networks";
-import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast, fact } from "./ui";
+import { h, icon, short, shortHash, grouped, fmtAmount, copy, toast, fact } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
 import { explainSendError, explainPlain, asSendError } from "./errors";
+import { clockLine, updateClocks, cancelButton } from "./send-flow";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import "./walletconnect.css";
 
@@ -554,9 +555,7 @@ function render() {
   }
   layer.replaceChildren(content);
   clearInterval(clockTimer);
-  if (layer.querySelector(".wc-clock")) clockTimer = window.setInterval(() => {
-    layer?.querySelectorAll<HTMLElement>(".wc-clock").forEach((c) => { c.textContent = `Waiting ${clock(Date.now() - Number(c.dataset.t0))} · gives up after 5:00`; });
-  }, 1000);
+  if (layer.querySelector(".clock")) clockTimer = window.setInterval(updateClocks, 1000);
 }
 
 function connectCard() {
@@ -669,15 +668,15 @@ function itemView(it: Item): Node {
     }
     case "connecting":
       return h("div", { class: "wc-item" }, head, statusLine("Reaching your phone…", "Opening the USB connection. The request is not on the phone yet."),
-        h("p", { class: "clock wc-clock", "data-t0": it.stage.t0 }, ""),
-        h("div", { class: "actions" }, h("button", { class: "big", disabled: it.cancelling, onclick: () => cancel(it) }, it.cancelling ? "Cancelling…" : "Cancel")));
+        clockLine(it.stage.t0, REVIEW_LIMIT_MS),
+        h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it))));
     case "on_phone":
       return h("div", { class: "wc-item wc-center" }, head,
         h("div", { class: "phone-art" }, h("div", { class: "phone-screen" }, icon("phone", 22))),
         h("h3", null, "Review on your phone"),
         h("p", { class: "muted" }, prep?.kind === "transaction" ? "The request is on your phone. Unlock it, check the details, and approve or reject." : "Sent to your phone. Unlock it, read the review, and approve or reject."),
-        h("p", { class: "clock wc-clock", "data-t0": it.stage.t0 }, ""),
-        prep?.kind === "transaction" ? h("div", { class: "actions" }, h("button", { class: "big", disabled: it.cancelling, onclick: () => cancel(it) }, it.cancelling ? "Cancelling…" : "Cancel")) : null);
+        clockLine(it.stage.t0, REVIEW_LIMIT_MS),
+        prep?.kind === "transaction" ? h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it))) : null);
     case "verifying":
       return h("div", { class: "wc-item" }, head, statusLine("Checking the signature…", "Decoding what the phone returned and comparing every field with this request."));
     case "broadcasting":

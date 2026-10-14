@@ -4,9 +4,10 @@
 // entered only from a real command result or a `send-progress` event carrying this attempt's
 // ticket, exactly like the EVM send.
 
-import { call, onProgress, onEvent, openExternal, errText } from "./api";
+import { call, onProgress, onEvent, openExternal, errText, REVIEW_LIMIT_MS } from "./api";
 import type { SendError } from "./api";
-import { h, icon, padlock, short, clock, copy, ago, toast, usdFmt, capitalize, fact } from "./ui";
+import { h, icon, padlock, short, copy, ago, toast, usdFmt, capitalize, fact, statusCard } from "./ui";
+import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { explainSendError, explainPlain, asSendError } from "./errors";
 import "./bitcoin.css";
@@ -418,22 +419,16 @@ let fees: Fees | null = null;
 let formError: string | null = null;
 let addr: AddrCheck | null = null;
 let addrSeq = 0;
-let tick = 0;
-const REVIEW_LIMIT_MS = 300_000;
+const tickFor = clockTicker();
 const CONFIRMATION_POLL_MS = 15_000;
 
 const busy = () => sub === "send" && !["form", "quoting", "review", "failed", "signed", "broadcast_failed", "bump_failed"].includes(flow.s);
 
 function setFlow(f: Flow) {
   flow = f;
-  clearInterval(tick);
-  if (f.s === "on_phone" || f.s === "connecting" || f.s === "submitted") tick = window.setInterval(() => {
-    document.querySelectorAll<HTMLElement>(".btc-clock").forEach((c) => { c.textContent = clockText(Number(c.dataset.t0), c.dataset.limit ? Number(c.dataset.limit) : null); });
-  }, 1000);
+  tickFor(f.s);
   if (sub === "send") host.renderNow();
 }
-const clockText = (t0: number, limit: number | null) => limit ? `Waiting ${clock(Date.now() - t0)} · gives up after ${clock(limit)}` : `${clock(Date.now() - t0)} elapsed`;
-const clockLine = (t0: number, limit: number | null) => h("p", { class: "clock btc-clock", "data-t0": t0, "data-limit": limit ?? "" }, clockText(t0, limit));
 
 function startSend(a: BtcAccount) {
   const blocked = host.phoneBlocked();
@@ -463,7 +458,6 @@ function amountBtc(): string | null {
   return satsToBtcStr(Math.round((usdV / p) * 1e8));
 }
 
-const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
     case "form": case "quoting": case "review": case "bumping": case "bump_failed": return 0;
@@ -472,21 +466,13 @@ function stepOf(f: Flow): number {
     default: return 3;
   }
 }
-function stepper() {
-  const at = stepOf(flow);
-  const bad = flow.s === "failed" || flow.s === "broadcast_failed";
-  const done = flow.s === "submitted" && flow.confs > 0;
-  return h("ol", { class: "stepper", "aria-label": "Progress" }, STEPS.map((label, i) =>
-    h("li", { class: i < at || (i === at && done) ? "done" : i === at ? (bad ? "now bad" : "now") : "" },
-      h("span", { class: "bullet" }, i < at || (i === at && done) ? icon("check", 12) : String(i + 1)), h("span", { class: "lbl" }, label))));
-}
 
 function sendView(a: BtcAccount) {
   const n = btcNet(a.network);
   const back = busy() ? null : () => { if (flow.s === "review" && !draft.bumpOf) setFlow({ s: "form" }); else { flow = { s: "form" }; go("home"); } };
   return h("div", { class: "stack fade" },
     host.topbar(draft.bumpOf ? "Speed up" : `Send ${n.unit === "BTC" ? "bitcoin" : n.unit}`, back),
-    stepper(),
+    stepper(stepOf(flow), flow.s === "submitted" && flow.confs > 0, flow.s === "failed" || flow.s === "broadcast_failed"),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody(a)),
   );
 }
@@ -560,7 +546,7 @@ function flowBody(a: BtcAccount): Node {
     case "review": return review(a, flow.q);
     case "connecting":
       return statusCard(flow.waiting ? "Waiting for your phone…" : "Reaching your phone…", flow.waiting ? "Your phone is answering another request. Your transaction goes to it as soon as that one finishes. Nothing has been sent yet." : "Opening the USB connection. The request is not on the phone yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)]);
     case "on_phone": {
       const q = flow.q;
       return h("section", { class: "card phone-wait" },
@@ -574,7 +560,7 @@ function flowBody(a: BtcAccount): Node {
           q.change_sats ? h("li", null, h("span", { class: "muted" }, "Change (yours)"), h("strong", null, `${fmtBtc(q.change_sats)} ${n.unit}`)) : null,
         ),
         clockLine(flow.t0, REVIEW_LIMIT_MS),
-        h("div", { class: "actions" }, cancelBtn(flow.cancelling)),
+        h("div", { class: "actions" }, cancelButton(flow.cancelling, cancelSign)),
       );
     }
     case "verifying": return statusCard("Checking the signatures…", "Comparing the signed transaction with what you reviewed and verifying every signature on this Mac.", [], []);
@@ -696,12 +682,10 @@ async function sendToPhone(q: BtcQuote) {
   }
 }
 
-function cancelBtn(cancelling?: boolean) {
-  return h("button", { class: "big", disabled: !!cancelling, onclick: async () => {
-    if (flow.s !== "connecting" && flow.s !== "on_phone") return;
-    const t = flow.ticket; setFlow({ ...flow, cancelling: true });
-    try { await btcApi.signCancel(t); } catch { /* the command result says */ }
-  } }, cancelling ? "Cancelling…" : "Cancel");
+async function cancelSign() {
+  if (flow.s !== "connecting" && flow.s !== "on_phone") return;
+  const t = flow.ticket; setFlow({ ...flow, cancelling: true });
+  try { await btcApi.signCancel(t); } catch { /* the command result says */ }
 }
 
 async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
@@ -723,10 +707,6 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
       if (Date.now() - t0 > 3 * 3600_000) return;
     }
   } catch (e) { setFlow({ s: "broadcast_failed", q, signed: s, message: errText(e) }); }
-}
-
-function statusCard(title: string, body: string, extra: Node[], actions: Node[]) {
-  return h("section", { class: "card result" }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
 }
 
 function explainBroadcast(m: string): string {

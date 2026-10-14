@@ -2,11 +2,12 @@
 // Phone Vault Companion UI. One main view (account, balances, Send, Receive, activity), a send
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 
-import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri } from "./api";
+import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, isTauri, REVIEW_LIMIT_MS } from "./api";
 import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance, PairedAccount } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, clock, copy, capitalize, fact } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, copy, capitalize, fact, statusCard } from "./ui";
+import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
 import { mountWalletConnect, wcHomeSlot, wcSettingsSection, wcPhoneBusy } from "./walletconnect";
@@ -672,13 +673,11 @@ let formError: string | null = null;
 const draft = { to: "", amount: "", asset: "" };
 const draftToken = () => (draft.asset ? tokenAt(flowNet.id, draft.asset) : undefined);
 let fee: FeeEstimate | null = null;
-let tick = 0;
-const REVIEW_LIMIT_MS = 300_000;
+const tickFor = clockTicker();
 
 function setFlow(f: Flow) {
   flow = f;
-  clearInterval(tick);
-  if (f.s === "on_phone" || f.s === "connecting" || f.s === "submitted") tick = window.setInterval(updateClock, 1000);
+  tickFor(f.s);
   if (view === "send") render();
 }
 
@@ -696,7 +695,6 @@ async function loadFee() {
   try { const f = await api.feeEstimate(rpcFor(n.id)); if (n === flowNet) { fee = f; updateFormExtras(); } } catch { fee = null; updateFormExtras(); }
 }
 
-const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
 function stepOf(f: Flow): number {
   switch (f.s) {
     case "form": case "quoting": case "review": case "replacing": case "prep_failed": return 0;
@@ -705,13 +703,6 @@ function stepOf(f: Flow): number {
     default: return 3;
   }
 }
-function stepper() {
-  const at = stepOf(flow);
-  const bad = flow.s === "failed" || flow.s === "broadcast_failed" || (flow.s === "done" && !flow.ok);
-  return h("ol", { class: "stepper", "aria-label": "Progress" }, STEPS.map((label, i) =>
-    h("li", { class: i < at || (i === at && flow.s === "done" && flow.ok) ? "done" : i === at ? (bad ? "now bad" : "now") : "" },
-      h("span", { class: "bullet" }, i < at || (i === at && flow.s === "done" && flow.ok) ? icon("check", 12) : String(i + 1)), h("span", { class: "lbl" }, label))));
-}
 
 function sendView() {
   const busy = ["connecting", "on_phone", "verifying", "broadcasting", "submitted"].includes(flow.s);
@@ -719,7 +710,7 @@ function sendView() {
   const back = busy ? null : () => { if (flow.s === "review" && !repl) { setFlow({ s: "form" }); } else go("home"); };
   return h("div", { class: "stack fade" },
     topbar(repl ? `${repl === "cancel" ? "Cancel" : "Speed up"} on ${flowNet.name}` : `Send on ${flowNet.name}`, back),
-    stepper(),
+    stepper(stepOf(flow), flow.s === "done" && flow.ok, flow.s === "failed" || flow.s === "broadcast_failed" || (flow.s === "done" && !flow.ok)),
     h("div", { class: "flow-body", "aria-live": "polite" }, flowBody()),
   );
 }
@@ -785,7 +776,7 @@ function flowBody(): Node {
       return form;
     }
     case "replacing":
-      return statusCard("connecting", flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], []);
+      return statusCard(flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], [], "connecting");
     case "prep_failed":
       return h("section", { class: "card result" },
         h("div", { class: "result-ic neutral" }, icon("x", 28)),
@@ -825,10 +816,10 @@ function flowBody(): Node {
       );
     }
     case "connecting":
-      if (flow.waiting) return statusCard("connecting", "Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
-      return statusCard("connecting", "Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
-        [clockLine(flow.t0, null)], [cancelBtn(flow.cancelling)]);
+      if (flow.waiting) return statusCard("Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
+      return statusCard("Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
+        [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
     case "on_phone":
       return h("section", { class: "card phone-wait" },
         h("div", { class: "phone-art" }, h("div", { class: "phone-screen" }, padlock(3))),
@@ -841,10 +832,10 @@ function flowBody(): Node {
           h("li", null, h("span", { class: "muted" }, "Network"), h("strong", null, q!.network)),
         ),
         clockLine(flow.t0, REVIEW_LIMIT_MS),
-        h("div", { class: "actions" }, cancelBtn(flow.cancelling)),
+        h("div", { class: "actions" }, cancelButton(flow.cancelling, cancelSign)),
       );
     case "verifying":
-      return statusCard("connecting", "Checking the signature…", "Decoding what the phone returned and comparing every field with what you entered.", [], []);
+      return statusCard("Checking the signature…", "Decoding what the phone returned and comparing every field with what you entered.", [], [], "connecting");
     case "failed": {
       const x = explainSendError(flow.err, { chain: "eth" });
       const quote = flow.quote;
@@ -1006,22 +997,6 @@ function hashLinks(hash: string) {
     h("button", { class: "link mono", title: hash, onclick: () => copy(hash, "Hash") }, shortHash(hash), icon("copy", 14)),
     h("button", { class: "link", onclick: () => openExternal(url) }, `View on ${hostOf(flowNet.explorer)}`, icon("external", 14)),
   );
-}
-function statusCard(kind: string, title: string, body: string, extra: Node[], actions: Node[]) {
-  return h("section", { class: `card result ${kind}` }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
-}
-function clockLine(t0: number, limit: number | null) {
-  return h("p", { class: "clock", "data-t0": t0, "data-limit": limit ?? "" }, clockText(t0, limit));
-}
-function clockText(t0: number, limit: number | null) {
-  const el = Date.now() - t0;
-  return limit ? `Waiting ${clock(el)} · gives up after ${clock(limit)}` : `${clock(el)} elapsed`;
-}
-function updateClock() {
-  document.querySelectorAll<HTMLElement>(".clock").forEach((c) => { c.textContent = clockText(Number(c.dataset.t0), c.dataset.limit ? Number(c.dataset.limit) : null); });
-}
-function cancelBtn(cancelling?: boolean) {
-  return h("button", { class: "big", disabled: !!cancelling, onclick: cancelSign }, cancelling ? "Cancelling…" : "Cancel");
 }
 
 async function checkAddr() {
