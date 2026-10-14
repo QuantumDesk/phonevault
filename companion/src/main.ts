@@ -1232,22 +1232,18 @@ async function submitted(quote: Quote, hash: string) {
   }
 }
 
-// ------------------------------------------------------------------ optional tools (mount point)
+// ------------------------------------------------------------------ tools
 //
-// Message / EIP-712 signing lives in `signing.ts`, added separately. If that module exists it
-// must export `mountSigning(container: HTMLElement)`; the build works without it.
-
-type SigningModule = { mountSigning?: (el: HTMLElement) => unknown };
-const signingLoader = import.meta.glob<SigningModule>("./signing.ts")["./signing.ts"] as (() => Promise<SigningModule>) | undefined;
+// Message / EIP-712 signing (personal_sign, eth_signTypedData_v4) is self-contained in `signing.ts`,
+// loaded when the tool is first opened.
 
 function toolView() {
   const host = h("div", { class: "tool-host" }, h("div", { class: "boot" }, h("div", { class: "spinner" })));
   (async () => {
     try {
-      const mod = signingLoader ? await signingLoader() : null;
-      if (!mod?.mountSigning) throw "message signing is not included in this build";
+      const { mountSigning } = await import("./signing");
       host.replaceChildren();
-      mod.mountSigning(host);
+      mountSigning(host);
     } catch (e) { host.replaceChildren(h("p", { class: "inline-error" }, icon("alert", 15), capitalize(errText(e)))); }
   })();
   return h("div", { class: "stack fade" }, topbar("Sign a message", () => go("home")), host);
@@ -1365,10 +1361,10 @@ function renderDrawer() {
     ),
     wcSettingsSection(),
     extSettingsSection(),
-    signingLoader ? h("section", { class: "set" },
+    h("section", { class: "set" },
       h("h4", null, "TOOLS"),
       h("button", { class: "radio", onclick: () => { closeDrawer(); go("tool"); } }, icon("pen", 16), h("span", { class: "grow" }, "Sign a message"), icon("back", 14)),
-    ) : null,
+    ),
     h("section", { class: "set about" },
       h("h4", null, "ABOUT"),
       h("div", { class: "set-row" }, h("span", null, "Phone Vault Companion"), h("span", { class: "mono muted" }, version || "…")),
