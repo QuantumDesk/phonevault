@@ -431,7 +431,7 @@ fn tee_attestation_is_never_genuine() {
 fn builtin_policy_parses_and_refuses_bad_files() {
     let p = Policy::builtin();
     assert_eq!(p.package, "dev.phonevault.signer");
-    assert!(p.release_signers.is_empty(), "no release key exists yet; pin it at release (path-to-release.md)");
+    assert!(p.release_signers.is_empty(), "no release key exists yet; pin it at release (ROADMAP.md)");
     assert!(p.avb_keys.is_empty(), "no release AVB key exists yet");
     assert_eq!(
         p.development_signers,

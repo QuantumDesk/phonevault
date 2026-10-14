@@ -149,8 +149,8 @@ conservatively so the claim never exceeds the code:
 | R4 startup health tests | ⚠️ **partial.** RCT, APT and a distribution check now run over a 1024-byte per-source sample (an earlier version checked only 64 bytes, so the APT *never executed*). They run on *conditioned* output, so they are a stuck/collapsed-source backstop, not an SP 800-90B raw-noise assessment. |
 | R4 fail-loud policy (≥2 healthy proceed / 1 needs user entropy / 0 refuse) | ✅ implemented, unit-tested |
 | R5 equal-weight mixing | ✅ |
-| R6 user entropy input | ⚠️ engine accepts it; **no UI** yet (always empty on device) |
-| R7 diagnostics screen | ❌ reports exist (status only — contributions are zeroed after mixing) but nothing displays them |
+| R6 user entropy input | ✅ optional dice rolls during wallet setup, mixed with the device sources and discarded after creation |
+| R7 diagnostics screen | ✅ Security → Device information → "Entropy at wallet creation" lists each source and whether it passed its health tests (names and pass/fail only; contributions are zeroed after mixing) |
 
 Memory hygiene: source contributions, the health sample, the SHA-512
 digest, the 32-byte entropy and the BIP39 seed are all zeroed in `finally` blocks; the only
@@ -167,5 +167,5 @@ compliant.
   it and relying on kernel+TitanM+user only.
 - Decide the exact StrongBox call used to extract independent Titan M randomness on this
   Keymaster version, and confirm it doesn't merely proxy the kernel pool.
-- Wire the R4 health tests and R7 diagnostics screen into the seed-generation UX before any
-  seed code ships.
+- Wallets restored from words, or created before source reporting existed, show "Not recorded"
+  on the diagnostics screen; that is expected.
