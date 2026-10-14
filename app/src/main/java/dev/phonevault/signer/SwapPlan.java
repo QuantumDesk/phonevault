@@ -61,11 +61,23 @@ final class SwapPlan {
         final Amount amount;
         /** Non-null for a portion fee: the portion in basis points (or 1e18-precision portion as text). */
         final String portion;
+        /** For a portion fee: the exact fraction (0..1) of the balance it was taken from; null otherwise. */
+        final java.math.BigDecimal share;
 
         Payment(String recipient, Amount amount, String portion) {
+            this(recipient, amount, portion, null);
+        }
+
+        Payment(String recipient, Amount amount, String portion, java.math.BigDecimal share) {
             this.recipient = recipient;
             this.amount = amount;
             this.portion = portion;
+            this.share = share;
+        }
+
+        /** The exact fraction {@code numerator/denominator} (portion fees). */
+        static java.math.BigDecimal share(BigInteger numerator, BigInteger denominator) {
+            return new java.math.BigDecimal(numerator).divide(new java.math.BigDecimal(denominator), java.math.MathContext.DECIMAL128);
         }
 
         boolean fee() { return portion != null; }
@@ -275,7 +287,7 @@ final class SwapPlan {
             if (b == null) throw new Refusal("a fee taken from a router balance this transaction never funded");
             BigInteger feeMin = b.min.multiply(numerator).divide(denominator);
             checkFeeRecipient(recipient, router);
-            payments.add(new Payment(recipient, new Amount(asset, feeMin, Bound.AT_LEAST), label));
+            payments.add(new Payment(recipient, new Amount(asset, feeMin, Bound.AT_LEAST), label, Payment.share(numerator, denominator)));
             // what stays is at least min − ceil(min × portion); exact amounts become lower bounds
             BigInteger keep = b.min.subtract(b.min.multiply(numerator).add(denominator).subtract(BigInteger.ONE).divide(denominator));
             held.put(asset, b.atLeastLike(keep.max(BigInteger.ZERO)));
@@ -292,13 +304,22 @@ final class SwapPlan {
             }
         }
 
-        /** Final checks: unused native coin is refused; other possible leftovers become a warning. */
+        /**
+         * Final checks: unused native coin is refused, and so is any amount of this wallet's own
+         * input (wrapped native, tokens pulled in) known to be left in the router, where anyone can
+         * sweep it in the next block. Other possible leftovers (an unknown remainder, swap output)
+         * become a warning.
+         */
         void finish() throws Refusal {
             for (Map.Entry<String, Bal> e : held.entrySet()) {
                 Bal b = e.getValue();
                 if (b.surelyZero()) continue;
                 if (NATIVE.equals(e.getKey()) && b.known()) {
                     throw new Refusal("it sends " + b.exact + " wei of native coin that the swap does not use");
+                }
+                if (b.input && b.min.signum() > 0) {
+                    throw new Refusal("it leaves " + (b.known() ? "" : "at least ") + b.min + " of this wallet's own "
+                            + e.getKey() + " in the router, where anyone can take it");
                 }
                 leftovers.add(e.getKey());
             }
@@ -332,6 +353,15 @@ final class SwapPlan {
             if (t != null) return t.symbol;
             if (router != null && router.wrappedNative.equals(asset)) return router.wrappedSymbol;
             return "unknown token " + org.web3j.crypto.Keys.toChecksumAddress(asset);
+        }
+
+        /** The decimals the phone knows for {@code asset} (native and the pinned wrapped native: 18), or null. */
+        Integer decimals(String asset) {
+            if (NATIVE.equals(asset)) return 18;
+            TokenList.Token t = tokens.lookup(chainId, asset);
+            if (t != null) return t.decimals;
+            if (router != null && router.wrappedNative.equals(asset)) return 18;
+            return null;
         }
 
         /** Symbol, or a short address for an unknown token (titles). */
