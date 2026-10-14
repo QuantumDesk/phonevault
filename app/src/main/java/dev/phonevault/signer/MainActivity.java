@@ -156,6 +156,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final ApprovalScreens approvals = new ApprovalScreens(host);
     /** Bitcoin: share account, show address, PSBT review; the session's account-key cache. */
     private final BtcScreens btc = new BtcScreens(host, approvals);
+    /** ☰ → Security, Display & auto-lock, Device information, Coming next. */
+    private final SettingsScreens settings = new SettingsScreens(host, backup, setup, btc);
     /** ☰ → Accounts and ☰ → Passphrase wallet: screens, account lists, the passphrase, switching. */
     private final AccountScreens accounts = new AccountScreens(new AccountScreens.Host() {
         @Override public Context context() { return MainActivity.this; }
@@ -896,12 +898,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pages.action(root, "Accounts", current.startsWith("account"), () -> { if (menuAvailable()) showAccounts(); });
         pages.action(root, accounts.passphraseWalletOpen() ? "Passphrase wallet · open" : "Passphrase wallet", current.startsWith("passphrase"),
                 () -> { if (menuAvailable()) showPassphraseWallet(); });
-        pages.action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
-        pages.action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
+        pages.action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) settings.showSecurity(); });
+        pages.action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) settings.showPreferences(); });
         pages.action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
         pages.action(root, "Bitcoin sharing", "btc-sharing".equals(current), () -> { if (menuAvailable()) btc.showBtcSharing(); });
-        pages.action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
-        pages.action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
+        pages.action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) settings.showIntegrity(); });
+        pages.action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) settings.showFeatures(); });
         pages.action(root, "Lock now", false, this::lock);
         pages.present(root, "menu");
     }
@@ -984,164 +986,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pages.present(root, "wallet");
     }
 
-    private void showSecurity() {
-        LinearLayout root = pages.page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
-        pages.card(root, "Backup", backupVerified
-                ? "Spot-checked for Account 1. Keep the written 24 words somewhere safe and private."
-                : "Not checked yet. Receiving and signing stay paused until it is.");
-        pages.action(root, "Check my backup", !backupVerified, () -> backup.startBackupAccess(true));
-        pages.action(root, "Show recovery phrase", false, backup::confirmRevealBackup);
-        pages.card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
-        pages.action(root, "Passphrase wallet", false, this::showPassphraseWallet);
-        pages.action(root, "Show as SeedQR", false, backup::confirmRevealSeedQr);
-        pages.action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, backup::showBackupReminderSettings);
-        pages.action(root, "Bitcoin sharing", false, btc::showBtcSharing);
-        pages.card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
-        pages.action(root, "Replace with a new wallet", false, backup::confirmReplace);
-        pages.action(root, "Restore a different wallet", false, setup::confirmRestoreOver);
-        pages.action(root, "Lock now", false, this::lock);
-        pages.present(root, "security");
-    }
-
-    // ------------------------------------------------------------------ first-run wizard
-
-    // ------------------------------------------------------------------ optional user entropy
-    // Physical dice rolls, mixed with the two device sources.
-
-    // ------------------------------------------------------------------ restore over an existing wallet
-    // Same entry screens, but owned by a fresh-PIN sensitive flow and the replacement state
-    // machine, exactly like Replace (USB excluded throughout).
-
-    // ------------------------------------------------------------------ restore
-    // On-device word entry (no system keyboard), validate, confirm address, commit.
-
-    private void showPreferences() {
-        LinearLayout root = pages.page("SECURITY / PREFERENCES", "Display & auto-lock",
-                "Text size, screen timeout, locking and touch feedback. Changes apply at once.");
-        pages.card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
-        pages.action(root, largeText ? "Use standard text" : "Use larger text", true, () -> {
-            if (display.setLargeText(!largeText)) {
-                applyDisplaySettings();
-                showPreferences();
-            } else pages.showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
-        });
-
-        int screen = display.screenTimeoutSeconds();
-        pages.card(root, "Screen timeout", "The screen turns off after " + DisplaySettings.durationLabel(screen)
-                + " without a touch. Screen off always locks the vault.");
-        for (int seconds : DisplaySettings.SCREEN_TIMEOUT_CHOICES) {
-            pages.action(root, "Screen off after " + DisplaySettings.durationLabel(seconds), seconds == screen, () -> {
-                if (display.setScreenTimeoutSeconds(seconds)) {
-                    applyDisplaySettings();
-                    DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
-                    if (policy.isDeviceOwnerApp(getPackageName())) applyIdlePolicy(policy);
-                    armIdleLock();
-                    showPreferences();
-                } else pages.showInfo("Setting not saved", "Your previous screen timeout is still active.", this::showPreferences);
-            });
-        }
-
-        int idle = display.idleSeconds();
-        int effective = DisplaySettings.effectiveIdleSeconds(idle, screen);
-        pages.card(root, "Idle lock", "Locks after " + DisplaySettings.durationLabel(effective)
-                + " without a touch, even while a review keeps the screen on."
-                + (effective < idle ? " (Capped by the screen timeout.)" : ""));
-        for (int seconds : DisplaySettings.IDLE_CHOICES) {
-            pages.action(root, "Lock after " + DisplaySettings.durationLabel(seconds), idle == seconds, () -> {
-                if (display.setIdleSeconds(seconds)) {
-                    applyDisplaySettings();
-                    armIdleLock();
-                    showPreferences();
-                } else pages.showInfo("Setting not saved", "Your previous idle timeout is still active.", this::showPreferences);
-            });
-        }
-
-        boolean haptics = display.haptics();
-        pages.card(root, "Haptics", haptics ? "On · a tap for PIN keys, a pulse when you sign, a double pulse on reject"
-                : "Off · no vibration feedback");
-        pages.action(root, haptics ? "Turn haptics off" : "Turn haptics on", false, () -> {
-            if (display.setHaptics(!haptics)) {
-                applyDisplaySettings();
-                showPreferences();
-            } else pages.showInfo("Setting not saved", "Your previous haptics setting is still active.", this::showPreferences);
-        });
-
-        pages.card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart.");
-        pages.action(root, "Back to Security", false, this::showSecurity);
-        pages.present(root, "preferences");
-    }
-
-    private void showIntegrity() {
-        LinearLayout root = pages.page("SECURITY / DEVICE", "Know what is verified", "These are local observations, not independent attestation.");
-        pages.card(root, "App build", BuildConfig.VERSION_NAME + " · " + (DevTools.SCREENSHOTS ? "development capture enabled" : "release capture disabled"));
-        pages.card(root, "Platform", Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid " + Build.VERSION.RELEASE + "\nReported patch: " + Build.VERSION.SECURITY_PATCH);
-        pages.card(root, "Device policy", isPhoneVaultApplianceBuild() && operational ? "Appliance policy active" : "Development environment · appliance policy not established");
-        pages.card(root, "Key boundary", BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE
-                ? "StrongBox wrapping is required when loading. EVM signing runs in Android memory."
-                : "Development build permits software wrapping. EVM signing runs in Android memory.");
-        pages.card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
-        SigningAccount shownAccount = activeAccount;
-        pages.card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
-                : shownAccount.path() + (shownAccount.passphrase ? " · passphrase wallet " + shownAccount.fingerprint : " · no passphrase"));
-        pages.card(root, "PIN protection", credentialMode()
-                ? "Checked by the security chip (Titan M), which slows repeated guesses · "
-                        + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs reset the phone · the seed key works only for "
-                        + SystemCredential.AUTH_WINDOW_SECONDS + " s after a correct PIN"
-                : "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
-        String entropy = getPreferences(MODE_PRIVATE).getString("entropy_report", null);
-        pages.card(root, "Entropy at wallet creation", entropy != null ? entropy
-                : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
-        Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
-        if (battery != null) {
-            int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-            int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-            pages.card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
-        }
-        pages.card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
-        pages.action(root, "Back to Security", false, this::showSecurity);
-        pages.present(root, "integrity");
-    }
-
-    /** Persist WHICH sources fed the last generated seed and whether each passed its health tests
-     *  (names and pass/fail only; no entropy bytes). Shown on Device information (R7). */
-    private void recordEntropyReport(boolean dice) {
-        List<SeedVault.SourceReport> reports = vault.lastGenerationReports();
-        if (reports == null) return;
-        StringBuilder b = new StringBuilder();
-        for (SeedVault.SourceReport r : reports) {
-            if (b.length() > 0) b.append('\n');
-            b.append(r.healthy ? "✓ " : "✗ ").append(r.name).append(r.healthy ? " · passed health tests" : " · not used: " + r.detail);
-        }
-        if (dice) b.append("\n✓ your dice rolls");
-        getPreferences(MODE_PRIVATE).edit().putString("entropy_report", b.toString()).apply();
-    }
-
-    private void showFeatures() {
-        LinearLayout root = pages.page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
-        String[][] items = {
-            {"Change PIN", "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect until then."},
-            {"Account discovery", "Finding used accounts automatically and watch-only export. Accounts and passphrase wallets themselves are in ☰ → Accounts and ☰ → Passphrase wallet."},
-            {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
-            {"Browser wallets", "MetaMask and other integrations need a supported adapter. This build does not impersonate Ledger or Trezor."},
-            {"Typed-data signing", "Permission-aware EIP-712 review for permits, orders, and authentication. Unsupported signing requests remain refused."},
-            {"Verified token details", "Authenticated token identity and decimals. Current token calls show unverified raw arguments."},
-            {"Signed updates", "A verified release chain, rollback protection, and recovery from interrupted updates."},
-            {"Advanced recovery", "Multisig, optional stateless use, and additional backup formats after core recovery is proven."},
-            {"Passkeys", "A future hardware-backed authenticator with its own transport and recovery review."}
-        };
-        for (String[] item : items) pages.action(root, item[0] + " · planned", false,
-                () -> showPlanned(item[0], item[1]));
-        pages.present(root, "features");
-    }
-
-    private void showPlanned(String title, String description) {
-        LinearLayout root = pages.page("PLANNED · NOT AVAILABLE", title, description);
-        pages.card(root, "Availability", "No wallet setting was changed. This screen describes upcoming work.");
-        pages.action(root, "Back to Coming next", true, this::showFeatures);
-        pages.action(root, "Wallet", false, this::showHome);
-        pages.present(root, "planned");
-    }
-
     private void setStatusActive(boolean active) {
         statusMessage = active ? "USB connected · waiting for a request" : "USB disconnected";
         if (statusView != null) statusView.setText(statusMessage);
@@ -1155,7 +999,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void beginSensitive(String purpose, Runnable afterPin) {
         if (!walletLoaded || credentials == null || !unlocked) return;
         if (transport != null || requestPending.get()) {
-            pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", this::showSecurity);
+            pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", settings::showSecurity);
             return;
         }
         int token;
@@ -1231,9 +1075,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         : remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet."));
         gate.setSubmitRequired(remaining == 1 && !pin.eraseOutstanding());
     }
-
-    // ------------------------------------------------------------------ SeedQR + backup reminder
-    // (logic lives in SeedQr / SeedQrView / BackupReminder; these are only the screens)
 
     private static void secure(Window window) {
         if (!DevTools.SCREENSHOTS) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
@@ -1742,7 +1583,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     /** MainActivity as the flow screens see it: its fields, locks and navigation (VaultHost). */
-    private final class ScreenHost implements BtcScreens.Host {
+    private final class ScreenHost implements BtcScreens.Host, SettingsScreens.Host {
         @Override public Activity activity() { return MainActivity.this; }
         @Override public Pages pages() { return pages; }
         @Override public Handler ui() { return ui; }
@@ -1758,7 +1599,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) { MainActivity.this.confirmDevicePin(why, onOk, onCancel); }
         @Override public void forgetConfirmation() { credentialGate.forgetConfirmation(); }
         @Override public void showHome() { MainActivity.this.showHome(); }
-        @Override public void showSecurity() { MainActivity.this.showSecurity(); }
+        @Override public void showSecurity() { settings.showSecurity(); }
         @Override public void lock() { MainActivity.this.lock(); }
         @Override public void hideBackup() { MainActivity.this.hideBackup(); }
         @Override public void confirmRevealBackup() { backup.confirmRevealBackup(); }
@@ -1786,7 +1627,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public BackupCheck backupCheck() { return backupCheck; }
         @Override public BackupReminder backupReminder() { return backupReminder; }
         @Override public Bitmap qrFor(String address) { return MainActivity.this.qrFor(address); }
-        @Override public void recordEntropyReport(boolean dice) { MainActivity.this.recordEntropyReport(dice); }
+        @Override public void recordEntropyReport(boolean dice) { settings.recordEntropyReport(dice); }
         @Override public void publishNewWallet(Credentials key, Bitmap qr, boolean verified) {
             credentials = key;
             adoptNewWallet(key.getAddress());
@@ -1809,6 +1650,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             walletQr = qr;
         }
         @Override public void relabelActiveAccount(SigningAccount account) { activeAccount = account; }
+        @Override public void showPassphraseWallet() { MainActivity.this.showPassphraseWallet(); }
+        @Override public DisplaySettings display() { return display; }
+        @Override public boolean largeText() { return largeText; }
+        @Override public void applyDisplaySettings() { MainActivity.this.applyDisplaySettings(); }
+        @Override public void screenTimeoutChanged() {
+            DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+            if (policy.isDeviceOwnerApp(getPackageName())) applyIdlePolicy(policy);
+            MainActivity.this.armIdleLock();
+        }
+        @Override public void armIdleLock() { MainActivity.this.armIdleLock(); }
+        @Override public boolean appliancePolicyActive() { return isPhoneVaultApplianceBuild() && operational; }
+        @Override public boolean credentialMode() { return MainActivity.this.credentialMode(); }
+        @Override public SigningAccount activeAccount() { return activeAccount; }
         @Override public boolean owns(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need) {
             return MainActivity.this.owns(source, s, decision, need);
         }
