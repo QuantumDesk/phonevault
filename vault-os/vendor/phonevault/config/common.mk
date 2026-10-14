@@ -18,7 +18,7 @@ include vendor/phonevault/config/release-version.mk
 # (device/phonevault/crosshatch/vault_crosshatch.mk) ahead of its inherits so it outranks
 # Lineage's overlays; adding it here too would list the directory twice.
 
-# NOTE (dev ladder rung 4): this file is inherited after vendor/lineage/config, so
+# NOTE (dev ladder rung 4, vault-os/dev-ladder/README.md "App strip mechanism"): this file is inherited after vendor/lineage/config, so
 # Lineage/AOSP opt-out knobs assigned here are evaluated too late and do nothing.
 # AudioFX, Aperture and DynamicSystemInstallationService are removed by the
 # `overrides` list instead; these lines are kept only as documentation of intent.

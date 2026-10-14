@@ -12,7 +12,8 @@ android_app_import {
     // product, so Make's -= cannot reliably remove upstream entries. Module
     // overrides are applied to the fully expanded install graph.
     // Release removal list = the boot-tested dev ladder (crosshatch rung 4b)
-    // plus the release-only entries below it. See vault-os/docs/release-config.md.
+    // plus the release-only entries below it. See vault-os/docs/release-config.md and
+    // vault-os/docs/hardening-ladder.md (the rungs, archived under tag crosshatch-ladder-archive).
     //
     // NEVER override (proven required by the ladder; tests/test_forbidden_policy_coverage.py
     // enforces it): Settings (FallbackHome, confirm-credential, device-admin UI),
