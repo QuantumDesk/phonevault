@@ -21,7 +21,7 @@ import java.util.Set;
  * code in an app release (and the APK signature). A file that does not match the pin, or that
  * breaks any rule in {@link #parse}, is refused as a whole and the review treats every contract as
  * unknown. There is no update path at runtime; a signed, updatable list is future work
- * (path-to-release.md §2). Sources for every entry: {@code app/token-list/SOURCES.md}.
+ * (ROADMAP.md). Sources for every entry: {@code app/token-list/SOURCES.md}.
  *
  * <p>The Mac companion compiles the SAME file in (companion/src-tauri/src/tokens.rs) and its
  * tests check this pin and its own against the file's bytes.
