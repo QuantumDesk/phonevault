@@ -506,9 +506,9 @@ pub fn call_info(data: &str, value: u128) -> CallInfo {
         };
     }
     let selector = body.get(..8).map(|s| format!("0x{s}"));
-    let token = match selector.as_deref() {
-        Some("0xa9059cbb") => Some("token_transfer"),
-        Some("0x095ea7b3") => Some("token_approve"),
+    let token = match body.get(..8) {
+        Some(crate::abi::SEL_TRANSFER) => Some("token_transfer"),
+        Some(crate::abi::SEL_APPROVE) => Some("token_approve"),
         _ => None,
     };
     if let (Some(kind), 68) = (token, bytes) {

@@ -7,6 +7,7 @@
 //! only, and a transfer is built here from the list entry, re-checked in `send::sign_start`, and
 //! re-decoded from the signed bytes by `verify::check_erc20_transfer` before it can be broadcast.
 
+use crate::abi::{self, SEL_BALANCE_OF, SEL_TRANSFER};
 use crate::{blocking, eth, pairing, verify, CmdResult, Quote};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -16,9 +17,6 @@ use std::sync::OnceLock;
 pub const PINNED_SHA256: &str = "1021c5c5be1393df34c089d79e48aada223c6517ab03e70035efd0132e081506";
 const LIST_BYTES: &[u8] = include_bytes!("../../../app/src/main/res/raw/tokens.json");
 pub const ALLOWED_CHAINS: [u64; 6] = [1, 11155111, 8453, 10, 42161, 137];
-
-const SEL_TRANSFER: &str = "a9059cbb";
-const SEL_BALANCE_OF: &str = "70a08231";
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -155,7 +153,7 @@ fn word_address(address: &str) -> Result<String, String> {
     // lowercased first: a "0X" prefix is accepted here
     let a = verify::parse_address(&address.trim().to_ascii_lowercase(), verify::Case::Any)
         .map_err(|_| "bad address".to_string())?;
-    Ok(format!("{:0>64}", a.trim_start_matches("0x")))
+    Ok(abi::address_word_hex(&a))
 }
 
 /// `transfer(address,uint256)` calldata, lower-case 0x hex (exactly the phone's canonical form).
@@ -172,10 +170,7 @@ pub fn parse_balance_word(ret: &[u8]) -> Result<u128, String> {
     if ret.len() != 32 {
         return Err(format!("balanceOf returned {} bytes, expected 32", ret.len()));
     }
-    if ret[..16].iter().any(|&b| b != 0) {
-        return Err("balance is too large to display".into());
-    }
-    Ok(u128::from_be_bytes(ret[16..].try_into().unwrap()))
+    abi::u128_of_word(ret).ok_or_else(|| "balance is too large to display".to_string())
 }
 
 // ---------------------------------------------------------------- what the UI sent: re-checked

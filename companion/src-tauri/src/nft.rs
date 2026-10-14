@@ -13,6 +13,9 @@
 // Contract return data and node answers are untrusted: no unchecked indexing or slicing.
 #![deny(clippy::indexing_slicing)]
 
+use crate::abi::{
+    self, SEL_BALANCE_OF, SEL_NAME, SEL_OWNER_OF, SEL_SYMBOL, SEL_TOKEN_OF_OWNER_BY_INDEX, SEL_TOKEN_URI,
+};
 use crate::{blocking, eth, pairing, verify, watcher, CmdResult};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
@@ -26,12 +29,6 @@ use std::time::Duration;
 const MAX_CANDIDATES: usize = 120;
 const MAX_JSON: u64 = 256 * 1024;
 const MAX_IMAGE: u64 = 2 * 1024 * 1024;
-const SEL_OWNER_OF: &str = "6352211e";
-const SEL_NAME: &str = "06fdde03";
-const SEL_SYMBOL: &str = "95d89b41";
-const SEL_TOKEN_URI: &str = "c87b56dd";
-const SEL_BALANCE_OF: &str = "70a08231";
-const SEL_TOKEN_OF_OWNER_BY_INDEX: &str = "2f745c59";
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Nft {
@@ -115,62 +112,13 @@ fn word_u256_hex(id: &str) -> Result<String, String> {
     Ok(format!("{v:064x}"))
 }
 
-/// A 32-byte ABI word at `at` as a usize; None if it is out of range or past the end.
-fn abi_usize(ret: &[u8], at: usize) -> Option<usize> {
-    let w = ret.get(at..at.checked_add(32)?)?;
-    let (high, low) = w.split_at(16);
-    if high.iter().any(|b| *b != 0) {
-        return None;
-    }
-    usize::try_from(u128::from_be_bytes(low.try_into().ok()?)).ok()
-}
-
-/// A returned `string` (or a legacy `bytes32`), printable characters only, capped. The contract
-/// (anyone's) chooses these bytes: every offset and length is checked, never trusted.
-pub fn decode_string(ret: &[u8]) -> Option<String> {
-    let raw: Vec<u8> = if ret.len() == 32 {
-        ret.iter().copied().take_while(|b| *b != 0).collect()
-    } else {
-        let off = abi_usize(ret, 0)?;
-        let len = abi_usize(ret, off)?;
-        if len > 4096 {
-            return None;
-        }
-        let start = off.checked_add(32)?;
-        ret.get(start..start.checked_add(len)?)?.to_vec()
-    };
-    let s = String::from_utf8(raw).ok()?;
-    let s: String = s.chars().filter(|c| !c.is_control()).take(200).collect();
-    let s = s.trim().to_string();
-    (!s.is_empty()).then_some(s)
-}
-
-fn address_word(ret: &[u8]) -> Option<String> {
-    if ret.len() != 32 {
-        return None;
-    }
-    let (pad, addr) = ret.split_at(12);
-    pad.iter().all(|b| *b == 0).then(|| format!("0x{}", hex::encode(addr)))
-}
-
-fn uint_word(ret: &[u8]) -> Option<u128> {
-    if ret.len() != 32 {
-        return None;
-    }
-    let (high, low) = ret.split_at(16);
-    if high.iter().any(|b| *b != 0) {
-        return None;
-    }
-    Some(u128::from_be_bytes(low.try_into().ok()?))
-}
-
 fn owns(rpc: &eth::Rpc, contract: &str, id: &str, owner: &str) -> Option<bool> {
     let ret = rpc.eth_call(contract, &format!("0x{SEL_OWNER_OF}{}", word_u256_hex(id).ok()?)).ok()?;
-    address_word(&ret).map(|a| a.eq_ignore_ascii_case(owner))
+    abi::address_of_word(&ret).map(|a| a.eq_ignore_ascii_case(owner))
 }
 
 fn label(rpc: &eth::Rpc, contract: &str) -> (Option<String>, Option<String>) {
-    let s = |sel: &str| rpc.eth_call(contract, &format!("0x{sel}")).ok().and_then(|r| decode_string(&r));
+    let s = |sel: &str| rpc.eth_call(contract, &format!("0x{sel}")).ok().and_then(|r| abi::decode_string(&r));
     (s(SEL_NAME), s(SEL_SYMBOL))
 }
 
@@ -215,8 +163,7 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
     for l in logs {
         let Some(t) = l.get("topics").and_then(Value::as_array) else { continue };
         let [t0, _, t2, t3] = t.as_slice() else { continue };
-        if t0.as_str() != Some(watcher::TRANSFER_TOPIC)
-            || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic))
+        if t0.as_str() != Some(abi::TRANSFER_TOPIC) || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic))
         {
             continue;
         }
@@ -262,7 +209,7 @@ pub(crate) async fn nft_scan(rpc_url: String) -> CmdResult<Scan> {
         let (rpc, chain, owner, block) = connect(&rpc_url)?;
         let window = watcher::network(chain).map(|n| n.4).unwrap_or(5_000);
         let owner_topic = watcher::topic_address(&owner);
-        let (logs, covered, error) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, None, json!([watcher::TRANSFER_TOPIC, Value::Null, owner_topic]));
+        let (logs, covered, error) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, None, json!([abi::TRANSFER_TOPIC, Value::Null, owner_topic]));
         let error = error.map(|e| if covered.is_none() && e.to_ascii_lowercase().contains("address") { format!("this node only answers log searches for specific contracts ({e}); add a collection by its contract address, or use your own node") } else { e });
         let nfts = refresh(&rpc, chain, &owner, erc721_candidates(&logs, &owner_topic))?;
         Ok(Scan { chain_id: chain, nfts, from_block: covered, to_block: Some(block), error })
@@ -276,12 +223,12 @@ pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdRe
         let c = contract.trim().to_ascii_lowercase();
         if !verify::is_address(&c) { return Err("a contract address is 0x followed by 40 hex characters".into()); }
         let (rpc, chain, owner, block) = connect(&rpc_url)?;
-        let owner_word = format!("{:0>64}", owner.trim_start_matches("0x"));
-        let count = rpc.eth_call(&c, &format!("0x{SEL_BALANCE_OF}{owner_word}")).ok().and_then(|r| uint_word(&r))
+        let owner_word = abi::address_word_hex(&owner);
+        let count = rpc.eth_call(&c, &format!("0x{SEL_BALANCE_OF}{owner_word}")).ok().and_then(|r| abi::u128_of_word(&r))
             .ok_or("that contract doesn't answer balanceOf like an ERC-721 collection on this network")?;
         let mut candidates = Vec::new();
         for i in 0..count.min(50) {
-            match rpc.eth_call(&c, &format!("0x{SEL_TOKEN_OF_OWNER_BY_INDEX}{owner_word}{i:064x}")).ok().and_then(|r| uint_word(&r)) {
+            match rpc.eth_call(&c, &format!("0x{SEL_TOKEN_OF_OWNER_BY_INDEX}{owner_word}{i:064x}")).ok().and_then(|r| abi::u128_of_word(&r)) {
                 Some(id) => candidates.push((c.clone(), id.to_string())),
                 None => break,
             }
@@ -290,7 +237,7 @@ pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdRe
         if candidates.len() < count.min(50) as usize {
             let window = watcher::network(chain).map(|n| n.4).unwrap_or(5_000);
             let owner_topic = watcher::topic_address(&owner);
-            let (logs, covered, e) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, Some(json!(c)), json!([watcher::TRANSFER_TOPIC, Value::Null, owner_topic]));
+            let (logs, covered, e) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, Some(json!(c)), json!([abi::TRANSFER_TOPIC, Value::Null, owner_topic]));
             candidates.extend(erc721_candidates(&logs, &owner_topic));
             from = covered; error = e;
             if candidates.is_empty() && count > 0 { error = Some(format!("you hold {count} from this collection, but it doesn't list them and none arrived in the recent block window")); }
@@ -434,7 +381,7 @@ pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: St
         let Some(uri) = rpc
             .eth_call(&c, &format!("0x{SEL_TOKEN_URI}{}", word_u256_hex(&token_id)?))
             .ok()
-            .and_then(|r| decode_string(&r))
+            .and_then(|r| abi::decode_string(&r))
         else {
             return Ok(empty("the contract has no tokenURI for this token".into()));
         };
@@ -472,26 +419,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strings_decode_abi_and_bytes32() {
-        let mut abi = vec![0u8; 96];
-        abi[31] = 32;
-        abi[63] = 5;
-        abi[64..69].copy_from_slice(b"Pixel");
-        assert_eq!(decode_string(&abi).as_deref(), Some("Pixel"));
-        let mut b32 = [0u8; 32];
-        b32[..3].copy_from_slice(b"MKR");
-        assert_eq!(decode_string(&b32).as_deref(), Some("MKR"));
-        abi[63] = 200; // length past the end
-        assert!(decode_string(&abi).is_none());
-    }
-
-    #[test]
     fn erc721_logs_become_candidates_once() {
         let me = watcher::topic_address("0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3");
         let other = watcher::topic_address("0x1111111111111111111111111111111111111111");
         let id = format!("0x{:064x}", 4211u128);
-        let l = |to: &str| json!({"address": "0xAbC0000000000000000000000000000000000001", "topics": [watcher::TRANSFER_TOPIC, other, to, id]});
-        let erc20 = json!({"address": "0xabc", "topics": [watcher::TRANSFER_TOPIC, other, me], "data": "0x01"});
+        let l = |to: &str| json!({"address": "0xAbC0000000000000000000000000000000000001", "topics": [abi::TRANSFER_TOPIC, other, to, id]});
+        let erc20 = json!({"address": "0xabc", "topics": [abi::TRANSFER_TOPIC, other, me], "data": "0x01"});
         let c = erc721_candidates(&[l(&me), l(&me), l(&other), erc20], &me);
         assert_eq!(c, vec![("0xabc0000000000000000000000000000000000001".to_string(), "4211".to_string())]);
     }
@@ -524,24 +457,5 @@ mod tests {
         assert!(image_data_url_capped(&big, MAX_ICON).is_err());
         assert!(image_data_url_capped(&png, MAX_ICON).is_ok());
         assert!(image_data_url_capped("http://dapp.example/icon.png", MAX_ICON).is_err(), "https only");
-    }
-
-    /// `decode_string` (name(), symbol() and tokenURI() of any contract that sends the user an NFT)
-    /// refuses an ABI offset or length that overflows or points past the return data.
-    #[test]
-    fn abi_string_offsets_that_overflow_are_refused() {
-        use std::panic::catch_unwind;
-        let mut ret = vec![0u8; 64];
-        ret[16..32].copy_from_slice(&((u64::MAX - 15) as u128).to_be_bytes());
-        assert_eq!(catch_unwind(|| decode_string(&ret)).ok(), Some(None));
-        // the length word overflowing the end, and the largest offsets
-        for (off, len) in
-            [(32u128, u64::MAX as u128), (u128::MAX, 1), (usize::MAX as u128 - 31, 0), (usize::MAX as u128, 0)]
-        {
-            let mut r = vec![0u8; 96];
-            r[16..32].copy_from_slice(&off.to_be_bytes());
-            r[48..64].copy_from_slice(&len.to_be_bytes());
-            assert_eq!(catch_unwind(|| decode_string(&r)).ok(), Some(None), "off {off} len {len}");
-        }
     }
 }

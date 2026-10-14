@@ -27,7 +27,7 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const TRANSFER: &str = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+use crate::abi::TRANSFER_EVENT as TRANSFER;
 const TRANSFER_SINGLE: &str = "c3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62";
 const TRANSFER_BATCH: &str = "4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb";
 const DEPOSIT: &str = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c";
@@ -230,21 +230,13 @@ fn strip(h: &str) -> &str {
     h.strip_prefix("0x").unwrap_or(h)
 }
 #[deny(clippy::indexing_slicing)]
+/// An address topic, with or without `0x`.
 fn topic_address(t: &str) -> Option<String> {
-    let t = strip(t);
-    if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let (pad, addr) = (t.get(..24)?, t.get(24..)?);
-    if !pad.bytes().all(|b| b == b'0') {
-        return None;
-    }
-    Some(format!("0x{}", addr.to_ascii_lowercase()))
+    crate::abi::address_of_word_hex(strip(t))
 }
 #[deny(clippy::indexing_slicing)]
 fn word(bytes: &[u8], i: usize) -> Option<U256> {
-    let start = i.checked_mul(32)?;
-    U256::from_be(bytes.get(start..start.checked_add(32)?)?)
+    U256::from_be(crate::abi::word_at(bytes, i.checked_mul(32)?)?)
 }
 fn word_usize(bytes: &[u8], i: usize) -> Option<usize> {
     word(bytes, i)?.to_u128().and_then(|v| usize::try_from(v).ok())

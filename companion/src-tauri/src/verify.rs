@@ -462,7 +462,7 @@ pub fn decode_erc20_transfer(data: &str) -> Result<(String, u128), VerifyError> 
     if body.len() != 136 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(err("calldata is not exactly transfer(address,uint256): wrong length"));
     }
-    if &body[..8] != "a9059cbb" {
+    if &body[..8] != crate::abi::SEL_TRANSFER {
         return Err(err("calldata is not transfer(address,uint256)"));
     }
     if !body[8..32].bytes().all(|b| b == b'0') {

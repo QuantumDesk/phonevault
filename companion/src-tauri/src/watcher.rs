@@ -29,7 +29,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-pub const TRANSFER_TOPIC: &str = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+use crate::abi::TRANSFER_TOPIC;
 
 /// (chain id, name, native symbol, default node, initial log window in blocks ≈ the last day or
 /// what public nodes still serve without an archive token)
@@ -190,7 +190,7 @@ pub(crate) fn watch_scan_status() -> CmdResult<Vec<ScanStatus>> {
 
 /// Topic word for an address (32 bytes, left-padded).
 pub fn topic_address(addr: &str) -> String {
-    format!("0x{:0>64}", addr.trim_start_matches("0x").to_ascii_lowercase())
+    format!("0x{}", crate::abi::address_word_hex(addr))
 }
 
 /// Search logs in [from, to], newest chunk first. Public nodes refuse wide ranges and old blocks
@@ -239,16 +239,9 @@ pub fn search_logs(
     (logs, covered, incomplete.then(|| "searched as far back as the node allows".to_string()))
 }
 
-/// The 64 hex digits of a 32-byte log word written as `0x` + 64 hex; None for anything else.
-fn word_hex(w: &str) -> Option<&str> {
-    w.strip_prefix("0x").filter(|h| h.len() == 64 && h.bytes().all(|b| b.is_ascii_hexdigit()))
-}
-
-/// The address in an address topic (12 zero bytes, then 20 bytes), lowercase; None for anything else.
+/// The address in an address topic (`0x`, 12 zero bytes, then 20 bytes), lowercase; None for anything else.
 pub fn address_of_topic(topic: &str) -> Option<String> {
-    let h = word_hex(topic)?;
-    let (pad, addr) = (h.get(..24)?, h.get(24..)?);
-    pad.bytes().all(|b| b == b'0').then(|| format!("0x{}", addr.to_ascii_lowercase()))
+    crate::abi::address_of_word_hex(topic.strip_prefix("0x")?)
 }
 
 /// An ERC-20 Transfer log to `owner`: (contract, from, amount). None for anything else (ERC-721
@@ -263,12 +256,8 @@ fn parse_erc20_in(log: &Value, owner_topic: &str) -> Option<(String, String, u12
     if *t0 != TRANSFER_TOPIC || !t2.eq_ignore_ascii_case(owner_topic) {
         return None;
     }
-    let data = word_hex(log.get("data")?.as_str()?)?;
-    let (high, low) = (data.get(..32)?, data.get(32..)?);
-    if !high.bytes().all(|b| b == b'0') {
-        return None;
-    }
-    let amount = u128::from_str_radix(low, 16).ok().filter(|a| *a > 0)?;
+    let data = log.get("data")?.as_str()?.strip_prefix("0x")?;
+    let amount = crate::abi::u128_of_word_hex(data).filter(|a| *a > 0)?;
     let from = address_of_topic(t1)?;
     let contract = log.get("address")?.as_str().filter(|a| verify::is_address(a))?;
     Some((contract.to_ascii_lowercase(), from, amount))

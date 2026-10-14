@@ -2,6 +2,8 @@
 //! the phone, reads balances and fees from a node, hands a transaction to the phone for review,
 //! verifies what comes back independently, and broadcasts only what the user approved on the phone.
 
+// Solidity ABI words, selectors and the Transfer topic (untrusted input: checked, never indexed)
+mod abi;
 mod aoa;
 // device attestation: is the phone genuine Phone Vault hardware + firmware + app?
 pub mod attest;
