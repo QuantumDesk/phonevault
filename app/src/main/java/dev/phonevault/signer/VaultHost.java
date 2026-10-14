@@ -99,6 +99,13 @@ interface VaultHost {
      * {@code qr} may be null (set later with {@link #setWalletQr}).
      */
     void publishNewWallet(Credentials key, Bitmap qr, boolean backupVerified);
+    /**
+     * Another account (or the passphrase wallet's) signs now: its key, its description, its
+     * address and QR, published together.
+     */
+    void publishAccount(Credentials key, SigningAccount account, String address, Bitmap qr);
+    /** The active account's label changed (same key). */
+    void relabelActiveAccount(SigningAccount account);
     /** Drop the signing key from memory. */
     void clearCredentials();
     /** Forget the receiving identity (address, QR, account, Bitcoin accounts, loaded/verified). */
