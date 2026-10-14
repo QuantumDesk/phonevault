@@ -3,10 +3,13 @@ package dev.phonevault.signer;
 import android.app.Activity;
 import android.graphics.Bitmap;
 import android.os.Handler;
+import android.widget.LinearLayout;
 
 import org.web3j.crypto.Credentials;
 
 import java.security.SecureRandom;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -105,4 +108,20 @@ interface VaultHost {
     void setWalletQr(Bitmap qr);
     /** The backup of the loaded wallet passed the spot check. */
     void markBackupVerified();
+
+    // ---------------------------------------------------------------- USB requests
+    /** Under stateLock or on the UI thread: the request still owns its slot, with the checks {@code need} names. */
+    boolean owns(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need);
+    /** Before drawing a request's screen: false if it still owns its slot; else cancels, releases the slot, true. */
+    boolean abandonUnlessOwned(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need);
+    /** Releases the approval slot; callable from any thread (the refusal path runs on the USB reader). */
+    void finishApproval(ApprovalDecision owner);
+    /** Answers {@code id} with an error and shows it in the status line. Any thread. */
+    void sendError(AccessoryTransport source, String id, String message);
+    /** The active account's key, for the signing step only: read it under stateLock, after the ownership re-check. */
+    Credentials signingKey();
+    /** Address book + recipient history for the reviews. */
+    AddressSafety safety();
+    /** A receipt's "Save as contact" actions (SafetyScreens). */
+    void addSaveActions(LinearLayout root, List<TransactionReview.Party> parties);
 }
