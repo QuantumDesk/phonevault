@@ -12,7 +12,6 @@ fn err(m: impl Into<String>) -> EthError { EthError(m.into()) }
 
 pub struct Rpc { url: String, client: reqwest::blocking::Client }
 
-pub const DEFAULT_RPC: &str = "https://ethereum-rpc.publicnode.com";
 /// The most this reads of one node answer (a full block with its transactions fits easily).
 pub const MAX_RESPONSE: u64 = 16 * 1024 * 1024;
 

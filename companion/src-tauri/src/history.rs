@@ -249,14 +249,6 @@ pub(crate) async fn history_reconcile(rpc_url: String) -> CmdResult<Vec<Entry>> 
     }).await
 }
 
-/// Record a balance increase seen by the UI (browser preview / older callers). The watcher records
-/// its own; kept for compatibility.
-#[tauri::command]
-pub(crate) async fn history_add_incoming(chain_id: u128, amount_wei: String) -> CmdResult<Vec<Entry>> {
-    let wei: u128 = amount_wei.parse().map_err(|_| "bad amount".to_string())?;
-    blocking(move || record_balance_increase(&active_owner()?, chain_id, wei)).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

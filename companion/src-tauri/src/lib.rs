@@ -231,9 +231,6 @@ async fn receipt(rpc_url: String, hash: String) -> CmdResult<Receipt> {
     }).await
 }
 
-#[tauri::command]
-fn default_rpc() -> String { eth::DEFAULT_RPC.to_string() }
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let browser_bridge = bridge::create();
@@ -242,9 +239,9 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(send::SendState::default())
         .manage(browser_bridge.clone())
-        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, receipt, default_rpc,
+        .invoke_handler(tauri::generate_handler![device_status, read_address, confirm_pairing, forget_pairing, select_account, rename_account, forget_account, wallet, quote, receipt,
             send::sign_start, send::sign_cancel, sim::simulate, send::broadcast_verified, send::fee_estimate, send::max_sendable, send::check_address,
-            history::history_list, history::history_mark, history::history_add_incoming, history::history_reconcile, price::spot_usd, price::prices_usd,
+            history::history_list, history::history_mark, history::history_reconcile, price::prices_usd,
             replace::replacement_quote,
             watcher::watch_configure, watcher::watch_scan_status, nft::nft_list, nft::nft_scan, nft::nft_add_contract, nft::nft_metadata, nft::dapp_icon,
             signing::sign_message, signing::sign_typed_data,

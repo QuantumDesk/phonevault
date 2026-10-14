@@ -36,10 +36,6 @@ pub fn spot(symbol: &str) -> Result<f64, String> {
     Ok(p)
 }
 
-/// USD per coin. `symbol` is limited to the native coins of the networks the app knows, and BTC.
-#[tauri::command]
-pub(crate) async fn spot_usd(symbol: String) -> CmdResult<f64> { blocking(move || spot(&symbol)).await }
-
 #[derive(serde::Serialize)]
 #[allow(non_snake_case)]
 pub struct Prices { ETH: Option<f64>, POL: Option<f64>, BTC: Option<f64> }

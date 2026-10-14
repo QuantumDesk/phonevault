@@ -5,9 +5,9 @@
 
 pub const COMMANDS: &[&str] = &[
     "device_status", "read_address", "confirm_pairing", "forget_pairing", "select_account", "rename_account",
-    "forget_account", "wallet", "quote", "receipt", "default_rpc", "sign_start", "sign_cancel", "simulate",
+    "forget_account", "wallet", "quote", "receipt", "sign_start", "sign_cancel", "simulate",
     "broadcast_verified", "fee_estimate", "max_sendable", "check_address", "history_list", "history_mark",
-    "history_add_incoming", "history_reconcile", "spot_usd", "prices_usd", "replacement_quote",
+    "history_reconcile", "prices_usd", "replacement_quote",
     "watch_configure", "watch_scan_status", "nft_list", "nft_scan", "nft_add_contract", "nft_metadata",
     "dapp_icon", "sign_message", "sign_typed_data", "attest_phone", "attestation_cached", "developer_mode",
     "set_developer_mode", "token_list", "token_balances", "token_quote", "wc_plan_session",
