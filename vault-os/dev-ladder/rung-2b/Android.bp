@@ -16,7 +16,7 @@ android_app_import {
     overrides: [
         "LineageSetupWizard",
     ],
-    // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests)
+    // The release overrides not yet enabled at this rung (each is enabled by a boot-tested rung):
     // overrides: [
     // "Aperture",
     // "AudioFX",

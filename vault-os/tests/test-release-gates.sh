@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Release gates that run before anything is signed:
 #   - verify-release-source.sh: no development deviation in the release configuration
-#     (the 2026-08 DEBUG-38/41 leftovers: persist.sys.usb.config=adb, an early-adbd init
-#     script, DEBUG-NN markers, tracked *.rel-bak/*.b38-bak copies);
+#     (persist.sys.usb.config=adb, an early-adbd init script, DEBUG-NN markers, tracked
+#     *.rel-bak/*.b38-bak copies);
 #   - verify-rollback-index.sh: project-owned AVB rollback index, strictly increasing over the
 #     previous signed release manifest;
 #   - dev-ladder/check-overrides.sh release: no overridden module left in the target-files.
@@ -50,14 +50,14 @@ make_source_fixture "${work_dir}/src-clean"
 "${SOURCE_GATE}" "${work_dir}/src-clean"
 
 common=vendor/phonevault/config/common.mk
-# DEBUG-38 exactly as it was committed.
+# adb as the default USB function, tagged with a development marker.
 source_case persist-adb 'persist.sys.usb.config must be none' \
   "sed -i.x 's|persist.sys.usb.config=none|persist.sys.usb.config=adb   # DEBUG-38: temporary, revert to none for release|' ${common} && rm ${common}.x"
 source_case debug-marker 'development marker in release configuration' \
   "printf '# DEBUG-39: FusedLocation+Telecom restored\n' >> ${common}"
 source_case debug-marker-nodash 'development marker in release configuration' \
   "printf '    // DEBUG48: overrides disabled\n' >> vendor/phonevault/prebuilt/Android.bp"
-# DEBUG-41: the early-adb rc and its install line.
+# An early-adb rc and its install line.
 source_case zzz-rc 'development leftover file in release configuration' \
   "printf 'on post-fs\n    start adbd\n' > vendor/phonevault/prebuilt/zzz-debug-earlyadb.rc"
 source_case zzz-install 'installs a debug init script' \
@@ -88,7 +88,7 @@ source_case recovery-not-applied 'does not apply patches/bootable-recovery' \
   "sed -i.x 's#patches/bootable-recovery#patches/elsewhere#' scripts/install-overlay.sh"
 echo "Release source gate negative fixtures passed."
 
-# Init-model and property-file cases (audit 2026-10-13). Positives first: honest release
+# Init-model and property-file cases. Positives first: honest release
 # configuration written the ways init and the build accept must still pass.
 source_pass() {  # NAME MUTATION...
   local name="$1"; shift

@@ -20,7 +20,7 @@ index 1de0642..bae058c 100644
  
  include device/google/crosshatch/crosshatch/BoardConfigLineage.mk
 +
-+# Phone Vault branding: prebuilt mono pixel-art boot animation (DEBUG48)
++# Phone Vault branding: prebuilt mono pixel-art boot animation
 +TARGET_BOOTANIMATION := vendor/phonevault/branding/bootanimation.zip
 diff --git a/device-lineage.mk b/device-lineage.mk
 index 3a88bcc..9e7196a 100644

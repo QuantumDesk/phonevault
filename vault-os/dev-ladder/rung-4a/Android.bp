@@ -77,8 +77,8 @@ android_app_import {
         "SettingsIntelligence",
         "Tag",
     ],
-    // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests).
-    // This commented list is the release candidate set; entries active above are restored.
+    // The release overrides not yet enabled at this rung (each is enabled by a boot-tested rung):
+    // Entries active above are already enabled.
     // overrides: [
     // "Aperture",
     // "AudioFX",

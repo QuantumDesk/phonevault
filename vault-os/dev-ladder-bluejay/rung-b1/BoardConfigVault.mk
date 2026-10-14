@@ -11,9 +11,8 @@
 #     that sync-rung.sh creates from PV_AVB_KEY_DIR
 #     (vendor/phonevault/keys/ is never synced from the repo and never committed). It is NOT the
 #     release key, which is generated separately for b8/b9 and never lives on the build host.
-#   - Public key (avbtool extract_public_key, the future avb_custom_key blob):
-#     sha256 068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c,
-#     sha1   af09b166ade90fb31a184e9ab6c59819cd33fc8a (what `avbtool info_image` prints).
+#   - Public key: `avbtool extract_public_key` (the future avb_custom_key blob); build-rung.sh
+#     writes it next to the images and checks every signed image against its sha1.
 #   - One key for all four signatures: chained partitions carry their own public key in vbmeta,
 #     so separate keys only matter once release OTAs are signed by different parties.
 #   - Rollback indexes unchanged from gs101: $(PLATFORM_SECURITY_PATCH_TIMESTAMP) at locations

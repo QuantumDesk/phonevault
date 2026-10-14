@@ -61,9 +61,9 @@ if len(overrides) != len(set(overrides)):
 # Removing one again must be a deliberate, boot-tested change to this list, not an edit of
 # Android.bp alone.
 ladder_required_modules = {
-    "FusedLocation",  # LocationManagerService: direct-boot fused provider required (DEBUG-39)
+    "FusedLocation",  # LocationManagerService: direct-boot fused provider required
     "LatinIME",  # the only IME; SystemUI's step-up PIN prompt needs it
-    "ModuleMetadata",  # system_server boot loop without it (rung 4b, 2026-10-11)
+    "ModuleMetadata",  # system_server boot-loops without it
     "PackageInstaller",  # PackageManagerService requires exactly one installer
     "PermissionController",
     "Settings",  # FallbackHome, confirm-credential, device-admin UI

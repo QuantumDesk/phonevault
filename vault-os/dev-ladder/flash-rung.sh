@@ -10,7 +10,7 @@
 # --wipe requires PV_THROWAWAY_DEVICE=1. Exactly one device ($PV_SERIAL) may be attached; every
 # adb/fastboot call is pinned to it.
 # The recovery still shows "Signature verification failed — install anyway?" at ~47%: someone
-# must tap Yes on the phone (until the OTA key is trusted, release-trust chunk).
+# must tap Yes on the phone (development OTAs are not signed with a key the recovery trusts).
 set -uo pipefail
 RUNG="${1:?rung}"; WIPE=0; [[ "${2:-}" == "--wipe" ]] && WIPE=1
 OTA="${PV_OTA:-${PV_OUT_DIR:-${HOME}}/rung-${RUNG}-ota.zip}"   # build-rung.sh's output by default

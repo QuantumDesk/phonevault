@@ -54,7 +54,7 @@ done
 KERNEL="${TREE}/kernel/google/msm-4.9"
 # Each rung carries exactly its own kernel patches: drop any a previous rung left applied (a stale
 # patch can add Kconfig symbols the current rung's config does not answer, and the kernel build
-# then waits forever on an interactive prompt — seen 2026-09-24 going 2d-c → 2d-b).
+# then waits forever on an interactive prompt).
 if ! git -C "${KERNEL}" diff --quiet; then
   echo "   kernel tree had tracked changes from another rung: reset"
   git -C "${KERNEL}" diff --stat | tail -1
@@ -96,8 +96,8 @@ sync_tree_diff vendor "${TREE}/vendor/google/crosshatch" "${RUNG_DIR}/vendor-goo
   crosshatch-vendor.mk Android.bp Android.mk BoardConfigVendor.mk
 
 # Release frameworks/base patches (vault-os/patches/frameworks-base) are release intent, not rung
-# deviations: every rung gets all of them. 0001-0004 were applied to this tree as commits long
-# ago (they reverse-apply → "present"); later ones are applied to the working tree here.
+# deviations: every rung gets all of them. A patch already in the tree (committed, or applied by
+# an earlier sync) reverse-applies and is reported "present"; the others are applied here.
 # packages/SystemUI is first restored to HEAD so a revised SystemUI patch replaces its earlier
 # revision instead of failing to apply (the tree carries no other SystemUI edits).
 FWB="${TREE}/frameworks/base"

@@ -7,10 +7,8 @@
 #
 # Development-only settings (adb as the default USB function, insecure adb,
 # pre-authorised adb keys, early-boot adb init scripts, DEBUG-NN bisection
-# markers, backup copies of release files) belong in vault-os/dev-ladder*/
-# rung directories only. 2026-08/10: a DEBUG-38 `persist.sys.usb.config=adb`
-# and a DEBUG-41 early-adbd init script sat in the release common.mk, next to
-# tracked *.rel-bak / *.b38-bak copies.
+# markers, backup copies of release files such as *.rel-bak) belong in
+# vault-os/dev-ladder*/ rung directories only.
 set -euo pipefail
 
 REPOSITORY_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
@@ -51,7 +49,8 @@ for path in files:
     if forbidden_names.search(path.name) or "zzz-debug" in relative:
         fail(f"development leftover file in release configuration: {relative}")
 
-# Bisection markers used while the boot was being debugged (DEBUG-38, DEBUG48, ...).
+# Development markers (DEBUG-NN or DEBUGNN) tag experimental changes; none may
+# remain in the release configuration.
 debug_marker = re.compile(r"\bDEBUG-?[0-9]+|\bDEBUG-")
 text_files = {}
 for path in files:

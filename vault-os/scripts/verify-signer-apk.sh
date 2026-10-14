@@ -44,7 +44,7 @@ if grep -q "application-debuggable" <<<"${BADGING}"; then
   echo "release APK must not be debuggable" >&2
   exit 1
 fi
-# Exact allowlist. USE_BIOMETRIC (reviewed 2026-09-24): opens the credential-only system prompt
+# Exact allowlist. USE_BIOMETRIC: opens the credential-only system prompt
 # that has the Titan M verify the vault PIN. Any other permission is a release blocker.
 ALLOWED_PERMISSIONS_RE="^uses-permission: name='android\.permission\.USE_BIOMETRIC'$"
 unexpected="$(grep -E "uses-permission:|uses-permission-sdk-" <<<"${PERMISSIONS}" | grep -Ev "${ALLOWED_PERMISSIONS_RE}" || true)"

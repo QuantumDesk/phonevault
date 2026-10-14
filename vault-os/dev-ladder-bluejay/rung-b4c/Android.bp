@@ -36,8 +36,8 @@ android_app_import {
         // Rung b4a: the radios. Each service goes together with its kernel driver
         // (BoardConfigVault.mk) and, where it has one, its VINTF entry (a declared HAL that never
         // registers makes clients wait) and its init rc (vendor-google-bluejay.diff drops the rc
-        // copies of the prebuilt daemons). Checked 2026-10-13 in out/soong/Android-vault_bluejay.mk:
-        // no installed module `required`s any of these.
+        // copies of the prebuilt daemons). out/soong/Android-vault_bluejay.mk confirms that no
+        // installed module `required`s any of these.
         // NFC: the ST NFC HAL (rc + AIDL fragment ship with the module) and the gto eSE HAL
         // (eSE1, declared in device/google/bluejay/vintf/manifest.xml: removed by the device diff).
         "android.hardware.nfc-service.st",
@@ -105,7 +105,7 @@ android_app_import {
         "Tag",
 
         // Rung b4c: app strip slice B (= crosshatch rung 4b, adapted): system-side modules bound
-        // only on demand. KEPT on purpose (crosshatch lessons): ModuleMetadata (without it
+        // only on demand. KEPT on purpose (as on crosshatch): ModuleMetadata (without it
         // system_server boot-loops: "Call to getInstalledModules before metadata loaded"),
         // Settings (FallbackHome, confirm-credential), LatinIME (the step-up PIN prompt's IME),
         // and on bluejay GoogleParts (gs101's is only the eUICC disabler, not Active Edge) and the

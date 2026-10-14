@@ -127,8 +127,7 @@ android_app_import {
         "CredentialManager",
         "DynamicSystemInstallationService",
         // "ModuleMetadata": KEPT — without it ModuleInfoProvider never loads and
-        // AppRestrictionController.onSystemReady crashes system_server on every boot
-        // (boot loop on phone 2, 2026-10-11).
+        // AppRestrictionController.onSystemReady crashes system_server on every boot.
         "PacProcessor",
         "ProxyHandler",
         "SecureElement",
@@ -155,8 +154,8 @@ android_app_import {
         "PixelCameraServicesCrosshatch",
         "com.qualcomm.qti.services.secureui",
     ],
-    // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests).
-    // This commented list is the release candidate set; entries active above are restored.
+    // The release overrides not yet enabled at this rung (each is enabled by a boot-tested rung):
+    // Entries active above are already enabled.
     // overrides: [
     // "Aperture",
     // "AudioFX",

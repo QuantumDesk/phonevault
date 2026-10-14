@@ -15,12 +15,12 @@ android_app_import {
     // stay disabled until their own boot-tested rungs).
     overrides: [
         "LineageSetupWizard",
-        // NOTE 2026-09-13: adding TrebuchetQuickStep(Go) here did NOT remove the launcher from the
-        // image (still packaged in SYSTEM_EXT/priv-app) — its install is not driven by this override.
+        // TrebuchetQuickStep(Go) is not listed: overriding it does not remove the launcher from
+        // the image (still packaged in SYSTEM_EXT/priv-app); its install is not driven by this override.
         // The first-boot HOME chooser is fixed by etc/preferred-apps instead (see common.mk); the
         // launcher itself goes in the rung-4 app slice.
     ],
-    // DEBUG48: overrides disabled for boot-proving build (restore incrementally with boot tests)
+    // The release overrides not yet enabled at this rung (each is enabled by a boot-tested rung):
     // overrides: [
     // "Aperture",
     // "AudioFX",

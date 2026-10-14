@@ -12,9 +12,8 @@
 #     that sync-rung.sh creates from PV_AVB_KEY_DIR
 #     (vendor/phonevault/keys/ is never synced from the repo and never committed). It is NOT the
 #     release key, which is generated separately for b8/b9 and never lives on the build host.
-#   - Public key (avbtool extract_public_key, the future avb_custom_key blob):
-#     sha256 068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c,
-#     sha1   af09b166ade90fb31a184e9ab6c59819cd33fc8a (what `avbtool info_image` prints).
+#   - Public key: `avbtool extract_public_key` (the future avb_custom_key blob); build-rung.sh
+#     writes it next to the images and checks every signed image against its sha1.
 #   - One key for all four signatures: chained partitions carry their own public key in vbmeta,
 #     so separate keys only matter once release OTAs are signed by different parties.
 #   - Rollback indexes unchanged from gs101: $(PLATFORM_SECURITY_PATCH_TIMESTAMP) at locations
@@ -67,7 +66,7 @@ TARGET_BOARD_INFO_FILE := vendor/phonevault/config/board-info-bluejay.txt
 #
 # Slice 1 removes only modules that NOTHING in this image's userspace uses, so no vendor service
 # loses its device in this rung (radio drivers whose HALs/daemons would crash-loop go in b4a,
-# together with those services: the crosshatch 2d-c lesson):
+# together with those services: a HAL whose device disappears under it crash-loops):
 #   - the Linux Bluetooth host stack and its UART/SDIO/vendor drivers (Android's Bluetooth stack
 #     reaches the controller through the vendor HAL over a tty, never through these);
 #   - mac80211 (bcmdhd4389 is a FullMAC cfg80211 driver) and libarc4 (used by mac80211/ppp_mppe);
@@ -104,8 +103,8 @@ PHONEVAULT_KMODS_REMOVED := \
 # Every name must be a real module of this kernel (a typo would silently remove nothing).
 $(foreach k,$(PHONEVAULT_KMODS_REMOVED),$(if $(filter %/$(k),$(KERNEL_MODULES)),,\
   $(error Phone Vault: $(k) in PHONEVAULT_KMODS_REMOVED is not a module in $(KERNEL_MODULE_DIR))))
-# Dependencies were closed over by hand (modinfo depends, 2026-10-13): nothing kept depends on a
-# removed module. check-build.sh re-checks modules.dep in the target files.
+# The list is closed over its dependencies (modinfo depends): nothing kept depends on a removed
+# module. check-build.sh re-checks modules.dep in the target files.
 phonevault-kmod-keep = $(foreach m,$(1),$(if $(filter $(PHONEVAULT_KMODS_REMOVED),$(notdir $(m))),,$(m)))
 BOARD_VENDOR_KERNEL_MODULES := $(call phonevault-kmod-keep,$(BOARD_VENDOR_KERNEL_MODULES))
 BOARD_VENDOR_KERNEL_MODULES_LOAD := $(call phonevault-kmod-keep,$(BOARD_VENDOR_KERNEL_MODULES_LOAD))

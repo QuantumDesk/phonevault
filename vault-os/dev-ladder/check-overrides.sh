@@ -2,10 +2,10 @@
 # Artifact gate for the app-strip rungs: every module named in the rung's active (uncommented)
 # Android.bp `overrides` list must be absent from the built target-files, as an app
 # (<PARTITION>/app|priv-app/<name>/) or an overlay (<PARTITION>/overlay/<name>.apk or
-# overlay/<name>/, or the app's auto-generated RRO). Run on the build box after build-rung.sh, before sideloading:
+# overlay/<name>/, or the app's auto-generated RRO). Run on the build host after build-rung.sh, before sideloading:
 #   check-overrides.sh RUNG|release [target_files.zip]   (default: newest in $LINEAGE_TREE/out)
 # Exit 1 lists the survivors. An override can be silently defeated when another installed module
-# names the target in `required` (that is how Trebuchet survived on 2026-09-13), so this is the
+# names the target in `required` (Trebuchet survives its override that way), so this is the
 # proof a rung did what its Android.bp says. Also prints the APKs that remain, for the README.
 # Non-app modules (e.g. android.software.webview.prebuilt.xml) are not matched here; check those
 # on the phone (`pm list features`).
