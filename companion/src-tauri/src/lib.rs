@@ -14,6 +14,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// what the ETH and Bitcoin send flows share: errors, progress, cancel, the exchange with the phone
+mod send_flow;
 // simulate every transaction on the user's node before it goes to the phone (shown as the Mac's claim)
 mod sim;
 // speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone

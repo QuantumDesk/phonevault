@@ -27,16 +27,17 @@ pub mod verify;
 pub mod wallet;
 pub mod watch;
 
+use crate::send_flow::{self, fail, SendError};
 use crate::{aoa, blocking, CmdResult};
 use bitcoin::{consensus, OutPoint, Transaction, Txid};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tx::Built;
 use wallet::{Account, Kind, Net};
 
@@ -55,7 +56,7 @@ struct Candidate {
 static CANDIDATES: LazyLock<Mutex<HashMap<String, Candidate>>> = LazyLock::new(Default::default);
 static QUOTES: LazyLock<Mutex<HashMap<String, Built>>> = LazyLock::new(Default::default);
 static VERIFIED: LazyLock<Mutex<HashMap<String, (Built, verify::Verified)>>> = LazyLock::new(Default::default);
-static CANCELS: LazyLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = LazyLock::new(Default::default);
+static CANCELS: LazyLock<send_flow::Cancels> = LazyLock::new(Default::default);
 static SCANS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = LazyLock::new(Default::default);
 /// Previous transactions already fetched and hashed (txid → tx), for coin checks and non_witness_utxo.
 static PREV_TXS: LazyLock<Mutex<HashMap<String, Transaction>>> = LazyLock::new(Default::default);
@@ -727,22 +728,6 @@ pub(crate) async fn btc_bump_quote(id: String, txid: String, fee_rate: String) -
     .await
 }
 
-#[derive(Serialize, Debug)]
-pub struct BtcSendError {
-    kind: &'static str,
-    message: String,
-    delivered: bool,
-}
-fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> BtcSendError {
-    BtcSendError { kind, message: message.into(), delivered }
-}
-
-#[derive(Serialize, Clone)]
-struct Progress {
-    ticket: String,
-    stage: &'static str,
-}
-
 #[derive(Serialize)]
 pub struct SignedView {
     txid: String,
@@ -755,67 +740,21 @@ pub struct SignedView {
     checks: Vec<String>,
 }
 
-struct TicketGuard(String);
-impl Drop for TicketGuard {
-    fn drop(&mut self) {
-        if let Ok(mut m) = CANCELS.lock() {
-            m.remove(&self.0);
-        }
-    }
-}
-
 /// Hand the PSBT to the phone, wait for the user's review there, verify what comes back.
 #[tauri::command]
-pub(crate) async fn btc_sign_start(
-    app: AppHandle,
-    ticket: String,
-    quote_id: String,
-) -> Result<SignedView, BtcSendError> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut m = CANCELS.lock().map_err(|_| fail("internal", "state poisoned", false))?;
-        if m.contains_key(&ticket) {
-            return Err(fail("busy", "this request is already running", false));
-        }
-        m.insert(ticket.clone(), cancel.clone());
-    }
-    let guard = TicketGuard(ticket.clone());
+pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: String) -> Result<SignedView, SendError> {
+    let (flow, guard) = send_flow::start(&CANCELS, app, ticket)?;
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        let emit = |stage: &'static str| { let _ = app.emit("send-progress", Progress { ticket: ticket.clone(), stage }); };
         let built = QUOTES.lock().map_err(|_| fail("internal", "state poisoned", false))?.get(&quote_id).cloned()
             .ok_or_else(|| fail("internal", "this quote expired; review the send again", false))?;
-        let mut waited = false;
-        let _turn = aoa::take_turn(|| { waited = true; emit("waiting"); }, || cancel.load(Ordering::SeqCst)).map_err(|_| fail("cancelled", aoa::CANCELLED, false))?;
-        if waited { emit("connecting"); }
-        crate::attest::require_genuine().map_err(|m| {
-            if m.starts_with("attestation:") { fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false) }
-            else if m.contains("no Android device") { fail("no_phone", m, false) }
-            else if m.contains("held by another program") { fail("usb_busy", m, false) }
-            else { fail("connect", m, false) }
-        })?;
-        if cancel.load(Ordering::SeqCst) { return Err(fail("cancelled", aoa::CANCELLED, false)); }
+        let _turn = flow.take_turn()?;
+        // Unlike the ETH flow, "a device check is already running" stays `connect` here.
+        crate::attest::require_genuine().map_err(send_flow::gate_failure)?;
+        flow.check_cancelled()?;
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "btcSignPsbt", "network": built.account.net.wire(), "psbt": verify::psbt_base64(&built.psbt)});
         if serde_json::to_vec(&request).map(|v| v.len()).unwrap_or(usize::MAX) > MAX_REQUEST_BYTES { return Err(fail("internal", "the transaction is too large for one request to the phone", false)); }
-        emit("connecting");
-        let mut session = aoa::Session::connect().map_err(|e| match e {
-            aoa::AoaError::NoDevice => fail("no_phone", e.to_string(), false),
-            aoa::AoaError::Protocol(ref m) if m.contains("held by another program") => fail("usb_busy", e.to_string(), false),
-            other => fail("connect", other.to_string(), false),
-        })?;
-        let delivered = AtomicBool::new(false);
-        let response = session.exchange_observed(&request, PHONE_TIMEOUT, || { delivered.store(true, Ordering::SeqCst); emit("delivered"); }, || cancel.load(Ordering::SeqCst)).map_err(|e| {
-            let d = delivered.load(Ordering::SeqCst);
-            match e {
-                aoa::AoaError::Protocol(ref m) if m == aoa::CANCELLED => fail("cancelled", m.clone(), d),
-                aoa::AoaError::Timeout(_) => fail("timeout", e.to_string(), d),
-                aoa::AoaError::Usb(_) => fail("disconnected", e.to_string(), d),
-                other if !d => fail("not_delivered", other.to_string(), d),
-                other => fail("protocol", other.to_string(), d),
-            }
-        })?;
-        drop(session);
-        emit("verifying");
+        let response = flow.exchange(&request, PHONE_TIMEOUT)?;
         let b64 = verify::parse_sign_response(&request, &response).map_err(|m| {
             if m == "rejected on the phone" { fail("rejected", m, true) }
             else if let Some(x) = m.strip_prefix("phone error:") { fail("phone_error", x.trim().to_string(), true) }
@@ -837,13 +776,7 @@ pub(crate) async fn btc_sign_start(
 
 #[tauri::command]
 pub(crate) fn btc_sign_cancel(ticket: Option<String>) {
-    if let Ok(m) = CANCELS.lock() {
-        for (t, c) in m.iter() {
-            if ticket.as_deref().is_none_or(|x| x == t) {
-                c.store(true, Ordering::SeqCst);
-            }
-        }
-    }
+    send_flow::cancel(&CANCELS, ticket.as_deref());
 }
 
 /// Broadcast a transaction verified in this session, by txid. Records it for history and speed-up.

@@ -8,14 +8,14 @@
 //!   `verify::validate_signature` accepted in this session, for exactly the quoted fields, can be
 //!   sent to a node. The UI never hands raw bytes back to Rust.
 
-use crate::{aoa, blocking, eth, history, pairing, tokens, verify, CmdResult, Quote};
+use crate::send_flow::{self, fail, SendError};
+use crate::{blocking, eth, history, pairing, tokens, verify, CmdResult, Quote};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 /// How long the phone may take between receiving the request and answering (unlock + review).
 const REVIEW_TIMEOUT: Duration = Duration::from_secs(300);
@@ -37,41 +37,14 @@ struct VerifiedTx {
 /// WalletConnect request may both be waiting for the phone).
 #[derive(Default)]
 pub struct SendState {
-    cancels: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    cancels: send_flow::Cancels,
     verified: Arc<Mutex<HashMap<String, VerifiedTx>>>,
-}
-
-/// A failure the UI can explain: `kind` picks the plain-language text, `message` is the detail.
-#[derive(Serialize, Debug)]
-pub struct SendError {
-    kind: &'static str,
-    message: String,
-    delivered: bool,
-}
-fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> SendError {
-    SendError { kind, message: message.into(), delivered }
-}
-
-#[derive(Serialize, Clone)]
-struct Progress {
-    ticket: String,
-    stage: &'static str,
 }
 
 #[derive(Serialize)]
 pub struct Signed {
     hash: String,
     signer: String,
-}
-
-/// Forgets the ticket however the command ends.
-struct TicketGuard(Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>, String);
-impl Drop for TicketGuard {
-    fn drop(&mut self) {
-        if let Ok(mut m) = self.0.lock() {
-            m.remove(&self.1);
-        }
-    }
 }
 
 fn q(v: &str, what: &str) -> Result<u128, SendError> {
@@ -85,35 +58,19 @@ pub(crate) async fn sign_start(
     ticket: String,
     quote: Quote,
 ) -> Result<Signed, SendError> {
-    let cancel = Arc::new(AtomicBool::new(false));
-    {
-        let mut m = state.cancels.lock().map_err(|_| fail("internal", "state poisoned", false))?;
-        if m.contains_key(&ticket) {
-            return Err(fail("busy", "this request is already running", false));
-        }
-        m.insert(ticket.clone(), cancel.clone());
-    }
-    let guard = TicketGuard(state.cancels.clone(), ticket.clone());
+    let (flow, guard) = send_flow::start(&state.cancels, app, ticket)?;
     let store = state.verified.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        let emit = |stage: &'static str| { let _ = app.emit("send-progress", Progress { ticket: ticket.clone(), stage }); };
         let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", "not paired yet", false))?;
-        // Wait our turn with the phone (an identify, a device check or a dApp request may be on
-        // it): the UI shows "waiting for the phone" instead of failing with "USB busy".
-        let mut waited = false;
-        let _turn = aoa::take_turn(|| { waited = true; emit("waiting"); }, || cancel.load(Ordering::SeqCst))
-            .map_err(|_| fail("cancelled", aoa::CANCELLED, false))?;
-        if waited { emit("connecting"); }
+        let _turn = flow.take_turn()?;
         // The phone must have passed the device check in this connection (runs it if not yet).
-        crate::attest::require_ok(&pinned).map_err(|m| {
-            if m.starts_with("attestation:") { fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false) }
-            else if m.contains("no Android device") { fail("no_phone", m, false) }
-            else if m.contains("held by another program") { fail("usb_busy", m, false) }
-            else if m.contains("already running") { fail("busy", m, false) }
-            else { fail("connect", m, false) }
+        crate::attest::require_ok(&pinned).map_err(|m| match send_flow::gate_failure(m) {
+            // A check another caller started is still running: "try again in a few seconds".
+            e if e.kind == "connect" && e.message.contains("already running") => fail("busy", e.message, false),
+            e => e,
         })?;
-        if cancel.load(Ordering::SeqCst) { return Err(fail("cancelled", aoa::CANCELLED, false)); }
+        flow.check_cancelled()?;
         // A token send is re-derived from the built-in list before anything reaches the phone.
         let token_check = match &quote.token {
             Some(t) => Some(tokens::check_quote(&quote, t).map_err(|m| fail("internal", format!("token quote rejected: {m}"), false))?),
@@ -136,30 +93,7 @@ pub(crate) async fn sign_start(
             "maxFeePerGas": quote.max_fee_per_gas, "gasLimit": quote.gas_limit, "to": quote.to, "value": quote.value, "data": quote.data,
         }), &pinned);
         if let Some(claim) = simulation.as_ref().and_then(crate::sim::host_claim) { request["hostSimulation"] = claim; }
-        emit("connecting");
-        let mut session = aoa::Session::connect().map_err(|e| match e {
-            aoa::AoaError::NoDevice => fail("no_phone", e.to_string(), false),
-            aoa::AoaError::Protocol(ref m) if m.contains("held by another program") => fail("usb_busy", e.to_string(), false),
-            other => fail("connect", other.to_string(), false),
-        })?;
-        if cancel.load(Ordering::SeqCst) { return Err(fail("cancelled", aoa::CANCELLED, false)); }
-        let delivered = AtomicBool::new(false);
-        let response = session.exchange_observed(
-            &request, REVIEW_TIMEOUT,
-            || { delivered.store(true, Ordering::SeqCst); emit("delivered"); },
-            || cancel.load(Ordering::SeqCst),
-        ).map_err(|e| {
-            let d = delivered.load(Ordering::SeqCst);
-            match e {
-                aoa::AoaError::Protocol(ref m) if m == aoa::CANCELLED => fail("cancelled", m.clone(), d),
-                aoa::AoaError::Timeout(_) => fail("timeout", e.to_string(), d),
-                aoa::AoaError::Usb(_) => fail("disconnected", e.to_string(), d),
-                other if !d => fail("not_delivered", other.to_string(), d),
-                other => fail("protocol", other.to_string(), d),
-            }
-        })?;
-        drop(session);
-        emit("verifying");
+        let response = flow.exchange(&request, REVIEW_TIMEOUT)?;
         let v = verify::validate_signature(&request, &response, &pinned).map_err(|e| {
             let m = e.0;
             if m == "rejected on the phone" { fail("rejected", m, true) }
@@ -191,13 +125,7 @@ pub(crate) async fn sign_start(
 /// The phone may still show the request; the user rejects it there.
 #[tauri::command]
 pub(crate) fn sign_cancel(state: State<'_, SendState>, ticket: Option<String>) {
-    if let Ok(m) = state.cancels.lock() {
-        for (t, c) in m.iter() {
-            if ticket.as_deref().is_none_or(|x| x == t) {
-                c.store(true, Ordering::SeqCst);
-            }
-        }
-    }
+    send_flow::cancel(&state.cancels, ticket.as_deref());
 }
 
 /// Broadcast a transaction this session verified, by hash. Records it in the local history.

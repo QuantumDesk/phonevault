@@ -40,13 +40,23 @@ pub enum AoaError {
     Usb(#[from] rusb::Error),
     #[error("{0}")]
     Protocol(String),
-    #[error("no Android device on USB")]
+    #[error("{}", NO_DEVICE)]
     NoDevice,
+    /// The accessory interface could not be claimed: another process (or session) holds it.
+    #[error("{}", USB_BUSY)]
+    Busy,
     #[error(
         "the phone did not answer within {0} s (locked, or its USB session ended — unplug and reconnect the cable)"
     )]
     Timeout(u64),
 }
+
+/// What `AoaError::Busy` says. Also matched in the text of errors that reach the send flows as
+/// strings (the device check returns `String`).
+pub const USB_BUSY: &str =
+    "the USB interface is held by another program (usually the adb server: run `adb kill-server`)";
+/// What `AoaError::NoDevice` says (matched the same way).
+pub const NO_DEVICE: &str = "no Android device on USB";
 
 fn proto(msg: impl Into<String>) -> AoaError {
     AoaError::Protocol(msg.into())
@@ -176,9 +186,7 @@ impl Session {
         let (iface, ep_in, ep_out) =
             chosen.ok_or_else(|| proto("accessory interface with two bulk endpoints not found"))?;
         handle.claim_interface(iface).map_err(|e| match e {
-            rusb::Error::Busy | rusb::Error::Access => {
-                proto("the USB interface is held by another program (usually the adb server: run `adb kill-server`)")
-            }
+            rusb::Error::Busy | rusb::Error::Access => AoaError::Busy,
             other => AoaError::Usb(other),
         })?;
         Ok(Session { handle, iface, ep_in, ep_out })
@@ -186,51 +194,7 @@ impl Session {
 
     /// One request, one newline-framed JSON response. `timeout` covers the wait for on-device approval.
     pub fn exchange(&mut self, request: &Value, timeout: Duration) -> Result<Value, AoaError> {
-        let id =
-            request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
-        let mut payload = serde_json::to_vec(request).map_err(|e| proto(e.to_string()))?;
-        payload.push(b'\n');
-        // The phone only reads once its app has opened the session (it wakes the screen and does
-        // so on attach, but a sleeping phone needs a moment). Keep offering the request for a while
-        // instead of failing on the first 5-second write timeout.
-        let write_deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            match self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)) {
-                Ok(_) => break,
-                Err(rusb::Error::Timeout) if Instant::now() < write_deadline => continue,
-                Err(rusb::Error::Timeout) => return Err(proto("the phone is not reading USB — wake it, unlock it, and retry; if it still fails unplug and reconnect the cable")),
-                Err(other) => return Err(AoaError::Usb(other)),
-            }
-        }
-        let deadline = Instant::now() + timeout;
-        let cap = response_cap(request);
-        let mut received: Vec<u8> = Vec::new();
-        let mut chunk = vec![0u8; 16_384];
-        while Instant::now() < deadline {
-            match self.handle.read_bulk(self.ep_in, &mut chunk, Duration::from_secs(1)) {
-                Ok(n) => received.extend_from_slice(&chunk[..n]),
-                Err(rusb::Error::Timeout) => continue,
-                Err(e) => return Err(AoaError::Usb(e)),
-            }
-            if received.len() > cap {
-                return Err(proto(format!("phone response exceeds {} KiB", cap / 1024)));
-            }
-            if let Some(pos) = received.iter().position(|&b| b == b'\n') {
-                if received.len() > pos + 1 {
-                    return Err(proto("phone returned more than one framed response"));
-                }
-                let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
-                let response: Value = serde_json::from_str(line).map_err(|_| proto("phone response is not JSON"))?;
-                if !response.is_object() {
-                    return Err(proto("phone response must be a JSON object"));
-                }
-                if response.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-                    return Err(proto("phone response id does not match the request"));
-                }
-                return Ok(response);
-            }
-        }
-        Err(AoaError::Timeout(timeout.as_secs()))
+        self.exchange_observed(request, timeout, || {}, || false)
     }
 }
 
@@ -243,7 +207,7 @@ impl Drop for Session {
 // ---------------------------------------------------------------- one conversation at a time
 //
 // The accessory interface can be claimed by one session at a time; a second `connect` while
-// another request is on the phone fails with "held by another program" ("USB busy" if Send starts
+// another request is on the phone fails with `AoaError::Busy` ("USB busy" if Send starts
 // during an identify or a WalletConnect request). So every exchange takes a turn first. Holders
 // are bounded by their own timeouts, so a turn always comes.
 
@@ -296,12 +260,15 @@ pub fn take_turn(on_wait: impl FnOnce(), cancelled: impl Fn() -> bool) -> Result
 
 // ---------------------------------------------------------------- observed exchange (UI progress)
 //
-// Same framing, caps and id check as `exchange`, plus two hooks the send flow needs so the UI can
-// tell the truth: `on_delivered` fires once the request is actually in the phone's hands (the bulk
-// write completed), and `cancelled` is polled about once a second so the user can stop waiting.
-// Kept as a separate block so `exchange` itself stays minimal.
+// The one implementation of the exchange (`exchange` calls it with no-op hooks). The two hooks are
+// what the send flows need so the UI can tell the truth: `on_delivered` fires once the request is
+// actually in the phone's hands (the bulk write completed), and `cancelled` is polled about once a
+// second so the user can stop waiting.
 pub const CANCELLED: &str = "cancelled on this Mac";
 impl Session {
+    /// The phone only reads once its app has opened the session (it wakes the screen and does so
+    /// on attach, but a sleeping phone needs a moment): the request is offered for up to 60 s
+    /// instead of failing on the first 5-second write timeout.
     pub fn exchange_observed(
         &mut self,
         request: &Value,
