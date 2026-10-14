@@ -29,7 +29,6 @@ final class AccountScreens {
         void card(LinearLayout parent, String label, String value);
         boolean ready();
         void showHome();
-        float bodySize();
         void harden(View view);
         int dp(int value);
         /** The open wallet's accounts (the passphrase wallet's while one is open). */
@@ -218,7 +217,7 @@ final class AccountScreens {
                 "Capitals, spaces and symbols all count. Typed here only; never stored, never sent to the computer.");
         keyboard(root, SeedVault.MAX_PASSPHRASE_LENGTH, true, this::showPassphraseEntry);
         if (error != null) {
-            TextView e = VaultTheme.bodyText(host.context(), error, host.bodySize(), VaultTheme.DANGER_INK);
+            TextView e = VaultTheme.bodyText(host.context(), error, VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
             e.setPadding(0, host.dp(10), 0, host.dp(4));
             root.addView(e);
         }

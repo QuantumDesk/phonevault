@@ -111,12 +111,4 @@ final class UniswapRouters {
     static Router lookup(long chainId, String address) {
         return address == null ? null : BY_KEY.get(chainId + ":" + address.toLowerCase(Locale.ROOT));
     }
-
-    /** Any pinned router address on any chain (used to warn about ETH sent to a router without calldata). */
-    static boolean isRouterOnAnyChain(String address) {
-        if (address == null) return false;
-        String lower = address.toLowerCase(Locale.ROOT);
-        for (Router r : BY_KEY.values()) if (r.address.equals(lower)) return true;
-        return false;
-    }
 }

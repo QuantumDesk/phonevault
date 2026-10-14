@@ -6,7 +6,7 @@ import java.util.Locale;
 
 /**
  * How the address book and recipient history name an address. EVM addresses are lowercase
- * {@code 0x…} (as before); Bitcoin addresses are {@code btc:<network>:<address>} (network
+ * {@code 0x…}; Bitcoin addresses are {@code btc:<network>:<address>} (network
  * bitcoin/testnet/signet, address exactly as the phone renders it: lowercase bech32 or
  * case-sensitive base58), so the same string on two networks is two different entries. A
  * history "wallet" is the EVM account address, or {@code btc-wallet:<network>:<fingerprint>}.
@@ -15,7 +15,7 @@ final class AddressKeys {
     private AddressKeys() {}
 
     static final String BTC = "btc:";
-    private static final String BTC_WALLET = "btc-wallet:";
+    static final String BTC_WALLET = "btc-wallet:";
     private static final String NETWORKS = "(bitcoin|testnet|signet)";
 
     static String btc(BtcNetwork network, String address) { return normalize(BTC + network.wire + ":" + address); }
@@ -26,7 +26,7 @@ final class AddressKeys {
     static String normalize(String key) {
         if (key == null) throw new IllegalArgumentException("not an address");
         if (key.matches("0x[0-9a-fA-F]{40}")) return key.toLowerCase(Locale.ROOT);
-        if (key.matches("btc:" + NETWORKS + ":([a-z0-9]{14,90}|[1-9A-HJ-NP-Za-km-z]{25,35})")) return key;
+        if (key.matches(BTC + NETWORKS + ":([a-z0-9]{14,90}|[1-9A-HJ-NP-Za-km-z]{25,35})")) return key;
         throw new IllegalArgumentException("not an address");
     }
 
@@ -36,7 +36,7 @@ final class AddressKeys {
     static String walletKey(String key) {
         if (key == null) throw new IllegalArgumentException("not a wallet");
         if (key.matches("0x[0-9a-fA-F]{40}")) return key.toLowerCase(Locale.ROOT);
-        if (key.matches("btc-wallet:" + NETWORKS + ":[0-9a-f]{8}")) return key;
+        if (key.matches(BTC_WALLET + NETWORKS + ":[0-9a-f]{8}")) return key;
         throw new IllegalArgumentException("not a wallet");
     }
 

@@ -272,9 +272,6 @@ final class AccessoryTransport implements Closeable {
 
     boolean isClosed() { return closed.get(); }
 
-    /** Number of responses still waiting for the writer (tests / diagnostics). */
-    int queuedResponses() { return outbound.size(); }
-
     /** Local close (lock, replacement, new session): releases resources, no listener callback. */
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;

@@ -85,7 +85,9 @@ final class BtcRequest {
         if (kind == Kind.SHOW_ADDRESS) {
             String c = json.getString("change"), i = json.getString("index");
             if (!c.matches("[01]")) throw new JSONException("change must be \"0\" or \"1\"");
-            if (!i.matches("0|[1-9][0-9]{0,3}")) throw new JSONException("index must be \"0\" to \"9999\"");
+            if (!i.matches("0|[1-9][0-9]{0,8}") || Integer.parseInt(i) > BtcWallet.MAX_ADDRESS_INDEX) {
+                throw new JSONException("index must be \"0\" to \"" + BtcWallet.MAX_ADDRESS_INDEX + "\"");
+            }
             change = Integer.parseInt(c);
             index = Integer.parseInt(i);
         }

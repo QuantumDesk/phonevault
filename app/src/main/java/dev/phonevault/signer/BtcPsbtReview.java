@@ -419,7 +419,7 @@ final class BtcPsbtReview {
     static RequestRefusal refuse(String message) { return new RequestRefusal(REFUSED_TITLE, message + " Nothing was signed."); }
 
     static String walletKey(BtcNetwork network, String fingerprintHex) {
-        return "btc-wallet:" + network.wire + ":" + fingerprintHex.toLowerCase(Locale.ROOT);
+        return AddressKeys.BTC_WALLET + network.wire + ":" + fingerprintHex.toLowerCase(Locale.ROOT);
     }
 
     // ------------------------------------------------------------------ rendering
@@ -521,8 +521,8 @@ final class BtcPsbtReview {
      * behind the real tip, so a wallet that sets nLockTime to the current height (anti fee sniping,
      * e.g. Bitcoin Core, Sparrow) does not trigger the warning; and because it matches the observed
      * drift instead of overshooting it, a lock more than about a week (1008 blocks, plus a day or so
-     * of estimate error by 2026) past the real tip is warned. (The previous fixed 580 s/block ran
-     * ~1,300 blocks ahead of the real tip by late 2026, so locks up to ~16 days out were silent.)
+     * of estimate error by 2026) past the real tip is warned. (A faster fixed rate such as 580 s/block
+     * would run ~1,300 blocks ahead of the real tip by late 2026, leaving locks up to ~16 days out silent.)
      */
     static final long SECONDS_PER_BLOCK = 600;
     /** Extra blocks added to the 600 s/block count, per thousand (2.4% ≈ a 586 s real average). */

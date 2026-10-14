@@ -689,7 +689,6 @@ public final class SwapReviewTest {
         } catch (Exception ex) {
             throw new AssertionError(ex);
         }
-        assertFalse(UniswapRouters.isRouterOnAnyChain(UNKNOWN));
     }
 
     // ------------------------------------------------------------------ split fees, abandoned input, dust minimum

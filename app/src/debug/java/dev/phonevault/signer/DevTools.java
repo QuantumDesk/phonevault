@@ -20,12 +20,11 @@ import java.io.FileOutputStream;
  *
  * <p>Requests are coalesced (a burst of touches yields one dump, 1.4 s after the last) and PNG
  * compression runs off the UI thread, so the hook cannot starve input dispatch during scripted
- * tests (it did: a 4 MP PNG encode on the UI thread dropped taps in fast keypad bursts).
+ * tests (a 4 MP PNG encode on the UI thread drops taps in fast keypad bursts).
  */
 final class DevTools {
     /** Also lifts FLAG_SECURE and the DO screen-capture block. */
     static final boolean SCREENSHOTS = true;
-    static final String VARIANT = "dev";
     private static Runnable pendingDump; // UI thread only
 
     private DevTools() {}

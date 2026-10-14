@@ -945,9 +945,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     // ------------------------------------------------------------------ pages
     // Native, scrollable pages. Sensitive operations never use floating dialogs.
 
-    /** Base body size; VaultTheme applies the Text size scale (one factor for every screen). */
-    private float bodySize() { return 16; }
-
     private LinearLayout page(String eyebrow, String title, String description) {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -984,7 +981,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.addView(heading);
         if (description != null && !description.isEmpty()) {
             String shown = ReviewStyle.groupEvmIn(description); // e.g. a refusal naming the requested account
-            TextView caption = VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.DIM);
+            TextView caption = VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.DIM);
             if (!shown.equals(description)) keepGroupsWhole(caption);
             caption.setPadding(0, dp(12), 0, dp(12));
             root.addView(caption);
@@ -1020,8 +1017,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
         // Whole EVM addresses in groups of four; a card that IS an address is monospace.
         String shown = ReviewStyle.groupEvmIn(value);
-        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, bodySize(), VaultTheme.INK)
-                : VaultTheme.bodyText(this, shown, bodySize(), VaultTheme.INK);
+        TextView text = ReviewStyle.isEvmAddress(value) ? VaultTheme.monoText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK)
+                : VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK);
         if (!shown.equals(value)) keepGroupsWhole(text);
         text.setPadding(0, dp(6), 0, 0);
         box.addView(text);
@@ -1039,9 +1036,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return unlocked && operational && walletLoaded && !sensitive.active() && approvalDecision == null
                 && !replacementActive() && !restoreReplacing;
     }
-
-    /** Former tab row. Navigation moved into the ☰ header menu; kept so screens stay one-line simple. */
-    private void nav(LinearLayout parent, String selected) { }
 
     private void showMenu() {
         LinearLayout root = page("MENU", "Where to?", null);
@@ -1070,7 +1064,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         display = new DisplaySettings(getPreferences(MODE_PRIVATE));
         applyDisplaySettings();
         battery = readBattery(registerReceiver(null, new android.content.IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
-        statusView = VaultTheme.bodyText(this, "", bodySize(), VaultTheme.DIM);
+        statusView = VaultTheme.bodyText(this, "", VaultTheme.BODY_SIZE, VaultTheme.DIM);
         showLoading("Opening Phone Vault", "Checking appliance policy…");
     }
 
@@ -1136,7 +1130,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
         }
         if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
-        statusView = VaultTheme.bodyText(this, statusMessage, bodySize(), VaultTheme.DIM);
+        statusView = VaultTheme.bodyText(this, statusMessage, VaultTheme.BODY_SIZE, VaultTheme.DIM);
         statusView.setPadding(dp(2), dp(20), 0, dp(4));
         root.addView(statusView);
         action(root, "Lock now", false, this::lock);
@@ -1399,7 +1393,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             slot.addView(srow);
         }
         if (suggestions.isEmpty() && !typed.isEmpty()) {
-            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", bodySize(), VaultTheme.DANGER_INK);
+            TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
             none.setPadding(0, dp(12), 0, dp(6));
             slot.addView(none);
         }
@@ -1876,10 +1870,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!backupReminder.due(now)) return;
         LinearLayout box = VaultTheme.box(this);
         box.addView(VaultTheme.bodyText(this, "BACKUP CHECK", 13, VaultTheme.FAINT));
-        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), bodySize(), VaultTheme.INK);
+        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), VaultTheme.BODY_SIZE, VaultTheme.INK);
         headline.setPadding(0, dp(6), 0, 0);
         box.addView(headline);
-        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", bodySize() - 2, VaultTheme.DIM);
+        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", VaultTheme.BODY_SIZE - 2, VaultTheme.DIM);
         body.setPadding(0, dp(6), 0, 0);
         box.addView(body);
         action(box, "Check my backup now", false, () -> startBackupAccess(true));
@@ -2625,7 +2619,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (gate.dangerRequired) {
             dangerAck = new CheckBox(this);
             dangerAck.setText(ReviewStyle.dangerAcknowledgement(dangers));
-            VaultTheme.size(dangerAck, bodySize());
+            VaultTheme.size(dangerAck, VaultTheme.BODY_SIZE);
             dangerAck.setTextColor(VaultTheme.DANGER_INK);
             dangerAck.setButtonTintList(android.content.res.ColorStateList.valueOf(VaultTheme.DANGER_INK));
             dangerAck.setMinHeight(dp(56));
@@ -2635,7 +2629,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(prompt);
-        VaultTheme.size(reviewed, bodySize());
+        VaultTheme.size(reviewed, VaultTheme.BODY_SIZE);
         reviewed.setTextColor(VaultTheme.INK);
         reviewed.setMinHeight(dp(56));
         reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
@@ -2821,7 +2815,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 : level == ReviewStyle.Level.CHECK ? VaultTheme.WARNING_INK : amber ? VaultTheme.AMBER : 0;
         TextView labelView = VaultTheme.bodyText(this, ReviewStyle.heading(r), 13, ink != 0 ? ink : VaultTheme.FAINT);
         String shown = ReviewStyle.displayValue(label, value);
-        TextView valueView = VaultTheme.monoText(this, shown, amber ? bodySize() + 2 : bodySize(), ink != 0 ? ink : VaultTheme.INK);
+        TextView valueView = VaultTheme.monoText(this, shown, amber ? VaultTheme.BODY_SIZE + 2 : VaultTheme.BODY_SIZE, ink != 0 ? ink : VaultTheme.INK);
         if (!shown.equals(value)) keepGroupsWhole(valueView);
         valueView.setTextIsSelectable(false);
         valueView.setPadding(0, dp(6), 0, dp(15));
@@ -2871,7 +2865,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         glp.rightMargin = dp(10);
         heading.addView(VaultTheme.levelGlyph(this, ReviewStyle.Level.DANGER), glp);
-        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), bodySize(), VaultTheme.DANGER_INK);
+        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
         title.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
         heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         panel.addView(heading);
@@ -3534,7 +3528,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
                 @Override public boolean ready() { return accountScreensReady() && backupVerified; }
                 @Override public void showHome() { endPassphraseEntry(); activity.showHome(); }
-                @Override public float bodySize() { return activity.bodySize(); }
                 @Override public void harden(View view) { hardenTouch(view); }
                 @Override public int dp(int value) { return activity.dp(value); }
                 @Override public AccountBook book() { return currentBook(); }
@@ -3601,7 +3594,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public boolean ready() { return menuAvailable(); }
                 @Override public void showMenu() { activity.showMenu(); }
                 @Override public void showHome() { activity.showHome(); }
-                @Override public float bodySize() { return activity.bodySize(); }
                 @Override public void harden(View view) { hardenTouch(view); }
                 @Override public int dp(int value) { return activity.dp(value); }
             }, safety().book);
