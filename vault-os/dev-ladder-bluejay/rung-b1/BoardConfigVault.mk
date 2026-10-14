@@ -6,8 +6,9 @@
 # those. b1 signs vbmeta AND every chained partition with the Phone Vault bluejay DEVELOPMENT key
 # and turns verification on (flags 0).
 #   - The key is a DEV key: RSA-4096, generated on the build host, private half only at
-#     /home/aipg/.phonevault-keys/avb/phonevault_bluejay_avb_DEV_rsa4096.pem (mode 0400, aipg),
+#     $(PV_AVB_KEY_DIR)/phonevault_bluejay_avb_DEV_rsa4096.pem (mode 0400, the tree owner's),
 #     reached through the in-tree symlink vendor/phonevault/keys/avb_bluejay_dev.pem
+#     that sync-rung.sh creates from PV_AVB_KEY_DIR
 #     (vendor/phonevault/keys/ is never synced from the repo and never committed). It is NOT the
 #     release key, which is generated separately for b8/b9 and never lives on the build host.
 #   - Public key (avbtool extract_public_key, the future avb_custom_key blob):
@@ -23,7 +24,7 @@
 #     enforcing restart instead of being silently ignored.
 PHONEVAULT_AVB_KEY := vendor/phonevault/keys/avb_bluejay_dev.pem
 ifeq ($(wildcard $(PHONEVAULT_AVB_KEY)),)
-$(error rung b1: $(PHONEVAULT_AVB_KEY) missing; link it to the dev key in /home/aipg/.phonevault-keys/avb (dev-ladder-bluejay/README.md))
+$(error rung b1: $(PHONEVAULT_AVB_KEY) missing; re-run sync-rung.sh with PV_AVB_KEY_DIR set to the directory holding phonevault_bluejay_avb_DEV_rsa4096.pem (dev-ladder-bluejay/README.md))
 endif
 PHONEVAULT_AVB_ALGORITHM := SHA256_RSA4096
 

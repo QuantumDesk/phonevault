@@ -3,22 +3,35 @@
 # bluejay rung's deviations. Never touches the crosshatch lineage-22.2 tree.
 #   sync-rung.sh RUNG [TREE] [APK] [KERNEL_DIST]
 #     RUNG         b0, b1, … (directory dev-ladder-bluejay/rung-RUNG)
-#     TREE         default /build/lineage-24 (the real path; /root/lineage-24 is a symlink)
+#     TREE         the LineageOS 24.0 bluejay source tree (default: $LINEAGE_TREE)
 #     APK          signer APK to bake as vendor/phonevault/prebuilt/PhoneVault.apk
-#     KERNEL_DIST  Kleaf dist dir, default /build/gs-6.1-kernel/out/bluejay/dist
-# Run as the tree owner (aipg). Development images only. See dev-ladder-bluejay/README.md.
+#     KERNEL_DIST  Kleaf dist dir (default: $PV_KERNEL_DIST); without one, the kernel prebuilts
+#                  already in the tree are kept
+# Environment:
+#     PV_DEV_ADB_KEY  required: your adb public key, pre-authorised on the dev image
+#     PV_AVB_KEY_DIR  rungs b1+: directory holding phonevault_bluejay_avb_DEV_rsa4096.pem; linked
+#                     into the tree as vendor/phonevault/keys/avb_bluejay_dev.pem (needed unless
+#                     that link already exists)
+# Run as the tree owner. Development images only. See dev-ladder-bluejay/README.md.
 set -euo pipefail
 
 RUNG="${1:?rung (b0, b1, …)}"
-TREE="${2:-/build/lineage-24}"
+TREE="${2:-${LINEAGE_TREE:?usage: sync-rung.sh RUNG TREE [APK] [KERNEL_DIST] (or set LINEAGE_TREE)}}"
 APK="${3:-}"
-KDIST="${4:-/build/gs-6.1-kernel/out/bluejay/dist}"
+KDIST="${4:-${PV_KERNEL_DIST:-}}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 OVERLAY="${ROOT}/vault-os"
 RUNG_DIR="${OVERLAY}/dev-ladder-bluejay/rung-${RUNG}"
 [[ -d "${RUNG_DIR}" ]] || { echo "no such rung: ${RUNG_DIR}" >&2; exit 2; }
 [[ -d "${TREE}/build" && -d "${TREE}/device/google/bluejay" ]] \
   || { echo "not a Lineage bluejay tree: ${TREE}" >&2; exit 2; }
+
+# Every dev rung pre-authorises the builder's adb host (common.mk PRODUCT_ADB_KEYS). The key is
+# the builder's own and is never committed: PV_DEV_ADB_KEY names their adb public key.
+ADB_PUBKEY="${PV_DEV_ADB_KEY:?set PV_DEV_ADB_KEY to your adb public key (e.g. ~/.android/adbkey.pub)}"
+[[ -s "${ADB_PUBKEY}" ]] || { echo "PV_DEV_ADB_KEY: no such file: ${ADB_PUBKEY}" >&2; exit 2; }
+grep -q '^QAAAA' "${ADB_PUBKEY}" \
+  || { echo "PV_DEV_ADB_KEY: not an adb public key (expected adbkey.pub format): ${ADB_PUBKEY}" >&2; exit 2; }
 
 echo "== release product → tree (bluejay only)"
 mkdir -p "${TREE}/device/phonevault/bluejay" "${TREE}/vendor/phonevault"
@@ -30,13 +43,28 @@ rsync -a --delete "${OVERLAY}/device/phonevault/bluejay/" "${TREE}/device/phonev
 rsync -a --delete --exclude 'keys/' --exclude 'prebuilt/PhoneVault.apk' \
   "${OVERLAY}/vendor/phonevault/" "${TREE}/vendor/phonevault/"
 
+# b1+ sign vbmeta and every chained partition with the builder's bluejay AVB development key
+# (BoardConfigVault.mk PHONEVAULT_AVB_KEY). The private key never enters the repo or the synced
+# tree: only a symlink to it does.
+if [[ "${RUNG}" != b0 ]]; then
+  AVB_LINK="${TREE}/vendor/phonevault/keys/avb_bluejay_dev.pem"
+  if [[ -n "${PV_AVB_KEY_DIR:-}" ]]; then
+    avb_key="${PV_AVB_KEY_DIR}/phonevault_bluejay_avb_DEV_rsa4096.pem"
+    [[ -r "${avb_key}" ]] || { echo "PV_AVB_KEY_DIR: cannot read ${avb_key}" >&2; exit 2; }
+    mkdir -p "$(dirname "${AVB_LINK}")"
+    ln -sfn "${avb_key}" "${AVB_LINK}"
+  fi
+  [[ -r "${AVB_LINK}" ]] || { echo "rung ${RUNG} needs the bluejay AVB development key: set" \
+    "PV_AVB_KEY_DIR to the directory holding phonevault_bluejay_avb_DEV_rsa4096.pem" >&2; exit 2; }
+  echo "   AVB dev key: vendor/phonevault/keys/avb_bluejay_dev.pem -> $(readlink "${AVB_LINK}" || echo "${AVB_LINK}")"
+fi
+
 echo "== rung ${RUNG} deviations"
 declare -A TARGET=(
   [common.mk]="vendor/phonevault/config/common.mk"
   [BoardConfigVault.mk]="vendor/phonevault/config/BoardConfigVault.mk"
   [Android.bp]="vendor/phonevault/prebuilt/Android.bp"
   [config.xml]="vendor/phonevault/overlay/frameworks/base/core/res/res/values/config.xml"
-  [debug_adbkey.pub]="vendor/phonevault/config/debug_adbkey.pub"
 )
 for name in "${!TARGET[@]}"; do
   if [[ -f "${RUNG_DIR}/${name}" ]]; then
@@ -46,6 +74,8 @@ for name in "${!TARGET[@]}"; do
     echo "   release : ${TARGET[$name]}"
   fi
 done
+install -m 0644 "${ADB_PUBKEY}" "${TREE}/vendor/phonevault/config/debug_adbkey.pub"
+echo "   dev adb key: vendor/phonevault/config/debug_adbkey.pub (from PV_DEV_ADB_KEY)"
 
 # Upstream trees: each rung carries exactly its own edits. Every tree below is restored to
 # upstream (tracked files only: the kernel dir's untracked Kleaf dist and vendor/google/bluejay's
@@ -110,7 +140,7 @@ if [[ -d "${KDIST}" ]]; then
   echo "   kernel dist → bluejay-kernels/6.1 ($(ls "${KDIR}"/*.ko | wc -l) modules," \
     "boot.img $(sha256sum "${KDIR}/boot.img" | cut -c1-16)…)"
 else
-  [[ -s "${KDIR}/boot.img" ]] || { echo "no kernel dist (${KDIST}) and no boot.img in ${KDIR}" >&2; exit 1; }
+  [[ -s "${KDIR}/boot.img" ]] || { echo "no kernel dist (pass KERNEL_DIST or set PV_KERNEL_DIST) and no boot.img in ${KDIR}" >&2; exit 1; }
   echo "   kernel: keeping existing prebuilts in bluejay-kernels/6.1"
 fi
 

@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # Build one bluejay rung on the native build box: target-files → firmware-free fastboot image zip
 # plus the loose images, with SHA256SUMS.
-#   build-rung.sh RUNG [TREE] [OUT]
-#     TREE default /build/lineage-24, OUT default /build/out-RUNG
-# Run as the tree owner (aipg), after sync-rung.sh. No `set -u`: envsetup/lunch use unset vars.
+#   build-rung.sh RUNG [TREE] [DEST]
+#     TREE  the synced LineageOS 24.0 bluejay tree (default: $LINEAGE_TREE)
+#     DEST  where the images, target files and checksums go (default: $PV_RUNG_OUT_ROOT/out-RUNG)
+# Run as the tree owner, after sync-rung.sh. No `set -u`: envsetup/lunch use unset vars.
 set -o pipefail
 RUNG="${1:?rung}"
-TREE="${2:-/build/lineage-24}"
-PV_DEST="${3:-/build/out-${RUNG}}"     # lunch exports OUT/OUT_DIR: never reuse those names
+TREE="${2:-${LINEAGE_TREE:-}}"
+PV_DEST="${3:-${PV_RUNG_OUT_ROOT:+${PV_RUNG_OUT_ROOT}/out-${RUNG}}}"  # lunch exports OUT/OUT_DIR: never reuse those names
+[[ -n "${TREE}" ]] || { echo "usage: build-rung.sh RUNG TREE [DEST] (or set LINEAGE_TREE)" >&2; exit 2; }
+[[ -n "${PV_DEST}" ]] || { echo "usage: build-rung.sh RUNG TREE DEST (or set PV_RUNG_OUT_ROOT)" >&2; exit 2; }
 JOBS="${PV_JOBS:-24}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${TREE}" || exit 9

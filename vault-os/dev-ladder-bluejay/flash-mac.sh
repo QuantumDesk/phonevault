@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Flash one bluejay rung to SLOT A of an unlocked Pixel 6a from macOS, from the BOOTLOADER only.
-# build-rung.sh installs this as /build/out-<rung>/flash-<rung>-mac.sh next to images/ and
+# build-rung.sh installs this as <DEST>/flash-<rung>-mac.sh next to images/ and
 # super.img; copy the whole out directory to the Mac and run it from there:
 #   ./flash-b1-mac.sh            pre-flight, verify hashes, ask, flash, wipe, set slot a, reboot
 #   ./flash-b1-mac.sh --check    pre-flight + hashes only, writes nothing

@@ -15,8 +15,15 @@ PRODUCT_PROPERTY_OVERRIDES += \
     ro.adb.secure=0 \
     persist.adb.notify=0
 
-# Pre-authorised dev hosts: the build box (root@cachy-mac) and the owner's Mac.
-PRODUCT_ADB_KEYS := vendor/phonevault/config/debug_adbkey.pub
+# --- development only: pre-authorise the builder's adb host ---
+# PV_DEV_ADB_KEY: the builder's adb public key (adb's adbkey.pub). The rung sync script requires it
+# and installs it at the in-tree default below; an absolute path in the build environment works
+# too. The release config never carries adb keys (verify-release-source.sh refuses them).
+PV_DEV_ADB_KEY ?= vendor/phonevault/config/debug_adbkey.pub
+ifeq ($(wildcard $(PV_DEV_ADB_KEY)),)
+$(error PV_DEV_ADB_KEY: no adb public key at '$(PV_DEV_ADB_KEY)'; set PV_DEV_ADB_KEY to your adb public key (absolute path) and re-run the rung sync)
+endif
+PRODUCT_ADB_KEYS := $(PV_DEV_ADB_KEY)
 
 # --- Phone Vault branding ---
 # The resource overlay is added by device/phonevault/bluejay/vault_bluejay.mk ahead of its
