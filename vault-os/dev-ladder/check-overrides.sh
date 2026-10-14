@@ -3,7 +3,7 @@
 # Android.bp `overrides` list must be absent from the built target-files, as an app
 # (<PARTITION>/app|priv-app/<name>/) or an overlay (<PARTITION>/overlay/<name>.apk or
 # overlay/<name>/, or the app's auto-generated RRO). Run on the build box after build-rung.sh, before sideloading:
-#   check-overrides.sh RUNG|release [target_files.zip]
+#   check-overrides.sh RUNG|release [target_files.zip]   (default: newest in $LINEAGE_TREE/out)
 # Exit 1 lists the survivors. An override can be silently defeated when another installed module
 # names the target in `required` (that is how Trebuchet survived on 2026-09-13), so this is the
 # proof a rung did what its Android.bp says. Also prints the APKs that remain, for the README.
@@ -20,7 +20,12 @@ else
   BP="${ROOT}/vault-os/dev-ladder/rung-${RUNG}/Android.bp"
 fi
 [[ -f "${BP}" ]] || { echo "no Android.bp for rung ${RUNG}" >&2; exit 2; }
-TF="${2:-$(ls -t "${PV_TREE:-/root/lineage-src}"/out/target/product/crosshatch/obj/PACKAGING/target_files_intermediates/*target_files*.zip | head -1)}"
+if [[ -n "${2:-}" ]]; then
+  TF="$2"
+else
+  : "${LINEAGE_TREE:?pass the target_files.zip, or set LINEAGE_TREE to the crosshatch source tree}"
+  TF="$(ls -t "${LINEAGE_TREE}"/out/target/product/crosshatch/obj/PACKAGING/target_files_intermediates/*target_files*.zip | head -1)"
+fi
 [[ -s "${TF}" ]] || { echo "target-files not found: ${TF}" >&2; exit 2; }
 echo "rung ${RUNG}: ${TF}"
 python3 - "${BP}" "${TF}" <<'EOF'

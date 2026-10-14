@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Build one ladder rung on the native build box: target-files → OTA zip.
 #   build-rung.sh RUNG [insecure-adb=1]
-# Runs as the tree owner (never root). Output: $PV_OUT_DIR/rung-RUNG-ota.zip.
+# Runs as the tree owner (never root). Tree: $LINEAGE_TREE (required). Output:
+# $PV_OUT_DIR/rung-RUNG-ota.zip ($PV_OUT_DIR defaults to the tree owner's home).
 # No `set -u`: build/envsetup.sh and lunch reference unset variables by design.
 set -o pipefail
 RUNG="${1:?rung}"
 INSECURE="${2:-1}"
-TREE="${PV_TREE:-/root/lineage-src}"
+TREE="${LINEAGE_TREE:?set LINEAGE_TREE to the LineageOS 22.2 crosshatch source tree}"
 # NOTE: lunch exports OUT and OUT_DIR itself — never reuse those names here.
 PV_OTA_DIR="${PV_OUT_DIR:-${HOME}}"   # the tree owner's home: this script must run as the tree owner
 PV_OTA="${PV_OTA_DIR}/rung-${RUNG}-ota.zip"
