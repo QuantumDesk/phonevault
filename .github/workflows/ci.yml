@@ -169,3 +169,7 @@ jobs:
           exit "${fail}"
       - name: Forbidden-policy coverage
         run: python3 vault-os/tests/test_forbidden_policy_coverage.py
+      - name: Gate modules compile (vault-os/scripts/**/*.py)
+        run: git ls-files -z 'vault-os/scripts/*.py' | xargs -0 python3 -m py_compile
+      - name: Gate module unit tests (vault-os/tests/test_*.py)
+        run: python3 -m unittest discover -s vault-os/tests -p 'test_*.py' -v
