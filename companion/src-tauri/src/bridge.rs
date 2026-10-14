@@ -333,9 +333,7 @@ pub struct Site {
 impl Site {
     fn valid(&self) -> bool {
         normalize_origin(&self.origin).as_deref() == Ok(self.origin.as_str())
-            && self.address.len() == 42
-            && self.address.starts_with("0x")
-            && self.address[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            && verify::is_address(&self.address)
             && !self.chains.is_empty()
             && self.chains.iter().all(|c| wc::chain_allowed(*c))
             && self.chains.contains(&self.active)
@@ -1348,11 +1346,7 @@ fn proxy_call(
     params: &Value,
 ) -> Result<(Value, Option<u64>), Value> {
     let fail = |m: String| json!({"code": wc::INTERNAL, "message": m});
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| fail(e.to_string()))?;
+    let client = crate::http::client(Duration::from_secs(20), crate::http::Policy::none()).map_err(fail)?;
     let post = |method: &str, params: &Value| -> Result<Value, Value> {
         let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
         // never the reqwest error text: it contains the node URL, often with the user's API key

@@ -10,6 +10,11 @@ use sha3::{Digest, Keccak256};
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct VerifyError(pub String);
+impl From<VerifyError> for String {
+    fn from(e: VerifyError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> VerifyError {
     VerifyError(m.into())
 }
@@ -297,6 +302,62 @@ pub fn try_checksum(address: &str) -> Option<String> {
     Some(out)
 }
 
+/// What `parse_address` requires of the letters' case.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Case {
+    /// Any case: the shape is all that is checked (node answers, stored files, our own values).
+    Any,
+    /// Typed or pasted by someone: all-lowercase and all-uppercase are accepted, but mixed case
+    /// must be the EIP-55 checksum (a typo guard).
+    ChecksumIfMixed,
+    /// Exactly the EIP-55 casing (the built-in token list).
+    Checksummed,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum AddressError {
+    /// Not `0x` followed by 40 hex digits.
+    Shape,
+    /// The right shape, but the casing breaks the rule asked for.
+    Checksum,
+}
+
+/// `0x` + 40 hex digits (lowercase `0x` only), with the casing rule `case`; the address in
+/// lowercase. Never panics. The zero address is the caller's decision.
+#[deny(clippy::indexing_slicing)]
+pub fn parse_address(s: &str, case: Case) -> Result<String, AddressError> {
+    let body = s.strip_prefix("0x").filter(|h| h.len() == 40 && h.bytes().all(|b| b.is_ascii_hexdigit()));
+    let body = body.ok_or(AddressError::Shape)?;
+    let mixed = body.bytes().any(|b| b.is_ascii_uppercase()) && body.bytes().any(|b| b.is_ascii_lowercase());
+    let casing_ok = match case {
+        Case::Any => true,
+        Case::ChecksumIfMixed => !mixed || checksum(s) == s,
+        Case::Checksummed => checksum(s) == s,
+    };
+    if !casing_ok {
+        return Err(AddressError::Checksum);
+    }
+    Ok(s.to_ascii_lowercase())
+}
+
+/// `0x` + 40 hex (any case).
+pub fn is_address(s: &str) -> bool {
+    parse_address(s, Case::Any).is_ok()
+}
+
+/// A recipient the user typed (Send, token send): trimmed, `0x` + 40 hex, not the zero address,
+/// and if written in mixed case a valid EIP-55 checksum (typo guard). Lowercase.
+pub fn recipient(to: &str) -> Result<String, String> {
+    let a = parse_address(to.trim(), Case::ChecksumIfMixed).map_err(|e| match e {
+        AddressError::Shape => "recipient must be a 0x address with 40 hex characters",
+        AddressError::Checksum => "recipient address fails its checksum — one character is wrong",
+    })?;
+    if a.bytes().skip(2).all(|b| b == b'0') {
+        return Err("refusing the zero address".into());
+    }
+    Ok(a)
+}
+
 /// EIP-55 checksum casing, for display only. Never panics: input that is not `0x` + 40 hex (which
 /// callers validate first; a node or dApp may still send anything) comes back unchanged.
 pub fn checksum(address: &str) -> String {
@@ -401,7 +462,7 @@ pub fn decode_erc20_transfer(data: &str) -> Result<(String, u128), VerifyError> 
     if body.len() != 136 || !body.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(err("calldata is not exactly transfer(address,uint256): wrong length"));
     }
-    if &body[..8] != "a9059cbb" {
+    if &body[..8] != crate::abi::SEL_TRANSFER {
         return Err(err("calldata is not transfer(address,uint256)"));
     }
     if !body[8..32].bytes().all(|b| b == b'0') {
@@ -549,6 +610,36 @@ mod tests {
             checksum("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"),
             "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed"
         );
+    }
+    #[test]
+    fn address_case_rules() {
+        use AddressError::{Checksum, Shape};
+        let lower = "0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaed";
+        let good = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAed";
+        let bad = "0x5aAeb6053F3E94C9b9A09f33669435E7Ef1BeAeD";
+        let upper = "0x5AAEB6053F3E94C9B9A09F33669435E7EF1BEAED";
+        let p = parse_address;
+        for case in [Case::Any, Case::ChecksumIfMixed, Case::Checksummed] {
+            assert_eq!(p(good, case), Ok(lower.to_string()));
+            for s in
+                ["", "0x", "5aaeb6053f3e94c9b9a09f33669435e7ef1beaed", "0X5aaeb6053f3e94c9b9a09f33669435e7ef1beaed"]
+            {
+                assert_eq!(p(s, case), Err(Shape), "{s}");
+            }
+            assert_eq!(p(&format!("{lower}0"), case), Err(Shape));
+            assert_eq!(p("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaeg", case), Err(Shape));
+            assert_eq!(p("0x5aaeb6053f3e94c9b9a09f33669435e7ef1beaé", case), Err(Shape));
+        }
+        assert_eq!(p(bad, Case::Any), Ok(lower.to_string()));
+        assert_eq!(p(bad, Case::ChecksumIfMixed), Err(Checksum));
+        assert_eq!(p(lower, Case::ChecksumIfMixed), Ok(lower.to_string()));
+        assert_eq!(p(upper, Case::ChecksumIfMixed), Ok(lower.to_string()));
+        assert_eq!(p(lower, Case::Checksummed), Err(Checksum));
+        assert_eq!(p(upper, Case::Checksummed), Err(Checksum));
+        assert_eq!(recipient(&format!(" {good} ")), Ok(lower.to_string()));
+        assert!(recipient(bad).unwrap_err().contains("checksum"));
+        assert!(recipient("0x0000000000000000000000000000000000000000").unwrap_err().contains("zero"));
+        assert!(recipient("0x12").unwrap_err().contains("40 hex"));
     }
     #[test]
     fn quantities_are_canonical() {

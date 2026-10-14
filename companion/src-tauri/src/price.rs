@@ -12,8 +12,8 @@ static CACHE: Mutex<Option<HashMap<String, (Instant, f64)>>> = Mutex::new(None);
 
 fn fetch(symbol: &str) -> Result<f64, String> {
     let url = format!("https://api.coinbase.com/v2/prices/{symbol}-USD/spot");
-    let client =
-        reqwest::blocking::Client::builder().timeout(Duration::from_secs(6)).build().map_err(|e| e.to_string())?;
+    // Display only, so redirects are followed (reqwest's default policy, at most 10).
+    let client = crate::http::client(Duration::from_secs(6), crate::http::Policy::limited(10))?;
     let v: Value = client
         .get(url)
         .send()

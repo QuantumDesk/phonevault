@@ -20,14 +20,14 @@
 //! simulation in this session reverted. Uncertainty (the node could not simulate at all) only asks
 //! the user to confirm ("Send anyway").
 
-use crate::{blocking, eth, pairing, tokens, verify, CmdResult, Quote};
+use crate::{blocking, chains, eth, pairing, tokens, verify, CmdResult, Quote};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-const TRANSFER: &str = "ddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+use crate::abi::TRANSFER_EVENT as TRANSFER;
 const TRANSFER_SINGLE: &str = "c3d58168c5ae7397731d063d5bbf3d657854427343f4c083240f7aacaa2d0f62";
 const TRANSFER_BATCH: &str = "4a39dc06d4c0dbc64b70af90fd698a233a518aa5d07e595d983b8c0526c8f7fb";
 const DEPOSIT: &str = "e1fffcc4923d04b559f4d29a8bfc6cda04eb5b0d3c460751c2402c5c5cc9109c";
@@ -44,22 +44,7 @@ const FRESH: Duration = Duration::from_secs(600);
 /// The canonical wrapped native coin per chain: its Deposit/Withdrawal events move the wallet's
 /// wrapped balance without a Transfer log (WETH9 does not emit one).
 fn wrapped_native(chain: u64) -> Option<&'static str> {
-    match chain {
-        1 => Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
-        8453 | 10 => Some("0x4200000000000000000000000000000000000006"),
-        42161 => Some("0x82af49447d8a07e3bd95bd0d56f35241523fbab1"),
-        137 => Some("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),
-        11155111 => Some("0xfff9976782d46cc05630d1f6ebab18b2324d6b14"),
-        _ => None,
-    }
-}
-
-fn native_symbol(chain: u64) -> &'static str {
-    if chain == 137 {
-        "POL"
-    } else {
-        "ETH"
-    }
+    chains::get(chain).map(|c| c.wrapped_native)
 }
 
 // ---------------------------------------------------------------- 256-bit amounts
@@ -229,26 +214,14 @@ type Key = (String, Option<U256>);
 fn strip(h: &str) -> &str {
     h.strip_prefix("0x").unwrap_or(h)
 }
-/// `0x` + 40 hex (any case), the only log `address` this reads.
-fn is_address(a: &str) -> bool {
-    a.len() == 42 && a.starts_with("0x") && a.bytes().skip(2).all(|b| b.is_ascii_hexdigit())
-}
 #[deny(clippy::indexing_slicing)]
+/// An address topic, with or without `0x`.
 fn topic_address(t: &str) -> Option<String> {
-    let t = strip(t);
-    if t.len() != 64 || !t.bytes().all(|b| b.is_ascii_hexdigit()) {
-        return None;
-    }
-    let (pad, addr) = (t.get(..24)?, t.get(24..)?);
-    if !pad.bytes().all(|b| b == b'0') {
-        return None;
-    }
-    Some(format!("0x{}", addr.to_ascii_lowercase()))
+    crate::abi::address_of_word_hex(strip(t))
 }
 #[deny(clippy::indexing_slicing)]
 fn word(bytes: &[u8], i: usize) -> Option<U256> {
-    let start = i.checked_mul(32)?;
-    U256::from_be(bytes.get(start..start.checked_add(32)?)?)
+    U256::from_be(crate::abi::word_at(bytes, i.checked_mul(32)?)?)
 }
 fn word_usize(bytes: &[u8], i: usize) -> Option<usize> {
     word(bytes, i)?.to_u128().and_then(|v| usize::try_from(v).ok())
@@ -295,7 +268,8 @@ fn credit(
 fn apply_log(map: &mut BTreeMap<Key, Flow>, log: &Value, wallet: &str, chain: u64) -> Result<(), String> {
     // the node's answer is untrusted: a log from something that is not an address is ignored
     let address = match log.get("address").and_then(Value::as_str) {
-        Some(a) if is_address(a) => a.to_ascii_lowercase(),
+        // `0x` + 40 hex (any case), the only log `address` this reads
+        Some(a) if verify::is_address(a) => a.to_ascii_lowercase(),
         _ => return Ok(()),
     };
     let topics: Vec<String> = log
@@ -384,7 +358,7 @@ fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256
     let raw = magnitude.to_decimal();
     let delta = if negative { format!("-{raw}") } else { raw.clone() };
     if asset == "native" {
-        let sym = native_symbol(chain);
+        let sym = chains::native_symbol(chain);
         return Change {
             asset: asset.into(),
             token_id: None,
@@ -554,7 +528,8 @@ pub fn interpret_simulate_v1(
     if let Some(e) = resp.get("error") {
         if is_insufficient_funds(e) {
             let mut s = Simulation::new("reverts", "eth_simulateV1", node, block);
-            s.reason = Some(format!("not enough {} for the amount ({})", native_symbol(tx.chain), error_text(e)));
+            s.reason =
+                Some(format!("not enough {} for the amount ({})", chains::native_symbol(tx.chain), error_text(e)));
             return Some(s);
         }
         return None;
@@ -593,7 +568,7 @@ pub fn interpret_simulate_v1(
     }
     s.fee_wei = Some(fee.to_string());
     s.gas_used = Some(gas_used.to_string());
-    if matches!(tx.chain, 8453 | 10 | 42161) {
+    if chains::has_l1_data_fee(u128::from(tx.chain)) {
         s.note = Some("Plus a small L1 data fee the simulation does not include.".into());
     }
     s.for_phone = s.changes.len() <= MAX_CLAIM_CHANGES;
@@ -618,7 +593,8 @@ pub fn interpret_fallback(
     if let Some(e) = call.get("error") {
         if is_insufficient_funds(e) {
             let mut s = Simulation::new("reverts", "eth_call", node, block);
-            s.reason = Some(format!("not enough {} for the amount ({})", native_symbol(tx.chain), error_text(e)));
+            s.reason =
+                Some(format!("not enough {} for the amount ({})", chains::native_symbol(tx.chain), error_text(e)));
             return s;
         }
         if is_revert(e) {
@@ -823,9 +799,9 @@ fn tx_of(q: &Quote, from: &str) -> Result<Tx, String> {
 pub(crate) async fn simulate(rpc_url: String, quote: Quote) -> CmdResult<Simulation> {
     blocking(move || {
         // Always the ACTIVE paired account: the one the phone will be asked to sign with (`from`).
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or("not paired yet")?;
         let tx = tx_of(&quote, &from)?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
         let node = node_label(&rpc_url);
         let sim = match rpc.chain_id() {
             Ok(c) if c == tx.chain as u128 => run(&rpc, &tx, &node),

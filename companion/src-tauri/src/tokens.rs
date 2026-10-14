@@ -7,6 +7,7 @@
 //! only, and a transfer is built here from the list entry, re-checked in `send::sign_start`, and
 //! re-decoded from the signed bytes by `verify::check_erc20_transfer` before it can be broadcast.
 
+use crate::abi::{self, SEL_BALANCE_OF, SEL_TRANSFER};
 use crate::{blocking, eth, pairing, verify, CmdResult, Quote};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -15,10 +16,6 @@ use std::sync::OnceLock;
 /// SHA-256 of `app/src/main/res/raw/tokens.json`. Must equal `TokenList.PINNED_SHA256` (tested).
 pub const PINNED_SHA256: &str = "1021c5c5be1393df34c089d79e48aada223c6517ab03e70035efd0132e081506";
 const LIST_BYTES: &[u8] = include_bytes!("../../../app/src/main/res/raw/tokens.json");
-pub const ALLOWED_CHAINS: [u64; 6] = [1, 11155111, 8453, 10, 42161, 137];
-
-const SEL_TRANSFER: &str = "a9059cbb";
-const SEL_BALANCE_OF: &str = "70a08231";
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -50,19 +47,18 @@ fn parse_list(bytes: &[u8]) -> Result<Vec<Token>, String> {
     let mut seen = std::collections::HashSet::new();
     for (i, t) in file.tokens.iter().enumerate() {
         let w = format!("token #{i}");
-        if !ALLOWED_CHAINS.contains(&t.chain_id) {
+        if !crate::chains::allowed(t.chain_id) {
             return Err(format!("{w}: chain {} is not in the phone's allow-list", t.chain_id));
         }
-        let a = &t.address;
-        if a.len() != 42
-            || !a.starts_with("0x")
-            || !a[2..].bytes().all(|b| b.is_ascii_hexdigit())
-            || a[2..].bytes().all(|b| b == b'0')
-        {
+        let a = match verify::parse_address(&t.address, verify::Case::Checksummed) {
+            Ok(a) => a,
+            Err(verify::AddressError::Shape) => return Err(format!("{w}: bad address")),
+            Err(verify::AddressError::Checksum) => {
+                return Err(format!("{w}: address is not in EIP-55 checksum casing"))
+            }
+        };
+        if a.bytes().skip(2).all(|b| b == b'0') {
             return Err(format!("{w}: bad address"));
-        }
-        if verify::checksum(a) != *a {
-            return Err(format!("{w}: address is not in EIP-55 checksum casing"));
         }
         if t.symbol.is_empty() || t.symbol.len() > 11 || !t.symbol.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(format!("{w}: bad symbol"));
@@ -153,11 +149,10 @@ pub fn parse_units(text: &str, decimals: u32) -> Result<u128, String> {
 }
 
 fn word_address(address: &str) -> Result<String, String> {
-    let a = address.trim().to_ascii_lowercase();
-    if a.len() != 42 || !a.starts_with("0x") || !a[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("bad address".into());
-    }
-    Ok(format!("{:0>64}", &a[2..]))
+    // lowercased first: a "0X" prefix is accepted here
+    let a = verify::parse_address(&address.trim().to_ascii_lowercase(), verify::Case::Any)
+        .map_err(|_| "bad address".to_string())?;
+    Ok(abi::address_word_hex(&a))
 }
 
 /// `transfer(address,uint256)` calldata, lower-case 0x hex (exactly the phone's canonical form).
@@ -174,10 +169,7 @@ pub fn parse_balance_word(ret: &[u8]) -> Result<u128, String> {
     if ret.len() != 32 {
         return Err(format!("balanceOf returned {} bytes, expected 32", ret.len()));
     }
-    if ret[..16].iter().any(|&b| b != 0) {
-        return Err("balance is too large to display".into());
-    }
-    Ok(u128::from_be_bytes(ret[16..].try_into().unwrap()))
+    abi::u128_of_word(ret).ok_or_else(|| "balance is too large to display".to_string())
 }
 
 // ---------------------------------------------------------------- what the UI sent: re-checked
@@ -198,7 +190,7 @@ pub struct TokenIntent {
 /// listed on the quote's chain with the same symbol/decimals, `to` is that contract, no native
 /// value, and `data` is exactly transfer(recipient, amount). Returns (contract, recipient, amount).
 pub fn check_quote(quote: &Quote, t: &TokenIntent) -> Result<(String, String, u128), String> {
-    let chain = verify::quantity(&quote.chain_id).map_err(|e| e.0)?;
+    let chain = verify::quantity(&quote.chain_id)?;
     let chain = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;
     let listed = lookup(chain, &t.contract).ok_or("the token is not in the built-in list for this network")?;
     if listed.symbol != t.symbol || listed.decimals != t.decimals || listed.name != t.name {
@@ -208,7 +200,7 @@ pub fn check_quote(quote: &Quote, t: &TokenIntent) -> Result<(String, String, u1
     if quote.to.to_ascii_lowercase() != contract {
         return Err("the transaction is not addressed to the token contract".into());
     }
-    if verify::quantity(&quote.value).map_err(|e| e.0)? != 0 {
+    if verify::quantity(&quote.value)? != 0 {
         return Err("a token transfer must not send ETH".into());
     }
     let amount: u128 = t.amount_raw.parse().map_err(|_| "bad token amount".to_string())?;
@@ -249,15 +241,15 @@ pub struct TokenBalances {
 #[tauri::command]
 pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> {
     blocking(move || {
-        let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         let data = balance_of_calldata(&owner)?;
         let balances = list()?
             .iter()
             .filter(|t| t.chain_id as u128 == chain)
             .map(|t| {
-                let r = rpc.eth_call(&t.address, &data).map_err(|e| e.0).and_then(|ret| parse_balance_word(&ret));
+                let r = rpc.eth_call(&t.address, &data).map_err(String::from).and_then(|ret| parse_balance_word(&ret));
                 let (raw, amount, error) = match r {
                     Ok(v) => (Some(v.to_string()), Some(format_units(v, t.decimals)), None),
                     Err(e) => (None, None, Some(e)),
@@ -278,34 +270,17 @@ pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> 
     .await
 }
 
-/// Same recipient rules as `quote` (lib.rs).
-fn check_recipient(to: &str) -> Result<String, String> {
-    let t = to.trim();
-    if t.len() != 42 || !t.starts_with("0x") || !t[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("recipient must be a 0x address with 40 hex characters".into());
-    }
-    if t[2..].bytes().all(|b| b == b'0') {
-        return Err("refusing the zero address".into());
-    }
-    if t[2..].bytes().any(|b| b.is_ascii_uppercase())
-        && t[2..].bytes().any(|b| b.is_ascii_lowercase())
-        && verify::checksum(t) != t
-    {
-        return Err("recipient address fails its checksum — one character is wrong".into());
-    }
-    Ok(t.to_ascii_lowercase())
-}
-
 /// Quote an ERC-20 transfer of `amount` (token units) of the listed `token` to `to`.
 #[tauri::command]
 pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amount: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let recipient = check_recipient(&to)?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let from = pairing::load()?.ok_or("not paired yet")?;
+        // same recipient rules as `quote` (lib.rs)
+        let recipient = verify::recipient(&to)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         let chain64 = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;
-        if !ALLOWED_CHAINS.contains(&chain64) {
+        if !crate::chains::allowed(chain64) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
         }
         let t = lookup(chain64, &token).ok_or("that token is not in the built-in list for this network")?;
@@ -317,14 +292,14 @@ pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amou
         if value == 0 {
             return Err("amount must be more than zero".into());
         }
-        let held = parse_balance_word(&rpc.eth_call(&contract, &balance_of_calldata(&from)?).map_err(|e| e.0)?)?;
+        let held = parse_balance_word(&rpc.eth_call(&contract, &balance_of_calldata(&from)?)?)?;
         if value > held {
             return Err(format!("not enough {}: {} {} available", t.symbol, format_units(held, t.decimals), t.symbol));
         }
         let data = transfer_calldata(&recipient, value)?;
-        let eth_balance = rpc.balance(&from).map_err(|e| e.0)?;
-        let nonce = rpc.nonce(&from).map_err(|e| e.0)?;
-        let (priority, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let eth_balance = rpc.balance(&from)?;
+        let nonce = rpc.nonce(&from)?;
+        let (priority, max_fee) = rpc.fees()?;
         let estimate = rpc
             .estimate_gas_data(&from, &contract, 0, &data)
             .map_err(|e| format!("the node says this transfer would fail: {}", e.0))?;
@@ -387,7 +362,7 @@ mod tests {
         assert_eq!(java_pin, PINNED_SHA256, "phone and companion pins differ");
         let l = list().unwrap();
         assert_eq!(l.len(), 30);
-        for chain in ALLOWED_CHAINS {
+        for chain in crate::chains::IDS {
             assert!(l.iter().any(|t| t.chain_id == chain && t.symbol == "USDC" && t.decimals == 6), "USDC on {chain}");
         }
         let usdc = lookup(1, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();

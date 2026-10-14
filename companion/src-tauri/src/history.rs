@@ -93,12 +93,12 @@ impl Entry {
 }
 
 fn path(owner: &str) -> Result<PathBuf, String> {
-    pairing::account_file("history", owner).map_err(|e| e.0)
+    pairing::account_file("history", owner).map_err(String::from)
 }
 
 /// The account the Mac shows (pairing::load).
 fn active_owner() -> Result<String, String> {
-    pairing::load().map_err(|e| e.0)?.ok_or_else(|| "not paired yet".to_string())
+    pairing::load()?.ok_or_else(|| "not paired yet".to_string())
 }
 
 pub fn now() -> u64 {
@@ -148,7 +148,7 @@ fn update_for(owner: &str, f: impl FnOnce(&mut Vec<Entry>)) -> Result<Vec<Entry>
 
 /// The history of the account the Mac shows (empty when nothing is paired).
 pub fn list() -> Result<Vec<Entry>, String> {
-    match pairing::load().map_err(|e| e.0)? {
+    match pairing::load()? {
         Some(owner) => list_for(&owner),
         None => Ok(Vec::new()),
     }
@@ -290,18 +290,18 @@ pub fn reconcile(rpc: &eth::Rpc, chain_id: u128, owner: &str) -> Result<bool, St
     let mut unmined: Vec<(u128, String)> = Vec::new();
     for x in &pending {
         let (hash, nonce) = (x.hash.clone().unwrap_or_default(), x.nonce.unwrap_or(u128::MAX));
-        match rpc.receipt_status(&hash).map_err(|e| e.0)? {
+        match rpc.receipt_status(&hash)? {
             Some((ok, block)) => outcomes.push((nonce, hash, ok, block)),
             None => unmined.push((nonce, hash)),
         }
     }
     // A nonce below the account's mined count with no receipt for any of ours: something else used it.
-    let mined_count = if unmined.is_empty() { 0 } else { rpc.nonce_latest(owner).map_err(|e| e.0)? };
+    let mined_count = if unmined.is_empty() { 0 } else { rpc.nonce_latest(owner)? };
     let mut dropped: Vec<String> = Vec::new();
     for (nonce, hash) in &unmined {
         if *nonce < mined_count && !outcomes.iter().any(|o| o.0 == *nonce) {
             // ask once more: the receipt may have landed between the two calls
-            if rpc.receipt_status(hash).map_err(|e| e.0)?.is_none() {
+            if rpc.receipt_status(hash)?.is_none() {
                 dropped.push(hash.clone());
             }
         }
@@ -349,9 +349,9 @@ pub(crate) async fn history_mark(hash: String, status: String, block: Option<u12
 #[tauri::command]
 pub(crate) async fn history_reconcile(rpc_url: String) -> CmdResult<Vec<Entry>> {
     blocking(move || {
-        let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         reconcile(&rpc, chain, &owner)?;
         list()
     })

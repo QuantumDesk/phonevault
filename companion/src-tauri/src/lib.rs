@@ -2,10 +2,16 @@
 //! the phone, reads balances and fees from a node, hands a transaction to the phone for review,
 //! verifies what comes back independently, and broadcasts only what the user approved on the phone.
 
+// Solidity ABI words, selectors and the Transfer topic (untrusted input: checked, never indexed)
+mod abi;
 mod aoa;
+// the EVM networks: ids, names, native coin, rollup or not, wrapped native, default node
+mod chains;
 // device attestation: is the phone genuine Phone Vault hardware + firmware + app?
 pub mod attest;
 mod eth;
+// every HTTP client: explicit timeout and redirect policy
+mod http;
 mod message;
 mod pairing;
 mod signing;
@@ -14,6 +20,8 @@ mod verify;
 mod history;
 mod price;
 mod send;
+// what the ETH and Bitcoin send flows share: errors, progress, cancel, the exchange with the phone
+mod send_flow;
 // simulate every transaction on the user's node before it goes to the phone (shown as the Mac's claim)
 mod sim;
 // speed up / cancel a stuck transaction: a new transaction with the same nonce, reviewed on the phone
@@ -86,7 +94,7 @@ async fn device_status() -> CmdResult<Status> {
     blocking(|| {
         let phone = aoa::presence().map_err(|e| e.to_string())?;
         attest::note_presence(phone);
-        let p = pairing::list().map_err(|e| e.0)?;
+        let p = pairing::list()?;
         let paired = p.active.clone();
         Ok(Status {
             paired_checksum: paired.as_deref().map(verify::checksum),
@@ -109,6 +117,12 @@ pub(crate) fn pinned_request(mut request: Value, pinned: &str) -> Value {
     request
 }
 
+/// One request to the phone, with no device check of its own (unlike `btc::phone_request`), on
+/// purpose: it is the transport the device check itself uses (`attest::run`), and its other callers
+/// gate where it matters. `read_address` only reads the phone's address; nothing is pinned until
+/// `confirm_pairing` passes `attest::require_pairable` (a passing check for that very address).
+/// `signing::request_signature` calls `attest::require_ok` before asking. The send flows have their
+/// own exchange (`send_flow`) behind the same gates. A new signing caller must gate first.
 fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
     // One conversation with the phone at a time: wait for any other request to finish.
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
@@ -145,11 +159,9 @@ pub(crate) fn parse_address_response(
         return Err("malformed address response".into());
     }
     let addr = obj["address"].as_str().ok_or("no address")?;
-    if addr.len() != 42 || !addr.starts_with("0x") || !addr[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-        return Err("invalid address from phone".into());
-    }
+    let addr = verify::parse_address(addr, verify::Case::Any).map_err(|_| "invalid address from phone")?;
     if !with_account {
-        return Ok((addr.to_ascii_lowercase(), None, None));
+        return Ok((addr, None, None));
     }
     let n = obj["account"]
         .as_str()
@@ -157,7 +169,7 @@ pub(crate) fn parse_address_response(
         .filter(|n| (1..=20).contains(n))
         .ok_or("malformed account number")?;
     let w = obj["wallet"].as_str().filter(|w| *w == "standard" || *w == "passphrase").ok_or("malformed wallet kind")?;
-    Ok((addr.to_ascii_lowercase(), Some(n), Some(w.to_string())))
+    Ok((addr, Some(n), Some(w.to_string())))
 }
 
 /// Ask the phone for its ACTIVE account. Nothing is pinned until the user confirms it against the phone's screen.
@@ -167,7 +179,7 @@ async fn read_address() -> CmdResult<PhoneAccount> {
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "getAddress"});
         let response = ask_phone(request.clone(), Duration::from_secs(30))?;
         let (addr, account, wallet) = parse_address_response(&request, &response)?;
-        let existing = pairing::list().map_err(|e| e.0)?;
+        let existing = pairing::list()?;
         let label = existing
             .find(&addr)
             .map(|p| p.label.clone())
@@ -188,7 +200,7 @@ async fn confirm_pairing(
     // Only an address that a phone which passed the device check attested to in this connection.
     blocking(move || {
         attest::require_pairable(&address)
-            .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(|e| e.0))
+            .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(String::from))
             .map(|p| p.display().to_string())
     })
     .await
@@ -198,7 +210,7 @@ async fn confirm_pairing(
 #[tauri::command]
 async fn select_account(address: String) -> CmdResult<()> {
     blocking(move || {
-        pairing::select(&address).map_err(|e| e.0)?;
+        pairing::select(&address)?;
         watcher::WAKE.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     })
@@ -207,18 +219,18 @@ async fn select_account(address: String) -> CmdResult<()> {
 
 #[tauri::command]
 async fn rename_account(address: String, label: String) -> CmdResult<()> {
-    blocking(move || pairing::rename(&address, &label).map(|_| ()).map_err(|e| e.0)).await
+    blocking(move || pairing::rename(&address, &label).map(|_| ()).map_err(String::from)).await
 }
 
 /// Unpair one account (its local history file stays on disk).
 #[tauri::command]
 async fn forget_account(address: String) -> CmdResult<()> {
-    blocking(move || pairing::remove(&address).map(|_| ()).map_err(|e| e.0)).await
+    blocking(move || pairing::remove(&address).map(|_| ()).map_err(String::from)).await
 }
 
 #[tauri::command]
 async fn forget_pairing() -> CmdResult<()> {
-    blocking(|| pairing::forget().map_err(|e| e.0)).await
+    blocking(|| pairing::forget().map_err(String::from)).await
 }
 
 #[derive(Serialize)]
@@ -233,15 +245,15 @@ struct Wallet {
 #[tauri::command]
 async fn wallet(rpc_url: String) -> CmdResult<Wallet> {
     blocking(move || {
-        let address = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let balance = rpc.balance(&address).map_err(|e| e.0)?;
+        let address = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let balance = rpc.balance(&address)?;
         Ok(Wallet {
             address: verify::checksum(&address),
             balance_wei: balance.to_string(),
             balance_eth: eth::format_eth(balance),
-            chain_id: rpc.chain_id().map_err(|e| e.0)?,
-            block: rpc.block_number().map_err(|e| e.0)?,
+            chain_id: rpc.chain_id()?,
+            block: rpc.block_number()?,
         })
     })
     .await
@@ -273,47 +285,30 @@ struct Quote {
 }
 
 fn network_name(chain: u128) -> String {
-    match chain {
-        1 => "Ethereum Mainnet".into(),
-        11155111 => "Sepolia Testnet".into(),
-        8453 => "Base".into(),
-        10 => "Optimism".into(),
-        42161 => "Arbitrum One".into(),
-        137 => "Polygon".into(),
-        c => format!("chain {c}"),
+    match u64::try_from(chain).ok().and_then(chains::get) {
+        Some(c) => c.quote_name.into(),
+        None => format!("chain {chain}"),
     }
 }
 
 #[tauri::command]
 async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let to_l = to.trim().to_string();
-        if to_l.len() != 42 || !to_l.starts_with("0x") || !to_l[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
-            return Err("recipient must be a 0x address with 40 hex characters".into());
-        }
-        if to_l[2..].bytes().all(|b| b == b'0') {
-            return Err("refusing the zero address".into());
-        }
+        let from = pairing::load()?.ok_or("not paired yet")?;
         // If the recipient is written with mixed case, it must be a valid EIP-55 checksum (typo guard).
-        if to_l[2..].bytes().any(|b| b.is_ascii_uppercase())
-            && to_l[2..].bytes().any(|b| b.is_ascii_lowercase())
-            && verify::checksum(&to_l) != to_l
-        {
-            return Err("recipient address fails its checksum — one character is wrong".into());
-        }
-        let value = eth::parse_eth(&amount_eth).map_err(|e| e.0)?;
+        let to_l = verify::recipient(&to)?;
+        let value = eth::parse_eth(&amount_eth)?;
         if value == 0 {
             return Err("amount must be more than zero".into());
         }
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
-        if !matches!(chain, 1 | 11155111 | 8453 | 10 | 42161 | 137) {
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
+        if !chains::allowed_u128(chain) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
         }
-        let balance = rpc.balance(&from).map_err(|e| e.0)?;
-        let nonce = rpc.nonce(&from).map_err(|e| e.0)?;
-        let (priority, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let balance = rpc.balance(&from)?;
+        let nonce = rpc.nonce(&from)?;
+        let (priority, max_fee) = rpc.fees()?;
         let gas = rpc.estimate_gas(&from, &to_l, value).unwrap_or(21_000).max(21_000);
         let max_cost = gas.checked_mul(max_fee).ok_or("fee overflow")?;
         let total = value.checked_add(max_cost).ok_or("total overflow")?;
@@ -330,7 +325,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
             max_priority_fee_per_gas: verify::to_quantity(priority),
             max_fee_per_gas: verify::to_quantity(max_fee),
             gas_limit: verify::to_quantity(gas),
-            to: to_l.to_ascii_lowercase(),
+            to: to_l,
             value: verify::to_quantity(value),
             data: "0x".into(),
             amount_eth: eth::format_eth(value),
@@ -355,8 +350,8 @@ struct Receipt {
 #[tauri::command]
 async fn receipt(rpc_url: String, hash: String) -> CmdResult<Receipt> {
     blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        Ok(match rpc.receipt_status(&hash).map_err(|e| e.0)? {
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        Ok(match rpc.receipt_status(&hash)? {
             None => Receipt { mined: false, success: false, block: 0 },
             Some((ok, block)) => Receipt { mined: true, success: ok, block },
         })

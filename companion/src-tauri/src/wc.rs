@@ -18,8 +18,6 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 
-/// Chains the phone has a reviewed profile for (Eip1559Request.supportedChain). Must match it.
-pub const ALLOWED_CHAINS: [u64; 6] = [1, 10, 137, 8453, 42161, 11155111];
 /// Methods a session is offered. Everything else is refused per request.
 pub const SUPPORTED_METHODS: [&str; 7] = [
     "eth_sendTransaction",
@@ -59,19 +57,16 @@ fn bad(message: impl Into<String>) -> RpcError {
     rpc_err(INVALID_PARAMS, message)
 }
 
+/// Chains the phone has a reviewed profile for (Eip1559Request.supportedChain; tested below).
 pub fn chain_allowed(id: u64) -> bool {
-    ALLOWED_CHAINS.contains(&id)
+    crate::chains::allowed(id)
 }
 
+/// A chain's name in dApp-facing text.
 pub fn chain_name(id: u64) -> String {
-    match id {
-        1 => "Ethereum".into(),
-        10 => "Optimism".into(),
-        137 => "Polygon".into(),
-        8453 => "Base".into(),
-        42161 => "Arbitrum One".into(),
-        11155111 => "Sepolia (testnet)".into(),
-        c => format!("Chain {c}"),
+    match crate::chains::get(id) {
+        Some(c) => c.dapp_name.into(),
+        None => format!("Chain {id}"),
     }
 }
 
@@ -88,21 +83,12 @@ pub fn parse_caip2(s: &str) -> Option<u64> {
     id.parse().ok()
 }
 
-fn is_address(s: &str) -> bool {
-    s.len() == 42 && s.starts_with("0x") && s[2..].bytes().all(|b| b.is_ascii_hexdigit())
-}
-
 /// Address from a dApp: 0x + 40 hex; if written in mixed case it must be a valid EIP-55 checksum.
 pub fn dapp_address(s: &str, what: &str) -> Result<String, RpcError> {
-    if !is_address(s) {
-        return Err(bad(format!("{what} must be a 0x address with 40 hex characters")));
-    }
-    let body = &s[2..];
-    let mixed = body.bytes().any(|b| b.is_ascii_uppercase()) && body.bytes().any(|b| b.is_ascii_lowercase());
-    if mixed && verify::checksum(s) != s {
-        return Err(bad(format!("{what} fails its EIP-55 checksum")));
-    }
-    Ok(s.to_ascii_lowercase())
+    verify::parse_address(s, verify::Case::ChecksumIfMixed).map_err(|e| match e {
+        verify::AddressError::Shape => bad(format!("{what} must be a 0x address with 40 hex characters")),
+        verify::AddressError::Checksum => bad(format!("{what} fails its EIP-55 checksum")),
+    })
 }
 
 /// Hex quantity from a dApp: "0x" + 1…64 hex digits. Leading zeros are tolerated (JSON-RPC
@@ -515,9 +501,9 @@ pub fn call_info(data: &str, value: u128) -> CallInfo {
         };
     }
     let selector = body.get(..8).map(|s| format!("0x{s}"));
-    let token = match selector.as_deref() {
-        Some("0xa9059cbb") => Some("token_transfer"),
-        Some("0x095ea7b3") => Some("token_approve"),
+    let token = match body.get(..8) {
+        Some(crate::abi::SEL_TRANSFER) => Some("token_transfer"),
+        Some(crate::abi::SEL_APPROVE) => Some("token_approve"),
         _ => None,
     };
     if let (Some(kind), 68) = (token, bytes) {
@@ -555,9 +541,9 @@ pub fn personal_sign_params(params: &Value, paired: &str) -> Result<(String, Opt
     let a = list[0].as_str().ok_or_else(|| bad("message must be a string"))?;
     let b = list[1].as_str().ok_or_else(|| bad("address must be a string"))?;
     let paired_l = paired.to_ascii_lowercase();
-    let (msg, addr) = if is_address(b) {
+    let (msg, addr) = if verify::is_address(b) {
         (a, b)
-    } else if is_address(a) && a.eq_ignore_ascii_case(&paired_l) {
+    } else if verify::is_address(a) && a.eq_ignore_ascii_case(&paired_l) {
         (b, a)
     } else {
         return Err(bad("personal_sign takes [message, address]"));
@@ -732,11 +718,7 @@ fn node_call(url: &str, method: &str, params: Value) -> Result<Value, String> {
     if !url.starts_with("https://") {
         return Err("the node URL must use https://".into());
     }
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = crate::http::client(Duration::from_secs(20), crate::http::Policy::none())?;
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     let http = client.post(url).json(&body).send().map_err(|e| eth::transport_error(&e))?;
     let bytes = eth::read_capped(http, eth::MAX_RESPONSE)?;
@@ -862,13 +844,13 @@ pub fn wc_plan_session(required: Value, optional: Value) -> SessionPlan {
 
 #[tauri::command]
 pub fn wc_session_namespaces(required: Value, optional: Value, selected: Vec<u64>) -> Result<Value, String> {
-    let paired = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    let paired = pairing::load()?.ok_or("not paired yet")?;
     build_namespaces(&required, &optional, &selected, &paired)
 }
 
 #[tauri::command]
 pub fn wc_add_chain(namespaces: Value, chain_id: u64) -> Result<Value, String> {
-    let paired = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    let paired = pairing::load()?.ok_or("not paired yet")?;
     add_chain(&namespaces, chain_id, &paired)
 }
 
@@ -1239,9 +1221,9 @@ mod tests {
             .map(|t| t.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap())
             .collect();
         ids.sort();
-        let mut ours = ALLOWED_CHAINS.to_vec();
+        let mut ours = crate::chains::IDS.to_vec();
         ours.sort();
-        assert_eq!(ids, ours, "wc::ALLOWED_CHAINS must equal Eip1559Request.supportedChain");
+        assert_eq!(ids, ours, "chains::CHAINS must equal Eip1559Request.supportedChain");
     }
 
     #[test]

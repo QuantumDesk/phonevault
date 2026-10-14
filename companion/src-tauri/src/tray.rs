@@ -1,7 +1,7 @@
 //! Menu-bar item: the padlock, the balance on the selected network, Open, Copy receive address,
 //! Quit. Closing the window keeps the app (and the watcher's notifications) running here.
 
-use crate::{eth, pairing, price, verify, watcher};
+use crate::{eth, pairing, price, verify};
 use std::sync::OnceLock;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -147,7 +147,7 @@ pub fn set_unpaired(_app: &AppHandle) {
 /// "0.0421 ETH on Base · $103.29" (USD only when the cached price is available).
 pub fn set_balance(app: &AppHandle, chain: u64, wei: u128) {
     let Some(i) = ITEMS.get() else { return };
-    let Some((_, name, symbol, ..)) = watcher::network(chain) else { return };
+    let Some(crate::chains::Chain { watch_name: name, symbol, .. }) = crate::chains::get(chain) else { return };
     let eth_text = eth::format_eth(wei);
     let shown = match eth_text.split_once('.') {
         Some((w, f)) if f.len() > 5 => format!("{w}.{}", &f[..5]),

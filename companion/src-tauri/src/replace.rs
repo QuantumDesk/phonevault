@@ -80,7 +80,7 @@ fn pending_original(hash: &str) -> Result<(history::Entry, Vec<history::Entry>),
 fn token_intent(chain_id: u128, contract: &str, data: &str) -> Result<tokens::TokenIntent, String> {
     let t = tokens::lookup(u64::try_from(chain_id).map_err(|_| "chain id out of range")?, contract)
         .ok_or("the token is not in the built-in list for this network")?;
-    let (recipient, amount) = verify::decode_erc20_transfer(data).map_err(|e| e.0)?;
+    let (recipient, amount) = verify::decode_erc20_transfer(data)?;
     Ok(tokens::TokenIntent {
         contract: t.address.to_ascii_lowercase(),
         symbol: t.symbol.clone(),
@@ -99,20 +99,20 @@ pub(crate) async fn replacement_quote(rpc_url: String, hash: String, kind: Strin
         return Err("kind must be speedup or cancel".into());
     }
     blocking(move || {
-        let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        let owner = pairing::load()?.ok_or("not paired yet")?;
         let (e, all) = pending_original(&hash)?;
         let nonce = e.nonce.unwrap_or_default();
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         if chain != e.chain_id { return Err(format!("this transaction is on chain {}, but the selected node is on chain {chain}; switch to that network", e.chain_id)); }
-        if rpc.receipt_status(&hash).map_err(|e| e.0)?.is_some() || rpc.nonce_latest(&owner).map_err(|e| e.0)? > nonce {
+        if rpc.receipt_status(&hash)?.is_some() || rpc.nonce_latest(&owner)? > nonce {
             return Err("it was already included in a block (or another transaction used its nonce), so there is nothing to replace".into());
         }
         let previous = match group_fees(&all, chain, nonce)? {
             Some(f) => f,
-            None => rpc.tx_fees(&hash).map_err(|e| e.0)?.ok_or("the node doesn't know the original transaction's fees; it may already have been dropped")?,
+            None => rpc.tx_fees(&hash)?.ok_or("the node doesn't know the original transaction's fees; it may already have been dropped")?,
         };
-        let (priority, max_fee) = new_fees(previous, rpc.fees().map_err(|e| e.0)?);
+        let (priority, max_fee) = new_fees(previous, rpc.fees()?);
         let (to, value, data, gas, token) = if kind == "speedup" {
             let t = e.tx.as_ref().ok_or("this transaction was sent before this app kept its details, so it can only be cancelled")?;
             let token = match &e.token_contract { Some(c) => Some(token_intent(chain, c, &t.data)?), None => None };
@@ -120,7 +120,7 @@ pub(crate) async fn replacement_quote(rpc_url: String, hash: String, kind: Strin
         } else {
             (owner.clone(), 0, "0x".to_string(), 21_000, None)
         };
-        let balance = rpc.balance(&owner).map_err(|e| e.0)?;
+        let balance = rpc.balance(&owner)?;
         let max_cost = gas.checked_mul(max_fee).ok_or("fee overflow")?;
         let total = value.checked_add(max_cost).ok_or("total overflow")?;
         if total > balance { return Err(format!("not enough balance for the higher fee: {} ETH needed at most, {} ETH available", eth::format_eth(total), eth::format_eth(balance))); }

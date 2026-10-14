@@ -8,6 +8,11 @@ use std::time::Duration;
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct EthError(pub String);
+impl From<EthError> for String {
+    fn from(e: EthError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> EthError {
     EthError(m.into())
 }
@@ -53,11 +58,7 @@ pub fn transport_error(e: &reqwest::Error) -> String {
 /// HTTP client for nodes: bounded time, and no redirects (the node is the URL the user set, not
 /// wherever it points to).
 fn node_client() -> Result<reqwest::blocking::Client, EthError> {
-    reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .map_err(|e| err(e.to_string()))
+    crate::http::client(Duration::from_secs(20), crate::http::Policy::none()).map_err(err)
 }
 
 impl Rpc {

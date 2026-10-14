@@ -11,7 +11,7 @@ pub const CONFIRMATION: &str = "I FLASHED THIS PHONE";
 const FILE: &str = "developer-mode.json";
 
 fn dir() -> Result<PathBuf, String> {
-    crate::pairing::dir().map_err(|e| e.0)
+    crate::pairing::dir().map_err(String::from)
 }
 
 /// On only when the file exists, is private (0600-style: no group/other bits), and says so.
