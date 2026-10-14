@@ -157,7 +157,7 @@ public final class AttestationProtocolTest {
     }
 
     @Test public void attestationRunsOffTheSigningThread() throws Exception {
-        String body = SourceGuard.body(SourceGuard.mainActivity(), "private void answerAttestation(");
+        String body = SourceGuard.definition("private void answerAttestation(");
         assertTrue(body.contains("attestExecutor.execute("));
         assertEquals("attestation must not queue behind signing", -1, body.indexOf("cryptoExecutor"));
         assertTrue("a challenge is answered once", body.contains("attestChallenges.firstUse("));
