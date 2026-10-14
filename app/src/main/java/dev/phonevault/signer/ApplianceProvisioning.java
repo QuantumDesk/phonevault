@@ -64,8 +64,8 @@ final class ApplianceProvisioning {
             Log.w(TAG, "screen timeout not applied: " + e.getMessage());
         }
 
-        // Hide any setup wizard the image still carries (rung ladder strips them from the
-        // image; this keeps a factory boot deterministic either way).
+        // Hide any setup wizard the image still carries (release images strip them; this keeps a
+        // factory boot deterministic either way).
         PackageManager pm = context.getPackageManager();
         for (String wizard : SETUP_WIZARDS) {
             try {

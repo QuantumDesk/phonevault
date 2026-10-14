@@ -156,7 +156,7 @@ public class WalletPersistenceTest {
     }
 
     @Test public void failedSettleIsReportedAndLegacyCannotResurrect() throws Exception {
-        // The round-5 P1: the record is written fine but the cleanup commit fails. The write must
+        // The record is written fine but the cleanup commit fails. The write must
         // NOT be reported as success, the journal must stay pending, and after a restart in which
         // the record vanished, the legacy wallet must not come back.
         FakeStorage s = new FakeStorage();

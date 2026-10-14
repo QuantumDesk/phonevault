@@ -69,7 +69,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Counterparties of the transaction just signed, offered as "Save as contact" on its receipt. */
     private List<TransactionReview.Party> receiptParties;
     private volatile ApprovalDecision approvalDecision;
-    // --- Bitcoin (BtcRequest, BtcWallet, BtcPsbtReview, BtcPsbtSigner).
+    // ------------------------------------------------------------------ Bitcoin state
+    // See BtcRequest, BtcWallet, BtcPsbtReview, BtcPsbtSigner.
     /**
      * Per network (BtcNetwork ordinal): the STANDARD wallet's Bitcoin account public keys, derived
      * from the seed inside the seed-key window on first use and kept for this unlocked session only
@@ -81,7 +82,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Amounts already signed per coin (SegWit fee-attack guard); memory only. */
     private final BtcAmountMemory btcAmounts = new BtcAmountMemory();
     private static final String BTC_PREFS = "bitcoin", BTC_SHARING_KEY = "shared_v1";
-    // --- accounts + passphrase wallet (AccountBook, AccountScreens). Published with credentials.
+    // ------------------------------------------------------------------ accounts + passphrase wallet state
+    // See AccountBook, AccountScreens. Published together with credentials.
     /** Non-secret description of the key in {@link #credentials}; set and cleared with it under stateLock. */
     private volatile SigningAccount activeAccount;
     /** Lowercase account-0 address of the STANDARD wallet: identity of the backup check and the saved account list. */
@@ -129,10 +131,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private TextView seedTimer;
     private char[][] pinSetupEntries;
 
-    // --- device security & lifecycle (roadmap chunk 1) ---
+    // ------------------------------------------------------------------ device security & lifecycle
     /** Idle time (no touch) before the vault locks and drops the key from memory. */
     private static final long IDLE_LOCK_MS = 2 * 60 * 1000L;
-    /** The recovery phrase never stays on screen longer than this. */
     /** Idle time before the phrase hides. Copying 24 words onto paper means not touching the phone;
      *  every touch or page turn restarts it. */
     private static final long SEED_TIMEOUT_MS = 120 * 1000L;
@@ -454,9 +455,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Locked gate in credential mode: our screen, the system verifies the PIN. */
     private void showCredentialGate(int s) {
         // The boot attempt below is still waiting for this session: onCreate and onResume both
-        // show the gate on a cold start, and a second call used to replace the attempt's loading
-        // screen with the locked page AND queue the system prompt while the boot lock screen was
-        // still animating away (credentialtest "asked a second time", rung 4b, 2026-10-11). The
+        // show the gate on a cold start, and a second call would replace the attempt's loading
+        // screen with the locked page AND queue the system prompt while the boot lock screen is
+        // still animating away (the PIN would be asked a second time). The
         // attempt shows the gate itself if the keystore refuses; a new session (lock) passes.
         if (bootAttemptSession == s) return;
         boolean freshBoot = android.os.SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
@@ -941,7 +942,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
 
-    // ---------- Native, scrollable pages. Sensitive operations never use floating dialogs.
+    // ------------------------------------------------------------------ pages
+    // Native, scrollable pages. Sensitive operations never use floating dialogs.
 
     /** Base body size; VaultTheme applies the Text size scale (one factor for every screen). */
     private float bodySize() { return 16; }
@@ -1178,7 +1180,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         present(root, "first-run");
     }
 
-    // --- optional user entropy: physical dice rolls, mixed with the two device sources.
+    // ------------------------------------------------------------------ optional user entropy
+    // Physical dice rolls, mixed with the two device sources.
 
     /** Rolls as bytes '1'..'6'; never shown back on screen, zeroed after use and on lock. */
     private final StringBuilder diceRolls = new StringBuilder();
@@ -1272,8 +1275,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    // --- restore OVER an existing wallet: same entry screens, but owned by a fresh-PIN sensitive
-    //     flow and the replacement state machine, exactly like Replace (USB excluded throughout).
+    // ------------------------------------------------------------------ restore over an existing wallet
+    // Same entry screens, but owned by a fresh-PIN sensitive flow and the replacement state
+    // machine, exactly like Replace (USB excluded throughout).
 
     private boolean restoreReplacing;
     private int restoreOverOp = -1;
@@ -1337,7 +1341,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    // --- restore: on-device word entry (no system keyboard), validate, confirm address, commit
+    // ------------------------------------------------------------------ restore
+    // On-device word entry (no system keyboard), validate, confirm address, commit.
 
     private final String[] restoreWords = new String[SeedRestore.WORD_COUNT];
     private int restoreIndex;
@@ -2244,7 +2249,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
-                pendingUsb = intent; // fall back to the old replay-after-unlock behaviour
+                pendingUsb = intent; // fall back to replaying the attach after unlock
                 if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
             }
             return;
@@ -3253,7 +3258,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     // ------------------------------------------------------------------ accounts + passphrase wallet
     //
-    // One private key in memory, as before: the ACTIVE account's (credentials). Switching derives
+    // One private key in memory: the ACTIVE account's (credentials). Switching derives
     // the new account from the seed inside the PIN window (withSeedKey → VaultKeyStore.deriveAccount,
     // one decrypt) and replaces credentials under stateLock, like unlock does. The passphrase lives
     // only in `passphrase` (char[]) while its wallet is open, and is zeroed on lock / close.

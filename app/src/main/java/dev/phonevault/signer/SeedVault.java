@@ -30,7 +30,7 @@ final class SeedVault {
     /**
      * Bytes drawn per source purely for the startup health tests: two full Adaptive Proportion
      * Test windows ({@link HealthTests#APT_WINDOW}), so RCT, APT and the distribution check all
-     * actually execute. (Previously only 2×32 bytes were checked, so the APT never ran.) These
+     * actually execute (a smaller sample would never fill an APT window). These
      * bytes are discarded after the check; the mix uses a separate {@link #SOURCE_BYTES} draw.
      *
      * <p>Honesty note: both device sources emit *conditioned* output (kernel CSPRNG; SHA-256 over

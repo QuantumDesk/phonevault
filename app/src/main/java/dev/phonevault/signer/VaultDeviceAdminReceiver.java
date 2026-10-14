@@ -37,7 +37,7 @@ public final class VaultDeviceAdminReceiver extends DeviceAdminReceiver {
     /**
      * Every boot, as device owner. On a factory boot this is the fallback that matters: patch
      * 0003 activates the admin while the freshly wiped package is still in Android's "stopped"
-     * state, so DEVICE_ADMIN_ENABLED can be dropped (seen 2026-09-24 after a wipe-after-10);
+     * state, so DEVICE_ADMIN_ENABLED can be dropped (e.g. after a wipe-after-10);
      * USER_STARTED arrives once the package is unstopped. {@link ApplianceProvisioning#apply} is
      * idempotent, so running it on every boot costs nothing.
      */
