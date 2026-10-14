@@ -18,9 +18,8 @@ let native = null;
 /** "unknown" | "connected" | "not_running" | "not_installed" | "error" */
 let nativeState = "unknown";
 let nativeMessage = "";
-let paired = null;
 let nextId = 1;
-const pending = new Map(); // global id -> { port, pageId, origin }
+const pending = new Map(); // global id -> { port, pageId, tabId, waiting? } (a tab request) or { reply } (popup)
 const ports = new Set();
 let idleTimer = 0;
 
@@ -75,7 +74,7 @@ function connectNative() {
 function onNative(m) {
   if (!m || typeof m !== "object") return;
   if (m.type === "hello") {
-    if (m.ok) { nativeState = "connected"; nativeMessage = ""; paired = !!m.paired; }
+    if (m.ok) { nativeState = "connected"; nativeMessage = ""; }
     else { nativeState = m.error === "companion_not_running" ? "not_running" : "error"; nativeMessage = String(m.message ?? m.error ?? ""); }
     return;
   }
@@ -117,7 +116,7 @@ chrome.runtime.onConnect.addListener((port) => {
   const bucket = { tokens: BUCKET_CAPACITY, at: Date.now() };
   ports.add(port);
   clearTimeout(idleTimer);
-  const openCount = () => { let n = 0; for (const p of pending.values()) if (p.source === port) n++; return n; };
+  const openCount = () => { let n = 0; for (const p of pending.values()) if (p.port === port) n++; return n; };
 
   port.onMessage.addListener((m) => {
     if (!m || m.type !== "request" || !Number.isSafeInteger(m.id) || typeof m.method !== "string" || m.method.length > 64 || !Array.isArray(m.params)) return;
@@ -128,7 +127,7 @@ chrome.runtime.onConnect.addListener((port) => {
     try { size = JSON.stringify(m.params).length; } catch { return answer({ code: -32602, message: "params must be JSON" }); }
     if (size > MAX_REQUEST_CHARS) return answer({ code: -32602, message: "request too large" });
     const id = nextId++;
-    pending.set(id, { source: port, port, pageId: m.id, origin, tabId: s.tab.id });
+    pending.set(id, { port, pageId: m.id, tabId: s.tab.id });
     try { connectNative().postMessage({ type: "request", id, origin, method: m.method, params: m.params }); }
     catch (e) { pending.delete(id); answer({ code: 4900, message: `Phone Vault Companion is not reachable: ${e?.message ?? e}` }); }
   });
@@ -136,7 +135,7 @@ chrome.runtime.onConnect.addListener((port) => {
   port.onDisconnect.addListener(() => {
     ports.delete(port);
     // The tab closed or navigated: withdraw what it left waiting so the companion drops its cards.
-    for (const [id, p] of [...pending]) if (p.source === port) { pending.delete(id); try { native?.postMessage({ type: "cancel", id }); } catch { /* gone */ } }
+    for (const [id, p] of [...pending]) if (p.port === port) { pending.delete(id); try { native?.postMessage({ type: "cancel", id }); } catch { /* gone */ } }
     updateBadge(s.tab.id);
     if (!ports.size && !pending.size) {
       clearTimeout(idleTimer);

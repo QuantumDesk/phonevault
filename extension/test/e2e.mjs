@@ -95,7 +95,7 @@ async function main() {
 
   const cleanup = () => { try { chrome.kill(); } catch {} try { companion.kill(); } catch {} server.close(); };
   try {
-    let portFile = join(profile, "DevToolsActivePort");
+    const portFile = join(profile, "DevToolsActivePort");
     for (let i = 0; i < 100 && !existsSync(portFile); i++) await sleep(100);
     const [port, path] = readFileSync(portFile, "utf8").trim().split("\n");
     const cdp = new Cdp(`ws://127.0.0.1:${port}${path}`);
@@ -113,7 +113,7 @@ async function main() {
     check(pv.length === 1, "announces exactly one EIP-6963 provider with rdns dev.phonevault", providers);
     check(pv[0]?.name === "Phone Vault", "provider name is Phone Vault", pv[0]?.name);
     check(/^data:image\/svg\+xml;base64,/.test(pv[0]?.icon ?? ""), "icon is an SVG data URI", pv[0]?.icon?.slice(0, 30));
-    check(/^[0-9a-f-]{36}$/.test(pv[0]?.uuid ?? ""), "uuid is a v4 UUID", pv[0]?.uuid);
+    check(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(pv[0]?.uuid ?? ""), "uuid is a v4 UUID", pv[0]?.uuid);
     check(await evaluate(`window.dispatchEvent(new Event("eip6963:requestProvider")), window.__providers.length === 1`), "re-announce on request keeps one entry (same uuid)");
     check(await evaluate(`window.ethereum?.isPhoneVault === true`), "window.ethereum set (no other wallet present)");
 

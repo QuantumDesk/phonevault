@@ -11,11 +11,11 @@
 //  * What goes back is limited by Rust to a verified hash, a verified signature, or null.
 
 import { isTauri } from "./api";
-import { NETWORKS } from "./networks";
+import { NETWORKS, netName } from "./networks";
 import { h, icon, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 
-export const EXT_PREFIX = "ext:";
+const EXT_PREFIX = "ext:";
 export const isExtTopic = (topic: string) => topic.startsWith(EXT_PREFIX);
 const originOf = (topic: string) => topic.slice(EXT_PREFIX.length);
 
@@ -26,7 +26,8 @@ export interface BridgeStatus { listening: boolean; error: string | null; socket
 
 const SUPPORTED = ["eth_sendTransaction", "personal_sign", "eth_signTypedData_v4", "eth_chainId", "eth_accounts", "eth_requestAccounts", "wallet_switchEthereumChain"];
 const ALL_CHAINS = NETWORKS.map((n) => n.id); // the phone's reviewed networks, app default first
-const netName = (id: number) => NETWORKS.find((n) => n.id === id)?.name ?? `chain ${id}`;
+const BRIDGE_POLL_MS = 2000;
+const NODES_PUSH_MS = 10_000;
 
 // ------------------------------------------------------------------ Rust calls (or the preview mock)
 
@@ -92,8 +93,8 @@ export function createExtBackend(ev: Events, rpcFor: (chainId: number) => string
 
   if (isTauri) import("@tauri-apps/api/event").then(({ listen }) => listen("bridge-changed", () => refresh())).catch(() => {});
   refresh(); pushNodes();
-  window.setInterval(refresh, 2000);
-  window.setInterval(pushNodes, 10_000);
+  window.setInterval(refresh, BRIDGE_POLL_MS);
+  window.setInterval(pushNodes, NODES_PUSH_MS);
   refreshNow = refresh;
 
   const done = async () => { shownProposal = null; await refresh(); };
@@ -214,7 +215,7 @@ const t0 = Date.now();
 if (q.get("ext") === "connect") mockPending.push({ id: 1, kind: "connect", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "eth_requestAccounts", params: [], chain_id: 8453, created: 0 });
 if (q.get("ext") === "requests") {
   mockPending.push({ id: 2, kind: "request", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "eth_sendTransaction", chain_id: 8453, created: 0,
-    params: [{ from: ADDR, to: "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C", value: "0x38d7ea4c68000" }] });
+    params: [{ from: ADDR, to: "0x51Ea0B8F1a0c6f3f0c1b2E5a6d7c8b9a0e1F2d3C", value: "0x38d7ea4c68000" }] });
   mockPending.push({ id: 3, kind: "request", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "personal_sign", chain_id: 8453, created: 0,
     params: ["0x" + [...new TextEncoder().encode("Sign in to app.uniswap.org\nNonce: 8f3a1c2b")].map((b) => b.toString(16).padStart(2, "0")).join(""), ADDR] });
 }

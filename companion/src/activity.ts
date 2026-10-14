@@ -86,7 +86,7 @@ function row(e: HistoryEntry, all: HistoryEntry[], host: ActivityHost) {
     ));
 }
 
-export function applyFilter(all: HistoryEntry[], f: ActivityFilter, chainId: number): HistoryEntry[] {
+function applyFilter(all: HistoryEntry[], f: ActivityFilter, chainId: number): HistoryEntry[] {
   return all.filter((e) => (!f.thisNetwork || e.chain_id === chainId) && (
     f.kind === "all" || (f.kind === "pending" ? e.status === "pending" : e.kind === f.kind)));
 }

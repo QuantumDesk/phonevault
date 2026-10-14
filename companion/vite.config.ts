@@ -3,16 +3,11 @@ import { defineConfig } from "vite";
 import process from "node:process";
 const host = process.env.TAURI_DEV_HOST;
 
-// https://vite.dev/config/
+// Tauri dev/build: keep Rust errors on screen, serve on the fixed port Tauri expects, and don't watch src-tauri.
 export default defineConfig(() => ({
-
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
-  //
-  // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
   // WalletConnect Pay is not used: WalletKit gets a stub that reports it unavailable (no wasm, no API).
   resolve: { alias: { "@walletconnect/pay": decodeURIComponent(new URL("./src/wc-pay-stub.ts", import.meta.url).pathname) } },
-  // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
     strictPort: true,
@@ -25,7 +20,6 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
     },
   },

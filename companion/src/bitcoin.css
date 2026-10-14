@@ -1,7 +1,6 @@
 /* Bitcoin screens (bitcoin.ts). Built on the shared tokens in styles.css. */
 .net-dot.nbtc-bitcoin { background: #f7931a; }
 .net-dot.nbtc-testnet, .net-dot.nbtc-signet { background: transparent; border: 1.5px dashed #f7931a; }
-.segmented.two { grid-template-columns: repeat(2, 1fr); }
 .segmented.unit-seg { grid-template-columns: repeat(3, auto); padding: 2px; border-radius: 9px; }
 .segmented.unit-seg button { min-height: 24px; padding: 0 10px; font-size: 12px; border-radius: 7px; }
 .field-label.row.between { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -46,7 +46,7 @@ function start(key: string, rpcUrl: string, quote: Quote, onChange: () => void):
 
 /** What the send button may do for this simulation state. */
 export interface Gate { allow: boolean; anyway: boolean; busy: boolean }
-export function gate(st: SimState): Gate {
+function gate(st: SimState): Gate {
   if (st.s === "loading") return { allow: false, anyway: false, busy: true };
   if (st.s === "failed") return { allow: true, anyway: true, busy: false };
   switch (st.r.status) {

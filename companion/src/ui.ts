@@ -76,7 +76,11 @@ export function fmtAmount(eth: string, maxDecimals = 6): string {
   return frac ? `${whole}.${frac}` : whole;
 }
 
-const usdFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
+export const capitalize = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+/** A <dt>/<dd> pair in a `.fact` list. */
+export function fact(k: string, v: Node | string) { return h("div", { class: "fact" }, h("dt", null, k), h("dd", null, v)); }
+
+export const usdFmt = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" });
 export function fmtUsd(eth: string | number, price: number | null | undefined): string | null {
   if (price === null || price === undefined) return null;
   const v = Number(eth) * price;

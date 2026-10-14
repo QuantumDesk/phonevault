@@ -16,9 +16,9 @@
 import type { Attestation, AttestationDetails, HistoryEntry, Stage, Quote, TxParams, Nft } from "./api";
 
 const params = new URLSearchParams(location.search);
-const ADDRESS = "0x7A3b9C1d2E4f5061728394A5b6C7d8E9f0A1B2c3";
-const ADDRESS2 = "0x51eA0b8F1a0C6f3F0c1B2e5A6d7C8b9A0e1F2d3C";
-const ADDRESS_PP = "0x9F3e2D1c0B9a8F7e6D5c4B3a2F1e0D9c8B7a6F5e";
+const ADDRESS = "0x7A3B9C1d2e4F5061728394a5b6c7d8E9F0a1b2C3";
+const ADDRESS2 = "0x51Ea0B8F1a0c6f3f0c1b2E5a6d7c8b9a0e1F2d3C";
+const ADDRESS_PP = "0x9f3e2d1c0b9a8F7E6d5C4B3a2F1e0D9c8B7a6F5E";
 const ADDRESS_NEW = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 /** The address the mock phone is on (its active account). */
 const PHONE_ADDRESS = ({ "2": ADDRESS2, pp: ADDRESS_PP, new: ADDRESS_NEW } as Record<string, string>)[params.get("phoneacct") ?? ""] ?? ADDRESS;
@@ -73,7 +73,6 @@ export interface Mock {
   onEvent(name: string, cb: (payload: unknown) => void): () => void;
 }
 
-const SENDER = "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C";
 const rndHash = () => "0x" + Array.from({ length: 64 }, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join("");
 /** A recorded signed transaction (what broadcast_verified keeps for speed-up / cancel). */
 const txp = (to: string, value: string, maxFee = "0x3b9aca00", prio = "0xf4240"): TxParams => ({ to: to.toLowerCase(), value, data: "0x", gas_limit: "0x5208", max_fee_per_gas: maxFee, max_priority_fee_per_gas: prio });
@@ -101,11 +100,11 @@ export function createMock(): Mock {
   const STUCK = "0x3c7e1f5a9b2d4e6f8a0c1e3b5d7f9a2c4e6b8d0f1a3c5e7b9d2f4a6c8e0b1d3f";
   const SPED_ORIG = "0x71aa3e5c7b9d1f2a4c6e8b0d3f5a7c9e1b2d4f6a8c0e3b5d7f9a1c2e4b6d8f0a";
   let history: HistoryEntry[] = params.get("history") === "0" ? [] : [
-    base({ kind: "out", hash: STUCK, counterparty: SENDER, amount_eth: "0.0125", fee_max_eth: "0.0000213", nonce: 6, time: now - 60 * 14, status: "pending", tx: txp(SENDER, "0x2c68af0bb140000") }),
-    base({ kind: "in", hash: "0xa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", counterparty: SENDER, token_symbol: "USDC", token_amount: "125.5", token_contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", time: now - 3600 * 2, block: 20511100, log_index: 3 }),
-    base({ kind: "out", hash: "0x5f1c9a7e3b2d4c6f8a0e1b3d5c7f9a2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a", counterparty: SENDER, amount_eth: "0.005", fee_max_eth: "0.00000412", nonce: 5, time: now - 3600 * 5, status: "confirmed", block: 20511233, replaces: SPED_ORIG, replacement_kind: "speedup", tx: txp(SENDER, "0x11c37937e08000", "0x59682f00") }),
-    base({ kind: "out", hash: SPED_ORIG, counterparty: SENDER, amount_eth: "0.005", fee_max_eth: "0.00000210", nonce: 5, time: now - 3600 * 5 - 600, status: "dropped", tx: txp(SENDER, "0x11c37937e08000") }),
-    base({ kind: "in", hash: "0x0f9e8d7c6b5a49382716051f2e3d4c5b6a79880f9e8d7c6b5a49382716051f2e", counterparty: SENDER, amount_eth: "0.02", time: now - 86400, block: 20480000 }),
+    base({ kind: "out", hash: STUCK, counterparty: ADDRESS2, amount_eth: "0.0125", fee_max_eth: "0.0000213", nonce: 6, time: now - 60 * 14, status: "pending", tx: txp(ADDRESS2, "0x2c68af0bb140000") }),
+    base({ kind: "in", hash: "0xa1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90", counterparty: ADDRESS2, token_symbol: "USDC", token_amount: "125.5", token_contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", time: now - 3600 * 2, block: 20511100, log_index: 3 }),
+    base({ kind: "out", hash: "0x5f1c9a7e3b2d4c6f8a0e1b3d5c7f9a2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d1f3a", counterparty: ADDRESS2, amount_eth: "0.005", fee_max_eth: "0.00000412", nonce: 5, time: now - 3600 * 5, status: "confirmed", block: 20511233, replaces: SPED_ORIG, replacement_kind: "speedup", tx: txp(ADDRESS2, "0x11c37937e08000", "0x59682f00") }),
+    base({ kind: "out", hash: SPED_ORIG, counterparty: ADDRESS2, amount_eth: "0.005", fee_max_eth: "0.00000210", nonce: 5, time: now - 3600 * 5 - 600, status: "dropped", tx: txp(ADDRESS2, "0x11c37937e08000") }),
+    base({ kind: "in", hash: "0x0f9e8d7c6b5a49382716051f2e3d4c5b6a79880f9e8d7c6b5a49382716051f2e", counterparty: ADDRESS2, amount_eth: "0.02", time: now - 86400, block: 20480000 }),
     base({ kind: "in", amount_eth: "0.025", time: now - 86400 * 2 }),
     base({ kind: "out", hash: "0x9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d", chain_id: 1, counterparty: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", amount_eth: "0.01", fee_max_eth: "0.00042", nonce: 11, time: now - 86400 * 9, status: "failed", block: 20111000 }),
   ];
@@ -115,9 +114,9 @@ export function createMock(): Mock {
   let lastAttestation: Attestation | null = null;
   let devMode = params.get("devmode") === "1";
   let nfts: Nft[] = [
-    { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "4211", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
-    { chain_id: 8453, contract: "0x6f2A1b3C4d5E6f708192a3B4c5D6e7F8091a2B3c", token_id: "88", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
-    { chain_id: 8453, contract: "0x9a8B7c6D5e4F3a2B1c0D9e8F7a6B5c4D3e2F1a0B", token_id: "3", name: "Onchain Summer Pass", symbol: "OSP", owned: true, checked_at: now },
+    { chain_id: 8453, contract: "0x6F2A1b3c4d5e6F708192a3b4C5d6E7F8091a2b3C", token_id: "4211", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
+    { chain_id: 8453, contract: "0x6F2A1b3c4d5e6F708192a3b4C5d6E7F8091a2b3C", token_id: "88", name: "Base Pixels", symbol: "BPX", owned: true, checked_at: now },
+    { chain_id: 8453, contract: "0x9a8b7c6d5e4f3a2B1C0d9e8F7a6b5c4D3e2f1A0b", token_id: "3", name: "Onchain Summer Pass", symbol: "OSP", owned: true, checked_at: now },
   ];
 
   // ---- Bitcoin (BIP-84 test vectors of the "abandon … about" wallet; preview only)

@@ -13,7 +13,7 @@ import type { Backend, Events, ProposalIn, RequestIn, SessionIn, Validation } fr
 
 const params = new URLSearchParams(location.search);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const ADDRESS = "0x7A3b9C1d2E4f5061728394A5b6C7d8E9f0A1B2c3";
+const ADDRESS = "0x7A3B9C1d2e4F5061728394a5b6c7d8E9F0a1b2C3";
 const UNI_ICON = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#fc72ff"/><path d="M20 44c6-2 8-9 12-16s10-10 14-8c-5 1-7 5-9 10s-5 12-17 14z" fill="#fff"/></svg>');
 const ALLOWED = [1, 10, 137, 8453, 42161, 11155111];
 const NAMES: Record<number, string> = { 1: "Ethereum", 10: "Optimism", 137: "Polygon", 8453: "Base", 42161: "Arbitrum One", 11155111: "Sepolia (testnet)", 56: "BNB Chain", 324: "zkSync" };
@@ -36,7 +36,7 @@ function sampleTx(): Record<string, string> {
   const kind = params.get("wctx") ?? "native";
   if (kind === "approve") return { from: ADDRESS, to: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", data: "0x095ea7b3000000000000000000000000000000000022d473030f116ddee9f6b43ac78ba3ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff" };
   if (kind === "swap") return { from: ADDRESS, to: "0x6fF5693b99212Da76ad316178A184AB56D299b43", value: "0x5af3107a4000", data: "0x3593564c" + "0".repeat(120) };
-  return { from: ADDRESS, to: "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C", value: "0x38d7ea4c68000" };
+  return { from: ADDRESS, to: "0x51Ea0B8F1a0c6f3f0c1b2E5a6d7c8b9a0e1F2d3C", value: "0x38d7ea4c68000" };
 }
 
 const PERMIT2 = JSON.stringify({
