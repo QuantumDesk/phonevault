@@ -3185,9 +3185,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, dangers, null,
                 seed -> {
                     byte[] signed = BtcPsbtSigner.sign(review, seed, random);
-                    // Remember what each coin was signed as (SegWit fee-attack guard), before it can leave.
+                    // Remember what each coin was signed as (SegWit fee-attack guard), before it can leave;
+                    // only amounts proven by the previous transaction (a lied Taproot amount must not stick).
                     for (BtcPsbtReview.SignInput in : review.inputs) {
-                        btcAmounts.record(review.psbt.tx.inputs.get(in.index).outpoint(), in.amount, in.script);
+                        if (in.amountProven) btcAmounts.record(review.psbt.tx.inputs.get(in.index).outpoint(), in.amount, in.script);
                     }
                     return BtcRequest.signedResponse(r.id, signed);
                 },
