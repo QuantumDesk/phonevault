@@ -215,10 +215,10 @@ pub(crate) async fn broadcast_verified(
             let tx = map.get(&key).ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
             (tx.raw.clone(), tx.chain_id, tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone(), tx.params.clone(), tx.replaces.clone())
         };
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let node_chain = rpc.chain_id().map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let node_chain = rpc.chain_id()?;
         if node_chain != chain_id { return Err(format!("the selected node is on chain {node_chain}, but this transaction is for chain {chain_id}; switch back to that network")); }
-        let sent = rpc.send_raw(&raw).map_err(|e| e.0)?;
+        let sent = rpc.send_raw(&raw)?;
         if sent.to_ascii_lowercase() != key { return Err(format!("node returned hash {sent}, expected {hash}")); }
         let _ = history::record_broadcast(history::Broadcast { hash: &hash, chain_id, value_wei, max_fee_wei, nonce, token: token.as_ref(), tx: params, replaces });
         Ok(hash)
@@ -239,9 +239,9 @@ pub struct FeeEstimate {
 #[tauri::command]
 pub(crate) async fn fee_estimate(rpc_url: String) -> CmdResult<FeeEstimate> {
     blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain_id = rpc.chain_id().map_err(|e| e.0)?;
-        let (priority, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain_id = rpc.chain_id()?;
+        let (priority, max_fee) = rpc.fees()?;
         let base = max_fee.saturating_sub(priority) / 2; // fees() = 2 × base + priority
         let gas = 21_000u128;
         let typical = gas * (base + priority);
@@ -269,11 +269,11 @@ pub struct MaxAmount {
 #[tauri::command]
 pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResult<MaxAmount> {
     blocking(move || {
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
-        let balance = rpc.balance(&from).map_err(|e| e.0)?;
-        let (_, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let from = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
+        let balance = rpc.balance(&from)?;
+        let (_, max_fee) = rpc.fees()?;
         let gas = match to.as_deref().map(str::trim) {
             Some(t) if t.len() == 42 && t.starts_with("0x") && t[2..].bytes().all(|b| b.is_ascii_hexdigit()) => {
                 rpc.estimate_gas(&from, t, 1).unwrap_or(21_000).max(21_000)
@@ -284,7 +284,7 @@ pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResu
         let l1_reserve: u128 = if matches!(chain, 8453 | 10 | 42161) { 50_000_000_000_000 } else { 0 }; // 0.00005 ETH
         let amount = balance.saturating_sub(cost).saturating_sub(l1_reserve);
         // round down to what format_eth shows (8 decimals) so the field and the quote agree
-        let shown = eth::parse_eth(&eth::format_eth(amount)).map_err(|e| e.0)?;
+        let shown = eth::parse_eth(&eth::format_eth(amount))?;
         Ok(MaxAmount { amount_eth: eth::format_eth(shown), amount_wei: shown.to_string() })
     })
     .await

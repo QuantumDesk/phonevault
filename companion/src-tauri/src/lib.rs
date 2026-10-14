@@ -86,7 +86,7 @@ async fn device_status() -> CmdResult<Status> {
     blocking(|| {
         let phone = aoa::presence().map_err(|e| e.to_string())?;
         attest::note_presence(phone);
-        let p = pairing::list().map_err(|e| e.0)?;
+        let p = pairing::list()?;
         let paired = p.active.clone();
         Ok(Status {
             paired_checksum: paired.as_deref().map(verify::checksum),
@@ -167,7 +167,7 @@ async fn read_address() -> CmdResult<PhoneAccount> {
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "getAddress"});
         let response = ask_phone(request.clone(), Duration::from_secs(30))?;
         let (addr, account, wallet) = parse_address_response(&request, &response)?;
-        let existing = pairing::list().map_err(|e| e.0)?;
+        let existing = pairing::list()?;
         let label = existing
             .find(&addr)
             .map(|p| p.label.clone())
@@ -188,7 +188,7 @@ async fn confirm_pairing(
     // Only an address that a phone which passed the device check attested to in this connection.
     blocking(move || {
         attest::require_pairable(&address)
-            .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(|e| e.0))
+            .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(String::from))
             .map(|p| p.display().to_string())
     })
     .await
@@ -198,7 +198,7 @@ async fn confirm_pairing(
 #[tauri::command]
 async fn select_account(address: String) -> CmdResult<()> {
     blocking(move || {
-        pairing::select(&address).map_err(|e| e.0)?;
+        pairing::select(&address)?;
         watcher::WAKE.store(true, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     })
@@ -207,18 +207,18 @@ async fn select_account(address: String) -> CmdResult<()> {
 
 #[tauri::command]
 async fn rename_account(address: String, label: String) -> CmdResult<()> {
-    blocking(move || pairing::rename(&address, &label).map(|_| ()).map_err(|e| e.0)).await
+    blocking(move || pairing::rename(&address, &label).map(|_| ()).map_err(String::from)).await
 }
 
 /// Unpair one account (its local history file stays on disk).
 #[tauri::command]
 async fn forget_account(address: String) -> CmdResult<()> {
-    blocking(move || pairing::remove(&address).map(|_| ()).map_err(|e| e.0)).await
+    blocking(move || pairing::remove(&address).map(|_| ()).map_err(String::from)).await
 }
 
 #[tauri::command]
 async fn forget_pairing() -> CmdResult<()> {
-    blocking(|| pairing::forget().map_err(|e| e.0)).await
+    blocking(|| pairing::forget().map_err(String::from)).await
 }
 
 #[derive(Serialize)]
@@ -233,15 +233,15 @@ struct Wallet {
 #[tauri::command]
 async fn wallet(rpc_url: String) -> CmdResult<Wallet> {
     blocking(move || {
-        let address = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let balance = rpc.balance(&address).map_err(|e| e.0)?;
+        let address = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let balance = rpc.balance(&address)?;
         Ok(Wallet {
             address: verify::checksum(&address),
             balance_wei: balance.to_string(),
             balance_eth: eth::format_eth(balance),
-            chain_id: rpc.chain_id().map_err(|e| e.0)?,
-            block: rpc.block_number().map_err(|e| e.0)?,
+            chain_id: rpc.chain_id()?,
+            block: rpc.block_number()?,
         })
     })
     .await
@@ -287,7 +287,7 @@ fn network_name(chain: u128) -> String {
 #[tauri::command]
 async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or("not paired yet")?;
         let to_l = to.trim().to_string();
         if to_l.len() != 42 || !to_l.starts_with("0x") || !to_l[2..].bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("recipient must be a 0x address with 40 hex characters".into());
@@ -302,18 +302,18 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
         {
             return Err("recipient address fails its checksum — one character is wrong".into());
         }
-        let value = eth::parse_eth(&amount_eth).map_err(|e| e.0)?;
+        let value = eth::parse_eth(&amount_eth)?;
         if value == 0 {
             return Err("amount must be more than zero".into());
         }
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         if !matches!(chain, 1 | 11155111 | 8453 | 10 | 42161 | 137) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
         }
-        let balance = rpc.balance(&from).map_err(|e| e.0)?;
-        let nonce = rpc.nonce(&from).map_err(|e| e.0)?;
-        let (priority, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let balance = rpc.balance(&from)?;
+        let nonce = rpc.nonce(&from)?;
+        let (priority, max_fee) = rpc.fees()?;
         let gas = rpc.estimate_gas(&from, &to_l, value).unwrap_or(21_000).max(21_000);
         let max_cost = gas.checked_mul(max_fee).ok_or("fee overflow")?;
         let total = value.checked_add(max_cost).ok_or("total overflow")?;
@@ -355,8 +355,8 @@ struct Receipt {
 #[tauri::command]
 async fn receipt(rpc_url: String, hash: String) -> CmdResult<Receipt> {
     blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        Ok(match rpc.receipt_status(&hash).map_err(|e| e.0)? {
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        Ok(match rpc.receipt_status(&hash)? {
             None => Receipt { mined: false, success: false, block: 0 },
             Some((ok, block)) => Receipt { mined: true, success: ok, block },
         })

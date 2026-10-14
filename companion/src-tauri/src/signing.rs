@@ -34,16 +34,16 @@ fn chain_quantity(chain_id: u64) -> CmdResult<String> {
 }
 
 fn request_signature(request: Value) -> CmdResult<SignedMessage> {
-    let pinned = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    let pinned = pairing::load()?.ok_or("not paired yet")?;
     // Hold the phone from the device check through the signature (queued behind any other request).
     let _turn = crate::aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     crate::attest::require_ok(&pinned)?;
     // Refuse locally what the phone would refuse, before bothering the user on the phone.
-    verify::expected_message_digest(&request).map_err(|e| e.0)?;
+    verify::expected_message_digest(&request)?;
     // Pinned to the account active NOW: the phone refuses it if another account is active there.
     let request = crate::pinned_request(request, &pinned);
     let response = ask_phone(request.clone(), Duration::from_secs(300))?;
-    let v = verify::validate_message_signature(&request, &response, &pinned).map_err(|e| e.0)?;
+    let v = verify::validate_message_signature(&request, &response, &pinned)?;
     Ok(SignedMessage { signature: v.signature, digest: v.digest, signer: verify::checksum(&v.signer) })
 }
 

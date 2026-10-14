@@ -198,7 +198,7 @@ pub struct TokenIntent {
 /// listed on the quote's chain with the same symbol/decimals, `to` is that contract, no native
 /// value, and `data` is exactly transfer(recipient, amount). Returns (contract, recipient, amount).
 pub fn check_quote(quote: &Quote, t: &TokenIntent) -> Result<(String, String, u128), String> {
-    let chain = verify::quantity(&quote.chain_id).map_err(|e| e.0)?;
+    let chain = verify::quantity(&quote.chain_id)?;
     let chain = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;
     let listed = lookup(chain, &t.contract).ok_or("the token is not in the built-in list for this network")?;
     if listed.symbol != t.symbol || listed.decimals != t.decimals || listed.name != t.name {
@@ -208,7 +208,7 @@ pub fn check_quote(quote: &Quote, t: &TokenIntent) -> Result<(String, String, u1
     if quote.to.to_ascii_lowercase() != contract {
         return Err("the transaction is not addressed to the token contract".into());
     }
-    if verify::quantity(&quote.value).map_err(|e| e.0)? != 0 {
+    if verify::quantity(&quote.value)? != 0 {
         return Err("a token transfer must not send ETH".into());
     }
     let amount: u128 = t.amount_raw.parse().map_err(|_| "bad token amount".to_string())?;
@@ -249,15 +249,15 @@ pub struct TokenBalances {
 #[tauri::command]
 pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> {
     blocking(move || {
-        let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         let data = balance_of_calldata(&owner)?;
         let balances = list()?
             .iter()
             .filter(|t| t.chain_id as u128 == chain)
             .map(|t| {
-                let r = rpc.eth_call(&t.address, &data).map_err(|e| e.0).and_then(|ret| parse_balance_word(&ret));
+                let r = rpc.eth_call(&t.address, &data).map_err(String::from).and_then(|ret| parse_balance_word(&ret));
                 let (raw, amount, error) = match r {
                     Ok(v) => (Some(v.to_string()), Some(format_units(v, t.decimals)), None),
                     Err(e) => (None, None, Some(e)),
@@ -300,10 +300,10 @@ fn check_recipient(to: &str) -> Result<String, String> {
 #[tauri::command]
 pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amount: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or("not paired yet")?;
         let recipient = check_recipient(&to)?;
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
-        let chain = rpc.chain_id().map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
+        let chain = rpc.chain_id()?;
         let chain64 = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;
         if !ALLOWED_CHAINS.contains(&chain64) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
@@ -317,14 +317,14 @@ pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amou
         if value == 0 {
             return Err("amount must be more than zero".into());
         }
-        let held = parse_balance_word(&rpc.eth_call(&contract, &balance_of_calldata(&from)?).map_err(|e| e.0)?)?;
+        let held = parse_balance_word(&rpc.eth_call(&contract, &balance_of_calldata(&from)?)?)?;
         if value > held {
             return Err(format!("not enough {}: {} {} available", t.symbol, format_units(held, t.decimals), t.symbol));
         }
         let data = transfer_calldata(&recipient, value)?;
-        let eth_balance = rpc.balance(&from).map_err(|e| e.0)?;
-        let nonce = rpc.nonce(&from).map_err(|e| e.0)?;
-        let (priority, max_fee) = rpc.fees().map_err(|e| e.0)?;
+        let eth_balance = rpc.balance(&from)?;
+        let nonce = rpc.nonce(&from)?;
+        let (priority, max_fee) = rpc.fees()?;
         let estimate = rpc
             .estimate_gas_data(&from, &contract, 0, &data)
             .map_err(|e| format!("the node says this transfer would fail: {}", e.0))?;

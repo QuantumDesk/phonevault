@@ -10,6 +10,11 @@ use sha3::{Digest, Keccak256};
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct VerifyError(pub String);
+impl From<VerifyError> for String {
+    fn from(e: VerifyError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> VerifyError {
     VerifyError(m.into())
 }

@@ -104,7 +104,7 @@ pub fn valid_id(id: &str) -> bool {
 }
 
 fn dir() -> Result<PathBuf, String> {
-    crate::pairing::dir().map_err(|e| e.0)
+    crate::pairing::dir().map_err(String::from)
 }
 
 pub fn check_file(p: &Path) -> Result<Option<String>, String> {

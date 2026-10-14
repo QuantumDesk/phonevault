@@ -35,6 +35,11 @@ const DOMAIN_FIELDS: [(&str, &str); 5] = [
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct MessageError(pub String);
+impl From<MessageError> for String {
+    fn from(e: MessageError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> MessageError {
     MessageError(m.into())
 }

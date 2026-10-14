@@ -8,6 +8,11 @@ use std::time::Duration;
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct EthError(pub String);
+impl From<EthError> for String {
+    fn from(e: EthError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> EthError {
     EthError(m.into())
 }

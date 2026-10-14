@@ -20,6 +20,11 @@ use std::sync::Mutex;
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct PairingError(pub String);
+impl From<PairingError> for String {
+    fn from(e: PairingError) -> String {
+        e.0
+    }
+}
 fn err(m: impl Into<String>) -> PairingError {
     PairingError(m.into())
 }

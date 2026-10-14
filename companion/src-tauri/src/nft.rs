@@ -70,11 +70,11 @@ static LOCK: Mutex<()> = Mutex::new(());
 
 /// One store per paired account (`nfts-<address>.json`).
 fn store_path(owner: &str) -> Result<std::path::PathBuf, String> {
-    pairing::account_file("nfts", owner).map_err(|e| e.0)
+    pairing::account_file("nfts", owner).map_err(String::from)
 }
 /// The single store of versions before accounts; read for the address it belonged to.
 fn legacy_store_path() -> Result<std::path::PathBuf, String> {
-    Ok(pairing::path().map_err(|e| e.0)?.with_file_name("nfts.json"))
+    Ok(pairing::path()?.with_file_name("nfts.json"))
 }
 
 fn load(owner: &str) -> Vec<Nft> {
@@ -239,17 +239,17 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
 }
 
 fn connect(rpc_url: &str) -> Result<(eth::Rpc, u64, String, u128), String> {
-    let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
-    let rpc = eth::Rpc::new(rpc_url).map_err(|e| e.0)?;
-    let chain = u64::try_from(rpc.chain_id().map_err(|e| e.0)?).map_err(|_| "chain id out of range")?;
-    let block = rpc.block_number().map_err(|e| e.0)?;
+    let owner = pairing::load()?.ok_or("not paired yet")?;
+    let rpc = eth::Rpc::new(rpc_url)?;
+    let chain = u64::try_from(rpc.chain_id()?).map_err(|_| "chain id out of range")?;
+    let block = rpc.block_number()?;
     Ok((rpc, chain, owner, block))
 }
 
 #[tauri::command]
 pub(crate) async fn nft_list(chain_id: u64) -> CmdResult<Vec<Nft>> {
     blocking(move || {
-        let owner = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+        let owner = pairing::load()?.ok_or("not paired yet")?;
         Ok(load(&owner).into_iter().filter(|n| n.chain_id == chain_id).collect())
     })
     .await
@@ -429,7 +429,7 @@ pub(crate) async fn dapp_icon(url: String) -> CmdResult<String> {
 #[tauri::command]
 pub(crate) async fn nft_metadata(rpc_url: String, contract: String, token_id: String) -> CmdResult<Meta> {
     blocking(move || {
-        let rpc = eth::Rpc::new(&rpc_url).map_err(|e| e.0)?;
+        let rpc = eth::Rpc::new(&rpc_url)?;
         let c = contract.trim().to_ascii_lowercase();
         if !watcher::is_address(&c) {
             return Err("bad contract".into());

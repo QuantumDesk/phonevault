@@ -862,13 +862,13 @@ pub fn wc_plan_session(required: Value, optional: Value) -> SessionPlan {
 
 #[tauri::command]
 pub fn wc_session_namespaces(required: Value, optional: Value, selected: Vec<u64>) -> Result<Value, String> {
-    let paired = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    let paired = pairing::load()?.ok_or("not paired yet")?;
     build_namespaces(&required, &optional, &selected, &paired)
 }
 
 #[tauri::command]
 pub fn wc_add_chain(namespaces: Value, chain_id: u64) -> Result<Value, String> {
-    let paired = pairing::load().map_err(|e| e.0)?.ok_or("not paired yet")?;
+    let paired = pairing::load()?.ok_or("not paired yet")?;
     add_chain(&namespaces, chain_id, &paired)
 }
 

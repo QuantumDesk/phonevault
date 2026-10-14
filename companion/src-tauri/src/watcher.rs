@@ -118,7 +118,7 @@ pub struct ScanStatus {
 static STATE: Mutex<Option<Persisted>> = Mutex::new(None);
 
 fn state_path() -> Result<PathBuf, String> {
-    Ok(pairing::path().map_err(|e| e.0)?.with_file_name("watch-state.json"))
+    Ok(pairing::path()?.with_file_name("watch-state.json"))
 }
 
 fn with_state<T>(f: impl FnOnce(&mut Persisted) -> T) -> Result<T, String> {
@@ -293,13 +293,13 @@ fn notify(app: &AppHandle, body: &str) {
 
 fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String> {
     let url = rpc_for(chain).ok_or("unknown network")?;
-    let rpc = eth::Rpc::new(&url).map_err(|e| e.0)?;
-    let node_chain = rpc.chain_id().map_err(|e| e.0)?;
+    let rpc = eth::Rpc::new(&url)?;
+    let node_chain = rpc.chain_id()?;
     if node_chain != chain as u128 {
         return Err(format!("the node for chain {chain} is on chain {node_chain}"));
     }
-    let block = rpc.block_number().map_err(|e| e.0)?;
-    let balance = rpc.balance_at(owner, block).map_err(|e| e.0)?;
+    let block = rpc.block_number()?;
+    let balance = rpc.balance_at(owner, block)?;
     let _ = app.emit("watch-balance", json!({"owner": owner, "chain_id": chain, "balance_wei": balance.to_string(), "balance_eth": eth::format_eth(balance), "block": block}));
     if chain == selected_chain() {
         crate::tray::set_balance(app, chain, balance);

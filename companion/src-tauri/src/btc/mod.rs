@@ -222,7 +222,7 @@ pub(crate) async fn btc_confirm_account(id: String, label: Option<String>) -> Cm
             lock(&CANDIDATES)?.insert(id, c);
             return Err("show the first address on the phone and compare it first".into());
         }
-        let p = store::add_in(&crate::pairing::dir().map_err(|e| e.0)?, &c.account, label.as_deref())?;
+        let p = store::add_in(&crate::pairing::dir()?, &c.account, label.as_deref())?;
         store::update_cache(&id, |x| {
             if !x.verified.contains(&0) {
                 x.verified.push(0)
@@ -264,7 +264,7 @@ pub(crate) async fn btc_rename(id: String, label: String) -> CmdResult<()> {
 /// Unpair (its cache file stays, like EVM history).
 #[tauri::command]
 pub(crate) async fn btc_forget(id: String) -> CmdResult<()> {
-    blocking(move || store::remove_in(&crate::pairing::dir().map_err(|e| e.0)?, &id).map(|_| ())).await
+    blocking(move || store::remove_in(&crate::pairing::dir()?, &id).map(|_| ())).await
 }
 
 #[tauri::command]
