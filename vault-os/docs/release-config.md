@@ -56,7 +56,14 @@ Run by `sign-release.sh` before anything is signed (new usage:
    `persist.adb.notify`, `PRODUCT_ADB_KEYS`, `WITH_ADB_INSECURE`, no debug init script install, no
    `start adbd` and no `ffs.adb`/`usb-ffs/adb` setup outside a `ro.debuggable=1` trigger in any
    release `.rc`; plus the rollback-index file, the voice/SMS overlay and the recovery patch
-   wiring.
+   wiring. Property rules also apply to every `*.prop` in the release directories and to each
+   file named by `TARGET_*_PROP` / `PRODUCT_*_PROPERTIES` (parsed as init does; a referenced
+   file outside the release directories, or an `import` in one, fails). Any install destination
+   or module filename `adb_keys` fails whatever the source file is called. `.rc` files (and any
+   file installed under `etc/init/`) are read with init's tokenizer: continuations joined,
+   `on`/`service`/`import` at any indentation, `enable`/`exec_start` like `start`, a
+   property-expanded service name or USB-config value counts as adb, and imports from writable
+   or unresolved paths fail.
 2. `scripts/verify-production-target-files.sh` (new release ADB policy on the target-files): any
    `(persist.)sys|vendor.usb.config` containing adb, a `persist.sys.usb.config` that is not
    exactly `none`, `ro.force.debuggable=1`, `service.adb.root=1`, `ro.adb.secure.recovery=0`,
@@ -66,13 +73,30 @@ Run by `sign-release.sh` before anything is signed (new usage:
    gadget HAL refuses for adb on user builds), `ffs.adb`/`usb-ffs/adb`/`functionfs adb` setup
    outside `ro.debuggable=1`, `setprop … usb.config …adb`, and any adbd service outside
    `init.usb.rc`. Only the recovery ramdisk's own `init.rc` (it prepares the FunctionFS endpoint
-   for `adb sideload`) is exempt, and only when it really is the recovery init.
+   for `adb sideload`; `BOOT`, `RECOVERY` or, with recovery in vendor_boot, `VENDOR_BOOT`) is
+   exempt, and only when it really is the recovery init.
+   Property files are read the way init reads them (`property_service.cpp`): whitespace around
+   `=` stripped, `#` comments, `import <path> [filter]` followed into the image (an import that
+   resolves outside the image fails), and the effective value computed in init's load order
+   (ramdisk `prop.default`, second-stage ramdisk `build.prop`, system, system_ext, system_dlkm,
+   vendor, vendor_dlkm, odm_dlkm, odm, product, debug-ramdisk `adb_debug.prop`; a later file
+   wins, `ro.*` included). The effective `ro.debuggable`/`ro.secure`/`ro.adb.secure` must be
+   0/1/1, `persist.sys.usb.config` exactly `none`, and no property file anywhere may set them to
+   anything else. Debug-ramdisk artifacts (`force_debuggable`, `adb_debug.prop`, and
+   `userdebug_plat_sepolicy.cil` in a ramdisk) fail. Init files are tokenized like init
+   (continuations, quotes, `on`/`service`/`import` at any indentation), `import`s are followed
+   anywhere in the image (writable locations fail), `enable`/`exec_start`/`exec … adbd` count
+   like `start`, an adbd service must be `disabled`, and a property-expanded service name or USB
+   function must resolve to a build-time `ro.*` constant (not `ro.boot.*`/`ro.hardware`, which
+   the bootloader sets first) that is not adbd/adb. `tests/test-production-gate.sh` keeps a
+   bluejay/crosshatch-shaped user layout with the stock idioms as a positive.
 3. `scripts/verify-appliance-target-files.sh` (DWC3 dual-role required, host-only forbidden, dwc3
    `id` node root-only).
 4. `dev-ladder/check-overrides.sh release TARGET_FILES`: no release override is packaged.
 5. `scripts/verify-rollback-index.sh` (section 5).
 
-Tests: `tests/test-production-gate.sh` (ADB negatives incl. the exact DEBUG-41 script),
+Tests: `tests/test-release-gate-gaps.sh` (adversarial negatives, audit 2026-10-13),
+`tests/test-production-gate.sh` (ADB negatives incl. the exact DEBUG-41 script),
 `tests/test-release-gates.sh` (source gate incl. the exact DEBUG-38 line, rollback gate,
 release overrides gate), `tests/test-appliance-gate.sh` (DWC3 / id node),
 `tests/test_forbidden_policy_coverage.py` (overrides ⇔ policy, ladder-required modules).

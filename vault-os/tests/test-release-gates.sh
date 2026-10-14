@@ -41,7 +41,7 @@ source_case() {  # NAME EXPECTED MUTATION...
   local name="$1" expected="$2"; shift 2
   local fixture="${work_dir}/src-${name}"
   make_source_fixture "${fixture}"
-  ( cd "${fixture}/vault-os" && eval "$@" )
+  ( cd "${fixture}/vault-os" && eval "$*" )
   expect_failure "source-${name}" "${expected}" "${SOURCE_GATE}" "${fixture}"
 }
 
@@ -87,6 +87,94 @@ source_case recovery-patch 'lacks the user-build recovery hardening patch' \
 source_case recovery-not-applied 'does not apply patches/bootable-recovery' \
   "sed -i.x 's#patches/bootable-recovery#patches/elsewhere#' scripts/install-overlay.sh"
 echo "Release source gate negative fixtures passed."
+
+# Init-model and property-file cases (audit 2026-10-13). Positives first: honest release
+# configuration written the ways init and the build accept must still pass.
+source_pass() {  # NAME MUTATION...
+  local name="$1"; shift
+  local fixture="${work_dir}/src-pass-${name}"
+  make_source_fixture "${fixture}"
+  ( cd "${fixture}/vault-os" && eval "$*" )
+  "${SOURCE_GATE}" "${fixture}" > /dev/null 2> "${work_dir}/src-pass-${name}.stderr" || {
+    echo "source positive ${name} was rejected:" >&2
+    cat "${work_dir}/src-pass-${name}.stderr" >&2
+    exit 1
+  }
+}
+# shellcheck disable=SC2016  # literal init syntax below
+{
+source_pass safe-prop-file \
+  "printf '%s\n' '# vault properties' ' ro.vendor.phonevault.example = 1' 'persist.sys.usb.config = none' > vendor/phonevault/config/vault.prop && printf 'TARGET_VENDOR_PROP += vendor/phonevault/config/vault.prop\n' >> vendor/phonevault/config/BoardConfigVault.mk"
+source_pass safe-rc-idioms \
+  "printf '%s\n' 'service vaultd /system/bin/vaultd \\' '        --flag' '    class main' '  on boot' '    enable vaultd' '    setprop sys.usb.controller \"a600000.dwc3\"' '    write /config/usb_gadget/g1/strings/0x409/serialnumber \${ro.serialno}' > vendor/phonevault/prebuilt/vault-late.rc"
+source_pass adb-keys-comment \
+  "printf '# Never install adb_keys here; see verify-release-source.sh.\n' >> ${common}"
+source_case prop-file-spaced-debuggable 'release configuration must not make the build debuggable' \
+  "printf '  ro.debuggable = 1\n' > device/phonevault/bluejay/vault.prop"
+source_case prop-file-outside 'release property file is not in the release configuration' \
+  "printf 'TARGET_SYSTEM_PROP += device/google/bluejay/debug.prop\n' >> vendor/phonevault/config/BoardConfigVault.mk"
+source_case prop-file-import 'property import in release configuration' \
+  "printf 'import /data/local.prop\n' > vendor/phonevault/config/vault.prop"
+source_case rc-continued-start 'release init script starts adbd' \
+  "printf '%s\n' 'on boot' '    start \\' '        adbd' > vendor/phonevault/prebuilt/vault-late.rc"
+source_case rc-exec-start 'release init script starts adbd' \
+  "printf '%s\n' 'on boot' '    exec_start adbd' > vendor/phonevault/prebuilt/vault-late.rc"
+source_case rc-start-expanded 'release init script starts adbd' \
+  "printf '%s\n' 'on boot' '    start \${ro.vendor.vault.svc}' > vendor/phonevault/prebuilt/vault-late.rc"
+source_case rc-setprop-expanded 'init selects adb as USB function' \
+  "printf '%s\n' 'on boot' '    setprop persist.sys.usb.config \${ro.vendor.vault.usb}' > vendor/phonevault/prebuilt/vault-late.rc"
+source_case rc-import-writable 'imports from a writable or unresolved location' \
+  "printf '%s\n' 'import /data/vault/late.rc' > vendor/phonevault/prebuilt/vault-late.rc"
+source_case rc-installed-under-other-suffix 'release init script starts adbd' \
+  "printf 'on boot\n    start adbd\n' > vendor/phonevault/prebuilt/vault-late.conf && printf 'PRODUCT_COPY_FILES += vendor/phonevault/prebuilt/vault-late.conf:\$(TARGET_COPY_OUT_VENDOR)/etc/init/vault-late.rc\n' >> ${common}"
+source_case adb-key-soong-filename 'installs a pre-authorised adb host key' \
+  "printf '%s\n' 'prebuilt_root {' '    name: \"vault_owner_key\",' '    src: \"owner.pub\",' '    filename: \"adb_keys\",' '}' >> vendor/phonevault/prebuilt/Android.bp"
+}
+echo "Release source gate init-model and property-file fixtures passed."
+
+# --------------------------------------------- install-overlay patch markers
+# apply_versioned_patch accepts a recorded patch that neither applies nor reverse-applies
+# only when later recorded patches of the same series overlap it and undoing them (newest
+# first) on a scratch copy leaves this patch reverse-applicable.
+marker_dir="${work_dir}/markers"
+mkdir -p "${marker_dir}/tree" "${marker_dir}/series" "${marker_dir}/state"
+sed -n '/^apply_versioned_patch() {/,/^}/p' "${VAULT}/scripts/install-overlay.sh" \
+  > "${marker_dir}/apply.sh"
+(
+  cd "${marker_dir}/tree" && git init -q . \
+    && printf '%s\n' a b c d e f g > policy.rc && git add . \
+    && git -c user.name=t -c user.email=t@t commit -qm upstream \
+    && sed 's/^c$/C/' policy.rc > policy.rc.new && mv policy.rc.new policy.rc \
+    && git diff > "${marker_dir}/series/0001-first.patch" \
+    && git -c user.name=t -c user.email=t@t commit -qam first \
+    && sed 's/^d$/D/' policy.rc > policy.rc.new && mv policy.rc.new policy.rc \
+    && git diff > "${marker_dir}/series/0002-second.patch" \
+    && git -c user.name=t -c user.email=t@t commit -qam second
+) || exit 1
+cp "${marker_dir}/series/0001-first.patch" "${marker_dir}/state/t-0001-first.patch"
+cp "${marker_dir}/series/0002-second.patch" "${marker_dir}/state/t-0002-second.patch"
+run_marker() {
+  # shellcheck source=/dev/null
+  ( source "${marker_dir}/apply.sh" \
+      && apply_versioned_patch "${marker_dir}/tree" "${marker_dir}/series/0001-first.patch" \
+           "${marker_dir}/state/t-0001-first.patch" "marker test" )
+}
+git -C "${marker_dir}/tree" apply --check "${marker_dir}/series/0001-first.patch" 2>/dev/null \
+  && { echo "marker fixture: 0001 must not apply standalone" >&2; exit 1; }
+git -C "${marker_dir}/tree" apply --reverse --check "${marker_dir}/series/0001-first.patch" 2>/dev/null \
+  && { echo "marker fixture: 0001 must not reverse-apply standalone" >&2; exit 1; }
+run_marker > "${work_dir}/marker-overlap.out" 2>&1 || {
+  echo "recorded patch under a recorded overlapping later patch was rejected:" >&2
+  cat "${work_dir}/marker-overlap.out" >&2
+  exit 1
+}
+grep -Fq 'verified under 1 later overlapping patch' "${work_dir}/marker-overlap.out"
+mv "${marker_dir}/state/t-0002-second.patch" "${marker_dir}/state/t-0002-second.saved"
+expect_failure marker-later-unrecorded 'recorded as applied but neither applies nor is present' run_marker
+mv "${marker_dir}/state/t-0002-second.saved" "${marker_dir}/state/t-0002-second.patch"
+printf '%s\n' a b X Y e f g > "${marker_dir}/tree/policy.rc"
+expect_failure marker-tree-lost-patches 'recorded as applied but neither applies nor is present' run_marker
+echo "install-overlay patch marker fixtures passed."
 
 # -------------------------------------------------------------- rollback gate
 version_mk="${VAULT}/vendor/phonevault/config/release-version.mk"
