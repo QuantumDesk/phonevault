@@ -195,6 +195,33 @@ mod tests {
         assert_eq!(cache.unconfirmed(), 0);
     }
 
+    /// Audit proof (2026-10-13): an untrusted Esplora that reports change addresses 0..=899 as used
+    /// moves `next[1]` (the change index btc_quote builds with, mod.rs) to 900. The phone shows
+    /// change up to index 1000 as "Change back to your wallet ✓" with no warning
+    /// (BtcAuditProofTest), yet an honest gap-20 scan never reaches it.
+    #[test]
+    fn lying_server_pushes_change_index_far_past_the_gap_limit() {
+        struct Liar { used: BTreeSet<String> }
+        impl Source for Liar {
+            fn address(&self, a: &str) -> Result<AddressInfo, String> {
+                let mut cs = Stats::default();
+                if self.used.contains(a) { cs.tx_count = 1; }
+                Ok(AddressInfo { address: a.to_string(), chain_stats: cs, mempool_stats: Stats::default() })
+            }
+            fn txs(&self, _a: &str) -> Result<Vec<Tx>, String> { Ok(vec![]) }
+        }
+        let (a, _) = test_account(Net::Bitcoin, Kind::P2wpkh, 1);
+        let used: BTreeSet<String> = (0..900).map(|i| a.derive(1, i).unwrap().address.to_string()).collect();
+        let mut cache = Cache::default();
+        scan(&a, &Liar { used }, &mut cache, true, 1_800_000_000).unwrap();
+        assert_eq!(cache.next[1], 900, "the next change address is index 900");
+        // an honest server afterwards: the gap-20 scan stops at change index 19
+        let mut honest = Cache::default();
+        scan(&a, &Liar { used: BTreeSet::new() }, &mut honest, true, 1_800_000_000).unwrap();
+        assert_eq!(honest.next[1], 0);
+        assert!(900 > GAP);
+    }
+
     #[test]
     fn entries_from_the_fixture() {
         let t = parse_txs(crate::btc::esplora::fixtures::TXS).unwrap();
