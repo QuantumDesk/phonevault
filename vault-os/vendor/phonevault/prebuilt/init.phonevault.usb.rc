@@ -36,7 +36,7 @@ on boot
     write /sys/class/typec/port0/port_type sink
 
 # Re-assert after boot in case anything reset the port type while services
-# started (dev ladder rung 3). tcpm then presents Rd only: the phone charges and
+# started (dev ladder rung 3, vault-os/docs/hardening-ladder.md). tcpm then presents Rd only: the phone charges and
 # is a USB device, never sources VBUS or hosts, and rejects DR/PR swaps.
 on property:sys.boot_completed=1
     write /sys/class/typec/port0/port_type sink

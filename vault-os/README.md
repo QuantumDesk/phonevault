@@ -7,7 +7,7 @@ use GrapheneOS branding or update infrastructure.
 | Phone | Role | Base | Ladder |
 |---|---|---|---|
 | Pixel 6a (`bluejay`) | launch target | LineageOS 24.0 / Android 17 | [`dev-ladder-bluejay/`](dev-ladder-bluejay/README.md), plan in [`docs/port-bluejay.md`](docs/port-bluejay.md) |
-| Pixel 3 XL (`crosshatch`) | development phone | LineageOS 22.2 / Android 15 | [`dev-ladder/`](dev-ladder/README.md) |
+| Pixel 3 XL (`crosshatch`) | development phone | LineageOS 22.2 / Android 15 | [`dev-ladder/`](dev-ladder/README.md) (rung-4b baseline), archived rungs in [`docs/hardening-ladder.md`](docs/hardening-ladder.md) |
 
 The build outline below and the release scripts in `scripts/` are written for
 crosshatch; the 6a uses the same `vendor/phonevault` product with its own device

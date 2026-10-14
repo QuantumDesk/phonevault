@@ -260,7 +260,7 @@ certificate (`d8eab12d…4b53`) that signs the dev appliance APK.
 Both runs used `aoa_client.py attest` on the phone side and the companion's `attest_verify`
 example to verify the saved exchange.
 
-**Pixel 3 XL (Titan M), development rung 2d-d.** StrongBox chain of 4 to the Google RSA root
+**Pixel 3 XL (Titan M), development rung 2d-d** ([hardening-ladder.md](hardening-ladder.md)). StrongBox chain of 4 to the Google RSA root
 (pinned by key; that root certificate expired 2026-05-24), factory provisioning, attestation v4 /
 KeyMint 41, package `dev.phonevault.signer` with the development signer, binding to the paired
 address, not revoked. Boot state: unlocked, orange, boot key all zeros. Verdict: **FAIL** with

@@ -112,7 +112,8 @@ python3 vault-os/tests/test_forbidden_policy_coverage.py
 Building an image needs a 64-bit Linux build host with several hundred GB of free disk and a
 LineageOS tree (22.2 for the Pixel 3 XL, 24.0 for the Pixel 6a). The outline is in
 [vault-os/README.md](vault-os/README.md); the step-by-step ladders are
-[vault-os/dev-ladder/README.md](vault-os/dev-ladder/README.md) (Pixel 3 XL) and
+[vault-os/dev-ladder/README.md](vault-os/dev-ladder/README.md) (Pixel 3 XL; the archived rungs are
+summarised in [vault-os/docs/hardening-ladder.md](vault-os/docs/hardening-ladder.md)) and
 [vault-os/dev-ladder-bluejay/README.md](vault-os/dev-ladder-bluejay/README.md) (Pixel 6a).
 Paths in those documents are placeholders (`$LINEAGE_TREE`, `$OUT_DIR`, `<build-host>`); set
 them for your machine.

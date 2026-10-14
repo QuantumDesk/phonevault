@@ -51,7 +51,7 @@ The spike is reversible: `adb shell locksettings set-pin 123456` then
 
 ## As built, and what the hardware showed
 
-Implemented and passing on development phones (Pixel 3 XL from rung 2d-b on; Pixel 6a from b0):
+Implemented and passing on development phones (Pixel 3 XL from rung 2d-b on, see [hardening-ladder.md](hardening-ladder.md); Pixel 6a from b0):
 `credentialtest.sh` (relock, wrong-then-right PIN, phrase reveal inside and after the window,
 reboot) passes repeatedly, together with the USB signing suites.
 

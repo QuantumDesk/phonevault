@@ -317,7 +317,7 @@ its lens launcher and bluejay RRO), `AudioFX`, `Camelot` (PDF), `Canvas`
 `LiveWallpapersPicker`, `PhotoTable`, `SoundPicker`, `ThemePicker`, `ThemesStub`,
 `AccessibilityMenu`, `CameraExtensionsProxy`, `DeviceAsWebcam` (UVC: no instance since b3),
 `DeviceDiagnostics`, `DownloadProviderUi`, `EmergencyInfo`, `SettingsIntelligence`, `Tag`.
-Reasons as crosshatch 4a ([../dev-ladder/README.md](../dev-ladder/README.md#removed-in-4a-40-modules)).
+Reasons as crosshatch 4a ([hardening-ladder.md](../docs/hardening-ladder.md#removed-in-4a-40-modules)).
 
 **b4c (slice B, 47):** telephony UI/role apps `CallLogBackup CarrierDefaultApp
 CellBroadcastLegacyApp Contacts Dialer SimAppDialog Stk messaging`; backup `BackupRestoreConfirmation
@@ -330,7 +330,7 @@ StatementService VpnDialogs`; providers `BookmarkProvider CalendarProvider E2eeC
 PartnerBookmarksProvider`; Pixel blobs `NowPlayingPrebuilt DeviceIntelligenceNetworkPrebuiltAstrea
 DevicePersonalizationAiAiPrebuiltPixel2021 HardwareInfo HotwordEnrollmentOKGoogleFUSIONPro
 HotwordEnrollmentXGoogleFUSIONPro PixelCameraServices PersistentBackgroundCameraServices`.
-Reasons as crosshatch 4b ([../dev-ladder/README.md](../dev-ladder/README.md#removed-in-4b-57-modules-on-top-of-4a)).
+Reasons as crosshatch 4b ([hardening-ladder.md](../docs/hardening-ladder.md#removed-in-4b-57-modules-on-top-of-4a)).
 
 **Kept, unlike or beyond crosshatch:** `ModuleMetadata` (4b's system_server boot loop),
 `GoogleParts` (on gs101 it is only the boot-time eUICC disabler, not Active Edge), `Settings`,

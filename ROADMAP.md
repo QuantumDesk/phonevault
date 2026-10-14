@@ -55,8 +55,8 @@ messaging, and a watch-only Bitcoin wallet. Unsigned and not notarized.
 
 ### Vault OS
 
-- **Pixel 3 XL (development):** the hardening ladder ([dev-ladder](vault-os/dev-ladder/README.md))
-  has passed on hardware through rung 4b: automatic device-owner provisioning and kiosk, our AVB
+- **Pixel 3 XL (development):** the hardening ladder ([summary](vault-os/docs/hardening-ladder.md),
+  [dev-ladder](vault-os/dev-ladder/README.md)) has passed on hardware through rung 4b: automatic device-owner provisioning and kiosk, our AVB
   key with verity enforcing, the appliance VINTF manifest, kernel without radios, modem, camera,
   sensors, DSPs or extra USB functions, USB locked to accessory (+ adb on dev images) and
   device-only, and about 100 unused apps and services removed. The release configuration folds

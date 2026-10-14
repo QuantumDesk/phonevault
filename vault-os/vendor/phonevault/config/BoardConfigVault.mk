@@ -34,7 +34,7 @@ DEVICE_FRAMEWORK_COMPATIBILITY_MATRIX_FILE := \
 # Merge the appliance fragment after Crosshatch's stock b1c1_defconfig. This
 # removes hardware attack surface in the kernel rather than relying solely on
 # absent userspace services and firmware. The fragment equals the boot-tested
-# dev-ladder slices A-D (rung 2d-d): DWC3 stays dual-role (a gadget-only build
-# never enumerated on USB); host/source roles are refused by the USB HALs and
+# dev-ladder slices A-D (rung 2d-d, vault-os/docs/hardening-ladder.md): DWC3
+# stays dual-role (a gadget-only build never enumerated on USB); host/source roles are refused by the USB HALs and
 # the Type-C port is pinned to sink by init instead.
 TARGET_KERNEL_CONFIG += phonevault.config
