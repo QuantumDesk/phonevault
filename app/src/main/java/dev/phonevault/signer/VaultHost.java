@@ -2,9 +2,11 @@ package dev.phonevault.signer;
 
 import android.app.Activity;
 import android.graphics.Bitmap;
+import android.os.Handler;
 
 import org.web3j.crypto.Credentials;
 
+import java.security.SecureRandom;
 import java.util.concurrent.ExecutorService;
 
 /**
@@ -18,6 +20,10 @@ import java.util.concurrent.ExecutorService;
 interface VaultHost {
     Activity activity();
     Pages pages();
+    /** MainActivity's UI-thread handler (onDestroy removes everything posted to it). */
+    Handler ui();
+    /** The activity's one SecureRandom (spot-check choices, BIP-340 auxiliary randomness). */
+    SecureRandom random();
     /** MainActivity's state lock: session check + publish (and signing + send) as one step. */
     Object stateLock();
     /** The single crypto thread (signing, key loads, wallet storage). */

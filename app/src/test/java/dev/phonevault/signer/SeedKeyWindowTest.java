@@ -66,7 +66,7 @@ public class SeedKeyWindowTest {
 
     @Test public void backupRetryStaysInsideTheOwningFlow() throws Exception {
         String open = SourceGuard.definition("private void openBackup(int token, int s, boolean checkOnly, boolean retried) {");
-        assertTrue(open.contains("!retried && authLapsed(e)"));
+        assertTrue(open.contains("!retried && KeystoreFailures.authLapsed(e)"));
         assertTrue("retry re-opens with the same token", open.contains("openBackup(token, s, checkOnly, true)"));
         assertEquals("re-entering beginSensitive is refused while the flow is active",
                 -1, open.indexOf("startBackupAccess("));

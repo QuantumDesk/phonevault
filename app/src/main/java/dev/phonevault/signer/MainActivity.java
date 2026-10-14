@@ -69,6 +69,8 @@ import java.util.function.Function;
 public final class MainActivity extends Activity implements AccessoryTransport.Listener {
     private static final String TAG = "Vault";
     private final ExecutorService cryptoExecutor = Executors.newSingleThreadExecutor();
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private final SecureRandom random = new SecureRandom();
     private final AtomicBoolean requestPending = new AtomicBoolean(false);
     /**
      * Device attestation (USB "attest", AttestationKey) runs on its own thread so a StrongBox key
@@ -175,32 +177,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final ScreenHost host = new ScreenHost();
     /** First-run wizard, dice entropy, restore (first run and over an existing wallet). */
     private final SetupScreens setup = new SetupScreens(host);
+    /** Recovery phrase reveal / SeedQR / spot check / reminder, and Replace. */
+    private final BackupScreens backup = new BackupScreens(host);
     private boolean batteryRegistered;
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { onBattery(readBattery(intent)); }
     };
     private String statusMessage = "USB disconnected · connect a host when ready";
-    private int activeSensitive = -1, backupPage, replacementOperation;
+    private int activeSensitive = -1;
     private Runnable afterReauth;
-    private String[] backupWords;
-    private String backupIdentity;
-    private BackupCheck.Challenge backupChallenge;
-    private SeedVault.Generation replacementCandidate;
-    private final SecureRandom random = new SecureRandom();
-    private long seedIdleDeadline, seedHardDeadline;
-    private TextView seedTimer;
     private char[][] pinSetupEntries;
 
     // ------------------------------------------------------------------ device security & lifecycle
     /** Idle time (no touch) before the vault locks and drops the key from memory. */
     private static final long IDLE_LOCK_MS = 2 * 60 * 1000L;
-    /** Idle time before the phrase hides. Copying 24 words onto paper means not touching the phone;
-     *  every touch or page turn restarts it. */
-    private static final long SEED_TIMEOUT_MS = 120 * 1000L;
-    /** Absolute cap on one reveal session, regardless of touches. */
-    private static final long SEED_SESSION_MS = 8 * 60 * 1000L;
-    /** Page to reopen at after an idle hide, so the user does not start over at word 1. */
-    private int resumeBackupPage;
     /** True from the moment a PIN is SET in this unlocked session until it is used once or the
      *  vault locks: the first-run wizard does not ask for the PIN again seconds after setting it. */
     private boolean firstRunPinFresh;
@@ -241,9 +231,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
     private static final int SCREEN_OFF_TIMEOUT_MS = 60 * 1000;
-    private final Handler ui = new Handler(Looper.getMainLooper());
     private final Runnable idleLock = this::lock;
-    private final Runnable hideSeed = this::tickSeedTimer;
     /** Set when a lock closed a live USB session: the host must unplug and reconnect to resume. */
     private boolean usbReplugHint;
     private final Runnable pixelShift = this::shiftPixels;
@@ -345,8 +333,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     @Override public void onUserInteraction() {
         super.onUserInteraction();
         if (unlocked) armIdleLock();
-        if (sensitive.active() && backupWords != null)
-            seedIdleDeadline = SystemClock.elapsedRealtime() + SEED_TIMEOUT_MS;
+        if (sensitive.active() && backup.showingWords()) backup.touched();
         devDumpUi(); // dev-only: every touch refreshes the UI dump (no-op in release)
     }
 
@@ -469,27 +456,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void withSeedKey(String why, Runnable op, Runnable onCancel) { credentialGate.withSeedKey(why, op, onCancel); }
 
     private void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) { credentialGate.confirmDevicePin(why, onOk, onCancel); }
-
-    /** Keystore refused because the PIN window lapsed (the op took longer than the window). */
-    private static boolean authLapsed(Throwable t) {
-        for (Throwable c = t; c != null; c = c.getCause()) {
-            if (c instanceof UserNotAuthenticatedException) return true;
-            // Keystore2 may report the same refusal as a KeyStoreException instead.
-            if (c instanceof KeyStoreException
-                    && ((KeyStoreException) c).getNumericErrorCode()
-                            == KeyStoreException.ERROR_USER_AUTHENTICATION_REQUIRED) return true;
-            String m = c.getMessage();
-            if (m != null && (m.contains("not authenticated") || m.contains("KEY_USER_NOT_AUTHENTICATED"))) return true;
-        }
-        return false;
-    }
-
-    /** Class names and messages of an exception chain for the log (no key material is ever in them). */
-    private static String chain(Throwable t) {
-        StringBuilder b = new StringBuilder();
-        for (Throwable c = t; c != null; c = c.getCause()) b.append(c.getClass().getName()).append(": ").append(c.getMessage()).append(" <- ");
-        return b.toString();
-    }
 
     /** Locked gate in credential mode: our screen, the system verifies the PIN (CredentialGate#show). */
     private void showCredentialGate(int s) { credentialGate.show(s); }
@@ -686,14 +652,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         bootUnlock.noteLock(bootId()); // no silent boot unlock after any lock this boot
         requestPending.set(false);
         ui.removeCallbacks(idleLock);
-        ui.removeCallbacks(hideSeed);
+        backup.stopSeedTimer();
         showPinGate(null);
     }
 
     private void armIdleLock() {
         ui.removeCallbacks(idleLock);
         // While the recovery phrase (or its check) is on screen, the seed timer owns the timeout.
-        long delay = backupWords != null ? Math.max(idleTimeoutMs, SEED_TIMEOUT_MS + 10_000L) : idleTimeoutMs;
+        long delay = backup.showingWords() ? Math.max(idleTimeoutMs, BackupScreens.SEED_TIMEOUT_MS + 10_000L) : idleTimeoutMs;
         ui.postDelayed(idleLock, delay);
     }
 
@@ -704,20 +670,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * commit is in progress, which owns its own outcome) and a parked USB host is replayed.
      */
     private void clearSensitiveUi() {
-        ui.removeCallbacks(hideSeed);
+        backup.stopSeedTimer();
         if (approvalDecision == null) keepScreenOn(false);
         sensitive.reset();
         activeSensitive = -1;
         afterReauth = null;
-        if (backupWords != null) Arrays.fill(backupWords, null);
-        backupWords = null;
-        if (backupChallenge != null) backupChallenge.destroy();
-        backupChallenge = null;
-        backupIdentity = null;
-        replacementCandidate = null;
-        seedTimer = null;
-        wipeSeedQr();
-        seedQrRequested = false;
+        backup.clear(); // the phrase, its check, a replacement candidate, the SeedQR
         setup.clear(); // typed recovery words and dice rolls never outlive the unlocked session
         endPassphraseEntry(); // nor a typed passphrase
         firstRunPinFresh = false;
@@ -1017,11 +975,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             root.addView(box, Pages.matchWrap(pages.dp(22)));
             pages.action(root, "Switch account", false, this::showAccounts);
             pages.card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
-            addBackupReminderCard(root);
+            backup.addBackupReminderCard(root);
         } else {
             pages.card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
-            pages.action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
-            pages.action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
+            pages.action(root, "Write down recovery phrase", true, backup::confirmRevealBackup);
+            pages.action(root, "I have my backup · check words", false, () -> backup.startBackupAccess(true));
         }
         if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
         statusView = VaultTheme.bodyText(this, statusMessage, VaultTheme.BODY_SIZE, VaultTheme.DIM);
@@ -1038,15 +996,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pages.card(root, "Backup", backupVerified
                 ? "Spot-checked for Account 1. Keep the written 24 words somewhere safe and private."
                 : "Not checked yet. Receiving and signing stay paused until it is.");
-        pages.action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
-        pages.action(root, "Show recovery phrase", false, this::confirmRevealBackup);
+        pages.action(root, "Check my backup", !backupVerified, () -> backup.startBackupAccess(true));
+        pages.action(root, "Show recovery phrase", false, backup::confirmRevealBackup);
         pages.card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
         pages.action(root, "Passphrase wallet", false, this::showPassphraseWallet);
-        pages.action(root, "Show as SeedQR", false, this::confirmRevealSeedQr);
-        pages.action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, this::showBackupReminderSettings);
+        pages.action(root, "Show as SeedQR", false, backup::confirmRevealSeedQr);
+        pages.action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, backup::showBackupReminderSettings);
         pages.action(root, "Bitcoin sharing", false, this::showBtcSharing);
         pages.card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
-        pages.action(root, "Replace with a new wallet", false, this::confirmReplace);
+        pages.action(root, "Replace with a new wallet", false, backup::confirmReplace);
         pages.action(root, "Restore a different wallet", false, setup::confirmRestoreOver);
         pages.action(root, "Lock now", false, this::lock);
         pages.present(root, "security");
@@ -1281,368 +1239,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         gate.setSubmitRequired(remaining == 1 && !pin.eraseOutstanding());
     }
 
-    private void confirmRevealBackup() { seedQrRequested = false; startBackupAccess(false); }
-
-    private void startBackupAccess(boolean checkOnly) {
-        beginSensitive(checkOnly ? "check your backup" : "view your recovery phrase",
-                () -> openBackup(activeSensitive, session.get(), checkOnly, false));
-    }
-
-    /**
-     * Decrypt the phrase for the sensitive flow {@code token} already owns. If the chip refuses
-     * because the PIN window closed before the decrypt reached it (SeedKeyWindow), ask for the PIN
-     * once more and retry inside the SAME flow: re-entering {@link #beginSensitive} would be
-     * refused (the flow is still active) and leave the loading screen up for good.
-     */
-    private void openBackup(int token, int s, boolean checkOnly, boolean retried) {
-        pages.showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
-        cryptoExecutor.execute(() -> {
-            try {
-                if (!sensitiveValid(token, s)) return;
-                String mnemonic = vault.revealMnemonic(() -> sensitiveValid(token, s));
-                String[] words = mnemonic.split(" ");
-                runOnUiThread(() -> {
-                    if (!sensitiveValid(token, s)) { Arrays.fill(words, null); return; }
-                    backupWords = words;
-                    backupIdentity = walletId; // the backup covers the wallet: its account-0 identity
-                    backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
-                    startSeedTimer();
-                    if (checkOnly) startWordCheck();
-                    else if (seedQrRequested) showSeedQr();
-                    else showPhrasePage();
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (!sensitiveValid(token, s)) return;
-                    if (!retried && authLapsed(e)) {
-                        credentialGate.forgetConfirmation();
-                        confirmDevicePin("Confirm your PIN to open your backup",
-                                () -> { if (sensitiveValid(token, s)) openBackup(token, s, checkOnly, true); },
-                                this::hideBackup);
-                        return;
-                    }
-                    Log.w(TAG, "backup open failed: " + chain(e));
-                    pages.showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
-                });
-            }
-        });
-    }
-
     // ------------------------------------------------------------------ SeedQR + backup reminder
     // (logic lives in SeedQr / SeedQrView / BackupReminder; these are only the screens)
-
-    /** True when the PIN-gated reveal should open on the SeedQR instead of the words. */
-    private boolean seedQrRequested;
-    private SeedQr.Format seedQrFormat = SeedQr.Format.COMPACT;
-    private SeedQrView seedQrView;
-
-    private void confirmRevealSeedQr() { seedQrRequested = true; startBackupAccess(false); }
-
-    /**
-     * The recovery phrase as a SeedQR, for copying onto the backup card's grid. Same protections as
-     * the phrase pages: inside the sensitive flow (PIN, no USB session), FLAG_SECURE window, the seed
-     * timer, and Hide / Back / lock clear it.
-     */
-    private void showSeedQr() {
-        if (!sensitive.active() || backupWords == null || replacementCandidate != null) return;
-        wipeSeedQr();
-        SeedQr.Modules modules;
-        try {
-            modules = SeedQr.encode(backupWords, seedQrFormat);
-        } catch (RuntimeException e) {
-            Log.w(TAG, "SeedQR unavailable: " + e.getClass().getSimpleName());
-            pages.showInfo("SeedQR unavailable", "This recovery phrase could not be shown as a SeedQR. Your written words are the backup; nothing changed.", this::hideBackup);
-            return;
-        }
-        boolean compact = seedQrFormat == SeedQr.Format.COMPACT;
-        LinearLayout root = pages.page("RECOVERY PHRASE · SEEDQR",
-                compact ? "CompactSeedQR · 25 × 25" : "Standard SeedQR · 29 × 29",
-                "Copy each black square onto the matching grid of your backup card: row and column numbers match. Never photograph or scan this screen.");
-        seedQrView = new SeedQrView(this, modules);
-        root.addView(seedQrView, Pages.matchWrap(pages.dp(4)));
-        pages.card(root, "Same secret as your 24 words", compact
-                ? "SeedSigner CompactSeedQR (binary). Use the card with the 25 × 25 grid. Wallets that support SeedQR restore it; ordinary camera apps cannot read it."
-                : "SeedSigner Standard SeedQR (digits). Use the card with the 29 × 29 grid. More squares to copy, and any QR reader can decode it.");
-        pages.action(root, "Hide", true, this::hideBackup);
-        pages.action(root, compact ? "Use Standard SeedQR (29 × 29)" : "Use CompactSeedQR (25 × 25)", false, () -> {
-            seedQrFormat = compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT;
-            showSeedQr();
-        });
-        pages.action(root, "Show as words", false, () -> { wipeSeedQr(); backupPage = 0; showPhrasePage(); });
-        addSeedTimer(root);
-        pages.present(root, "backup-seedqr");
-    }
-
-    private void wipeSeedQr() {
-        if (seedQrView != null) seedQrView.wipe();
-        seedQrView = null;
-    }
-
-    /** Home, verified wallet, no request in progress: a gentle periodic "check your backup". */
-    private void addBackupReminderCard(LinearLayout root) {
-        if (!backupVerified || transport != null || approvalDecision != null || requestPending.get()) return;
-        long now = System.currentTimeMillis();
-        if (!backupReminder.due(now)) return;
-        LinearLayout box = VaultTheme.box(this);
-        box.addView(VaultTheme.bodyText(this, "BACKUP CHECK", 13, VaultTheme.FAINT));
-        TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), VaultTheme.BODY_SIZE, VaultTheme.INK);
-        headline.setPadding(0, pages.dp(6), 0, 0);
-        box.addView(headline);
-        TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", VaultTheme.BODY_SIZE - 2, VaultTheme.DIM);
-        body.setPadding(0, pages.dp(6), 0, 0);
-        box.addView(body);
-        pages.action(box, "Check my backup now", false, () -> startBackupAccess(true));
-        pages.action(box, "Remind me in 2 weeks", false, () -> {
-            if (!backupReminder.snooze(System.currentTimeMillis())) statusMessage = "Reminder snooze not saved";
-            showHome();
-        });
-        root.addView(box, Pages.matchWrap(pages.dp(12)));
-    }
-
-    private void showBackupReminderSettings() {
-        LinearLayout root = pages.page("SECURITY / BACKUP REMINDER", "Check your backup",
-                "Now and then Home suggests a two-minute check: pick 3 words from your written backup. Your phrase is not shown, and the reminder never interrupts a request.");
-        int last = backupReminder.lastCheckDay();
-        pages.card(root, "Last checked", last < 0 ? "Not recorded on this phone yet"
-                : LocalDate.ofEpochDay(last) + " (by this phone's clock)");
-        int current = backupReminder.intervalDays();
-        for (int days : BackupReminder.CHOICES) {
-            pages.action(root, BackupReminder.label(days), days == current, () -> {
-                if (backupReminder.setIntervalDays(days)) showBackupReminderSettings();
-                else pages.showInfo("Setting not saved", "Your previous reminder setting is still active.", this::showBackupReminderSettings);
-            });
-        }
-        pages.action(root, "Back to Security", false, this::showSecurity);
-        pages.present(root, "reminder-settings");
-    }
-
-    private void startSeedTimer() {
-        long now = SystemClock.elapsedRealtime();
-        seedHardDeadline = now + SEED_SESSION_MS;
-        seedIdleDeadline = now + SEED_TIMEOUT_MS;
-        // The phrase/SeedQR has its own hide timer; don't let a short screen timeout switch the
-        // screen off (and lock) while someone is copying words. Cleared in clearSensitiveUi.
-        keepScreenOn(true);
-        ui.removeCallbacks(hideSeed);
-        ui.post(hideSeed);
-    }
-
-    private void tickSeedTimer() {
-        if (!sensitive.active() || backupWords == null || replacement.state() == ReplacementState.COMMITTING) return;
-        long remaining = Math.min(seedHardDeadline, seedIdleDeadline) - SystemClock.elapsedRealtime();
-        if (remaining <= 0) {
-            boolean discarded = replacementCandidate != null;
-            if (!discarded) resumeBackupPage = backupPage;
-            hideBackup();
-            statusMessage = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
-                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of 6.";
-            pages.showInfo("Backup hidden", statusMessage, this::showHome);
-            return;
-        }
-        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · any touch restarts the timer · 8 minute session limit");
-        ui.postDelayed(hideSeed, 1000);
-    }
-
-    private void addSeedTimer(LinearLayout root) {
-        seedTimer = VaultTheme.bodyText(this, "", 14, VaultTheme.FAINT);
-        seedTimer.setPadding(0, pages.dp(18), 0, 0);
-        root.addView(seedTimer);
-        ui.removeCallbacks(hideSeed);
-        tickSeedTimer();
-    }
-
-    private void showPhrasePage() {
-        if (!sensitive.active() || backupWords == null) return;
-        LinearLayout root = pages.page(replacementCandidate == null ? "RECOVERY PHRASE" : "NEW WALLET · NOT ACTIVE",
-                "Write words " + (backupPage * 4 + 1) + "–" + (backupPage * 4 + 4),
-                "Page " + (backupPage + 1) + " of 6. Write each word beside its number. Never photograph or share your phrase.");
-        for (int i = backupPage * 4; i < backupPage * 4 + 4; i++) {
-            LinearLayout row = VaultTheme.box(this);
-            row.setOrientation(LinearLayout.HORIZONTAL);
-            TextView number = VaultTheme.monoText(this, String.format(Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
-            number.setWidth(pages.dp(44));
-            row.addView(number);
-            row.addView(VaultTheme.monoText(this, backupWords[i], 23, VaultTheme.INK),
-                    new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-            root.addView(row, Pages.matchWrap(pages.dp(12)));
-        }
-        if (backupPage < 5) pages.action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
-        else pages.action(root, "I've written them down · spot-check", true, this::startWordCheck);
-        if (backupPage > 0) pages.action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
-        if (replacementCandidate == null) pages.action(root, "Show as SeedQR", false, this::showSeedQr);
-        pages.action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
-        addSeedTimer(root);
-        pages.present(root, "phrase");
-    }
-
-    private void startWordCheck() {
-        if (backupWords == null || !sensitive.active()) return;
-        if (backupChallenge != null) backupChallenge.destroy();
-        backupChallenge = new BackupCheck.Challenge(backupWords, random);
-        showWordCheck();
-    }
-
-    private void showWordCheck() {
-        if (backupChallenge == null || !sensitive.active()) return;
-        int position = backupChallenge.position();
-        LinearLayout root = pages.page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF " + backupChallenge.total(),
-                "Find word " + (position + 1), "Use your written backup. Select the word beside this number.");
-        List<String> choices = new ArrayList<>();
-        choices.add(backupWords[position]);
-        List<String> dictionary = MnemonicUtils.getWords();
-        while (choices.size() < 6) {
-            String next = dictionary.get(random.nextInt(dictionary.size()));
-            if (!choices.contains(next)) choices.add(next);
-        }
-        Collections.shuffle(choices, random);
-        final BackupCheck.Challenge challenge = backupChallenge;
-        final int token = activeSensitive, s = session.get();
-        for (String choice : choices) pages.action(root, choice, false, () -> {
-            if (!sensitiveValid(token, s) || backupChallenge != challenge) return;
-            if (!challenge.answer(choice)) {
-                challenge.destroy();
-                LinearLayout failed = pages.page("BACKUP NEEDS ATTENTION", "That word did not match", "Check the number and spelling on your paper. Receiving stays paused until the full check is complete.");
-                pages.action(failed, "Review recovery words", true, () -> { backupPage = 0; showPhrasePage(); });
-                pages.action(failed, "Restart the 24-word check", false, this::startWordCheck);
-                pages.action(failed, "Cancel", false, this::hideBackup);
-                addSeedTimer(failed);
-                pages.present(failed, "backup-error");
-            } else if (challenge.complete()) showBackupChecked();
-            else showWordCheck();
-        });
-        pages.action(root, "Cancel check", false, this::hideBackup);
-        addSeedTimer(root);
-        pages.present(root, "backup-check");
-    }
-
-    private void showBackupChecked() {
-        if (backupChallenge == null || !backupChallenge.complete()) return;
-        ui.removeCallbacks(hideSeed);
-        if (backupWords != null) Arrays.fill(backupWords, null);
-        backupWords = null;
-        backupChallenge.destroy();
-        int checked = backupChallenge == null ? BackupCheck.SPOT_CHECK : backupChallenge.total();
-        backupChallenge = null;
-        String address = replacementCandidate == null ? backupIdentity : replacementCandidate.address;
-        LinearLayout root = pages.page(checked + " OF " + checked + " WORDS CHECKED",
-                replacementCandidate == null ? "Your backup matches" : "Ready to replace?",
-                replacementCandidate == null ? "Confirm the account below. This check does not replace an independent restore drill."
-                        : "Your current wallet will be replaced. Keep its backup if it controls any assets. The new wallet is not active until you confirm.");
-        pages.card(root, replacementCandidate == null ? "Account 1" : "New Account 1",
-                Keys.toChecksumAddress(address));
-        pages.card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
-        pages.action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
-                replacementCandidate == null ? this::saveBackupCheck
-                        : () -> withSeedKey("Confirm your PIN to activate the new wallet", this::activateReplacement));
-        pages.action(root, "Cancel", false, this::hideBackup);
-        pages.present(root, "backup-confirm");
-    }
-
-    private void saveBackupCheck() {
-        final int token = activeSensitive, s = session.get();
-        final String address = backupIdentity;
-        pages.showLoading("Saving backup check", "Confirming this account's recovery status…");
-        cryptoExecutor.execute(() -> {
-            try {
-                synchronized (stateLock) {
-                    if (!sensitiveValid(token, s) || credentials == null || address == null || !address.equalsIgnoreCase(walletId)) return;
-                    backupCheck.record(address);
-                    backupVerified = true;
-                }
-                runOnUiThread(() -> {
-                    if (!sensitiveValid(token, s)) return;
-                    statusMessage = "Backup checked · ready to receive";
-                    hideBackup();
-                });
-            } catch (Exception e) {
-                runOnUiThread(() -> {
-                    if (sensitiveValid(token, s))
-                        pages.showInfo("Backup status not saved", "Your wallet is unchanged. Please repeat the check before receiving or signing.", this::hideBackup);
-                });
-            }
-        });
-    }
-
-    private void confirmReplace() {
-        if (!backupVerified) {
-            pages.showInfo("Check your existing backup first", "Replacing a wallet requires a verified backup of the current account.", this::showHome);
-            return;
-        }
-        beginSensitive("replace your wallet", () -> {
-            final int token = activeSensitive, s = session.get();
-            LinearLayout root = pages.page("SECURITY / REPLACE WALLET", "Keep your current backup", "Replacement creates a different account. Assets on the old account remain controlled by its original phrase.");
-            pages.card(root, "Nothing changes yet", "You will write down all 24 new words and pass a spot-check before a separate Activate step. Cancellation keeps your current wallet.");
-            pages.action(root, "Prepare a new wallet", true, () -> {
-                if (!sensitiveValid(token, s)) return;
-                int op = beginReplacement();
-                if (op < 0) return;
-                replacementOperation = op;
-                pages.showLoading("Preparing a new wallet", "Your current wallet remains active until the final confirmation.");
-                cryptoExecutor.execute(() -> {
-                    try {
-                        if (!sensitiveValid(token, s)) return;
-                        SeedVault.Generation candidate = vault.prepareReplacement(new byte[0]);
-                        recordEntropyReport(false);
-                        runOnUiThread(() -> {
-                            if (!sensitiveValid(token, s) || !markPrepared(op)) return;
-                            replacementCandidate = candidate;
-                            backupWords = candidate.mnemonic.split(" ");
-                            backupPage = 0;
-                            startSeedTimer();
-                            showPhrasePage();
-                        });
-                    } catch (Exception e) {
-                        endReplacement(op);
-                        runOnUiThread(() -> {
-                            if (sensitiveValid(token, s))
-                                pages.showInfo("Could not prepare a wallet", "Your current wallet is unchanged. Lock and retry.", this::hideBackup);
-                        });
-                    }
-                });
-            });
-            pages.action(root, "Cancel · keep current wallet", false, this::hideBackup);
-            pages.present(root, "replace-confirm");
-        });
-    }
-
-    private void activateReplacement() {
-        final int token = activeSensitive, s = session.get(), op = replacementOperation;
-        final SeedVault.Generation candidate = replacementCandidate;
-        if (candidate == null || !sensitiveValid(token, s) || !beginCommit(op)) return;
-        ui.removeCallbacks(hideSeed);
-        clearReceivingIdentity();
-        pages.showLoading("Activating your new wallet", "Saving and checking the new identity. This step can no longer be cancelled.");
-        cryptoExecutor.execute(() -> {
-            try {
-                synchronized (stateLock) {
-                    if (!sensitiveValid(token, s) || !replacement.owns(op) || transport != null || requestPending.get()) return;
-                    credentials = null;
-                    Credentials fresh = vault.commitReplacement(candidate.mnemonic);
-                    backupCheck.record(fresh.getAddress());
-                    credentials = fresh;
-                    adoptNewWallet(fresh.getAddress());
-                    walletAddress = fresh.getAddress();
-                    backupVerified = true;
-                    walletLoaded = true;
-                    endReplacement(op);
-                }
-                Bitmap qr = qrFor(candidate.address);
-                runOnUiThread(() -> {
-                    if (!sensitiveValid(token, s)) return;
-                    walletQr = qr;
-                    statusMessage = "New wallet active · backup checked";
-                    hideBackup();
-                });
-            } catch (Exception e) {
-                synchronized (stateLock) { credentials = null; clearReceivingIdentity(); endReplacement(op); }
-                runOnUiThread(() -> {
-                    if (s != session.get()) return;
-                    gateNotice = "Storage could not confirm the wallet. Re-enter your PIN to reconcile it. No receiving address is available until loading succeeds.";
-                    lock();
-                });
-            }
-        });
-    }
 
     private static void secure(Window window) {
         if (!DevTools.SCREENSHOTS) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE);
@@ -1715,8 +1313,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     credentials = null;
                     clearReceivingIdentity();
-                    Log.w(TAG, "wallet load failed: " + chain(e));
-                    if (authLapsed(e)) {
+                    Log.w(TAG, "wallet load failed: " + KeystoreFailures.chain(e));
+                    if (KeystoreFailures.authLapsed(e)) {
                         if (!credentialGate.silentUnlockAttempt()) gateNotice = "Your PIN confirmation expired before the wallet opened. Unlock again.";
                         credentialGate.endSilentUnlockAttempt();
                         lock();
@@ -2229,10 +1827,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     });
                 } catch (Exception e) {
                     final boolean uncertain = mayHaveLeft;
-                    final boolean lapsed = authLapsed(e);
+                    final boolean lapsed = KeystoreFailures.authLapsed(e);
                     sendError(source, spec.requestId, uncertain ? e.getMessage()
                             : (lapsed ? "PIN confirmation expired before signing; nothing was signed" : "Not signed: " + e.getMessage()));
-                    if (!uncertain) Log.w(TAG, "seed signing failed: " + chain(e));
+                    if (!uncertain) Log.w(TAG, "seed signing failed: " + KeystoreFailures.chain(e));
                     runOnUiThread(() -> {
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
@@ -2427,7 +2025,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             }
                             use.use(derived);
                         } catch (Exception e) {
-                            if (authLapsed(e)) {
+                            if (KeystoreFailures.authLapsed(e)) {
                                 runOnUiThread(credentialGate::forgetConfirmation);
                                 failBitcoin(source, id, decision, s, new RequestRefusal("PIN confirmation expired",
                                         "The PIN confirmation expired before your Bitcoin accounts opened. Send the request again. Nothing was shared or signed."));
@@ -2762,12 +2360,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    if (authLapsed(e) && !retried) {
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
                         credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, true), this::showHome);
                         return;
                     }
-                    Log.w(TAG, "account switch failed: " + chain(e));
+                    Log.w(TAG, "account switch failed: " + KeystoreFailures.chain(e));
                     pages.showInfo("Account not switched", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
@@ -2793,12 +2391,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    if (authLapsed(e) && !retried) {
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
                         credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> previewWorker(chars, result, true), this::showHome);
                         return;
                     }
-                    Log.w(TAG, "passphrase preview failed: " + chain(e));
+                    Log.w(TAG, "passphrase preview failed: " + KeystoreFailures.chain(e));
                     pages.showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. Lock and retry.", this::showHome);
                 });
             }
@@ -2851,7 +2449,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    if (authLapsed(e) && !retried) {
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
                         credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to open the passphrase wallet", () -> openPassphraseWallet(true),
                                 () -> { synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; } endPassphraseEntry(); showHome(); });
@@ -2859,7 +2457,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     }
                     synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; }
                     endPassphraseEntry();
-                    Log.w(TAG, "passphrase wallet open failed: " + chain(e));
+                    Log.w(TAG, "passphrase wallet open failed: " + KeystoreFailures.chain(e));
                     pages.showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
@@ -2902,7 +2500,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    if (authLapsed(e) && !retried) {
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
                         credentialGate.forgetConfirmation();
                         confirmDevicePin("Confirm your PIN to return to the standard wallet", () -> closePassphraseWorker(true), this::showHome);
                         return;
@@ -3051,6 +2649,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final class ScreenHost implements VaultHost {
         @Override public Activity activity() { return MainActivity.this; }
         @Override public Pages pages() { return pages; }
+        @Override public Handler ui() { return ui; }
+        @Override public SecureRandom random() { return random; }
         @Override public Object stateLock() { return stateLock; }
         @Override public ExecutorService cryptoExecutor() { return cryptoExecutor; }
         @Override public int session() { return session.get(); }
@@ -3065,7 +2665,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public void showSecurity() { MainActivity.this.showSecurity(); }
         @Override public void lock() { MainActivity.this.lock(); }
         @Override public void hideBackup() { MainActivity.this.hideBackup(); }
-        @Override public void confirmRevealBackup() { MainActivity.this.confirmRevealBackup(); }
+        @Override public void confirmRevealBackup() { backup.confirmRevealBackup(); }
         @Override public void drainPendingUsb() { MainActivity.this.drainPendingUsb(); }
         @Override public void setStatus(String message) { statusMessage = message; }
         @Override public void showStatus(String message) {
