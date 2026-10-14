@@ -48,7 +48,11 @@ pub struct Coin {
 
 /// One planned output.
 #[derive(Clone, Debug)]
-pub struct Out { pub address: Address, pub value: u64, pub change: Option<Derived> }
+pub struct Out {
+    pub address: Address,
+    pub value: u64,
+    pub change: Option<Derived>,
+}
 
 /// A built, unsigned send: what the phone is asked to sign and what its answer must match.
 #[derive(Clone, Debug)]
@@ -69,12 +73,28 @@ pub struct Built {
 }
 
 impl Built {
-    pub fn change(&self) -> Option<&Out> { self.outputs.iter().find(|o| o.change.is_some()) }
-    pub fn input_total(&self) -> u64 { self.inputs.iter().map(|c| c.value).sum() }
-    pub fn prevouts(&self) -> Vec<TxOut> { self.inputs.iter().map(|c| TxOut { value: Amount::from_sat(c.value), script_pubkey: c.derived.script.clone() }).collect() }
+    pub fn change(&self) -> Option<&Out> {
+        self.outputs.iter().find(|o| o.change.is_some())
+    }
+    pub fn input_total(&self) -> u64 {
+        self.inputs.iter().map(|c| c.value).sum()
+    }
+    pub fn prevouts(&self) -> Vec<TxOut> {
+        self.inputs
+            .iter()
+            .map(|c| TxOut { value: Amount::from_sat(c.value), script_pubkey: c.derived.script.clone() })
+            .collect()
+    }
 }
 
-fn varint_len(n: u64) -> u64 { match n { 0..=0xfc => 1, 0xfd..=0xffff => 3, 0x10000..=0xffff_ffff => 5, _ => 9 } }
+fn varint_len(n: u64) -> u64 {
+    match n {
+        0..=0xfc => 1,
+        0xfd..=0xffff => 3,
+        0x10000..=0xffff_ffff => 5,
+        _ => 9,
+    }
+}
 
 /// Weight of a segwit transaction spending `n_in` inputs of `kind` to outputs with these script lengths.
 pub fn weight(kind: Kind, n_in: usize, out_script_lens: &[u64]) -> u64 {
@@ -83,18 +103,36 @@ pub fn weight(kind: Kind, n_in: usize, out_script_lens: &[u64]) -> u64 {
     base * 4 + 2 + kind.input_witness_weight() * n_in as u64
 }
 
-pub fn vsize(weight: u64) -> u64 { weight.div_ceil(4) }
-pub fn fee_for(vbytes: u64, rate_kvb: u64) -> u64 { (vbytes * rate_kvb).div_ceil(1000) }
-fn input_vbytes(kind: Kind) -> u64 { (41 * 4 + kind.input_witness_weight()).div_ceil(4) }
+pub fn vsize(weight: u64) -> u64 {
+    weight.div_ceil(4)
+}
+pub fn fee_for(vbytes: u64, rate_kvb: u64) -> u64 {
+    (vbytes * rate_kvb).div_ceil(1000)
+}
+fn input_vbytes(kind: Kind) -> u64 {
+    (41 * 4 + kind.input_witness_weight()).div_ceil(4)
+}
 
 /// "12.5" sat/vB → 12_500 sat/kvB (at most 3 decimals), within the allowed range.
 pub fn parse_rate(s: &str) -> Result<u64, String> {
     let s = s.trim();
     let (w, f) = s.split_once('.').unwrap_or((s, ""));
-    if w.is_empty() || w.len() > 6 || f.len() > 3 || !w.bytes().all(|b| b.is_ascii_digit()) || !f.bytes().all(|b| b.is_ascii_digit()) { return Err("Fee rate: use a number of sat/vB, like 12 or 3.5".into()); }
-    let v = w.parse::<u64>().map_err(|_| "bad fee rate")? * 1000 + format!("{f:0<3}").parse::<u64>().map_err(|_| "bad fee rate")?;
-    if v < MIN_RATE_KVB { return Err("Fee rate is below 0.1 sat/vB; nodes won't relay it".into()); }
-    if v > MAX_RATE_KVB { return Err("Fee rate above 2000 sat/vB refused (typo guard)".into()); }
+    if w.is_empty()
+        || w.len() > 6
+        || f.len() > 3
+        || !w.bytes().all(|b| b.is_ascii_digit())
+        || !f.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err("Fee rate: use a number of sat/vB, like 12 or 3.5".into());
+    }
+    let v = w.parse::<u64>().map_err(|_| "bad fee rate")? * 1000
+        + format!("{f:0<3}").parse::<u64>().map_err(|_| "bad fee rate")?;
+    if v < MIN_RATE_KVB {
+        return Err("Fee rate is below 0.1 sat/vB; nodes won't relay it".into());
+    }
+    if v > MAX_RATE_KVB {
+        return Err("Fee rate above 2000 sat/vB refused (typo guard)".into());
+    }
     Ok(v)
 }
 
@@ -102,13 +140,20 @@ pub fn parse_rate(s: &str) -> Result<u64, String> {
 pub fn parse_btc(s: &str) -> Result<u64, String> {
     let s = s.trim();
     let (w, f) = s.split_once('.').unwrap_or((s, ""));
-    if (w.is_empty() && f.is_empty()) || w.len() > 8 || f.len() > 8 || !w.bytes().all(|b| b.is_ascii_digit()) || !f.bytes().all(|b| b.is_ascii_digit()) {
+    if (w.is_empty() && f.is_empty())
+        || w.len() > 8
+        || f.len() > 8
+        || !w.bytes().all(|b| b.is_ascii_digit())
+        || !f.bytes().all(|b| b.is_ascii_digit())
+    {
         return Err("Amount: use digits and one dot, at most 8 decimals".into());
     }
     let whole = if w.is_empty() { 0 } else { w.parse::<u64>().map_err(|_| "bad amount")? };
     let frac = if f.is_empty() { 0 } else { format!("{f:0<8}").parse::<u64>().map_err(|_| "bad amount")? };
     let sats = whole.checked_mul(100_000_000).and_then(|x| x.checked_add(frac)).ok_or("amount too large")?;
-    if sats > 21_000_000 * 100_000_000 { return Err("amount too large".into()); }
+    if sats > 21_000_000 * 100_000_000 {
+        return Err("amount too large".into());
+    }
     Ok(sats)
 }
 
@@ -119,34 +164,55 @@ pub fn format_btc(sats: u64) -> String {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Selection { pub picked: Vec<usize>, pub change: u64, pub fee: u64, pub vsize: u64 }
+pub struct Selection {
+    pub picked: Vec<usize>,
+    pub change: u64,
+    pub fee: u64,
+    pub vsize: u64,
+}
 
 /// The smallest change worth creating at this fee rate: at least 1000 sat, and at least what
 /// spending it later would cost at today's rate (else it is dust in all but name).
-pub fn min_change(kind: Kind, rate_kvb: u64) -> u64 { 1000u64.max(fee_for(input_vbytes(kind), rate_kvb)) }
+pub fn min_change(kind: Kind, rate_kvb: u64) -> u64 {
+    1000u64.max(fee_for(input_vbytes(kind), rate_kvb))
+}
 
 /// Pick coins for `amount` to a recipient script of `recipient_len` bytes, or everything for
 /// `amount = None` ("send all", no change). Confirmed coins are preferred; unconfirmed ones (our own
 /// unconfirmed change, incoming payments in the mempool) only when the confirmed ones are not enough.
-pub fn select(kind: Kind, coins: &[(u64, bool)], amount: Option<u64>, recipient_len: u64, rate_kvb: u64) -> Result<Selection, String> {
+pub fn select(
+    kind: Kind,
+    coins: &[(u64, bool)],
+    amount: Option<u64>,
+    recipient_len: u64,
+    rate_kvb: u64,
+) -> Result<Selection, String> {
     let in_fee = fee_for(input_vbytes(kind), rate_kvb);
     let usable: Vec<usize> = (0..coins.len()).filter(|&i| coins[i].0 > in_fee).collect();
     let Some(amount) = amount else {
-        if usable.is_empty() { return Err("nothing to send: every coin is worth less than the fee to spend it".into()); }
+        if usable.is_empty() {
+            return Err("nothing to send: every coin is worth less than the fee to spend it".into());
+        }
         let vs = vsize(weight(kind, usable.len(), &[recipient_len]));
         let fee = fee_for(vs, rate_kvb);
         let total: u64 = usable.iter().map(|&i| coins[i].0).sum();
-        if total < fee + RECIPIENT_DUST { return Err("the balance does not cover the fee at this rate".into()); }
+        if total < fee + RECIPIENT_DUST {
+            return Err("the balance does not cover the fee at this rate".into());
+        }
         return Ok(Selection { picked: usable, change: 0, fee, vsize: vs });
     };
-    if amount < RECIPIENT_DUST { return Err(format!("amount below {RECIPIENT_DUST} sat is dust: nodes won't relay it")); }
+    if amount < RECIPIENT_DUST {
+        return Err(format!("amount below {RECIPIENT_DUST} sat is dust: nodes won't relay it"));
+    }
     let no_change = |n: usize| vsize(weight(kind, n, &[recipient_len]));
     let with_change = |n: usize| vsize(weight(kind, n, &[recipient_len, kind.script_len()]));
     let change_cost = fee_for(with_change(1) - no_change(1), rate_kvb) + in_fee; // create it now + spend it later
-    // 1. branch and bound over confirmed coins, then all: a set whose effective value lands within
-    //    `change_cost` above the target needs no change output (the small excess goes to the fee).
+                                                                                 // 1. branch and bound over confirmed coins, then all: a set whose effective value lands within
+                                                                                 //    `change_cost` above the target needs no change output (the small excess goes to the fee).
     for pool in [usable.iter().copied().filter(|&i| coins[i].1).collect::<Vec<_>>(), usable.clone()] {
-        if let Some(picked) = bnb(&pool, coins, amount, in_fee, change_cost, |n| fee_for(no_change(n) - n as u64 * input_vbytes(kind), rate_kvb)) {
+        if let Some(picked) = bnb(&pool, coins, amount, in_fee, change_cost, |n| {
+            fee_for(no_change(n) - n as u64 * input_vbytes(kind), rate_kvb)
+        }) {
             let vs = no_change(picked.len());
             let total: u64 = picked.iter().map(|&i| coins[i].0).sum();
             return Ok(Selection { fee: total - amount, picked, change: 0, vsize: vs });
@@ -162,7 +228,14 @@ pub fn select(kind: Kind, coins: &[(u64, bool)], amount: Option<u64>, recipient_
         picked.push(i);
         total += coins[i].0;
         let fee_c = fee_for(with_change(picked.len()), rate_kvb);
-        if total >= amount + fee_c + floor { return Ok(Selection { change: total - amount - fee_c, fee: fee_c, vsize: with_change(picked.len()), picked }); }
+        if total >= amount + fee_c + floor {
+            return Ok(Selection {
+                change: total - amount - fee_c,
+                fee: fee_c,
+                vsize: with_change(picked.len()),
+                picked,
+            });
+        }
         let fee_n = fee_for(no_change(picked.len()), rate_kvb);
         if total >= amount + fee_n {
             // enough without change, but not for a change output worth keeping: the rest is fee
@@ -171,36 +244,71 @@ pub fn select(kind: Kind, coins: &[(u64, bool)], amount: Option<u64>, recipient_
         }
     }
     let have: u64 = usable.iter().map(|&i| coins[i].0).sum();
-    Err(format!("not enough bitcoin: {} BTC plus the fee needed, {} BTC spendable", format_btc(amount), format_btc(have)))
+    Err(format!(
+        "not enough bitcoin: {} BTC plus the fee needed, {} BTC spendable",
+        format_btc(amount),
+        format_btc(have)
+    ))
 }
 
 /// Depth-first search for a subset with target ≤ Σ effective value ≤ target + window (Bitcoin
 /// Core's branch and bound, without the waste metric: the first fit with the least excess found
 /// within the try budget wins).
-fn bnb(pool: &[usize], coins: &[(u64, bool)], amount: u64, in_fee: u64, window: u64, base_fee: impl Fn(usize) -> u64) -> Option<Vec<usize>> {
+fn bnb(
+    pool: &[usize],
+    coins: &[(u64, bool)],
+    amount: u64,
+    in_fee: u64,
+    window: u64,
+    base_fee: impl Fn(usize) -> u64,
+) -> Option<Vec<usize>> {
     let mut eff: Vec<(usize, u64)> = pool.iter().map(|&i| (i, coins[i].0 - in_fee)).collect();
     eff.sort_by_key(|e| std::cmp::Reverse(e.1));
-    if eff.is_empty() || eff.len() > 64 { return None; }
+    if eff.is_empty() || eff.len() > 64 {
+        return None;
+    }
     let target = amount + base_fee(1); // the fixed part of the fee (version, counts, outputs)
     let mut best: Option<(u64, Vec<usize>)> = None;
     let mut tries = 0u32;
     let mut remaining: Vec<u64> = vec![0; eff.len() + 1];
-    for i in (0..eff.len()).rev() { remaining[i] = remaining[i + 1] + eff[i].1; }
+    for i in (0..eff.len()).rev() {
+        remaining[i] = remaining[i + 1] + eff[i].1;
+    }
     #[allow(clippy::too_many_arguments)]
-    fn go(i: usize, sum: u64, chosen: &mut Vec<usize>, eff: &[(usize, u64)], remaining: &[u64], target: u64, window: u64, best: &mut Option<(u64, Vec<usize>)>, tries: &mut u32) {
+    fn go(
+        i: usize,
+        sum: u64,
+        chosen: &mut Vec<usize>,
+        eff: &[(usize, u64)],
+        remaining: &[u64],
+        target: u64,
+        window: u64,
+        best: &mut Option<(u64, Vec<usize>)>,
+        tries: &mut u32,
+    ) {
         *tries += 1;
-        if *tries > 100_000 { return; }
-        if sum > target + window { return; }
-        if sum >= target {
-            let excess = sum - target;
-            if best.as_ref().is_none_or(|b| excess < b.0) { *best = Some((excess, chosen.clone())); }
+        if *tries > 100_000 {
             return;
         }
-        if i == eff.len() || sum + remaining[i] < target { return; }
+        if sum > target + window {
+            return;
+        }
+        if sum >= target {
+            let excess = sum - target;
+            if best.as_ref().is_none_or(|b| excess < b.0) {
+                *best = Some((excess, chosen.clone()));
+            }
+            return;
+        }
+        if i == eff.len() || sum + remaining[i] < target {
+            return;
+        }
         chosen.push(eff[i].0);
         go(i + 1, sum + eff[i].1, chosen, eff, remaining, target, window, best, tries);
         chosen.pop();
-        if best.as_ref().is_some_and(|b| b.0 == 0) { return; }
+        if best.as_ref().is_some_and(|b| b.0 == 0) {
+            return;
+        }
         go(i + 1, sum, chosen, eff, remaining, target, window, best, tries);
     }
     go(0, 0, &mut Vec::new(), &eff, &remaining, target, window, &mut best, &mut tries);
@@ -213,7 +321,9 @@ pub fn shuffle<T>(v: &mut [T]) {
     let rng = ring::rand::SystemRandom::new();
     for i in (1..v.len()).rev() {
         let mut b = [0u8; 4];
-        if rng.fill(&mut b).is_err() { return; }
+        if rng.fill(&mut b).is_err() {
+            return;
+        }
         let j = (u32::from_le_bytes(b) as usize) % (i + 1);
         v.swap(i, j);
     }
@@ -221,21 +331,53 @@ pub fn shuffle<T>(v: &mut [T]) {
 
 /// Assemble the unsigned PSBT for a selection. `shuffle_order` is false only in tests.
 #[allow(clippy::too_many_arguments)]
-pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u64, change: Option<(Derived, u64)>, fee: u64, rate_kvb: u64, vsize_est: u64, shuffle_order: bool) -> Result<Built, String> {
-    if inputs.is_empty() { return Err("no inputs".into()); }
-    if inputs.len() > MAX_INPUTS { return Err(format!("this would spend {} coins; the phone takes at most {MAX_INPUTS} per transaction. Send a smaller amount first", inputs.len())); }
+pub fn build(
+    account: &Account,
+    inputs: Vec<Coin>,
+    recipient: Address,
+    amount: u64,
+    change: Option<(Derived, u64)>,
+    fee: u64,
+    rate_kvb: u64,
+    vsize_est: u64,
+    shuffle_order: bool,
+) -> Result<Built, String> {
+    if inputs.is_empty() {
+        return Err("no inputs".into());
+    }
+    if inputs.len() > MAX_INPUTS {
+        return Err(format!("this would spend {} coins; the phone takes at most {MAX_INPUTS} per transaction. Send a smaller amount first", inputs.len()));
+    }
     let mut inputs = inputs;
     let mut outputs = vec![Out { address: recipient.clone(), value: amount, change: None }];
-    if let Some((d, v)) = change { outputs.push(Out { address: d.address.clone(), value: v, change: Some(d) }); }
-    if shuffle_order { shuffle(&mut inputs); shuffle(&mut outputs); }
+    if let Some((d, v)) = change {
+        outputs.push(Out { address: d.address.clone(), value: v, change: Some(d) });
+    }
+    if shuffle_order {
+        shuffle(&mut inputs);
+        shuffle(&mut outputs);
+    }
     let in_total: u64 = inputs.iter().map(|c| c.value).sum();
     let out_total: u64 = outputs.iter().map(|o| o.value).sum();
-    if in_total != out_total + fee { return Err("internal: inputs ≠ outputs + fee".into()); }
+    if in_total != out_total + fee {
+        return Err("internal: inputs ≠ outputs + fee".into());
+    }
     let tx = Transaction {
         version: Version::TWO,
         lock_time: LockTime::ZERO,
-        input: inputs.iter().map(|c| TxIn { previous_output: c.outpoint, script_sig: ScriptBuf::new(), sequence: Sequence(RBF_SEQUENCE), witness: Witness::new() }).collect(),
-        output: outputs.iter().map(|o| TxOut { value: Amount::from_sat(o.value), script_pubkey: o.address.script_pubkey() }).collect(),
+        input: inputs
+            .iter()
+            .map(|c| TxIn {
+                previous_output: c.outpoint,
+                script_sig: ScriptBuf::new(),
+                sequence: Sequence(RBF_SEQUENCE),
+                witness: Witness::new(),
+            })
+            .collect(),
+        output: outputs
+            .iter()
+            .map(|o| TxOut { value: Amount::from_sat(o.value), script_pubkey: o.address.script_pubkey() })
+            .collect(),
     };
     let mut psbt = Psbt::from_unsigned_tx(tx).map_err(|e| e.to_string())?;
     let fp = account.fingerprint;
@@ -243,7 +385,9 @@ pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u
         let inp = &mut psbt.inputs[i];
         inp.witness_utxo = Some(TxOut { value: Amount::from_sat(c.value), script_pubkey: c.derived.script.clone() });
         match account.kind {
-            Kind::P2wpkh => { inp.bip32_derivation = BTreeMap::from([(c.derived.pubkey, (fp, c.derived.origin.clone()))]); }
+            Kind::P2wpkh => {
+                inp.bip32_derivation = BTreeMap::from([(c.derived.pubkey, (fp, c.derived.origin.clone()))]);
+            }
             Kind::P2tr => {
                 let x = c.derived.internal_key.ok_or("internal: no internal key")?;
                 inp.tap_internal_key = Some(x);
@@ -255,7 +399,9 @@ pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u
         let Some(d) = &o.change else { continue };
         let out = &mut psbt.outputs[i];
         match account.kind {
-            Kind::P2wpkh => { out.bip32_derivation = BTreeMap::from([(d.pubkey, (fp, d.origin.clone()))]); }
+            Kind::P2wpkh => {
+                out.bip32_derivation = BTreeMap::from([(d.pubkey, (fp, d.origin.clone()))]);
+            }
             Kind::P2tr => {
                 let x = d.internal_key.ok_or("internal: no internal key")?;
                 out.tap_internal_key = Some(x);
@@ -269,10 +415,20 @@ pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u
     // are checked again here, and a coin without one is refused rather than sent without it.
     if account.kind == Kind::P2wpkh {
         for (i, c) in inputs.iter().enumerate() {
-            let prev = c.prev_tx.as_ref().ok_or("internal: a coin's previous transaction is missing; refresh the wallet and try again")?;
-            if prev.compute_txid() != c.outpoint.txid { return Err("a coin's previous transaction does not hash to the txid it spends".into()); }
-            let out = prev.output.get(c.outpoint.vout as usize).ok_or("a coin's previous transaction does not have its output")?;
-            if out.value.to_sat() != c.value || out.script_pubkey != c.derived.script { return Err("a coin's previous transaction does not pay it the listed amount".into()); }
+            let prev = c
+                .prev_tx
+                .as_ref()
+                .ok_or("internal: a coin's previous transaction is missing; refresh the wallet and try again")?;
+            if prev.compute_txid() != c.outpoint.txid {
+                return Err("a coin's previous transaction does not hash to the txid it spends".into());
+            }
+            let out = prev
+                .output
+                .get(c.outpoint.vout as usize)
+                .ok_or("a coin's previous transaction does not have its output")?;
+            if out.value.to_sat() != c.value || out.script_pubkey != c.derived.script {
+                return Err("a coin's previous transaction does not pay it the listed amount".into());
+            }
             if prev.input.len() > MAX_PREV_IO || prev.output.len() > MAX_PREV_IO {
                 return Err(format!("the coin {}:{} comes from a transaction with more than {MAX_PREV_IO} inputs or outputs, which the phone cannot check; spend other coins (send a smaller amount)", c.outpoint.txid, c.outpoint.vout));
             }
@@ -283,11 +439,30 @@ pub fn build(account: &Account, inputs: Vec<Coin>, recipient: Address, amount: u
     if size > MAX_PSBT_BYTES {
         return Err(format!("this transaction is too large for one request to the phone ({} KiB with the previous transactions the phone needs, at most {} KiB); send a smaller amount first, so fewer coins are spent", size.div_ceil(1024), MAX_PSBT_BYTES / 1024));
     }
-    Ok(Built { account: account.clone(), psbt, inputs, outputs, recipient, amount, fee, rate_kvb, vsize: vsize_est, replaces: None })
+    Ok(Built {
+        account: account.clone(),
+        psbt,
+        inputs,
+        outputs,
+        recipient,
+        amount,
+        fee,
+        rate_kvb,
+        vsize: vsize_est,
+        replaces: None,
+    })
 }
 
 /// Plan and build a send in one step.
-pub fn plan(account: &Account, coins: Vec<Coin>, recipient: Address, amount: Option<u64>, change: Derived, rate_kvb: u64, shuffle_order: bool) -> Result<Built, String> {
+pub fn plan(
+    account: &Account,
+    coins: Vec<Coin>,
+    recipient: Address,
+    amount: Option<u64>,
+    change: Derived,
+    rate_kvb: u64,
+    shuffle_order: bool,
+) -> Result<Built, String> {
     let values: Vec<(u64, bool)> = coins.iter().map(|c| (c.value, c.confirmed)).collect();
     let sel = select(account.kind, &values, amount, recipient.script_pubkey().len() as u64, rate_kvb)?;
     let total: u64 = sel.picked.iter().map(|&i| coins[i].value).sum();
@@ -301,12 +476,26 @@ pub fn plan(account: &Account, coins: Vec<Coin>, recipient: Address, amount: Opt
 /// taken from the change output. The new fee pays the new rate on the whole transaction and at
 /// least 1 sat/vB more than the old absolute fee (BIP-125 rules 3 and 4).
 pub fn bump(old: &Built, rate_kvb: u64) -> Result<Built, String> {
-    let ch = old.change().ok_or("this transaction has no change output to take a higher fee from (a \"send all\" can't be sped up here)")?;
+    let ch = old.change().ok_or(
+        "this transaction has no change output to take a higher fee from (a \"send all\" can't be sped up here)",
+    )?;
     let new_fee = fee_for(old.vsize, rate_kvb).max(old.fee + old.vsize);
     let extra = new_fee.saturating_sub(old.fee);
-    if ch.value < extra + min_change(old.account.kind, rate_kvb) { return Err("the change is too small to pay that fee".into()); }
+    if ch.value < extra + min_change(old.account.kind, rate_kvb) {
+        return Err("the change is too small to pay that fee".into());
+    }
     let change_d = ch.change.clone().ok_or("internal")?;
-    let mut b = build(&old.account, old.inputs.clone(), old.recipient.clone(), old.amount, Some((change_d, ch.value - extra)), new_fee, rate_kvb, old.vsize, true)?;
+    let mut b = build(
+        &old.account,
+        old.inputs.clone(),
+        old.recipient.clone(),
+        old.amount,
+        Some((change_d, ch.value - extra)),
+        new_fee,
+        rate_kvb,
+        old.vsize,
+        true,
+    )?;
     b.replaces = Some(old.psbt.unsigned_tx.compute_txid().to_string());
     Ok(b)
 }
@@ -322,11 +511,24 @@ pub mod tests {
     /// A coin paying `value` to `d`, with a previous transaction that really contains it.
     pub fn coin(d: &Derived, value: u64, n: u8) -> Coin {
         let prev = Transaction {
-            version: Version::TWO, lock_time: LockTime::ZERO,
-            input: vec![TxIn { previous_output: OutPoint { txid: Txid::from_byte_array([n; 32]), vout: 0 }, ..Default::default() }],
-            output: vec![TxOut { value: Amount::from_sat(1234), script_pubkey: ScriptBuf::new() }, TxOut { value: Amount::from_sat(value), script_pubkey: d.script.clone() }],
+            version: Version::TWO,
+            lock_time: LockTime::ZERO,
+            input: vec![TxIn {
+                previous_output: OutPoint { txid: Txid::from_byte_array([n; 32]), vout: 0 },
+                ..Default::default()
+            }],
+            output: vec![
+                TxOut { value: Amount::from_sat(1234), script_pubkey: ScriptBuf::new() },
+                TxOut { value: Amount::from_sat(value), script_pubkey: d.script.clone() },
+            ],
         };
-        Coin { outpoint: OutPoint { txid: prev.compute_txid(), vout: 1 }, value, derived: d.clone(), confirmed: true, prev_tx: Some(prev) }
+        Coin {
+            outpoint: OutPoint { txid: prev.compute_txid(), vout: 1 },
+            value,
+            derived: d.clone(),
+            confirmed: true,
+            prev_tx: Some(prev),
+        }
     }
 
     #[test]
@@ -347,14 +549,18 @@ pub mod tests {
         assert_eq!(parse_btc("1").unwrap(), 100_000_000);
         assert_eq!(parse_btc(".5").unwrap(), 50_000_000);
         assert_eq!(parse_btc("0.00000001").unwrap(), 1);
-        for bad in ["", ".", "1e3", "-1", "0.000000001", "1,5", "21000001"] { assert!(parse_btc(bad).is_err(), "{bad}"); }
+        for bad in ["", ".", "1e3", "-1", "0.000000001", "1,5", "21000001"] {
+            assert!(parse_btc(bad).is_err(), "{bad}");
+        }
         assert_eq!(format_btc(50_000), "0.0005");
         assert_eq!(format_btc(100_000_000), "1");
         assert_eq!(format_btc(0), "0");
         assert_eq!(parse_rate("12").unwrap(), 12_000);
         assert_eq!(parse_rate("3.5").unwrap(), 3_500);
         assert_eq!(parse_rate("0.1").unwrap(), 100);
-        for bad in ["0.05", "2001", "abc", "", "1.2345", "-3"] { assert!(parse_rate(bad).is_err(), "{bad}"); }
+        for bad in ["0.05", "2001", "abc", "", "1.2345", "-3"] {
+            assert!(parse_rate(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]
@@ -369,7 +575,8 @@ pub mod tests {
         // an amount that 50k + 30k cover exactly (minus a 2-in-1-out fee of 178 sat): no change
         let s = select(Kind::P2wpkh, &coins, Some(80_000 - 178), 22, 1000).unwrap();
         assert_eq!((s.change, s.fee), (0, 178));
-        let mut p = s.picked.clone(); p.sort();
+        let mut p = s.picked.clone();
+        p.sort();
         assert_eq!(p, vec![1, 2]);
     }
 
@@ -420,7 +627,10 @@ pub mod tests {
                 assert_eq!(inp.witness_utxo.as_ref().unwrap().script_pubkey, b.inputs[i].derived.script);
                 match kind {
                     Kind::P2wpkh => {
-                        assert_eq!(inp.bip32_derivation.values().next().unwrap(), &(a.fingerprint, b.inputs[i].derived.origin.clone()));
+                        assert_eq!(
+                            inp.bip32_derivation.values().next().unwrap(),
+                            &(a.fingerprint, b.inputs[i].derived.origin.clone())
+                        );
                         assert!(inp.non_witness_utxo.is_some());
                         assert!(inp.tap_key_origins.is_empty());
                     }
@@ -434,7 +644,10 @@ pub mod tests {
             let ci = b.outputs.iter().position(|o| o.change.is_some()).unwrap();
             assert!(!b.psbt.outputs[ci].bip32_derivation.is_empty() || !b.psbt.outputs[ci].tap_key_origins.is_empty());
             let ri = 1 - ci;
-            assert!(b.psbt.outputs[ri].bip32_derivation.is_empty() && b.psbt.outputs[ri].tap_key_origins.is_empty(), "the recipient carries no origin");
+            assert!(
+                b.psbt.outputs[ri].bip32_derivation.is_empty() && b.psbt.outputs[ri].tap_key_origins.is_empty(),
+                "the recipient carries no origin"
+            );
             // round trip through the wire format
             assert_eq!(Psbt::deserialize(&b.psbt.serialize()).unwrap(), b.psbt);
         }
@@ -444,7 +657,10 @@ pub mod tests {
     fn with_big_prev(mut c: Coin, extra: usize) -> Coin {
         let mut prev = c.prev_tx.clone().unwrap();
         let own = prev.output[c.outpoint.vout as usize].clone();
-        prev.output = (0..extra).map(|_| TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(vec![0x51; 22]) }).chain([own]).collect();
+        prev.output = (0..extra)
+            .map(|_| TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(vec![0x51; 22]) })
+            .chain([own])
+            .collect();
         c.outpoint = OutPoint { txid: prev.compute_txid(), vout: extra as u32 };
         c.prev_tx = Some(prev);
         c
@@ -456,22 +672,39 @@ pub mod tests {
         let d = a.derive(0, 0).unwrap();
         // a large previous transaction is included, not dropped
         let c = with_big_prev(coin(&d, 200_000, 7), 900);
-        let b = plan(&a, vec![c.clone(), coin(&d, 30_000, 8)], d.address.clone(), Some(210_000), a.derive(1, 0).unwrap(), 1000, false).unwrap();
+        let b = plan(
+            &a,
+            vec![c.clone(), coin(&d, 30_000, 8)],
+            d.address.clone(),
+            Some(210_000),
+            a.derive(1, 0).unwrap(),
+            1000,
+            false,
+        )
+        .unwrap();
         assert!(b.psbt.inputs.iter().all(|i| i.non_witness_utxo.is_some()));
         for (i, inp) in b.psbt.inputs.iter().enumerate() {
-            assert_eq!(inp.non_witness_utxo.as_ref().unwrap().compute_txid(), b.psbt.unsigned_tx.input[i].previous_output.txid);
+            assert_eq!(
+                inp.non_witness_utxo.as_ref().unwrap().compute_txid(),
+                b.psbt.unsigned_tx.input[i].previous_output.txid
+            );
         }
         assert!(b.psbt.serialize().len() > 22_000, "bigger than the old cap, still sent");
         assert!(b.psbt.serialize().len() <= MAX_PSBT_BYTES);
 
         let build1 = |c: Coin| plan(&a, vec![c], d.address.clone(), Some(50_000), a.derive(1, 0).unwrap(), 1000, false);
         // missing, or not the transaction the coin spends, or not paying it: refused
-        let mut missing = coin(&d, 200_000, 7); missing.prev_tx = None;
+        let mut missing = coin(&d, 200_000, 7);
+        missing.prev_tx = None;
         assert!(build1(missing).unwrap_err().contains("missing"));
-        let mut other = coin(&d, 200_000, 7); other.prev_tx = coin(&d, 200_000, 9).prev_tx;
+        let mut other = coin(&d, 200_000, 7);
+        other.prev_tx = coin(&d, 200_000, 9).prev_tx;
         assert!(build1(other).unwrap_err().contains("does not hash"));
-        let mut lying = coin(&d, 200_000, 7); lying.value = 300_000;
-        assert!(plan(&a, vec![lying], d.address.clone(), Some(250_000), a.derive(1, 0).unwrap(), 1000, false).unwrap_err().contains("listed amount"));
+        let mut lying = coin(&d, 200_000, 7);
+        lying.value = 300_000;
+        assert!(plan(&a, vec![lying], d.address.clone(), Some(250_000), a.derive(1, 0).unwrap(), 1000, false)
+            .unwrap_err()
+            .contains("listed amount"));
         // more than the phone parses in a previous transaction: refused with a reason
         assert!(build1(with_big_prev(coin(&d, 200_000, 7), MAX_PREV_IO)).unwrap_err().contains("cannot check"));
         // and a PSBT over the phone's request size: refused, never truncated
@@ -481,7 +714,8 @@ pub mod tests {
         // Taproot inputs carry none (BIP-341 signs the amounts of all inputs)
         let (t, _) = test_account(Net::Bitcoin, Kind::P2tr, 1);
         let td = t.derive(0, 0).unwrap();
-        let mut tc = coin(&td, 200_000, 7); tc.prev_tx = None;
+        let mut tc = coin(&td, 200_000, 7);
+        tc.prev_tx = None;
         let b = plan(&t, vec![tc], td.address.clone(), Some(50_000), t.derive(1, 0).unwrap(), 1000, false).unwrap();
         assert!(b.psbt.inputs[0].non_witness_utxo.is_none());
     }
@@ -490,7 +724,11 @@ pub mod tests {
     fn size_limits_fit_the_phone_and_the_way_back() {
         // phone: PSBT ≤ 200 KiB, btcSignPsbt line ≤ 288 KiB (AccessoryTransport / Psbt.java)
         const { assert!(MAX_PSBT_BYTES <= 200 * 1024) };
-        let line = r#"{"id":"00000000-0000-0000-0000-000000000000","method":"btcSignPsbt","network":"testnet4","psbt":""}"#.len() + MAX_PSBT_BYTES.div_ceil(3) * 4 + 1;
+        let line =
+            r#"{"id":"00000000-0000-0000-0000-000000000000","method":"btcSignPsbt","network":"testnet4","psbt":""}"#
+                .len()
+                + MAX_PSBT_BYTES.div_ceil(3) * 4
+                + 1;
         assert!(line <= 288 * 1024, "{line}");
         assert!(line <= crate::btc::MAX_REQUEST_BYTES);
         // back: the PSBT plus up to ~110 bytes of signature per input, as base64, in one USB response
@@ -503,7 +741,16 @@ pub mod tests {
     fn rbf_bump_takes_the_fee_from_change() {
         let (a, _) = test_account(Net::Bitcoin, Kind::P2wpkh, 1);
         let to = Address::from_str("bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g").unwrap().assume_checked();
-        let b = plan(&a, vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1)], to, Some(50_000), a.derive(1, 0).unwrap(), 2_000, false).unwrap();
+        let b = plan(
+            &a,
+            vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1)],
+            to,
+            Some(50_000),
+            a.derive(1, 0).unwrap(),
+            2_000,
+            false,
+        )
+        .unwrap();
         let n = bump(&b, 10_000).unwrap();
         assert_eq!(n.amount, 50_000);
         assert_eq!(n.inputs.len(), 1);
@@ -512,7 +759,16 @@ pub mod tests {
         assert_eq!(n.change().unwrap().value, b.change().unwrap().value - (n.fee - b.fee));
         assert_eq!(n.replaces.as_deref(), Some(b.psbt.unsigned_tx.compute_txid().to_string().as_str()));
         // send-all: nothing to take it from
-        let all = plan(&a, vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1)], a.derive(0, 5).unwrap().address, None, a.derive(1, 0).unwrap(), 2_000, false).unwrap();
+        let all = plan(
+            &a,
+            vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1)],
+            a.derive(0, 5).unwrap().address,
+            None,
+            a.derive(1, 0).unwrap(),
+            2_000,
+            false,
+        )
+        .unwrap();
         assert!(bump(&all, 10_000).is_err());
     }
 }

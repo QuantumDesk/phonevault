@@ -49,9 +49,15 @@ const NOW: i64 = 1_791_590_400;
 const TEGU_NOW: i64 = 1_772_000_000; // 2026-02-25
 const CAIMAN_NOW: i64 = 1_758_950_000; // 2025-09-27
 
-fn roots() -> Vec<TrustedRoot> { chain::google_roots() }
-fn b64(s: &str) -> Vec<u8> { B64.decode(s).unwrap() }
-fn unchecked() -> Status { Status::Checked { revoked: HashMap::new(), as_of: "2026-10-10".into() } }
+fn roots() -> Vec<TrustedRoot> {
+    chain::google_roots()
+}
+fn b64(s: &str) -> Vec<u8> {
+    B64.decode(s).unwrap()
+}
+fn unchecked() -> Status {
+    Status::Checked { revoked: HashMap::new(), as_of: "2026-10-10".into() }
+}
 
 // ------------------------------------------------------------------ roots
 
@@ -66,14 +72,24 @@ fn embedded_root_keys_are_googles_published_roots() {
         assert_eq!(cert.public_key().raw, root.spki.as_slice(), "{}", root.name);
     }
     use ring::digest::{digest, SHA256};
-    assert_eq!(hex::encode(digest(&SHA256, &r[0].spki)), "feb2ea7551ee316ed4bb443c8293b884dbfdea40b603ee3e4f4a897e4580fbae");
-    assert_eq!(hex::encode(digest(&SHA256, &r[1].spki)), "3ee44512a1af2beb39c889490c60ea3f82e43f5d5a5532f5ab9419f676cd07ec");
+    assert_eq!(
+        hex::encode(digest(&SHA256, &r[0].spki)),
+        "feb2ea7551ee316ed4bb443c8293b884dbfdea40b603ee3e4f4a897e4580fbae"
+    );
+    assert_eq!(
+        hex::encode(digest(&SHA256, &r[1].spki)),
+        "3ee44512a1af2beb39c889490c60ea3f82e43f5d5a5532f5ab9419f676cd07ec"
+    );
 }
 
 // ------------------------------------------------------------------ real chains: parse + verify
 
 fn sec(s: &str) -> SecurityLevel {
-    match s { "STRONG_BOX" => SecurityLevel::StrongBox, "TRUSTED_ENVIRONMENT" => SecurityLevel::TrustedEnvironment, _ => SecurityLevel::Software }
+    match s {
+        "STRONG_BOX" => SecurityLevel::StrongBox,
+        "TRUSTED_ENVIRONMENT" => SecurityLevel::TrustedEnvironment,
+        _ => SecurityLevel::Software,
+    }
 }
 
 /// Every field we rely on matches Google's own parse of the same certificate.
@@ -92,15 +108,26 @@ fn check_against_reference(pem: &str, json: &str, now: i64) -> chain::ChainInfo 
     assert_eq!(app.packages.len(), jp["packages"].as_array().unwrap().len());
     assert_eq!(app.packages[0].name, jp["packages"][0]["name"].as_str().unwrap());
     assert_eq!(app.packages[0].version, num(&jp["packages"][0]["version"]));
-    assert_eq!(app.signature_digests, jp["signatures"].as_array().unwrap().iter().map(|s| b64(s.as_str().unwrap())).collect::<Vec<_>>());
+    assert_eq!(
+        app.signature_digests,
+        jp["signatures"].as_array().unwrap().iter().map(|s| b64(s.as_str().unwrap())).collect::<Vec<_>>()
+    );
     assert_eq!(kd.software.creation_datetime, Some(num(&j["softwareEnforced"]["creationDateTime"])));
     let h = &j["hardwareEnforced"];
     let rot = kd.hardware.root_of_trust.as_ref().expect("rootOfTrust");
     assert_eq!(rot.verified_boot_key, b64(h["rootOfTrust"]["verifiedBootKey"].as_str().unwrap()));
     assert_eq!(rot.device_locked, h["rootOfTrust"]["deviceLocked"].as_bool().unwrap());
-    let state = match h["rootOfTrust"]["verifiedBootState"].as_str().unwrap() { "VERIFIED" => BootState::Verified, "SELF_SIGNED" => BootState::SelfSigned, "UNVERIFIED" => BootState::Unverified, _ => BootState::Failed };
+    let state = match h["rootOfTrust"]["verifiedBootState"].as_str().unwrap() {
+        "VERIFIED" => BootState::Verified,
+        "SELF_SIGNED" => BootState::SelfSigned,
+        "UNVERIFIED" => BootState::Unverified,
+        _ => BootState::Failed,
+    };
     assert_eq!(rot.verified_boot_state, state);
-    assert_eq!(rot.verified_boot_hash.as_deref(), Some(b64(h["rootOfTrust"]["verifiedBootHash"].as_str().unwrap()).as_slice()));
+    assert_eq!(
+        rot.verified_boot_hash.as_deref(),
+        Some(b64(h["rootOfTrust"]["verifiedBootHash"].as_str().unwrap()).as_slice())
+    );
     assert_eq!(kd.hardware.os_version, Some(num(&h["osVersion"])));
     assert_eq!(kd.hardware.os_patch_level, Some(num(&h["osPatchLevel"])));
     assert_eq!(kd.hardware.vendor_patch_level, Some(num(&h["vendorPatchLevel"])));
@@ -127,7 +154,10 @@ fn pixel3_strongbox_chain_verifies_to_the_rsa_root_today() {
     assert_eq!(info.serials[1], "17102468407102977850", "hex digits that look decimal, like many status-list keys");
     assert!(info.notes.is_empty(), "{:?}", info.notes);
     let rot = info.description.hardware.root_of_trust.as_ref().unwrap();
-    assert!(!rot.device_locked && rot.verified_boot_state == BootState::Unverified, "an unlocked Pixel 3, like our dev phones");
+    assert!(
+        !rot.device_locked && rot.verified_boot_state == BootState::Unverified,
+        "an unlocked Pixel 3, like our dev phones"
+    );
 }
 
 #[test]
@@ -219,7 +249,14 @@ fn policy_for(info: &chain::ChainInfo, release: bool) -> Policy {
     }
 }
 
-fn evaluate(info: &chain::ChainInfo, policy: &Policy, level: SecurityLevel, challenge: &[u8], status: &Status, allow_dev: bool) -> policy::Assessment {
+fn evaluate(
+    info: &chain::ChainInfo,
+    policy: &Policy,
+    level: SecurityLevel,
+    challenge: &[u8],
+    status: &Status,
+    allow_dev: bool,
+) -> policy::Assessment {
     let ev = policy::Evidence { chain: info, phone_level: level, challenge, binding_ok: true, revocation: status };
     policy::evaluate(policy, &ev, allow_dev)
 }
@@ -254,33 +291,60 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
         assert!(a.problems.iter().any(|p| p.contains(needle)), "expected '{needle}' in {:?}", a.problems);
     };
     // challenge mismatch (replay)
-    fails(evaluate(&info, &good, SecurityLevel::StrongBox, b"another challenge", &unchecked(), false), "different challenge");
+    fails(
+        evaluate(&info, &good, SecurityLevel::StrongBox, b"another challenge", &unchecked(), false),
+        "different challenge",
+    );
     // the phone claims a different level than the chain
-    fails(evaluate(&info, &good, SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), false), "the attestation says StrongBox");
+    fails(
+        evaluate(&info, &good, SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), false),
+        "the attestation says StrongBox",
+    );
     // revoked intermediate
     let mut revoked = HashMap::new();
     revoked.insert(info.serials[1].clone(), "KEY_COMPROMISE".to_string());
-    fails(evaluate(&info, &good, SecurityLevel::StrongBox, &challenge, &Status::Checked { revoked, as_of: "x".into() }, false), "revoked");
+    fails(
+        evaluate(
+            &info,
+            &good,
+            SecurityLevel::StrongBox,
+            &challenge,
+            &Status::Checked { revoked, as_of: "x".into() },
+            false,
+        ),
+        "revoked",
+    );
     // wrong package
-    let mut p = good.clone(); p.package = "dev.phonevault.signer".into();
+    let mut p = good.clone();
+    p.package = "dev.phonevault.signer".into();
     fails(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not the Phone Vault app");
     // unknown app signer
-    let mut p = good.clone(); p.release_signers = vec![vec![7u8; 32]];
+    let mut p = good.clone();
+    p.release_signers = vec![vec![7u8; 32]];
     fails(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "unknown key");
     // development signer without Developer mode
     let p = policy_for(&info, false);
     fails(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "development key");
     // locked + green, but the boot key is not ours → stock firmware
-    let mut p = good.clone(); p.avb_keys = vec![];
+    let mut p = good.clone();
+    p.avb_keys = vec![];
     fails(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "stock software");
     // patch level too old
-    let mut p = good.clone(); p.min_os_patch_level = 202_603;
+    let mut p = good.clone();
+    p.min_os_patch_level = 202_603;
     fails(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "patch level");
     // address binding signature did not verify
-    let ev = policy::Evidence { chain: &info, phone_level: SecurityLevel::StrongBox, challenge: &challenge, binding_ok: false, revocation: &unchecked() };
+    let ev = policy::Evidence {
+        chain: &info,
+        phone_level: SecurityLevel::StrongBox,
+        challenge: &challenge,
+        binding_ok: false,
+        revocation: &unchecked(),
+    };
     fails(policy::evaluate(&good, &ev, false), "not signed by the attested key");
     // StrongBox claimed, but the chain is not a StrongBox chain
-    let mut forged = info.clone(); forged.chain_names_strongbox = false;
+    let mut forged = info.clone();
+    forged.chain_names_strongbox = false;
     fails(evaluate(&forged, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not a StrongBox chain");
     // software attestation
     let mut soft = info.clone();
@@ -288,12 +352,14 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
     soft.description.keymint_security_level = SecurityLevel::Software;
     fails(evaluate(&soft, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "software");
     // imported (not generated) key
-    let mut imported = info.clone(); imported.description.hardware.origin = Some(2);
+    let mut imported = info.clone();
+    imported.description.hardware.origin = Some(2);
     fails(evaluate(&imported, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not generated");
     // yellow boot with somebody else's key
     let mut yellow = info.clone();
     yellow.description.hardware.root_of_trust.as_mut().unwrap().verified_boot_state = BootState::SelfSigned;
-    let mut p = good.clone(); p.avb_keys = vec![vec![9u8; 32]];
+    let mut p = good.clone();
+    p.avb_keys = vec![vec![9u8; 32]];
     fails(evaluate(&yellow, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not Phone Vault's");
     // ... and yellow WITH our key is genuine (custom-key relock on a Pixel boots yellow)
     let a = evaluate(&yellow, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
@@ -303,7 +369,10 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
     red.description.hardware.root_of_trust.as_mut().unwrap().verified_boot_state = BootState::Failed;
     fails(evaluate(&red, &good, SecurityLevel::StrongBox, &challenge, &unchecked(), false), "FAILED");
     // the policy compiled into the app refuses Google's sample outright (not our package)
-    fails(evaluate(&info, &Policy::builtin(), SecurityLevel::StrongBox, &challenge, &unchecked(), false), "not the Phone Vault app");
+    fails(
+        evaluate(&info, &Policy::builtin(), SecurityLevel::StrongBox, &challenge, &unchecked(), false),
+        "not the Phone Vault app",
+    );
 }
 
 #[test]
@@ -329,11 +398,16 @@ fn unlocked_pixel3_is_development_and_says_so() {
     assert_eq!(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false).verdict, Verdict::Fail);
     let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
-    assert_eq!(a.headline, policy::UNLOCKED_HEADLINE, "today's dev phones (Pixel 3 XL: unlocked, dev-signed app) look exactly as before");
+    assert_eq!(
+        a.headline,
+        policy::UNLOCKED_HEADLINE,
+        "today's dev phones (Pixel 3 XL: unlocked, dev-signed app) look exactly as before"
+    );
     assert!(a.cautions.iter().any(|c| c.contains("development key")));
     assert_eq!(a.details.unwrap().app_signer_kind, "development");
     // old patch level on a dev phone is a note, not a failure
-    let mut p2 = policy_for(&info, true); p2.min_os_patch_level = 202_501;
+    let mut p2 = policy_for(&info, true);
+    p2.min_os_patch_level = 202_501;
     let a = evaluate(&info, &p2, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development);
     assert!(a.notes.iter().any(|n| n.contains("2019-08")), "{:?}", a.notes);
@@ -344,7 +418,8 @@ fn tee_attestation_is_never_genuine() {
     let info = chain::verify(&pem_chain(BLUELINE_TEE), &roots(), NOW).unwrap();
     let challenge = info.description.challenge.clone();
     // (the sample phone is unlocked: Developer mode on, so the TEE caution is what is tested)
-    let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
+    let a =
+        evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{a:?}");
     assert!(a.cautions.iter().any(|c| c.contains("TEE")));
     // and claiming StrongBox for a TEE chain fails
@@ -358,8 +433,11 @@ fn builtin_policy_parses_and_refuses_bad_files() {
     assert_eq!(p.package, "dev.phonevault.signer");
     assert!(p.release_signers.is_empty(), "no release key exists yet; pin it at release (path-to-release.md)");
     assert!(p.avb_keys.is_empty(), "no release AVB key exists yet");
-    assert_eq!(p.development_signers, vec![hex::decode("d8eab12db9f77634d1663d66df9928c184a2c91df03e3ea78abcddd64f114b53").unwrap()],
-        "the build host's Android Debug certificate that signs the dev appliance APK");
+    assert_eq!(
+        p.development_signers,
+        vec![hex::decode("d8eab12db9f77634d1663d66df9928c184a2c91df03e3ea78abcddd64f114b53").unwrap()],
+        "the build host's Android Debug certificate that signs the dev appliance APK"
+    );
     assert!(Policy::parse(r#"{"_comment":[],"package":"x","releaseSignerSha256":["AB"],"developmentSignerSha256":[],"avbKeySha256":[],"minOsPatchLevel":202501}"#).is_err());
     assert!(Policy::parse(r#"{"_comment":[],"package":"x","releaseSignerSha256":[],"developmentSignerSha256":[],"avbKeySha256":[],"minOsPatchLevel":202501,"extra":1}"#).is_err());
     let same = "11".repeat(32);
@@ -386,12 +464,19 @@ fn response_schema_is_exact() {
     let ok = json!({"id":"r1","status":"ok","version":"1","address":"0x52908400098527886e0f7030069857d2e4169ee7","securityLevel":"StrongBox",
         "certificates": format!("{},{}", B64.encode([0x30u8, 0]), B64.encode([0x30u8, 0])), "signature":"0x3006020101020101"});
     assert!(matches!(parse_response(&req, &ok), Ok(Answer::Attestation(_))));
-    let with = |k: &str, v: serde_json::Value| { let mut r = ok.clone(); r[k] = v; r };
+    let with = |k: &str, v: serde_json::Value| {
+        let mut r = ok.clone();
+        r[k] = v;
+        r
+    };
     assert!(parse_response(&req, &with("id", json!("r2"))).is_err(), "wrong id");
     assert!(parse_response(&req, &with("extra", json!("x"))).is_err(), "unknown field");
     assert!(parse_response(&req, &with("version", json!("2"))).is_err());
     assert!(parse_response(&req, &with("securityLevel", json!("Software"))).is_err());
-    assert!(parse_response(&req, &with("address", json!("0x52908400098527886E0F7030069857D2E4169EE7"))).is_err(), "address must be lowercase");
+    assert!(
+        parse_response(&req, &with("address", json!("0x52908400098527886E0F7030069857D2E4169EE7"))).is_err(),
+        "address must be lowercase"
+    );
     assert!(parse_response(&req, &with("certificates", json!("AAA="))).is_err(), "one certificate is not a chain");
     assert!(parse_response(&req, &with("certificates", json!("!!,??"))).is_err());
     assert!(parse_response(&req, &with("signature", json!("3006"))).is_err(), "0x required");
@@ -404,21 +489,30 @@ fn response_schema_is_exact() {
 fn transient_refusals_are_errors_and_others_fail() {
     let req = request("r1", &[1u8; 32]);
     let p = Policy::builtin();
-    let not_ready = json!({"id":"r1","status":"error","error":"Wallet is not ready: unlock and complete the backup check first"});
+    let not_ready =
+        json!({"id":"r1","status":"error","error":"Wallet is not ready: unlock and complete the backup check first"});
     assert!(assess(&p, &roots(), NOW, &[1u8; 32], &req, &not_ready, unchecked, false).is_err());
     let old_app = json!({"id":"r1","status":"error","error":"Unsupported method"});
-    let r = assess(&p, &roots(), NOW, &[1u8; 32], &req, &old_app, || panic!("no revocation fetch for a refusal"), false).unwrap();
+    let r =
+        assess(&p, &roots(), NOW, &[1u8; 32], &req, &old_app, || panic!("no revocation fetch for a refusal"), false)
+            .unwrap();
     assert_eq!(r.verdict(), Verdict::Fail);
     assert!(r.assessment.problems[0].contains("update the app"));
     let garbage = json!({"id":"r1","status":"ok"});
-    assert_eq!(assess(&p, &roots(), NOW, &[1u8; 32], &req, &garbage, unchecked, false).unwrap().verdict(), Verdict::Fail);
+    assert_eq!(
+        assess(&p, &roots(), NOW, &[1u8; 32], &req, &garbage, unchecked, false).unwrap().verdict(),
+        Verdict::Fail
+    );
 }
 
 // ------------------------------------------------------------------ synthetic end-to-end (TEST ROOT)
 
 mod synthetic {
     use super::*;
-    use rcgen::{CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, BasicConstraints, Issuer, KeyPair, KeyUsagePurpose};
+    use rcgen::{
+        BasicConstraints, CertificateParams, CustomExtension, DistinguishedName, DnType, IsCa, Issuer, KeyPair,
+        KeyUsagePurpose,
+    };
     use ring::rand::SystemRandom;
     use ring::signature::{EcdsaKeyPair, KeyPair as _, ECDSA_P256_SHA256_ASN1_SIGNING};
 
@@ -426,22 +520,48 @@ mod synthetic {
     fn tlv(tag: &[u8], body: &[u8]) -> Vec<u8> {
         let mut out = tag.to_vec();
         let n = body.len();
-        if n < 0x80 { out.push(n as u8); } else if n < 0x100 { out.extend([0x81, n as u8]); } else { out.extend([0x82, (n >> 8) as u8, n as u8]); }
+        if n < 0x80 {
+            out.push(n as u8);
+        } else if n < 0x100 {
+            out.extend([0x81, n as u8]);
+        } else {
+            out.extend([0x82, (n >> 8) as u8, n as u8]);
+        }
         out.extend_from_slice(body);
         out
     }
     fn int(v: u64) -> Vec<u8> {
         let mut b: Vec<u8> = v.to_be_bytes().iter().copied().skip_while(|&x| x == 0).collect();
-        if b.is_empty() || b[0] & 0x80 != 0 { b.insert(0, 0); }
+        if b.is_empty() || b[0] & 0x80 != 0 {
+            b.insert(0, 0);
+        }
         tlv(&[0x02], &b)
     }
-    fn enumerated(v: u64) -> Vec<u8> { let mut i = int(v); i[0] = 0x0a; i }
-    fn octets(b: &[u8]) -> Vec<u8> { tlv(&[0x04], b) }
-    fn seq(parts: &[Vec<u8>]) -> Vec<u8> { tlv(&[0x30], &parts.concat()) }
-    fn set(parts: &[Vec<u8>]) -> Vec<u8> { let mut p = parts.to_vec(); p.sort(); tlv(&[0x31], &p.concat()) }
+    fn enumerated(v: u64) -> Vec<u8> {
+        let mut i = int(v);
+        i[0] = 0x0a;
+        i
+    }
+    fn octets(b: &[u8]) -> Vec<u8> {
+        tlv(&[0x04], b)
+    }
+    fn seq(parts: &[Vec<u8>]) -> Vec<u8> {
+        tlv(&[0x30], &parts.concat())
+    }
+    fn set(parts: &[Vec<u8>]) -> Vec<u8> {
+        let mut p = parts.to_vec();
+        p.sort();
+        tlv(&[0x31], &p.concat())
+    }
     /// [tag] EXPLICIT, context-specific constructed
     fn explicit(tag: u32, inner: Vec<u8>) -> Vec<u8> {
-        let id = if tag < 31 { vec![0xa0 | tag as u8] } else if tag < 128 { vec![0xbf, tag as u8] } else { vec![0xbf, 0x80 | (tag >> 7) as u8, (tag & 0x7f) as u8] };
+        let id = if tag < 31 {
+            vec![0xa0 | tag as u8]
+        } else if tag < 128 {
+            vec![0xbf, tag as u8]
+        } else {
+            vec![0xbf, 0x80 | (tag >> 7) as u8, (tag & 0x7f) as u8]
+        };
         tlv(&id, &inner)
     }
 
@@ -461,23 +581,51 @@ mod synthetic {
     pub fn key_description(s: &Spec) -> Vec<u8> {
         let app_id = seq(&[set(&[seq(&[octets(s.package.as_bytes()), int(3)])]), set(&[octets(&s.signer)])]);
         let software = seq(&[explicit(701, int(1_791_590_400_000)), explicit(709, octets(&app_id))]);
-        let rot = seq(&[octets(&s.boot_key), tlv(&[0x01], &[if s.locked { 0xff } else { 0 }]), enumerated(s.boot_state), octets(&[0x5a; 32])]);
-        let hardware = seq(&[
-            explicit(1, set(&[int(2), int(3)])), explicit(2, int(3)), explicit(3, int(256)), explicit(10, int(1)),
-            explicit(503, tlv(&[0x05], &[])), explicit(702, int(s.origin)), explicit(704, rot),
-            explicit(705, int(150_000)), explicit(706, int(s.patch)), explicit(718, int(20_220_105)), explicit(719, int(s.patch * 100 + 5)),
+        let rot = seq(&[
+            octets(&s.boot_key),
+            tlv(&[0x01], &[if s.locked { 0xff } else { 0 }]),
+            enumerated(s.boot_state),
+            octets(&[0x5a; 32]),
         ]);
-        seq(&[int(3), enumerated(s.level), int(4), enumerated(s.level), octets(&s.challenge), octets(&[]), software, hardware])
+        let hardware = seq(&[
+            explicit(1, set(&[int(2), int(3)])),
+            explicit(2, int(3)),
+            explicit(3, int(256)),
+            explicit(10, int(1)),
+            explicit(503, tlv(&[0x05], &[])),
+            explicit(702, int(s.origin)),
+            explicit(704, rot),
+            explicit(705, int(150_000)),
+            explicit(706, int(s.patch)),
+            explicit(718, int(20_220_105)),
+            explicit(719, int(s.patch * 100 + 5)),
+        ]);
+        seq(&[
+            int(3),
+            enumerated(s.level),
+            int(4),
+            enumerated(s.level),
+            octets(&s.challenge),
+            octets(&[]),
+            software,
+            hardware,
+        ])
     }
 
     const KD_OID: &[u64] = &[1, 3, 6, 1, 4, 1, 11129, 2, 1, 17];
 
-    pub struct Built { pub ders: Vec<Vec<u8>>, pub root: TrustedRoot, pub leaf: EcdsaKeyPair }
+    pub struct Built {
+        pub ders: Vec<Vec<u8>>,
+        pub root: TrustedRoot,
+        pub leaf: EcdsaKeyPair,
+    }
 
     fn dn(cn: &str, title: Option<&str>) -> DistinguishedName {
         let mut d = DistinguishedName::new();
         d.push(DnType::CommonName, cn);
-        if let Some(t) = title { d.push(DnType::CustomDnType(vec![2, 5, 4, 12]), t); }
+        if let Some(t) = title {
+            d.push(DnType::CustomDnType(vec![2, 5, 4, 12]), t);
+        }
         d
     }
 
@@ -499,7 +647,9 @@ mod synthetic {
 
         let int_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let mut int_params = ca("test batch key", Some(if strongbox_title { "StrongBox" } else { "TEE" }));
-        if extra_ext_on_intermediate { int_params.custom_extensions.push(CustomExtension::from_oid_content(KD_OID, key_description(spec))); }
+        if extra_ext_on_intermediate {
+            int_params.custom_extensions.push(CustomExtension::from_oid_content(KD_OID, key_description(spec)));
+        }
         let int_cert = int_params.signed_by(&int_key, &root_issuer).unwrap();
         let int_issuer = Issuer::new(int_params, int_key);
 
@@ -525,13 +675,27 @@ mod synthetic {
     pub const ADDRESS: &str = "0x52908400098527886e0f7030069857d2e4169ee7";
 
     pub fn genuine_spec(challenge: &[u8]) -> Spec {
-        Spec { level: 2, challenge: challenge.to_vec(), package: "dev.phonevault.signer".into(), signer: vec![0xab; 32],
-               locked: true, boot_state: 1, boot_key: vec![0xcd; 32], patch: 202_609, origin: 0 }
+        Spec {
+            level: 2,
+            challenge: challenge.to_vec(),
+            package: "dev.phonevault.signer".into(),
+            signer: vec![0xab; 32],
+            locked: true,
+            boot_state: 1,
+            boot_key: vec![0xcd; 32],
+            patch: 202_609,
+            origin: 0,
+        }
     }
 
     pub fn test_policy() -> Policy {
-        Policy { package: "dev.phonevault.signer".into(), release_signers: vec![vec![0xab; 32]], development_signers: vec![vec![0xde; 32]],
-                 avb_keys: vec![vec![0xcd; 32]], min_os_patch_level: 202_501 }
+        Policy {
+            package: "dev.phonevault.signer".into(),
+            release_signers: vec![vec![0xab; 32]],
+            development_signers: vec![vec![0xde; 32]],
+            avb_keys: vec![vec![0xcd; 32]],
+            min_os_patch_level: 202_501,
+        }
     }
 
     /// The phone's answer, signed like AttestationKey.java does.
@@ -596,7 +760,10 @@ mod synthetic {
         let root_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).unwrap();
         let root_params = ca("ladder root", None);
         let root_cert = root_params.self_signed(&root_key).unwrap();
-        let root_spki = { let (_, c) = x509_parser::parse_x509_certificate(root_cert.der()).unwrap(); c.public_key().raw.to_vec() };
+        let root_spki = {
+            let (_, c) = x509_parser::parse_x509_certificate(root_cert.der()).unwrap();
+            c.public_key().raw.to_vec()
+        };
         let mut issuer = Issuer::new(root_params, root_key);
         let mut ders = vec![root_cert.der().to_vec()];
         for i in 0..ints {
@@ -626,19 +793,37 @@ mod synthetic {
         assert!(err(1, &|_, p| p.key_usages = vec![KeyUsagePurpose::DigitalSignature]).contains("keyCertSign"));
         assert!(err(1, &|_, p| p.key_usages = vec![]).contains("no key usage"));
         // pathLen: the intermediate right under the root allows 0 CAs below it, the chain has 1
-        assert!(err(2, &|i, p| if i == 0 { p.is_ca = IsCa::Ca(BasicConstraints::Constrained(0)) }).contains("allows 0"));
-        assert!(err(2, &|i, p| if i == 0 { p.is_ca = IsCa::Ca(BasicConstraints::Constrained(1)) }).contains("no attestation extension"));
+        assert!(err(2, &|i, p| if i == 0 {
+            p.is_ca = IsCa::Ca(BasicConstraints::Constrained(0))
+        })
+        .contains("allows 0"));
+        assert!(err(2, &|i, p| if i == 0 {
+            p.is_ca = IsCa::Ca(BasicConstraints::Constrained(1))
+        })
+        .contains("no attestation extension"));
     }
 
     #[test]
     fn chain_extension_attack_and_fake_strongbox_fail() {
         let challenge = [0x42u8; 32];
         let b = build(&genuine_spec(&challenge), true, true);
-        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), std::slice::from_ref(&b.root));
+        let r = run(
+            &b,
+            &challenge,
+            &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"),
+            &test_policy(),
+            std::slice::from_ref(&b.root),
+        );
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems[0].contains("chain-extension"), "{:?}", r.assessment.problems);
         let b = build(&genuine_spec(&challenge), false, false);
-        let r = run(&b, &challenge, &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"), &test_policy(), std::slice::from_ref(&b.root));
+        let r = run(
+            &b,
+            &challenge,
+            &answer(&b, "t1", &challenge, ADDRESS, "StrongBox"),
+            &test_policy(),
+            std::slice::from_ref(&b.root),
+        );
         assert_eq!(r.verdict(), Verdict::Fail);
         assert!(r.assessment.problems.iter().any(|p| p.contains("not a StrongBox chain")));
     }
@@ -647,15 +832,19 @@ mod synthetic {
     fn unlocked_dev_phone_is_development_and_dev_signer_needs_dev_mode() {
         let challenge = [0x42u8; 32];
         let mut s = genuine_spec(&challenge);
-        s.locked = false; s.boot_state = 2; s.signer = vec![0xde; 32];
+        s.locked = false;
+        s.boot_state = 2;
+        s.signer = vec![0xde; 32];
         let b = build(&s, true, false);
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         let req = request("t1", &challenge);
-        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, true).unwrap();
+        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, true)
+            .unwrap();
         assert_eq!(r.verdict(), Verdict::Development, "{r:?}");
         assert_eq!(r.assessment.headline, policy::UNLOCKED_HEADLINE);
         assert!(r.dev_mode);
-        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, false).unwrap();
+        let r = assess(&test_policy(), std::slice::from_ref(&b.root), NOW, &challenge, &req, &resp, unchecked, false)
+            .unwrap();
         assert_eq!(r.verdict(), Verdict::Fail);
     }
 
@@ -669,7 +858,8 @@ mod synthetic {
         assert_eq!(kd.hardware.boot_patch_level, Some(20_260_905));
         assert!(kd.hardware.no_auth_required);
         // trailing junk after the KeyDescription is refused
-        let mut bad = key_description(&s); bad.push(0);
+        let mut bad = key_description(&s);
+        bad.push(0);
         assert!(keydesc::parse(&bad).is_err());
     }
 }
@@ -681,7 +871,12 @@ mod synthetic {
 #[test]
 fn developer_mode_turned_off_mid_check_is_not_undone() {
     // the user turns Developer mode off exactly while the check reads the (old, ON) setting
-    let (epoch, allow_dev) = epoch_then_dev_mode(|| { let old = true; invalidate(); old }).unwrap();
+    let (epoch, allow_dev) = epoch_then_dev_mode(|| {
+        let old = true;
+        invalidate();
+        old
+    })
+    .unwrap();
     assert!(allow_dev);
     assert_ne!(epoch, STATE.lock().unwrap().epoch, "the in-flight check's verdict will not be cached");
 }

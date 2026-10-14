@@ -81,26 +81,42 @@ pub struct PhoneAttestation {
 }
 
 #[derive(Debug)]
-pub enum Answer { Attestation(PhoneAttestation), Refused(String) }
+pub enum Answer {
+    Attestation(PhoneAttestation),
+    Refused(String),
+}
 
 /// Schema-exact parse of the phone's answer. `Err` means a malformed answer (a FAIL).
 pub fn parse_response(request: &Value, response: &Value) -> Result<Answer, String> {
     let obj = response.as_object().ok_or("the phone's answer is not an object")?;
-    if obj.get("id") != request.get("id") { return Err("the phone's answer is for a different request".into()); }
+    if obj.get("id") != request.get("id") {
+        return Err("the phone's answer is for a different request".into());
+    }
     let s = |k: &str| obj.get(k).and_then(Value::as_str);
     if s("status") == Some("error") {
-        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect(); keys.sort();
-        if keys != ["error", "id", "status"] { return Err("malformed error answer".into()); }
+        let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+        keys.sort();
+        if keys != ["error", "id", "status"] {
+            return Err("malformed error answer".into());
+        }
         return Ok(Answer::Refused(s("error").unwrap_or("error").chars().take(300).collect()));
     }
-    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect(); keys.sort();
+    let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
+    keys.sort();
     if keys != ["address", "certificates", "id", "securityLevel", "signature", "status", "version"] {
         return Err("the phone's attestation answer does not match the protocol".into());
     }
-    if s("status") != Some("ok") { return Err("unexpected status".into()); }
-    if s("version") != Some("1") { return Err("unsupported attestation version".into()); }
+    if s("status") != Some("ok") {
+        return Err("unexpected status".into());
+    }
+    if s("version") != Some("1") {
+        return Err("unsupported attestation version".into());
+    }
     let address = s("address").ok_or("address is not a string")?;
-    if address.len() != 42 || !address.starts_with("0x") || !address[2..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if address.len() != 42
+        || !address.starts_with("0x")
+        || !address[2..].bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
         return Err("the phone's address is not 0x + 40 lowercase hex".into());
     }
     let mut address_bytes = [0u8; 20];
@@ -110,20 +126,40 @@ pub fn parse_response(request: &Value, response: &Value) -> Result<Answer, Strin
         .ok_or("unknown securityLevel")?;
     let list = s("certificates").ok_or("certificates is not a string")?;
     let parts: Vec<&str> = list.split(',').collect();
-    if parts.len() < 2 || parts.len() > chain::MAX_CHAIN { return Err("the certificate list has the wrong length".into()); }
-    let certificates = parts.iter().map(|p| base64::engine::general_purpose::STANDARD.decode(p).map_err(|_| "a certificate is not valid base64".to_string()))
+    if parts.len() < 2 || parts.len() > chain::MAX_CHAIN {
+        return Err("the certificate list has the wrong length".into());
+    }
+    let certificates = parts
+        .iter()
+        .map(|p| {
+            base64::engine::general_purpose::STANDARD
+                .decode(p)
+                .map_err(|_| "a certificate is not valid base64".to_string())
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let sig_hex = s("signature").ok_or("signature is not a string")?.strip_prefix("0x").ok_or("signature must start with 0x")?;
-    if sig_hex.bytes().any(|b| b.is_ascii_uppercase()) { return Err("signature must be lowercase hex".into()); }
+    let sig_hex =
+        s("signature").ok_or("signature is not a string")?.strip_prefix("0x").ok_or("signature must start with 0x")?;
+    if sig_hex.bytes().any(|b| b.is_ascii_uppercase()) {
+        return Err("signature must be lowercase hex".into());
+    }
     let signature = hex::decode(sig_hex).map_err(|_| "signature is not hex".to_string())?;
-    if signature.is_empty() || signature.len() > MAX_SIGNATURE_BYTES { return Err("signature has the wrong length".into()); }
-    Ok(Answer::Attestation(PhoneAttestation { address: address.to_string(), address_bytes, security_level, certificates, signature }))
+    if signature.is_empty() || signature.len() > MAX_SIGNATURE_BYTES {
+        return Err("signature has the wrong length".into());
+    }
+    Ok(Answer::Attestation(PhoneAttestation {
+        address: address.to_string(),
+        address_bytes,
+        security_level,
+        certificates,
+        signature,
+    }))
 }
 
 /// ECDSA P-256 / SHA-256 over the binding message, by the attested key.
 pub fn verify_binding(point: &[u8], challenge: &[u8], address: &[u8; 20], signature: &[u8]) -> bool {
     ring::signature::UnparsedPublicKey::new(&ring::signature::ECDSA_P256_SHA256_ASN1, point)
-        .verify(&binding_message(challenge, address), signature).is_ok()
+        .verify(&binding_message(challenge, address), signature)
+        .is_ok()
 }
 
 /// What the UI shows and the gates check.
@@ -138,13 +174,20 @@ pub struct Report {
 }
 
 impl Report {
-    pub fn verdict(&self) -> Verdict { self.assessment.verdict }
+    pub fn verdict(&self) -> Verdict {
+        self.assessment.verdict
+    }
     fn summary(&self) -> String {
-        match self.assessment.problems.first() { Some(p) => format!("{} — {p}", self.assessment.headline), None => self.assessment.headline.clone() }
+        match self.assessment.problems.first() {
+            Some(p) => format!("{} — {p}", self.assessment.headline),
+            None => self.assessment.headline.clone(),
+        }
     }
 }
 
-fn unix_now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
 /// Phone answers that mean "try again", not "not genuine".
 fn transient(msg: &str) -> bool {
@@ -156,11 +199,20 @@ fn transient(msg: &str) -> bool {
 /// problem is a FAIL report. `revocation` is called only once the chain itself verified.
 #[allow(clippy::too_many_arguments)]
 pub fn assess(
-    policy: &Policy, roots: &[chain::TrustedRoot], now: i64, challenge: &[u8],
-    request: &Value, response: &Value, revocation: impl FnOnce() -> revocation::Status, allow_dev: bool,
+    policy: &Policy,
+    roots: &[chain::TrustedRoot],
+    now: i64,
+    challenge: &[u8],
+    request: &Value,
+    response: &Value,
+    revocation: impl FnOnce() -> revocation::Status,
+    allow_dev: bool,
 ) -> Result<Report, String> {
     let report = |assessment: Assessment, address: Option<&str>| Report {
-        assessment, address: address.map(verify::checksum), checked_at: now.max(0) as u64, dev_mode: allow_dev,
+        assessment,
+        address: address.map(verify::checksum),
+        checked_at: now.max(0) as u64,
+        dev_mode: allow_dev,
     };
     let phone = match parse_response(request, response) {
         Err(e) => return Ok(report(policy::fail(format!("The phone's answer is malformed: {e}.")), None)),
@@ -170,29 +222,59 @@ pub fn assess(
         Ok(Answer::Attestation(a)) => a,
     };
     let chain = match chain::verify(&phone.certificates, roots, now) {
-        Err(e) => return Ok(report(policy::fail(format!("The attestation certificate chain is not valid: {e}.")), Some(&phone.address))),
+        Err(e) => {
+            return Ok(report(
+                policy::fail(format!("The attestation certificate chain is not valid: {e}.")),
+                Some(&phone.address),
+            ))
+        }
         Ok(c) => c,
     };
-    let binding_ok = chain.leaf_p256_point.as_deref().is_some_and(|p| verify_binding(p, challenge, &phone.address_bytes, &phone.signature));
+    let binding_ok = chain
+        .leaf_p256_point
+        .as_deref()
+        .is_some_and(|p| verify_binding(p, challenge, &phone.address_bytes, &phone.signature));
     let status = revocation();
-    let ev = policy::Evidence { chain: &chain, phone_level: phone.security_level, challenge, binding_ok, revocation: &status };
+    let ev = policy::Evidence {
+        chain: &chain,
+        phone_level: phone.security_level,
+        challenge,
+        binding_ok,
+        revocation: &status,
+    };
     Ok(report(policy::evaluate(policy, &ev, allow_dev), Some(&phone.address)))
 }
 
 // ------------------------------------------------------------------ session cache + gates
 
-struct Cached { report: Report, at: Instant, epoch: u64 }
-struct State { cached: Option<Cached>, epoch: u64 }
+struct Cached {
+    report: Report,
+    at: Instant,
+    epoch: u64,
+}
+struct State {
+    cached: Option<Cached>,
+    epoch: u64,
+}
 static STATE: Mutex<State> = Mutex::new(State { cached: None, epoch: 0 });
 static RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct RunGuard;
-impl Drop for RunGuard { fn drop(&mut self) { RUNNING.store(false, Ordering::SeqCst); } }
+impl Drop for RunGuard {
+    fn drop(&mut self) {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+}
 
 /// Called with every USB presence poll: a phone that left the bus takes its verdict with it.
 pub fn note_presence(p: aoa::Presence) {
     if p == aoa::Presence::None {
-        if let Ok(mut s) = STATE.lock() { if s.cached.is_some() { s.cached = None; s.epoch += 1; } }
+        if let Ok(mut s) = STATE.lock() {
+            if s.cached.is_some() {
+                s.cached = None;
+                s.epoch += 1;
+            }
+        }
     }
 }
 
@@ -206,16 +288,29 @@ fn cached() -> Option<Report> {
 pub fn run() -> Result<Report, String> {
     // Queue behind any other request on the phone (re-entrant when a send already holds the turn).
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
-    if RUNNING.swap(true, Ordering::SeqCst) { return Err("a device check is already running".into()); }
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return Err("a device check is already running".into());
+    }
     let _guard = RunGuard;
     let (epoch, allow_dev) = epoch_then_dev_mode(devmode::enabled)?;
     let mut challenge = [0u8; CHALLENGE_BYTES];
     ring::rand::SystemRandom::new().fill(&mut challenge).map_err(|_| "no randomness for the challenge")?;
     let req = request(&uuid::Uuid::new_v4().to_string(), &challenge);
     let response = crate::ask_phone(req.clone(), PHONE_TIMEOUT)?;
-    let report = assess(&Policy::builtin(), &chain::google_roots(), unix_now() as i64, &challenge, &req, &response, revocation::current, allow_dev)?;
+    let report = assess(
+        &Policy::builtin(),
+        &chain::google_roots(),
+        unix_now() as i64,
+        &challenge,
+        &req,
+        &response,
+        revocation::current,
+        allow_dev,
+    )?;
     if let Ok(mut s) = STATE.lock() {
-        if s.epoch == epoch { s.cached = Some(Cached { report: report.clone(), at: Instant::now(), epoch }); }
+        if s.epoch == epoch {
+            s.cached = Some(Cached { report: report.clone(), at: Instant::now(), epoch });
+        }
     }
     Ok(report)
 }
@@ -229,7 +324,9 @@ fn epoch_then_dev_mode(dev_mode: impl FnOnce() -> bool) -> Result<(u64, bool), S
     Ok((epoch, dev_mode()))
 }
 
-fn blocked(r: &Report) -> String { format!("attestation: {}", r.summary()) }
+fn blocked(r: &Report) -> String {
+    format!("attestation: {}", r.summary())
+}
 
 /// Gate for every signing path: the phone on USB must have passed (GENUINE or DEVELOPMENT) for
 /// the pinned address in this connection; runs the check first if there is no current verdict.
@@ -240,11 +337,18 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
     let report = match cached() {
         // The phone may have switched accounts since the cached check (same USB connection):
         // a cached verdict for another address is asked again, once, before refusing.
-        Some(r) if r.verdict() != Verdict::Fail && !r.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(pinned)) => run()?,
+        Some(r)
+            if r.verdict() != Verdict::Fail
+                && !r.address.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(pinned)) =>
+        {
+            run()?
+        }
         Some(r) => r,
         None => run()?,
     };
-    if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
+    if report.verdict() == Verdict::Fail {
+        return Err(blocked(&report));
+    }
     match &report.address {
         Some(a) if a.eq_ignore_ascii_case(pinned) => Ok(report),
         _ => Err("attestation: the phone on USB is using a different account or wallet than the one selected on this Mac. Switch accounts on the phone (☰ → Accounts) or on this Mac".into()),
@@ -257,30 +361,47 @@ pub fn require_ok(pinned: &str) -> Result<Report, String> {
 /// returned address or signature must belong to it).
 pub fn require_genuine() -> Result<Report, String> {
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
-    let report = match cached() { Some(r) => r, None => run()? };
-    if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
+    let report = match cached() {
+        Some(r) => r,
+        None => run()?,
+    };
+    if report.verdict() == Verdict::Fail {
+        return Err(blocked(&report));
+    }
     Ok(report)
 }
 
 /// Gate for pairing: the address being pinned must come from a phone that passed just now.
 pub fn require_pairable(address: &str) -> Result<(), String> {
     let report = cached().ok_or("Check the phone first: its device check has not run for this connection.")?;
-    if report.verdict() == Verdict::Fail { return Err(blocked(&report)); }
-    match &report.address { Some(a) if a.eq_ignore_ascii_case(address) => Ok(()), _ => Err("This address is not the one the phone attested to.".into()) }
+    if report.verdict() == Verdict::Fail {
+        return Err(blocked(&report));
+    }
+    match &report.address {
+        Some(a) if a.eq_ignore_ascii_case(address) => Ok(()),
+        _ => Err("This address is not the one the phone attested to.".into()),
+    }
 }
 
 /// Forget the verdict for the phone on USB (Developer mode changed: it must be checked again).
 fn invalidate() {
-    if let Ok(mut s) = STATE.lock() { s.cached = None; s.epoch += 1; }
+    if let Ok(mut s) = STATE.lock() {
+        s.cached = None;
+        s.epoch += 1;
+    }
 }
 
 /// Fresh device check. Developer mode is read from this Mac's settings file, never from the webview.
 #[tauri::command]
-pub async fn attest_phone() -> CmdResult<Report> { blocking(run).await }
+pub async fn attest_phone() -> CmdResult<Report> {
+    blocking(run).await
+}
 
 /// Whether Developer mode is on (Settings → Device).
 #[tauri::command]
-pub async fn developer_mode() -> CmdResult<bool> { Ok(devmode::enabled()) }
+pub async fn developer_mode() -> CmdResult<bool> {
+    Ok(devmode::enabled())
+}
 
 /// Turn Developer mode on (only with the exact typed confirmation) or off. Either way the current
 /// verdict is dropped, so the next request runs a fresh check under the new setting.
@@ -290,9 +411,12 @@ pub async fn set_developer_mode(on: bool, confirmation: Option<String>) -> CmdRe
         devmode::set(on, confirmation.as_deref())?;
         invalidate();
         Ok(devmode::enabled())
-    }).await
+    })
+    .await
 }
 
 /// The verdict for the phone on USB right now, if one was taken in this connection.
 #[tauri::command]
-pub async fn attestation_cached() -> CmdResult<Option<Report>> { Ok(cached()) }
+pub async fn attestation_cached() -> CmdResult<Option<Report>> {
+    Ok(cached())
+}

@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 pub const CONFIRMATION: &str = "I FLASHED THIS PHONE";
 const FILE: &str = "developer-mode.json";
 
-fn dir() -> Result<PathBuf, String> { crate::pairing::dir().map_err(|e| e.0) }
+fn dir() -> Result<PathBuf, String> {
+    crate::pairing::dir().map_err(|e| e.0)
+}
 
 /// On only when the file exists, is private (0600-style: no group/other bits), and says so.
 pub fn enabled_in(dir: &Path) -> bool {
@@ -22,7 +24,9 @@ pub fn enabled_in(dir: &Path) -> bool {
     }
 }
 
-pub fn enabled() -> bool { dir().is_ok_and(|d| enabled_in(&d)) }
+pub fn enabled() -> bool {
+    dir().is_ok_and(|d| enabled_in(&d))
+}
 
 pub fn set_in(dir: &Path, on: bool, confirmation: Option<&str>) -> Result<(), String> {
     if on {
@@ -39,7 +43,9 @@ pub fn set_in(dir: &Path, on: bool, confirmation: Option<&str>) -> Result<(), St
     }
 }
 
-pub fn set(on: bool, confirmation: Option<&str>) -> Result<(), String> { set_in(&dir()?, on, confirmation) }
+pub fn set(on: bool, confirmation: Option<&str>) -> Result<(), String> {
+    set_in(&dir()?, on, confirmation)
+}
 
 #[cfg(test)]
 mod tests {

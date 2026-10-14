@@ -23,7 +23,10 @@ const MAX_BYTES: u64 = 8 * 1024 * 1024;
 #[derive(Debug, Clone)]
 pub enum Status {
     /// serial → reason, and the day the list was fetched (YYYY-MM-DD)
-    Checked { revoked: HashMap<String, String>, as_of: String },
+    Checked {
+        revoked: HashMap<String, String>,
+        as_of: String,
+    },
     Unknown(String),
 }
 
@@ -35,7 +38,9 @@ pub fn parse(json: &str) -> Result<HashMap<String, String>, String> {
     let mut out = HashMap::new();
     for (serial, entry) in entries {
         let s = serial.trim().to_ascii_lowercase();
-        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_hexdigit()) { return Err(format!("revocation list has a malformed serial {serial:?}")); }
+        if s.is_empty() || !s.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(format!("revocation list has a malformed serial {serial:?}"));
+        }
         let status = entry.get("status").and_then(|x| x.as_str()).unwrap_or("");
         if status == "REVOKED" {
             let reason = entry.get("reason").and_then(|x| x.as_str()).unwrap_or("UNSPECIFIED").to_string();
@@ -46,11 +51,17 @@ pub fn parse(json: &str) -> Result<HashMap<String, String>, String> {
     Ok(out)
 }
 
-fn cache_path() -> Option<PathBuf> { dirs::config_dir().map(|d| d.join("PhoneVault").join("attestation-status.json")) }
+fn cache_path() -> Option<PathBuf> {
+    dirs::config_dir().map(|d| d.join("PhoneVault").join("attestation-status.json"))
+}
 
-fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0) }
+fn now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
 
-fn day(ts: u64) -> String { super::chain::day_text(ts as i64) }
+fn day(ts: u64) -> String {
+    super::chain::day_text(ts as i64)
+}
 
 fn read_cache() -> Option<(u64, HashMap<String, String>)> {
     let p = cache_path()?;
@@ -64,22 +75,35 @@ fn read_cache() -> Option<(u64, HashMap<String, String>)> {
 fn write_cache(fetched: u64, body: &str) {
     let Some(p) = cache_path() else { return };
     let Some(dir) = p.parent() else { return };
-    if fs::create_dir_all(dir).is_err() { return; }
+    if fs::create_dir_all(dir).is_err() {
+        return;
+    }
     let _ = fs::set_permissions(dir, fs::Permissions::from_mode(0o700));
     let tmp = dir.join(format!(".attestation-status.{}.tmp", std::process::id()));
     let _ = fs::remove_file(&tmp);
     let Ok(mut f) = fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp) else { return };
     let doc = serde_json::json!({"fetchedAt": fetched, "source": STATUS_URL, "list": body});
-    if f.write_all(doc.to_string().as_bytes()).is_ok() && f.sync_all().is_ok() { let _ = fs::rename(&tmp, &p); } else { let _ = fs::remove_file(&tmp); }
+    if f.write_all(doc.to_string().as_bytes()).is_ok() && f.sync_all().is_ok() {
+        let _ = fs::rename(&tmp, &p);
+    } else {
+        let _ = fs::remove_file(&tmp);
+    }
 }
 
 fn fetch() -> Result<String, String> {
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
+    let client =
+        reqwest::blocking::Client::builder().timeout(Duration::from_secs(8)).build().map_err(|e| e.to_string())?;
     let resp = client.get(STATUS_URL).send().map_err(|_| "Google's status list could not be reached".to_string())?;
-    if !resp.status().is_success() { return Err(format!("Google's status list answered HTTP {}", resp.status().as_u16())); }
-    if resp.content_length().is_some_and(|l| l > MAX_BYTES) { return Err("status list is unexpectedly large".into()); }
+    if !resp.status().is_success() {
+        return Err(format!("Google's status list answered HTTP {}", resp.status().as_u16()));
+    }
+    if resp.content_length().is_some_and(|l| l > MAX_BYTES) {
+        return Err("status list is unexpectedly large".into());
+    }
     let body = resp.text().map_err(|_| "status list download failed".to_string())?;
-    if body.len() as u64 > MAX_BYTES { return Err("status list is unexpectedly large".into()); }
+    if body.len() as u64 > MAX_BYTES {
+        return Err("status list is unexpectedly large".into());
+    }
     Ok(body)
 }
 
@@ -88,12 +112,19 @@ pub fn current() -> Status {
     let t = now();
     let cached = read_cache();
     if let Some((fetched, list)) = &cached {
-        if t.saturating_sub(*fetched) < FRESH_SECS { return Status::Checked { revoked: list.clone(), as_of: day(*fetched) }; }
+        if t.saturating_sub(*fetched) < FRESH_SECS {
+            return Status::Checked { revoked: list.clone(), as_of: day(*fetched) };
+        }
     }
     match fetch().and_then(|body| parse(&body).map(|list| (body, list))) {
-        Ok((body, list)) => { write_cache(t, &body); Status::Checked { revoked: list, as_of: day(t) } }
+        Ok((body, list)) => {
+            write_cache(t, &body);
+            Status::Checked { revoked: list, as_of: day(t) }
+        }
         Err(e) => match cached {
-            Some((fetched, list)) if t.saturating_sub(fetched) < STALE_OK_SECS => Status::Checked { revoked: list, as_of: format!("{} (offline: {e})", day(fetched)) },
+            Some((fetched, list)) if t.saturating_sub(fetched) < STALE_OK_SECS => {
+                Status::Checked { revoked: list, as_of: format!("{} (offline: {e})", day(fetched)) }
+            }
             _ => Status::Unknown(e),
         },
     }
@@ -105,11 +136,14 @@ mod tests {
 
     #[test]
     fn parses_the_google_format_and_normalises_serials() {
-        let list = parse(r#"{"entries": {
+        let list = parse(
+            r#"{"entries": {
             "6681152659205225093": {"status": "REVOKED", "reason": "KEY_COMPROMISE"},
             "00C35747A084470C3135AEEFE2B8D40CD6": {"status": "REVOKED", "reason": "SOFTWARE_FLAW"},
             "abc": {"status": "SUSPENDED"}
-        }}"#).unwrap();
+        }}"#,
+        )
+        .unwrap();
         assert_eq!(list.get("6681152659205225093").map(String::as_str), Some("KEY_COMPROMISE"));
         assert_eq!(list.get("c35747a084470c3135aeefe2b8d40cd6").map(String::as_str), Some("SOFTWARE_FLAW"));
         assert!(!list.contains_key("abc"), "only REVOKED entries count");

@@ -12,24 +12,38 @@ static CACHE: Mutex<Option<HashMap<String, (Instant, f64)>>> = Mutex::new(None);
 
 fn fetch(symbol: &str) -> Result<f64, String> {
     let url = format!("https://api.coinbase.com/v2/prices/{symbol}-USD/spot");
-    let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(6)).build().map_err(|e| e.to_string())?;
-    let v: Value = client.get(url).send().map_err(|e| e.to_string())?.error_for_status().map_err(|e| e.to_string())?.json().map_err(|e| e.to_string())?;
+    let client =
+        reqwest::blocking::Client::builder().timeout(Duration::from_secs(6)).build().map_err(|e| e.to_string())?;
+    let v: Value = client
+        .get(url)
+        .send()
+        .map_err(|e| e.to_string())?
+        .error_for_status()
+        .map_err(|e| e.to_string())?
+        .json()
+        .map_err(|e| e.to_string())?;
     parse(&v)
 }
 
 fn parse(v: &Value) -> Result<f64, String> {
     let amount = v.pointer("/data/amount").and_then(Value::as_str).ok_or("no price in response")?;
     let p: f64 = amount.parse().map_err(|_| "price is not a number".to_string())?;
-    if !(p.is_finite() && p > 0.0) { return Err("implausible price".into()); }
+    if !(p.is_finite() && p > 0.0) {
+        return Err("implausible price".into());
+    }
     Ok(p)
 }
 
 /// Cached spot price for ETH, POL or BTC (the only symbols fetched).
 pub fn spot(symbol: &str) -> Result<f64, String> {
     let symbol = symbol.to_ascii_uppercase();
-    if !matches!(symbol.as_str(), "ETH" | "POL" | "BTC") { return Err(format!("no price source for {symbol}")); }
+    if !matches!(symbol.as_str(), "ETH" | "POL" | "BTC") {
+        return Err(format!("no price source for {symbol}"));
+    }
     if let Some((at, p)) = CACHE.lock().map_err(|_| "cache poisoned")?.as_ref().and_then(|m| m.get(&symbol)).copied() {
-        if at.elapsed() < TTL { return Ok(p); }
+        if at.elapsed() < TTL {
+            return Ok(p);
+        }
     }
     let p = fetch(&symbol)?;
     CACHE.lock().map_err(|_| "cache poisoned")?.get_or_insert_with(HashMap::new).insert(symbol, (Instant::now(), p));
@@ -38,7 +52,11 @@ pub fn spot(symbol: &str) -> Result<f64, String> {
 
 #[derive(serde::Serialize)]
 #[allow(non_snake_case)]
-pub struct Prices { ETH: Option<f64>, POL: Option<f64>, BTC: Option<f64> }
+pub struct Prices {
+    ETH: Option<f64>,
+    POL: Option<f64>,
+    BTC: Option<f64>,
+}
 
 /// Every price the UI uses for totals, each null when unavailable.
 #[tauri::command]
@@ -78,6 +96,8 @@ mod tests {
         assert_eq!(token_basis("cbBTC"), Some("BTC"));
         assert_eq!(token_basis("XYZ"), None);
         // every symbol in the built-in list has a basis
-        for t in crate::tokens::list().unwrap() { assert!(token_basis(&t.symbol).is_some(), "{}", t.symbol); }
+        for t in crate::tokens::list().unwrap() {
+            assert!(token_basis(&t.symbol).is_some(), "{}", t.symbol);
+        }
     }
 }

@@ -16,7 +16,15 @@ use std::time::Duration;
 
 const ME: &str = "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3";
 
-fn wait_for(mut f: impl FnMut() -> bool) { for _ in 0..300 { if f() { return; } std::thread::sleep(Duration::from_millis(10)); } panic!("timed out"); }
+fn wait_for(mut f: impl FnMut() -> bool) {
+    for _ in 0..300 {
+        if f() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("timed out");
+}
 
 #[test]
 fn unconnected_site_reload_loop_cannot_pop_the_window_repeatedly() {
@@ -25,12 +33,19 @@ fn unconnected_site_reload_loop_cannot_pop_the_window_repeatedly() {
     let sock = d.join("a.sock");
     let log: Arc<Mutex<Vec<Alert>>> = Arc::new(Mutex::new(vec![]));
     let l = log.clone();
-    let b = Bridge::with_alerts(None, Box::new(|| Some(ME.to_string())), Box::new(|| {}), Box::new(move |a| l.lock().unwrap().push(a)));
+    let b = Bridge::with_alerts(
+        None,
+        Box::new(|| Some(ME.to_string())),
+        Box::new(|| {}),
+        Box::new(move |a| l.lock().unwrap().push(a)),
+    );
     b.serve(&sock).unwrap();
     let mut s = UnixStream::connect(&sock).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let send = |s: &mut UnixStream, v: Value| bridge::write_frame(s, v.to_string().as_bytes(), MAX_IN_FRAME).unwrap();
-    let recv = |s: &mut UnixStream| -> Value { serde_json::from_slice(&bridge::read_frame(s, bridge::MAX_OUT_FRAME).unwrap().unwrap()).unwrap() };
+    let recv = |s: &mut UnixStream| -> Value {
+        serde_json::from_slice(&bridge::read_frame(s, bridge::MAX_OUT_FRAME).unwrap().unwrap()).unwrap()
+    };
     send(&mut s, json!({"type": "relay_hello", "caller": format!("chrome-extension://{CHROME_EXTENSION_ID}/")}));
 
     let origin = "https://wallet-security-alert.example";
@@ -40,7 +55,12 @@ fn unconnected_site_reload_loop_cannot_pop_the_window_repeatedly() {
         // the page asks to connect (from a rotating subdomain of the same site, to be thorough)
         let o = if i % 2 == 0 { origin.to_string() } else { format!("https://s{i}.wallet-security-alert.example") };
         send(&mut s, json!({"type": "request", "id": i, "origin": o, "method": "eth_requestAccounts", "params": []}));
-        let v = loop { let v = recv(&mut s); if v["id"] == i && (v["type"] == "queued" || v["type"] == "response") { break v; } };
+        let v = loop {
+            let v = recv(&mut s);
+            if v["id"] == i && (v["type"] == "queued" || v["type"] == "response") {
+                break v;
+            }
+        };
         if v["type"] == "queued" {
             queued_rounds += 1;
             wait_for(|| b.pending().len() == 1);
@@ -72,16 +92,26 @@ fn node_url_with_api_key_does_not_leak_to_the_site() {
     let mut s = UnixStream::connect(&sock).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let send = |s: &mut UnixStream, v: Value| bridge::write_frame(s, v.to_string().as_bytes(), MAX_IN_FRAME).unwrap();
-    let recv = |s: &mut UnixStream| -> Value { serde_json::from_slice(&bridge::read_frame(s, bridge::MAX_OUT_FRAME).unwrap().unwrap()).unwrap() };
+    let recv = |s: &mut UnixStream| -> Value {
+        serde_json::from_slice(&bridge::read_frame(s, bridge::MAX_OUT_FRAME).unwrap().unwrap()).unwrap()
+    };
     send(&mut s, json!({"type": "relay_hello", "caller": format!("chrome-extension://{CHROME_EXTENSION_ID}/")}));
     let origin = "https://some-dapp.example";
     send(&mut s, json!({"type": "request", "id": 1, "origin": origin, "method": "eth_requestAccounts", "params": []}));
     wait_for(|| b.pending().len() == 1);
     b.approve_connect(b.pending()[0].id, &[8453]).unwrap();
     send(&mut s, json!({"type": "request", "id": 2, "origin": origin, "method": "eth_blockNumber", "params": []}));
-    let answer = loop { let v = recv(&mut s); if v["type"] == "response" && v["id"] == 2 { break v; } };
+    let answer = loop {
+        let v = recv(&mut s);
+        if v["type"] == "response" && v["id"] == 2 {
+            break v;
+        }
+    };
     let msg = answer["error"]["message"].as_str().unwrap_or_default().to_string();
     assert!(msg.starts_with("node unreachable"), "the site is told the node failed: {msg}");
-    assert!(!msg.contains("SECRET") && !msg.contains("127.0.0.1") && !msg.contains("https://"), "no part of the node URL reaches the site: {msg}");
+    assert!(
+        !msg.contains("SECRET") && !msg.contains("127.0.0.1") && !msg.contains("https://"),
+        "no part of the node URL reaches the site: {msg}"
+    );
     let _ = std::fs::remove_dir_all(d);
 }

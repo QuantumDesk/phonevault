@@ -26,28 +26,39 @@ fn main() {
     let socket = bridge::socket_path().expect("PHONEVAULT_BRIDGE_SOCKET");
     let wake = Arc::new((Mutex::new(false), Condvar::new()));
     let w = wake.clone();
-    let b: Arc<Bridge> = Bridge::new(None, Box::new(|| Some(TEST_ADDRESS.to_string())), Box::new(move || {
-        let (m, c) = &*w;
-        *m.lock().unwrap() = true;
-        c.notify_all();
-    }));
+    let b: Arc<Bridge> = Bridge::new(
+        None,
+        Box::new(|| Some(TEST_ADDRESS.to_string())),
+        Box::new(move || {
+            let (m, c) = &*w;
+            *m.lock().unwrap() = true;
+            c.notify_all();
+        }),
+    );
     b.serve(&socket).expect("serve");
     println!("{}", json!({"ready": socket.display().to_string()}));
     loop {
         {
             let (m, c) = &*wake;
             let mut flag = m.lock().unwrap();
-            if !*flag { flag = c.wait_timeout(flag, Duration::from_millis(200)).unwrap().0; }
+            if !*flag {
+                flag = c.wait_timeout(flag, Duration::from_millis(200)).unwrap().0;
+            }
             *flag = false;
         }
         for p in b.pending() {
-            let line = json!({"pending": {"kind": p.kind, "origin": p.origin, "method": p.method, "chain": p.chain_id}});
+            let line =
+                json!({"pending": {"kind": p.kind, "origin": p.origin, "method": p.method, "chain": p.chain_id}});
             println!("{line}");
             match (p.kind, p.method.as_str()) {
                 (PendingKind::Connect, _) => b.approve_connect(p.id, &[8453, 1]).expect("approve"),
                 (_, "wallet_switchEthereumChain") => {
-                    let target = p.params[0]["chainId"].as_str().and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok()).unwrap_or(0);
-                    let mut chains = b.sites().into_iter().find(|s| s.origin == p.origin).map(|s| s.chains).unwrap_or_default();
+                    let target = p.params[0]["chainId"]
+                        .as_str()
+                        .and_then(|h| u64::from_str_radix(h.trim_start_matches("0x"), 16).ok())
+                        .unwrap_or(0);
+                    let mut chains =
+                        b.sites().into_iter().find(|s| s.origin == p.origin).map(|s| s.chains).unwrap_or_default();
                     chains.push(target);
                     b.update_site(&p.origin, Some(chains), Some(target)).expect("switch");
                     b.respond(p.id, None, None).expect("answer");

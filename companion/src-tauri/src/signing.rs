@@ -20,7 +20,11 @@ use serde_json::{json, Value};
 use std::time::Duration;
 
 #[derive(Serialize)]
-pub struct SignedMessage { signature: String, digest: String, signer: String }
+pub struct SignedMessage {
+    signature: String,
+    digest: String,
+    signer: String,
+}
 
 fn chain_quantity(chain_id: u64) -> CmdResult<String> {
     if !matches!(chain_id, 1 | 11155111 | 8453 | 10 | 42161 | 137) {
@@ -51,14 +55,17 @@ fn request_signature(request: Value) -> CmdResult<SignedMessage> {
 pub(crate) const MAX_ORIGIN_CHARS: usize = 255;
 
 fn origin_field(origin: Option<&str>) -> Option<String> {
-    origin.filter(|o| !o.is_empty())
+    origin
+        .filter(|o| !o.is_empty())
         .and_then(|o| crate::bridge::normalize_origin(o).ok())
         .filter(|o| o.len() <= MAX_ORIGIN_CHARS)
 }
 
 /// Add `"origin"` to a USB message request when there is a site origin.
 pub(crate) fn with_origin(mut request: Value, origin: Option<&str>) -> Value {
-    if let (Some(o), Some(obj)) = (origin, request.as_object_mut()) { obj.insert("origin".into(), Value::from(o)); }
+    if let (Some(o), Some(obj)) = (origin, request.as_object_mut()) {
+        obj.insert("origin".into(), Value::from(o));
+    }
     request
 }
 
@@ -67,26 +74,39 @@ pub(crate) fn with_origin(mut request: Value, origin: Option<&str>) -> Value {
 pub(crate) fn personal_sign_request(id: &str, bytes: &[u8], chain_id: u64, origin: Option<&str>) -> CmdResult<Value> {
     let origin = origin_field(origin);
     if let (Ok(text), Some(o)) = (std::str::from_utf8(bytes), origin.as_deref()) {
-        if let crate::siwe::Check::Mismatch { domain, site } = crate::siwe::check(text, Some(o)) { return Err(crate::siwe::blocked_message(&site, &domain)); }
+        if let crate::siwe::Check::Mismatch { domain, site } = crate::siwe::check(text, Some(o)) {
+            return Err(crate::siwe::blocked_message(&site, &domain));
+        }
     }
-    Ok(with_origin(json!({
-        "id": id, "method": "personal_sign",
-        "chainId": chain_quantity(chain_id)?, "message": format!("0x{}", hex::encode(bytes)),
-    }), origin.as_deref()))
+    Ok(with_origin(
+        json!({
+            "id": id, "method": "personal_sign",
+            "chainId": chain_quantity(chain_id)?, "message": format!("0x{}", hex::encode(bytes)),
+        }),
+        origin.as_deref(),
+    ))
 }
 
 pub(crate) fn typed_data_request(id: &str, typed_data: &str, chain_id: u64, origin: Option<&str>) -> CmdResult<Value> {
     let origin = origin_field(origin);
-    Ok(with_origin(json!({
-        "id": id, "method": "eth_signTypedData_v4",
-        "chainId": chain_quantity(chain_id)?, "typedData": typed_data,
-    }), origin.as_deref()))
+    Ok(with_origin(
+        json!({
+            "id": id, "method": "eth_signTypedData_v4",
+            "chainId": chain_quantity(chain_id)?, "typedData": typed_data,
+        }),
+        origin.as_deref(),
+    ))
 }
 
 /// `message` is UTF-8 text, or 0x-prefixed hex bytes when `is_hex` is set. `origin`: the site that
 /// asked, when known (see the module comment); None for a message the user started here.
 #[tauri::command]
-pub async fn sign_message(message: String, is_hex: bool, chain_id: u64, origin: Option<String>) -> CmdResult<SignedMessage> {
+pub async fn sign_message(
+    message: String,
+    is_hex: bool,
+    chain_id: u64,
+    origin: Option<String>,
+) -> CmdResult<SignedMessage> {
     blocking(move || {
         let bytes = if is_hex {
             let body = message.trim().strip_prefix("0x").ok_or("hex message must start with 0x")?.to_string();
@@ -94,16 +114,34 @@ pub async fn sign_message(message: String, is_hex: bool, chain_id: u64, origin: 
         } else {
             message.into_bytes()
         };
-        if bytes.is_empty() { return Err("the message is empty".into()); }
-        if bytes.len() > message::MAX_MESSAGE_BYTES { return Err(format!("the message exceeds {} bytes", message::MAX_MESSAGE_BYTES)); }
-        request_signature(personal_sign_request(&uuid::Uuid::new_v4().to_string(), &bytes, chain_id, origin.as_deref())?)
-    }).await
+        if bytes.is_empty() {
+            return Err("the message is empty".into());
+        }
+        if bytes.len() > message::MAX_MESSAGE_BYTES {
+            return Err(format!("the message exceeds {} bytes", message::MAX_MESSAGE_BYTES));
+        }
+        request_signature(personal_sign_request(
+            &uuid::Uuid::new_v4().to_string(),
+            &bytes,
+            chain_id,
+            origin.as_deref(),
+        )?)
+    })
+    .await
 }
 
 /// `typed_data` is the eth_signTypedData_v4 JSON text, sent to the phone exactly as given.
 #[tauri::command]
 pub async fn sign_typed_data(typed_data: String, chain_id: u64, origin: Option<String>) -> CmdResult<SignedMessage> {
-    blocking(move || request_signature(typed_data_request(&uuid::Uuid::new_v4().to_string(), &typed_data, chain_id, origin.as_deref())?)).await
+    blocking(move || {
+        request_signature(typed_data_request(
+            &uuid::Uuid::new_v4().to_string(),
+            &typed_data,
+            chain_id,
+            origin.as_deref(),
+        )?)
+    })
+    .await
 }
 
 #[cfg(test)]
@@ -115,41 +153,77 @@ mod tests {
     #[test]
     fn requests_carry_the_normalized_origin_only_when_there_is_one() {
         let r = personal_sign_request("m-1", b"hello", 1, Some("HTTPS://App.Uniswap.org")).unwrap();
-        assert_eq!(r, json!({"id": "m-1", "method": "personal_sign", "chainId": "0x1", "message": "0x68656c6c6f", "origin": "https://app.uniswap.org"}));
+        assert_eq!(
+            r,
+            json!({"id": "m-1", "method": "personal_sign", "chainId": "0x1", "message": "0x68656c6c6f", "origin": "https://app.uniswap.org"})
+        );
         let r = personal_sign_request("m-1", b"hello", 1, None).unwrap();
         assert!(r.get("origin").is_none());
         assert_eq!(r.as_object().unwrap().len(), 4, "unchanged wire format without a site");
         assert!(personal_sign_request("m-1", b"hello", 1, Some("")).unwrap().get("origin").is_none());
         let r = typed_data_request("t-1", "{}", 8453, Some("http://localhost:5173")).unwrap();
-        assert_eq!(r, json!({"id": "t-1", "method": "eth_signTypedData_v4", "chainId": "0x2105", "typedData": "{}", "origin": "http://localhost:5173"}));
+        assert_eq!(
+            r,
+            json!({"id": "t-1", "method": "eth_signTypedData_v4", "chainId": "0x2105", "typedData": "{}", "origin": "http://localhost:5173"})
+        );
         assert!(typed_data_request("t-1", "{}", 8453, None).unwrap().get("origin").is_none());
         // anything the phone's grammar would refuse is left out, never sent
         let long = format!("https://{}.example.org:65535", ["a", "b", "c", "d"].map(|c| c.repeat(58)).join("."));
         assert!(crate::bridge::normalize_origin(&long).is_ok() && long.len() > MAX_ORIGIN_CHARS);
-        for bad in ["https://app.uniswap.org/path", "https://app.uniswap.org/", "http://evil.org", "javascript:alert(1)", "https://ápp.org",
-            "https://user@app.uniswap.org", "https://a.org:0", "https://a.org:65536", "https://a.org?x", &long] {
+        for bad in [
+            "https://app.uniswap.org/path",
+            "https://app.uniswap.org/",
+            "http://evil.org",
+            "javascript:alert(1)",
+            "https://ápp.org",
+            "https://user@app.uniswap.org",
+            "https://a.org:0",
+            "https://a.org:65536",
+            "https://a.org?x",
+            &long,
+        ] {
             assert!(personal_sign_request("m-1", b"hello", 1, Some(bad)).unwrap().get("origin").is_none(), "{bad}");
             assert!(typed_data_request("t-1", "{}", 1, Some(bad)).unwrap().get("origin").is_none(), "{bad}");
         }
         // what is sent always matches the phone's pattern
         let phone_ok = |o: &str| {
             let (scheme, rest) = o.split_once("://").unwrap();
-            let (host, port) = match rest.rfind(':').filter(|_| !rest.ends_with(']')) { Some(i) if !rest.starts_with('[') || rest[..i].ends_with(']') => (&rest[..i], Some(&rest[i + 1..])), _ => (rest, None) };
-            let port_ok = port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && !p.starts_with('0') && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u32>().unwrap() <= 65535);
+            let (host, port) = match rest.rfind(':').filter(|_| !rest.ends_with(']')) {
+                Some(i) if !rest.starts_with('[') || rest[..i].ends_with(']') => (&rest[..i], Some(&rest[i + 1..])),
+                _ => (rest, None),
+            };
+            let port_ok = port.is_none_or(|p| {
+                !p.is_empty()
+                    && p.len() <= 5
+                    && !p.starts_with('0')
+                    && p.bytes().all(|b| b.is_ascii_digit())
+                    && p.parse::<u32>().unwrap() <= 65535
+            });
             let host_ok = match scheme {
-                "https" => host.split('.').all(|l| !l.is_empty() && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')),
+                "https" => host.split('.').all(|l| {
+                    !l.is_empty() && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                }),
                 "http" => matches!(host, "localhost" | "127.0.0.1" | "[::1]"),
                 _ => false,
             };
             o.len() <= 255 && port_ok && host_ok
         };
-        for o in ["HTTPS://App.Uniswap.org", "https://xn--uniswp-9za.org:8443", "http://[::1]:3000", "http://127.0.0.1", "http://localhost:5173"] {
+        for o in [
+            "HTTPS://App.Uniswap.org",
+            "https://xn--uniswp-9za.org:8443",
+            "http://[::1]:3000",
+            "http://127.0.0.1",
+            "http://localhost:5173",
+        ] {
             let r = personal_sign_request("m-1", b"hello", 1, Some(o)).unwrap();
             let sent = r["origin"].as_str().unwrap();
             assert!(phone_ok(sent), "{sent}");
         }
         // the pinned account is added after this, as for every request
-        let pinned = crate::pinned_request(personal_sign_request("m-1", b"hi", 1, Some("https://a.org")).unwrap(), "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3");
+        let pinned = crate::pinned_request(
+            personal_sign_request("m-1", b"hi", 1, Some("https://a.org")).unwrap(),
+            "0x7a3b9c1d2e4f5061728394a5b6c7d8e9f0a1b2c3",
+        );
         assert_eq!(pinned.as_object().unwrap().len(), 6);
     }
 

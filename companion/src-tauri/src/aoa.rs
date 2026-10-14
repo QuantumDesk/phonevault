@@ -27,7 +27,11 @@ pub const MAX_PSBT_RESPONSE_BYTES: usize = 272 * 1024;
 
 /// The response cap for one request: larger only for btcSignPsbt.
 fn response_cap(request: &Value) -> usize {
-    if request.get("method").and_then(Value::as_str) == Some("btcSignPsbt") { MAX_PSBT_RESPONSE_BYTES } else { MAX_RESPONSE_BYTES }
+    if request.get("method").and_then(Value::as_str) == Some("btcSignPsbt") {
+        MAX_PSBT_RESPONSE_BYTES
+    } else {
+        MAX_RESPONSE_BYTES
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -38,24 +42,36 @@ pub enum AoaError {
     Protocol(String),
     #[error("no Android device on USB")]
     NoDevice,
-    #[error("the phone did not answer within {0} s (locked, or its USB session ended — unplug and reconnect the cable)")]
+    #[error(
+        "the phone did not answer within {0} s (locked, or its USB session ended — unplug and reconnect the cable)"
+    )]
     Timeout(u64),
 }
 
-fn proto(msg: impl Into<String>) -> AoaError { AoaError::Protocol(msg.into()) }
+fn proto(msg: impl Into<String>) -> AoaError {
+    AoaError::Protocol(msg.into())
+}
 
 /// What the host can see on the bus right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum Presence { None, Android, Accessory }
+pub enum Presence {
+    None,
+    Android,
+    Accessory,
+}
 
 pub fn presence() -> Result<Presence, AoaError> {
     let ctx = Context::new()?;
     let mut seen = Presence::None;
     for dev in ctx.devices()?.iter() {
         let d = dev.device_descriptor()?;
-        if d.vendor_id() != GOOGLE_VENDOR_ID { continue; }
-        if ACCESSORY_PRODUCTS.contains(&d.product_id()) { return Ok(Presence::Accessory); }
+        if d.vendor_id() != GOOGLE_VENDOR_ID {
+            continue;
+        }
+        if ACCESSORY_PRODUCTS.contains(&d.product_id()) {
+            return Ok(Presence::Accessory);
+        }
         seen = Presence::Android;
     }
     Ok(seen)
@@ -64,7 +80,9 @@ pub fn presence() -> Result<Presence, AoaError> {
 fn google_devices(ctx: &Context) -> Result<Vec<Device<Context>>, AoaError> {
     let mut out = Vec::new();
     for dev in ctx.devices()?.iter() {
-        if dev.device_descriptor()?.vendor_id() == GOOGLE_VENDOR_ID { out.push(dev); }
+        if dev.device_descriptor()?.vendor_id() == GOOGLE_VENDOR_ID {
+            out.push(dev);
+        }
     }
     Ok(out)
 }
@@ -74,16 +92,22 @@ fn accessory_device(ctx: &Context) -> Result<Option<Device<Context>>, AoaError> 
         .into_iter()
         .filter(|d| d.device_descriptor().is_ok_and(|x| ACCESSORY_PRODUCTS.contains(&x.product_id())))
         .collect();
-    if found.len() > 1 { return Err(proto(format!("expected one Phone Vault accessory, found {}", found.len()))); }
+    if found.len() > 1 {
+        return Err(proto(format!("expected one Phone Vault accessory, found {}", found.len())));
+    }
     Ok(found.pop())
 }
 
 /// Ask the phone to re-enumerate as our accessory. No-op if it already did.
 fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
-    if let Some(acc) = accessory_device(ctx)? { return Ok(acc); }
+    if let Some(acc) = accessory_device(ctx)? {
+        return Ok(acc);
+    }
     let mut devices = google_devices(ctx)?;
     let device = devices.pop().ok_or(AoaError::NoDevice)?;
-    if devices.len() > 1 { return Err(proto("more than one Android device is attached; keep only the vault on USB")); }
+    if devices.len() > 1 {
+        return Err(proto("more than one Android device is attached; keep only the vault on USB"));
+    }
     let handle = device.open()?;
     let t = Duration::from_secs(2);
     let mut version = [0u8; 2];
@@ -91,7 +115,9 @@ fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
     let rt_out = rusb::request_type(Direction::Out, RequestType::Vendor, Recipient::Device);
     handle.read_control(rt_in, AOA_GET_PROTOCOL, 0, 0, &mut version, t)?;
     let v = u16::from_le_bytes(version);
-    if v < 1 { return Err(proto(format!("unsupported Android Open Accessory protocol {v}"))); }
+    if v < 1 {
+        return Err(proto(format!("unsupported Android Open Accessory protocol {v}")));
+    }
     for (index, value) in IDENTITY.iter().enumerate() {
         let mut bytes = value.as_bytes().to_vec();
         bytes.push(0);
@@ -102,7 +128,9 @@ fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
     let deadline = Instant::now() + Duration::from_secs(12);
     while Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(400));
-        if let Some(acc) = accessory_device(ctx)? { return Ok(acc); }
+        if let Some(acc) = accessory_device(ctx)? {
+            return Ok(acc);
+        }
     }
     Err(proto("the phone did not re-enumerate in accessory mode"))
 }
@@ -130,17 +158,27 @@ impl Session {
         let mut chosen = None;
         for interface in config.interfaces() {
             for desc in interface.descriptors() {
-                if (desc.class_code(), desc.sub_class_code(), desc.protocol_code()) != (0xFF, 0xFF, 0x00) { continue; }
+                if (desc.class_code(), desc.sub_class_code(), desc.protocol_code()) != (0xFF, 0xFF, 0x00) {
+                    continue;
+                }
                 let eps: Vec<_> = desc.endpoint_descriptors().collect();
-                if eps.len() != 2 || eps.iter().any(|e| e.transfer_type() != TransferType::Bulk) { continue; }
+                if eps.len() != 2 || eps.iter().any(|e| e.transfer_type() != TransferType::Bulk) {
+                    continue;
+                }
                 let ep_in = eps.iter().find(|e| e.direction() == Direction::In).map(rusb::EndpointDescriptor::address);
-                let ep_out = eps.iter().find(|e| e.direction() == Direction::Out).map(rusb::EndpointDescriptor::address);
-                if let (Some(i), Some(o)) = (ep_in, ep_out) { chosen = Some((desc.interface_number(), i, o)); }
+                let ep_out =
+                    eps.iter().find(|e| e.direction() == Direction::Out).map(rusb::EndpointDescriptor::address);
+                if let (Some(i), Some(o)) = (ep_in, ep_out) {
+                    chosen = Some((desc.interface_number(), i, o));
+                }
             }
         }
-        let (iface, ep_in, ep_out) = chosen.ok_or_else(|| proto("accessory interface with two bulk endpoints not found"))?;
+        let (iface, ep_in, ep_out) =
+            chosen.ok_or_else(|| proto("accessory interface with two bulk endpoints not found"))?;
         handle.claim_interface(iface).map_err(|e| match e {
-            rusb::Error::Busy | rusb::Error::Access => proto("the USB interface is held by another program (usually the adb server: run `adb kill-server`)"),
+            rusb::Error::Busy | rusb::Error::Access => {
+                proto("the USB interface is held by another program (usually the adb server: run `adb kill-server`)")
+            }
             other => AoaError::Usb(other),
         })?;
         Ok(Session { handle, iface, ep_in, ep_out })
@@ -148,7 +186,8 @@ impl Session {
 
     /// One request, one newline-framed JSON response. `timeout` covers the wait for on-device approval.
     pub fn exchange(&mut self, request: &Value, timeout: Duration) -> Result<Value, AoaError> {
-        let id = request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
+        let id =
+            request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
         let mut payload = serde_json::to_vec(request).map_err(|e| proto(e.to_string()))?;
         payload.push(b'\n');
         // The phone only reads once its app has opened the session (it wakes the screen and does
@@ -173,12 +212,18 @@ impl Session {
                 Err(rusb::Error::Timeout) => continue,
                 Err(e) => return Err(AoaError::Usb(e)),
             }
-            if received.len() > cap { return Err(proto(format!("phone response exceeds {} KiB", cap / 1024))); }
+            if received.len() > cap {
+                return Err(proto(format!("phone response exceeds {} KiB", cap / 1024)));
+            }
             if let Some(pos) = received.iter().position(|&b| b == b'\n') {
-                if received.len() > pos + 1 { return Err(proto("phone returned more than one framed response")); }
+                if received.len() > pos + 1 {
+                    return Err(proto("phone returned more than one framed response"));
+                }
                 let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
                 let response: Value = serde_json::from_str(line).map_err(|_| proto("phone response is not JSON"))?;
-                if !response.is_object() { return Err(proto("phone response must be a JSON object")); }
+                if !response.is_object() {
+                    return Err(proto("phone response must be a JSON object"));
+                }
                 if response.get("id").and_then(Value::as_str) != Some(id.as_str()) {
                     return Err(proto("phone response id does not match the request"));
                 }
@@ -190,7 +235,9 @@ impl Session {
 }
 
 impl Drop for Session {
-    fn drop(&mut self) { let _ = self.handle.release_interface(self.iface); }
+    fn drop(&mut self) {
+        let _ = self.handle.release_interface(self.iface);
+    }
 }
 
 // ---------------------------------------------------------------- one conversation at a time
@@ -208,23 +255,41 @@ thread_local!(static HELD: Cell<bool> = const { Cell::new(false) });
 
 /// This thread's turn with the phone; released on drop. Re-entrant on the same thread (the send
 /// path takes a turn, then the device check inside it asks the phone too).
-pub struct PhoneTurn { guard: Option<MutexGuard<'static, ()>> }
+pub struct PhoneTurn {
+    guard: Option<MutexGuard<'static, ()>>,
+}
 impl Drop for PhoneTurn {
-    fn drop(&mut self) { if self.guard.take().is_some() { HELD.with(|h| h.set(false)); } }
+    fn drop(&mut self) {
+        if self.guard.take().is_some() {
+            HELD.with(|h| h.set(false));
+        }
+    }
 }
 
 /// Wait for the phone. `on_wait` runs once if someone else has it; `cancelled` is polled while waiting.
 pub fn take_turn(on_wait: impl FnOnce(), cancelled: impl Fn() -> bool) -> Result<PhoneTurn, AoaError> {
-    if HELD.with(Cell::get) { return Ok(PhoneTurn { guard: None }); }
+    if HELD.with(Cell::get) {
+        return Ok(PhoneTurn { guard: None });
+    }
     let mut on_wait = Some(on_wait);
     loop {
         match PHONE.try_lock() {
-            Ok(g) => { HELD.with(|h| h.set(true)); return Ok(PhoneTurn { guard: Some(g) }); }
-            Err(TryLockError::Poisoned(p)) => { HELD.with(|h| h.set(true)); return Ok(PhoneTurn { guard: Some(p.into_inner()) }); }
+            Ok(g) => {
+                HELD.with(|h| h.set(true));
+                return Ok(PhoneTurn { guard: Some(g) });
+            }
+            Err(TryLockError::Poisoned(p)) => {
+                HELD.with(|h| h.set(true));
+                return Ok(PhoneTurn { guard: Some(p.into_inner()) });
+            }
             Err(TryLockError::WouldBlock) => {}
         }
-        if let Some(f) = on_wait.take() { f(); }
-        if cancelled() { return Err(proto(CANCELLED)); }
+        if let Some(f) = on_wait.take() {
+            f();
+        }
+        if cancelled() {
+            return Err(proto(CANCELLED));
+        }
         std::thread::sleep(Duration::from_millis(150));
     }
 }
@@ -244,12 +309,15 @@ impl Session {
         on_delivered: impl FnOnce(),
         cancelled: impl Fn() -> bool,
     ) -> Result<Value, AoaError> {
-        let id = request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
+        let id =
+            request.get("id").and_then(Value::as_str).ok_or_else(|| proto("request needs a string id"))?.to_string();
         let mut payload = serde_json::to_vec(request).map_err(|e| proto(e.to_string()))?;
         payload.push(b'\n');
         let write_deadline = Instant::now() + Duration::from_secs(60);
         loop {
-            if cancelled() { return Err(proto(CANCELLED)); }
+            if cancelled() {
+                return Err(proto(CANCELLED));
+            }
             match self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)) {
                 Ok(_) => break,
                 Err(rusb::Error::Timeout) if Instant::now() < write_deadline => continue,
@@ -263,18 +331,26 @@ impl Session {
         let mut received: Vec<u8> = Vec::new();
         let mut chunk = vec![0u8; 16_384];
         while Instant::now() < deadline {
-            if cancelled() { return Err(proto(CANCELLED)); }
+            if cancelled() {
+                return Err(proto(CANCELLED));
+            }
             match self.handle.read_bulk(self.ep_in, &mut chunk, Duration::from_secs(1)) {
                 Ok(n) => received.extend_from_slice(&chunk[..n]),
                 Err(rusb::Error::Timeout) => continue,
                 Err(e) => return Err(AoaError::Usb(e)),
             }
-            if received.len() > cap { return Err(proto(format!("phone response exceeds {} KiB", cap / 1024))); }
+            if received.len() > cap {
+                return Err(proto(format!("phone response exceeds {} KiB", cap / 1024)));
+            }
             if let Some(pos) = received.iter().position(|&b| b == b'\n') {
-                if received.len() > pos + 1 { return Err(proto("phone returned more than one framed response")); }
+                if received.len() > pos + 1 {
+                    return Err(proto("phone returned more than one framed response"));
+                }
                 let line = std::str::from_utf8(&received[..pos]).map_err(|_| proto("phone response is not UTF-8"))?;
                 let response: Value = serde_json::from_str(line).map_err(|_| proto("phone response is not JSON"))?;
-                if !response.is_object() { return Err(proto("phone response must be a JSON object")); }
+                if !response.is_object() {
+                    return Err(proto("phone response must be a JSON object"));
+                }
                 if response.get("id").and_then(Value::as_str) != Some(id.as_str()) {
                     return Err(proto("phone response id does not match the request"));
                 }
@@ -301,14 +377,30 @@ mod turn_tests {
         let waited = Arc::new(AtomicUsize::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let (w, c) = (waited.clone(), cancel.clone());
-        let t = std::thread::spawn(move || take_turn(|| { w.fetch_add(1, Ordering::SeqCst); }, || c.load(Ordering::SeqCst)).map(|_| ()));
+        let t = std::thread::spawn(move || {
+            take_turn(
+                || {
+                    w.fetch_add(1, Ordering::SeqCst);
+                },
+                || c.load(Ordering::SeqCst),
+            )
+            .map(|_| ())
+        });
         std::thread::sleep(Duration::from_millis(400));
         cancel.store(true, Ordering::SeqCst);
         assert!(matches!(t.join().unwrap(), Err(AoaError::Protocol(ref m)) if m == CANCELLED));
         assert_eq!(waited.load(Ordering::SeqCst), 1);
         // and gets the phone once the holder lets go
         let w2 = waited.clone();
-        let t2 = std::thread::spawn(move || take_turn(|| { w2.fetch_add(1, Ordering::SeqCst); }, || false).map(|_| ()));
+        let t2 = std::thread::spawn(move || {
+            take_turn(
+                || {
+                    w2.fetch_add(1, Ordering::SeqCst);
+                },
+                || false,
+            )
+            .map(|_| ())
+        });
         std::thread::sleep(Duration::from_millis(300));
         drop(first);
         assert!(t2.join().unwrap().is_ok());

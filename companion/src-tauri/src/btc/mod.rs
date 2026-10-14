@@ -46,7 +46,11 @@ const PHONE_TIMEOUT: Duration = Duration::from_secs(300);
 /// other requests 32 KiB); a little is kept for the newline.
 pub(crate) const MAX_REQUEST_BYTES: usize = 288 * 1024 - 16;
 
-struct Candidate { account: Account, shown_first: bool, at: Instant }
+struct Candidate {
+    account: Account,
+    shown_first: bool,
+    at: Instant,
+}
 
 static CANDIDATES: LazyLock<Mutex<HashMap<String, Candidate>>> = LazyLock::new(Default::default);
 static QUOTES: LazyLock<Mutex<HashMap<String, Built>>> = LazyLock::new(Default::default);
@@ -56,7 +60,9 @@ static SCANS: LazyLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = LazyLock::new(D
 /// Previous transactions already fetched and hashed (txid → tx), for coin checks and non_witness_utxo.
 static PREV_TXS: LazyLock<Mutex<HashMap<String, Transaction>>> = LazyLock::new(Default::default);
 
-fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, String> { m.lock().map_err(|_| "state poisoned".to_string()) }
+fn lock<T>(m: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, String> {
+    m.lock().map_err(|_| "state poisoned".to_string())
+}
 
 // ---------------------------------------------------------------- accounts
 
@@ -68,33 +74,64 @@ fn load_account(id: &str) -> Result<(store::StoredAccount, Account, Option<Strin
     Ok((s, a, server))
 }
 
-fn client(net: Net, server: Option<&str>) -> Result<esplora::Client, String> { esplora::Client::new(net, server) }
+fn client(net: Net, server: Option<&str>) -> Result<esplora::Client, String> {
+    esplora::Client::new(net, server)
+}
 
 #[derive(Serialize)]
 pub struct AccountView {
-    id: String, network: Net, kind: Kind, kind_name: &'static str, account: u32, label: String, fingerprint: String,
-    path: String, xpub: String, descriptor: String, active: bool, unit: &'static str, network_name: &'static str,
+    id: String,
+    network: Net,
+    kind: Kind,
+    kind_name: &'static str,
+    account: u32,
+    label: String,
+    fingerprint: String,
+    path: String,
+    xpub: String,
+    descriptor: String,
+    active: bool,
+    unit: &'static str,
+    network_name: &'static str,
 }
 
 fn view(s: &store::StoredAccount, active: bool) -> AccountView {
     AccountView {
-        id: s.id.clone(), network: s.network, kind: s.kind, kind_name: s.kind.name(), account: s.account, label: s.label.clone(),
-        fingerprint: s.fingerprint.clone(), path: format!("m/{}", wallet::account_path(s.kind, s.network, s.account)).replace('\'', "h"),
-        xpub: s.xpub.clone(), descriptor: s.descriptor.clone(), active, unit: s.network.unit(), network_name: s.network.name(),
+        id: s.id.clone(),
+        network: s.network,
+        kind: s.kind,
+        kind_name: s.kind.name(),
+        account: s.account,
+        label: s.label.clone(),
+        fingerprint: s.fingerprint.clone(),
+        path: format!("m/{}", wallet::account_path(s.kind, s.network, s.account)).replace('\'', "h"),
+        xpub: s.xpub.clone(),
+        descriptor: s.descriptor.clone(),
+        active,
+        unit: s.network.unit(),
+        network_name: s.network.name(),
     }
 }
 
 #[derive(Serialize)]
-pub struct AccountsView { accounts: Vec<AccountView>, servers: BTreeMap<String, String>, defaults: BTreeMap<String, Vec<String>> }
+pub struct AccountsView {
+    accounts: Vec<AccountView>,
+    servers: BTreeMap<String, String>,
+    defaults: BTreeMap<String, Vec<String>>,
+}
 
 #[tauri::command]
 pub(crate) async fn btc_accounts() -> CmdResult<AccountsView> {
     blocking(|| {
         let p = store::load()?;
         let accounts = p.accounts.iter().map(|a| view(a, p.active.get(a.network.wire()) == Some(&a.id))).collect();
-        let defaults = [Net::Bitcoin, Net::Testnet, Net::Signet].iter().map(|n| (n.wire().to_string(), esplora::defaults(*n).iter().map(ToString::to_string).collect())).collect();
+        let defaults = [Net::Bitcoin, Net::Testnet, Net::Signet]
+            .iter()
+            .map(|n| (n.wire().to_string(), esplora::defaults(*n).iter().map(ToString::to_string).collect()))
+            .collect();
         Ok(AccountsView { accounts, servers: p.servers.clone(), defaults })
-    }).await
+    })
+    .await
 }
 
 fn phone_request(request: &Value, timeout: Duration) -> Result<Value, String> {
@@ -105,7 +142,19 @@ fn phone_request(request: &Value, timeout: Duration) -> Result<Value, String> {
 }
 
 #[derive(Serialize)]
-pub struct CandidateView { id: String, network: Net, kind: Kind, account: u32, fingerprint: String, path: String, xpub: String, descriptor: String, first_address: String, already_paired: bool, label: String }
+pub struct CandidateView {
+    id: String,
+    network: Net,
+    kind: Kind,
+    account: u32,
+    fingerprint: String,
+    path: String,
+    xpub: String,
+    descriptor: String,
+    first_address: String,
+    already_paired: bool,
+    label: String,
+}
 
 /// Ask the phone for an account's xpub (the phone asks the user to approve sharing it the first
 /// time). Nothing is stored: the candidate waits here until the first address is compared.
@@ -134,7 +183,11 @@ pub(crate) async fn btc_read_account(network: String, kind: String, account: u32
 }
 
 #[derive(Serialize)]
-pub struct ShownAddress { address: String, expected: String, matches: bool }
+pub struct ShownAddress {
+    address: String,
+    expected: String,
+    matches: bool,
+}
 
 /// Have the phone display one of the account's addresses (for a candidate being paired, or a
 /// paired account's receive address) and compare it with the one derived here.
@@ -170,27 +223,42 @@ pub(crate) async fn btc_confirm_account(id: String, label: Option<String>) -> Cm
             return Err("show the first address on the phone and compare it first".into());
         }
         let p = store::add_in(&crate::pairing::dir().map_err(|e| e.0)?, &c.account, label.as_deref())?;
-        store::update_cache(&id, |x| if !x.verified.contains(&0) { x.verified.push(0) })?;
+        store::update_cache(&id, |x| {
+            if !x.verified.contains(&0) {
+                x.verified.push(0)
+            }
+        })?;
         watch::WAKE.store(true, Ordering::SeqCst);
         Ok(view(p.find(&id).ok_or("not stored")?, true))
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
 pub(crate) async fn btc_select(id: String) -> CmdResult<()> {
     blocking(move || {
-        store::modify(|p| { let n = p.find(&id).ok_or("that Bitcoin account is not paired")?.network; p.active.insert(n.wire().into(), id.clone()); Ok(()) })?;
+        store::modify(|p| {
+            let n = p.find(&id).ok_or("that Bitcoin account is not paired")?.network;
+            p.active.insert(n.wire().into(), id.clone());
+            Ok(())
+        })?;
         watch::WAKE.store(true, Ordering::SeqCst);
         Ok(())
-    }).await
+    })
+    .await
 }
 
 #[tauri::command]
 pub(crate) async fn btc_rename(id: String, label: String) -> CmdResult<()> {
     blocking(move || {
         let l = crate::pairing::clean_label(&label).ok_or("the name is empty")?;
-        store::modify(|p| { p.accounts.iter_mut().find(|a| a.id == id).ok_or("that Bitcoin account is not paired")?.label = l; Ok(()) }).map(|_| ())
-    }).await
+        store::modify(|p| {
+            p.accounts.iter_mut().find(|a| a.id == id).ok_or("that Bitcoin account is not paired")?.label = l;
+            Ok(())
+        })
+        .map(|_| ())
+    })
+    .await
 }
 
 /// Unpair (its cache file stays, like EVM history).
@@ -203,59 +271,126 @@ pub(crate) async fn btc_forget(id: String) -> CmdResult<()> {
 pub(crate) async fn btc_set_server(network: String, url: Option<String>) -> CmdResult<()> {
     blocking(move || {
         let net = Net::parse(&network)?;
-        let url = match url.as_deref().map(str::trim).filter(|u| !u.is_empty()) { Some(u) => Some(esplora::check_server(u)?), None => None };
-        store::modify(|p| { match url { Some(u) => { p.servers.insert(net.wire().into(), u); } None => { p.servers.remove(net.wire()); } } Ok(()) })?;
+        let url = match url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            Some(u) => Some(esplora::check_server(u)?),
+            None => None,
+        };
+        store::modify(|p| {
+            match url {
+                Some(u) => {
+                    p.servers.insert(net.wire().into(), u);
+                }
+                None => {
+                    p.servers.remove(net.wire());
+                }
+            }
+            Ok(())
+        })?;
         watch::WAKE.store(true, Ordering::SeqCst);
         Ok(())
-    }).await
+    })
+    .await
 }
 
 // ---------------------------------------------------------------- wallet view and refresh
 
 #[derive(Serialize, Clone)]
 pub struct HistoryView {
-    txid: String, net_sats: i64, fee_sats: Option<u64>, status: String, confirmations: u64, time: u64,
-    counterparty: Option<String>, explorer: String, can_bump: bool, sent_here: bool,
+    txid: String,
+    net_sats: i64,
+    fee_sats: Option<u64>,
+    status: String,
+    confirmations: u64,
+    time: u64,
+    counterparty: Option<String>,
+    explorer: String,
+    can_bump: bool,
+    sent_here: bool,
 }
 
 #[derive(Serialize)]
 pub struct WalletView {
-    id: String, network: Net, unit: &'static str, confirmed_sats: u64, unconfirmed_sats: i64,
-    receive_address: String, receive_index: u32, receive_verified: bool,
-    history: Vec<HistoryView>, scanned_at: u64, error: Option<String>, server: String, used_addresses: usize,
+    id: String,
+    network: Net,
+    unit: &'static str,
+    confirmed_sats: u64,
+    unconfirmed_sats: i64,
+    receive_address: String,
+    receive_index: u32,
+    receive_verified: bool,
+    history: Vec<HistoryView>,
+    scanned_at: u64,
+    error: Option<String>,
+    server: String,
+    used_addresses: usize,
 }
 
 fn wallet_view(id: &str, a: &Account, server: Option<&str>, c: &store::Cache) -> Result<WalletView, String> {
     let r = c.next[0];
     let tip = c.tip.unwrap_or(0);
-    let mut history: Vec<HistoryView> = c.history.iter().map(|e| {
-        let sent = c.sent.iter().find(|s| s.txid == e.txid);
-        HistoryView {
-            txid: e.txid.clone(), net_sats: e.net, fee_sats: e.fee, status: e.status.clone(),
-            confirmations: e.height.map_or(0, |h| tip.saturating_sub(h) + 1), time: e.time, counterparty: e.counterparty.clone(),
-            explorer: esplora::explorer_tx(a.net, &e.txid), can_bump: e.status == "pending" && sent.is_some_and(|s| s.change.is_some()), sent_here: sent.is_some(),
-        }
-    }).collect();
+    let mut history: Vec<HistoryView> = c
+        .history
+        .iter()
+        .map(|e| {
+            let sent = c.sent.iter().find(|s| s.txid == e.txid);
+            HistoryView {
+                txid: e.txid.clone(),
+                net_sats: e.net,
+                fee_sats: e.fee,
+                status: e.status.clone(),
+                confirmations: e.height.map_or(0, |h| tip.saturating_sub(h) + 1),
+                time: e.time,
+                counterparty: e.counterparty.clone(),
+                explorer: esplora::explorer_tx(a.net, &e.txid),
+                can_bump: e.status == "pending" && sent.is_some_and(|s| s.change.is_some()),
+                sent_here: sent.is_some(),
+            }
+        })
+        .collect();
     // sent from here but not seen by the server yet
     for s in c.sent.iter().filter(|s| !c.history.iter().any(|e| e.txid == s.txid)) {
-        if crate::history::now().saturating_sub(s.time) > 86400 * 3 { continue; }
+        if crate::history::now().saturating_sub(s.time) > 86400 * 3 {
+            continue;
+        }
         history.push(HistoryView {
-            txid: s.txid.clone(), net_sats: -((s.amount + s.fee) as i64), fee_sats: Some(s.fee), status: "pending".into(), confirmations: 0, time: s.time,
-            counterparty: Some(s.recipient.clone()), explorer: esplora::explorer_tx(a.net, &s.txid), can_bump: s.change.is_some(), sent_here: true,
+            txid: s.txid.clone(),
+            net_sats: -((s.amount + s.fee) as i64),
+            fee_sats: Some(s.fee),
+            status: "pending".into(),
+            confirmations: 0,
+            time: s.time,
+            counterparty: Some(s.recipient.clone()),
+            explorer: esplora::explorer_tx(a.net, &s.txid),
+            can_bump: s.change.is_some(),
+            sent_here: true,
         });
     }
     history.sort_by_key(|x| std::cmp::Reverse(x.time));
     Ok(WalletView {
-        id: id.to_string(), network: a.net, unit: a.net.unit(), confirmed_sats: c.confirmed(), unconfirmed_sats: c.unconfirmed(),
-        receive_address: a.derive(0, r)?.address.to_string(), receive_index: r, receive_verified: c.verified.contains(&r),
-        history, scanned_at: c.scanned_at, error: c.error.clone(), server: client(a.net, server).map(|c| c.host()).unwrap_or_default(), used_addresses: c.addrs.len(),
+        id: id.to_string(),
+        network: a.net,
+        unit: a.net.unit(),
+        confirmed_sats: c.confirmed(),
+        unconfirmed_sats: c.unconfirmed(),
+        receive_address: a.derive(0, r)?.address.to_string(),
+        receive_index: r,
+        receive_verified: c.verified.contains(&r),
+        history,
+        scanned_at: c.scanned_at,
+        error: c.error.clone(),
+        server: client(a.net, server).map(|c| c.host()).unwrap_or_default(),
+        used_addresses: c.addrs.len(),
     })
 }
 
 /// The cached state (no network).
 #[tauri::command]
 pub(crate) async fn btc_wallet(id: String) -> CmdResult<WalletView> {
-    blocking(move || { let (_, a, server) = load_account(&id)?; wallet_view(&id, &a, server.as_deref(), &store::load_cache(&id)?) }).await
+    blocking(move || {
+        let (_, a, server) = load_account(&id)?;
+        wallet_view(&id, &a, server.as_deref(), &store::load_cache(&id)?)
+    })
+    .await
 }
 
 /// Scan now (one scan per account at a time). Returns the new incoming payments.
@@ -278,12 +413,20 @@ pub fn refresh(id: &str, full: bool) -> Result<(Vec<store::Entry>, store::Cache)
                 let sent = std::mem::take(&mut stored.sent);
                 let next = stored.next;
                 *stored = cache;
-                stored.verified = verified; stored.sent = sent;
-                for (s, n) in stored.next.iter_mut().zip(next) { *s = (*s).max(n); }
-                if let Some(t) = tip { stored.tip = Some(t); }
+                stored.verified = verified;
+                stored.sent = sent;
+                for (s, n) in stored.next.iter_mut().zip(next) {
+                    *s = (*s).max(n);
+                }
+                if let Some(t) = tip {
+                    stored.tip = Some(t);
+                }
                 Ok(inc)
             }
-            Err(e) => { stored.error = Some(e.clone()); Err(e) }
+            Err(e) => {
+                stored.error = Some(e.clone());
+                Err(e)
+            }
         }
     })?;
     Ok((incoming?, cache))
@@ -295,15 +438,25 @@ pub(crate) async fn btc_refresh(id: String, full: Option<bool>) -> CmdResult<Wal
         let (_, a, server) = load_account(&id)?;
         match refresh(&id, full.unwrap_or(true)) {
             Ok((_, c)) => wallet_view(&id, &a, server.as_deref(), &c),
-            Err(e) => { let mut v = wallet_view(&id, &a, server.as_deref(), &store::load_cache(&id)?)?; v.error = Some(e); Ok(v) }
+            Err(e) => {
+                let mut v = wallet_view(&id, &a, server.as_deref(), &store::load_cache(&id)?)?;
+                v.error = Some(e);
+                Ok(v)
+            }
         }
-    }).await
+    })
+    .await
 }
 
 // ---------------------------------------------------------------- send
 
 #[derive(Serialize)]
-pub struct AddressCheck { ok: bool, error: Option<String>, own: bool, kind: Option<&'static str> }
+pub struct AddressCheck {
+    ok: bool,
+    error: Option<String>,
+    own: bool,
+    kind: Option<&'static str>,
+}
 
 #[tauri::command]
 pub(crate) async fn btc_check_address(id: String, address: String) -> CmdResult<AddressCheck> {
@@ -313,28 +466,47 @@ pub(crate) async fn btc_check_address(id: String, address: String) -> CmdResult<
             Err(e) => AddressCheck { ok: false, error: Some(e), own: false, kind: None },
             Ok(addr) => {
                 let kind = match addr.address_type() {
-                    Some(bitcoin::AddressType::P2wpkh) => Some("Native SegWit"), Some(bitcoin::AddressType::P2tr) => Some("Taproot"),
-                    Some(bitcoin::AddressType::P2pkh) => Some("Legacy"), Some(bitcoin::AddressType::P2sh) => Some("Script (P2SH)"),
-                    Some(bitcoin::AddressType::P2wsh) => Some("SegWit script"), _ => None,
+                    Some(bitcoin::AddressType::P2wpkh) => Some("Native SegWit"),
+                    Some(bitcoin::AddressType::P2tr) => Some("Taproot"),
+                    Some(bitcoin::AddressType::P2pkh) => Some("Legacy"),
+                    Some(bitcoin::AddressType::P2sh) => Some("Script (P2SH)"),
+                    Some(bitcoin::AddressType::P2wsh) => Some("SegWit script"),
+                    _ => None,
                 };
                 AddressCheck { ok: true, error: None, own: is_own(&a, &addr.to_string())?, kind }
             }
         })
-    }).await
+    })
+    .await
 }
 
 /// One of this account's addresses (any used one, or within the next 20 on either chain).
 fn is_own(a: &Account, addr: &str) -> Result<bool, String> {
     let c = store::load_cache(&a.id())?;
-    if c.addrs.contains_key(addr) { return Ok(true); }
-    for chain in 0..=1u32 { for i in c.next[chain as usize]..c.next[chain as usize] + scan::GAP { if a.derive(chain, i)?.address.to_string() == addr { return Ok(true); } } }
+    if c.addrs.contains_key(addr) {
+        return Ok(true);
+    }
+    for chain in 0..=1u32 {
+        for i in c.next[chain as usize]..c.next[chain as usize] + scan::GAP {
+            if a.derive(chain, i)?.address.to_string() == addr {
+                return Ok(true);
+            }
+        }
+    }
     Ok(false)
 }
 
 #[derive(Serialize)]
-pub struct Fees { fast: f64, normal: f64, slow: f64, server: String }
+pub struct Fees {
+    fast: f64,
+    normal: f64,
+    slow: f64,
+    server: String,
+}
 
-fn round_up_tenth(v: f64) -> f64 { (v * 10.0).ceil() / 10.0 }
+fn round_up_tenth(v: f64) -> f64 {
+    (v * 10.0).ceil() / 10.0
+}
 
 #[tauri::command]
 pub(crate) async fn btc_fees(id: String) -> CmdResult<Fees> {
@@ -344,7 +516,8 @@ pub(crate) async fn btc_fees(id: String) -> CmdResult<Fees> {
         let f = c.fees()?;
         let pick = |t| round_up_tenth(esplora::rate_for(&f, t).unwrap_or(1.0)).max(1.0);
         Ok(Fees { fast: pick(1), normal: pick(6), slow: pick(144), server: c.host() })
-    }).await
+    })
+    .await
 }
 
 /// A coin as the server lists it, accepted only if its previous transaction (hashed here to the
@@ -355,48 +528,118 @@ fn checked_coin(c: &esplora::Client, u: &esplora::Utxo, d: &wallet::Derived) -> 
         Some(t) => t,
         None => {
             let bytes = hex::decode(c.tx_hex(&u.txid)?).map_err(|_| "server: bad hex")?;
-            let t: Transaction = consensus::deserialize(&bytes).map_err(|_| "server: transaction does not parse".to_string())?;
-            if t.compute_txid().to_string() != u.txid { return Err("server sent a transaction that does not hash to the txid it was asked for".into()); }
+            let t: Transaction =
+                consensus::deserialize(&bytes).map_err(|_| "server: transaction does not parse".to_string())?;
+            if t.compute_txid().to_string() != u.txid {
+                return Err("server sent a transaction that does not hash to the txid it was asked for".into());
+            }
             let mut m = lock(&PREV_TXS)?;
-            if m.len() > 2000 { m.clear(); }
+            if m.len() > 2000 {
+                m.clear();
+            }
             m.insert(u.txid.clone(), t.clone());
             t
         }
     };
     let out = prev.output.get(u.vout as usize).ok_or("server: the coin's output does not exist")?;
-    if out.value.to_sat() != u.value || out.script_pubkey != d.script { return Err("server: a coin's amount or address does not match its transaction".into()); }
-    Ok(tx::Coin { outpoint: OutPoint { txid: Txid::from_str(&u.txid).map_err(|e| e.to_string())?, vout: u.vout }, value: u.value, derived: d.clone(), confirmed: u.status.confirmed, prev_tx: Some(prev) })
+    if out.value.to_sat() != u.value || out.script_pubkey != d.script {
+        return Err("server: a coin's amount or address does not match its transaction".into());
+    }
+    Ok(tx::Coin {
+        outpoint: OutPoint { txid: Txid::from_str(&u.txid).map_err(|e| e.to_string())?, vout: u.vout },
+        value: u.value,
+        derived: d.clone(),
+        confirmed: u.status.confirmed,
+        prev_tx: Some(prev),
+    })
 }
 
 fn spendable(a: &Account, c: &esplora::Client, cache: &store::Cache) -> Result<Vec<tx::Coin>, String> {
     let mut coins = Vec::new();
     for (addr, s) in cache.addrs.iter().filter(|(_, s)| s.confirmed > 0 || s.mempool > 0) {
         let d = a.derive(s.chain, s.index)?;
-        if d.address.to_string() != *addr { return Err("internal: address cache mismatch".into()); }
-        for u in c.utxos(addr)? { coins.push(checked_coin(c, &u, &d)?); }
+        if d.address.to_string() != *addr {
+            return Err("internal: address cache mismatch".into());
+        }
+        for u in c.utxos(addr)? {
+            coins.push(checked_coin(c, &u, &d)?);
+        }
     }
     Ok(coins)
 }
 
 #[derive(Serialize)]
-pub struct OutView { address: String, sats: u64, change: bool, path: Option<String> }
+pub struct OutView {
+    address: String,
+    sats: u64,
+    change: bool,
+    path: Option<String>,
+}
 #[derive(Serialize)]
-pub struct InView { outpoint: String, sats: u64, address: String, confirmed: bool }
+pub struct InView {
+    outpoint: String,
+    sats: u64,
+    address: String,
+    confirmed: bool,
+}
 
 #[derive(Serialize)]
 pub struct QuoteView {
-    quote_id: String, network: Net, unit: &'static str, recipient: String, amount_sats: u64, fee_sats: u64, vsize: u64, rate: String,
-    total_sats: u64, change_sats: u64, inputs: Vec<InView>, outputs: Vec<OutView>, replaces: Option<String>, own_recipient: bool,
-    unconfirmed_inputs: bool, balance_sats: u64, sequence: String,
+    quote_id: String,
+    network: Net,
+    unit: &'static str,
+    recipient: String,
+    amount_sats: u64,
+    fee_sats: u64,
+    vsize: u64,
+    rate: String,
+    total_sats: u64,
+    change_sats: u64,
+    inputs: Vec<InView>,
+    outputs: Vec<OutView>,
+    replaces: Option<String>,
+    own_recipient: bool,
+    unconfirmed_inputs: bool,
+    balance_sats: u64,
+    sequence: String,
 }
 
 fn quote_view(id: String, b: &Built, own: bool) -> QuoteView {
     QuoteView {
-        quote_id: id, network: b.account.net, unit: b.account.net.unit(), recipient: b.recipient.to_string(), amount_sats: b.amount, fee_sats: b.fee, vsize: b.vsize,
-        rate: format!("{:.1}", b.rate_kvb as f64 / 1000.0), total_sats: b.amount + b.fee, change_sats: b.change().map_or(0, |c| c.value),
-        inputs: b.inputs.iter().map(|c| InView { outpoint: format!("{}:{}", c.outpoint.txid, c.outpoint.vout), sats: c.value, address: c.derived.address.to_string(), confirmed: c.confirmed }).collect(),
-        outputs: b.outputs.iter().map(|o| OutView { address: o.address.to_string(), sats: o.value, change: o.change.is_some(), path: o.change.as_ref().map(|d| format!("m/{}", d.origin).replace('\'', "h")) }).collect(),
-        replaces: b.replaces.clone(), own_recipient: own, unconfirmed_inputs: b.inputs.iter().any(|c| !c.confirmed), balance_sats: b.input_total(),
+        quote_id: id,
+        network: b.account.net,
+        unit: b.account.net.unit(),
+        recipient: b.recipient.to_string(),
+        amount_sats: b.amount,
+        fee_sats: b.fee,
+        vsize: b.vsize,
+        rate: format!("{:.1}", b.rate_kvb as f64 / 1000.0),
+        total_sats: b.amount + b.fee,
+        change_sats: b.change().map_or(0, |c| c.value),
+        inputs: b
+            .inputs
+            .iter()
+            .map(|c| InView {
+                outpoint: format!("{}:{}", c.outpoint.txid, c.outpoint.vout),
+                sats: c.value,
+                address: c.derived.address.to_string(),
+                confirmed: c.confirmed,
+            })
+            .collect(),
+        outputs: b
+            .outputs
+            .iter()
+            .map(|o| OutView {
+                address: o.address.to_string(),
+                sats: o.value,
+                change: o.change.is_some(),
+                path: o.change.as_ref().map(|d| format!("m/{}", d.origin).replace('\'', "h")),
+            })
+            .collect(),
+        replaces: b.replaces.clone(),
+        own_recipient: own,
+        unconfirmed_inputs: b.inputs.iter().any(|c| !c.confirmed),
+        balance_sats: b.input_total(),
         sequence: format!("0x{:08x} (replaceable)", tx::RBF_SEQUENCE),
     }
 }
@@ -404,7 +647,9 @@ fn quote_view(id: String, b: &Built, own: bool) -> QuoteView {
 fn keep_quote(b: Built) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let mut q = lock(&QUOTES)?;
-    if q.len() > 50 { q.clear(); }
+    if q.len() > 50 {
+        q.clear();
+    }
     q.insert(id.clone(), b);
     Ok(id)
 }
@@ -412,23 +657,34 @@ fn keep_quote(b: Built) -> Result<String, String> {
 /// Build a send: refresh, check the coins against their transactions, select, build the PSBT.
 /// `amount` in BTC (exact decimal); `max` sends everything (no change).
 #[tauri::command]
-pub(crate) async fn btc_quote(id: String, to: String, amount: Option<String>, max: bool, fee_rate: String) -> CmdResult<QuoteView> {
+pub(crate) async fn btc_quote(
+    id: String,
+    to: String,
+    amount: Option<String>,
+    max: bool,
+    fee_rate: String,
+) -> CmdResult<QuoteView> {
     blocking(move || {
         let (_, a, server) = load_account(&id)?;
         let recipient = wallet::parse_recipient(&to, a.net)?;
         let rate = tx::parse_rate(&fee_rate)?;
         let amount = if max { None } else { Some(tx::parse_btc(amount.as_deref().ok_or("enter an amount")?)?) };
-        if amount == Some(0) { return Err("amount must be more than zero".into()); }
+        if amount == Some(0) {
+            return Err("amount must be more than zero".into());
+        }
         let (_, cache) = refresh(&id, false)?;
         let c = client(a.net, server.as_deref())?;
         let coins = spendable(&a, &c, &cache)?;
-        if coins.is_empty() { return Err("no spendable coins".into()); }
+        if coins.is_empty() {
+            return Err("no spendable coins".into());
+        }
         let change = a.derive(1, cache.next[1])?;
         let own = is_own(&a, &recipient.to_string())?;
         let b = tx::plan(&a, coins, recipient, amount, change, rate, true)?;
         let v = quote_view(String::new(), &b, own);
         Ok(QuoteView { quote_id: keep_quote(b)?, ..v })
-    }).await
+    })
+    .await
 }
 
 /// Speed up a pending transaction sent from here (RBF): same inputs and recipient, higher fee from the change.
@@ -438,10 +694,19 @@ pub(crate) async fn btc_bump_quote(id: String, txid: String, fee_rate: String) -
         let (_, a, server) = load_account(&id)?;
         let rate = tx::parse_rate(&fee_rate)?;
         let cache = store::load_cache(&id)?;
-        let s = cache.sent.iter().find(|s| s.txid == txid).ok_or("only transactions sent from this Mac can be sped up here")?.clone();
+        let s = cache
+            .sent
+            .iter()
+            .find(|s| s.txid == txid)
+            .ok_or("only transactions sent from this Mac can be sped up here")?
+            .clone();
         let c = client(a.net, server.as_deref())?;
-        if c.tx_status(&txid).is_ok_and(|st| st.confirmed) { return Err("it is already confirmed".into()); }
-        if rate <= s.rate_kvb { return Err(format!("choose a fee rate above the current {:.1} sat/vB", s.rate_kvb as f64 / 1000.0)); }
+        if c.tx_status(&txid).is_ok_and(|st| st.confirmed) {
+            return Err("it is already confirmed".into());
+        }
+        if rate <= s.rate_kvb {
+            return Err(format!("choose a fee rate above the current {:.1} sat/vB", s.rate_kvb as f64 / 1000.0));
+        }
         let mut inputs = Vec::new();
         for (t, vout, value, chain, index) in &s.inputs {
             let d = a.derive(*chain, *index)?;
@@ -458,29 +723,60 @@ pub(crate) async fn btc_bump_quote(id: String, txid: String, fee_rate: String) -
         b.replaces = Some(txid.clone());
         let v = quote_view(String::new(), &b, false);
         Ok(QuoteView { quote_id: keep_quote(b)?, ..v })
-    }).await
+    })
+    .await
 }
 
 #[derive(Serialize, Debug)]
-pub struct BtcSendError { kind: &'static str, message: String, delivered: bool }
-fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> BtcSendError { BtcSendError { kind, message: message.into(), delivered } }
+pub struct BtcSendError {
+    kind: &'static str,
+    message: String,
+    delivered: bool,
+}
+fn fail(kind: &'static str, message: impl Into<String>, delivered: bool) -> BtcSendError {
+    BtcSendError { kind, message: message.into(), delivered }
+}
 
 #[derive(Serialize, Clone)]
-struct Progress { ticket: String, stage: &'static str }
+struct Progress {
+    ticket: String,
+    stage: &'static str,
+}
 
 #[derive(Serialize)]
-pub struct SignedView { txid: String, fee_sats: u64, vsize: u64, rate: String, amount_sats: u64, recipient: String, explorer: String, checks: Vec<String> }
+pub struct SignedView {
+    txid: String,
+    fee_sats: u64,
+    vsize: u64,
+    rate: String,
+    amount_sats: u64,
+    recipient: String,
+    explorer: String,
+    checks: Vec<String>,
+}
 
 struct TicketGuard(String);
-impl Drop for TicketGuard { fn drop(&mut self) { if let Ok(mut m) = CANCELS.lock() { m.remove(&self.0); } } }
+impl Drop for TicketGuard {
+    fn drop(&mut self) {
+        if let Ok(mut m) = CANCELS.lock() {
+            m.remove(&self.0);
+        }
+    }
+}
 
 /// Hand the PSBT to the phone, wait for the user's review there, verify what comes back.
 #[tauri::command]
-pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: String) -> Result<SignedView, BtcSendError> {
+pub(crate) async fn btc_sign_start(
+    app: AppHandle,
+    ticket: String,
+    quote_id: String,
+) -> Result<SignedView, BtcSendError> {
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut m = CANCELS.lock().map_err(|_| fail("internal", "state poisoned", false))?;
-        if m.contains_key(&ticket) { return Err(fail("busy", "this request is already running", false)); }
+        if m.contains_key(&ticket) {
+            return Err(fail("busy", "this request is already running", false));
+        }
         m.insert(ticket.clone(), cancel.clone());
     }
     let guard = TicketGuard(ticket.clone());
@@ -541,71 +837,135 @@ pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: Str
 
 #[tauri::command]
 pub(crate) fn btc_sign_cancel(ticket: Option<String>) {
-    if let Ok(m) = CANCELS.lock() { for (t, c) in m.iter() { if ticket.as_deref().is_none_or(|x| x == t) { c.store(true, Ordering::SeqCst); } } }
+    if let Ok(m) = CANCELS.lock() {
+        for (t, c) in m.iter() {
+            if ticket.as_deref().is_none_or(|x| x == t) {
+                c.store(true, Ordering::SeqCst);
+            }
+        }
+    }
 }
 
 /// Broadcast a transaction verified in this session, by txid. Records it for history and speed-up.
 #[tauri::command]
 pub(crate) async fn btc_broadcast(txid: String) -> CmdResult<String> {
     blocking(move || {
-        let (built, v) = lock(&VERIFIED)?.get(&txid).cloned().ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
+        let (built, v) = lock(&VERIFIED)?
+            .get(&txid)
+            .cloned()
+            .ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
         let id = built.account.id();
         let (_, _, server) = load_account(&id)?;
         let c = client(built.account.net, server.as_deref())?;
         let sent = match c.broadcast(&v.hex) {
             Ok(t) => t,
-            Err(e) if e.contains("already in block chain") || e.contains("txn-already-known") || e.contains("txn-already-in-mempool") => v.txid.clone(),
+            Err(e)
+                if e.contains("already in block chain")
+                    || e.contains("txn-already-known")
+                    || e.contains("txn-already-in-mempool") =>
+            {
+                v.txid.clone()
+            }
             Err(e) => return Err(e),
         };
-        if sent != v.txid { return Err(format!("the server answered with txid {sent}, expected {}", v.txid)); }
+        if sent != v.txid {
+            return Err(format!("the server answered with txid {sent}, expected {}", v.txid));
+        }
         let change = built.change().and_then(|o| o.change.as_ref().map(|d| (d.index, o.value)));
-        let inputs = built.inputs.iter().map(|c| (c.outpoint.txid.to_string(), c.outpoint.vout, c.value, c.derived.chain, c.derived.index)).collect();
+        let inputs = built
+            .inputs
+            .iter()
+            .map(|c| (c.outpoint.txid.to_string(), c.outpoint.vout, c.value, c.derived.chain, c.derived.index))
+            .collect();
         store::update_cache(&id, |cache| {
             if !cache.sent.iter().any(|s| s.txid == v.txid) {
-                cache.sent.push(store::Sent { txid: v.txid.clone(), time: crate::history::now(), recipient: built.recipient.to_string(), amount: built.amount, fee: v.fee,
-                    vsize: built.vsize, rate_kvb: built.rate_kvb, inputs, change, replaces: built.replaces.clone() });
+                cache.sent.push(store::Sent {
+                    txid: v.txid.clone(),
+                    time: crate::history::now(),
+                    recipient: built.recipient.to_string(),
+                    amount: built.amount,
+                    fee: v.fee,
+                    vsize: built.vsize,
+                    rate_kvb: built.rate_kvb,
+                    inputs,
+                    change,
+                    replaces: built.replaces.clone(),
+                });
             }
             // the change index is now used: the next send uses the next one
-            if let Some((i, _)) = change { cache.next[1] = cache.next[1].max(i + 1); }
+            if let Some((i, _)) = change {
+                cache.next[1] = cache.next[1].max(i + 1);
+            }
         })?;
         lock(&VERIFIED)?.remove(&txid);
         watch::WAKE.store(true, Ordering::SeqCst);
         Ok(v.txid)
-    }).await
+    })
+    .await
 }
 
 #[derive(Serialize)]
-pub struct TxState { confirmed: bool, confirmations: u64, height: Option<u64> }
+pub struct TxState {
+    confirmed: bool,
+    confirmations: u64,
+    height: Option<u64>,
+}
 
 #[tauri::command]
 pub(crate) async fn btc_tx_status(id: String, txid: String) -> CmdResult<TxState> {
     blocking(move || {
         let (_, a, server) = load_account(&id)?;
-        if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) { return Err("bad txid".into()); }
+        if txid.len() != 64 || !txid.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err("bad txid".into());
+        }
         let c = client(a.net, server.as_deref())?;
         let st = c.tx_status(&txid)?;
         let h = st.block_height.filter(|_| st.confirmed);
-        let conf = match h { Some(h) => c.tip().map(|t| t.saturating_sub(h) + 1).unwrap_or(1), None => 0 };
+        let conf = match h {
+            Some(h) => c.tip().map(|t| t.saturating_sub(h) + 1).unwrap_or(1),
+            None => 0,
+        };
         Ok(TxState { confirmed: st.confirmed, confirmations: conf, height: h })
-    }).await
+    })
+    .await
 }
 
 // ---------------------------------------------------------------- export (Sparrow and others)
 
 #[derive(Serialize)]
-pub struct Export { descriptor: String, receive: String, change: String, fingerprint: String, path: String, xpub: String, text: String }
+pub struct Export {
+    descriptor: String,
+    receive: String,
+    change: String,
+    fingerprint: String,
+    path: String,
+    xpub: String,
+    text: String,
+}
 
 fn export_for(s: &store::StoredAccount, a: &Account) -> Export {
     let path = format!("m/{}", a.path()).replace('\'', "h");
     let text = format!(
         "Phone Vault — watch-only Bitcoin wallet\n{}\n\nNetwork: {}\nScript type: {} ({})\nMaster fingerprint: {}\nDerivation: {}\nAccount xpub: {}\n\nOutput descriptor (Sparrow: File → New Wallet → Import → Output Descriptor):\n{}\n\nReceive: {}\nChange:  {}\n\nThis file holds no private key. Anyone with it can see this account's addresses, balance and history.\n",
         s.label, a.net.name(), a.kind.name(), if a.kind == Kind::P2tr { "BIP-86" } else { "BIP-84" }, a.fingerprint, path, a.xpub, a.descriptor(), a.chain_descriptor(0), a.chain_descriptor(1));
-    Export { descriptor: a.descriptor(), receive: a.chain_descriptor(0), change: a.chain_descriptor(1), fingerprint: a.fingerprint.to_string(), path, xpub: a.xpub.to_string(), text }
+    Export {
+        descriptor: a.descriptor(),
+        receive: a.chain_descriptor(0),
+        change: a.chain_descriptor(1),
+        fingerprint: a.fingerprint.to_string(),
+        path,
+        xpub: a.xpub.to_string(),
+        text,
+    }
 }
 
 #[tauri::command]
 pub(crate) async fn btc_export(id: String) -> CmdResult<Export> {
-    blocking(move || { let (s, a, _) = load_account(&id)?; Ok(export_for(&s, &a)) }).await
+    blocking(move || {
+        let (s, a, _) = load_account(&id)?;
+        Ok(export_for(&s, &a))
+    })
+    .await
 }
 
 /// Save the export as a .txt in Downloads (never overwriting) and return its path.
@@ -614,19 +974,33 @@ pub(crate) async fn btc_save_export(id: String) -> CmdResult<String> {
     blocking(move || {
         let (s, a, _) = load_account(&id)?;
         let dir = dirs::download_dir().ok_or("no Downloads folder")?;
-        let stem: String = s.label.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect::<String>().trim_matches('-').to_string();
+        let stem: String = s
+            .label
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+            .collect::<String>()
+            .trim_matches('-')
+            .to_string();
         for n in 0..100 {
-            let name = if n == 0 { format!("phone-vault-{stem}-watch-only.txt") } else { format!("phone-vault-{stem}-watch-only-{n}.txt") };
+            let name = if n == 0 {
+                format!("phone-vault-{stem}-watch-only.txt")
+            } else {
+                format!("phone-vault-{stem}-watch-only-{n}.txt")
+            };
             let p = dir.join(name);
             use std::io::Write;
             match std::fs::OpenOptions::new().write(true).create_new(true).open(&p) {
-                Ok(mut f) => { f.write_all(export_for(&s, &a).text.as_bytes()).map_err(|e| e.to_string())?; return Ok(p.display().to_string()); }
+                Ok(mut f) => {
+                    f.write_all(export_for(&s, &a).text.as_bytes()).map_err(|e| e.to_string())?;
+                    return Ok(p.display().to_string());
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(e) => return Err(e.to_string()),
             }
         }
         Err("could not pick a file name".into())
-    }).await
+    })
+    .await
 }
 
 #[cfg(test)]
