@@ -2558,14 +2558,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             for (MessageReview.Row row : sim.rows) box.addView(detail(row));
             root.addView(box, matchWrap(dp(16)));
         }
-        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel, dangers,
-                approval::signIfIdentityUnchanged,
+        addDecisionControls(root, source, decision, s, SignSpec.withCredentials(approval.request.id, review.reviewPrompt,
+                review.signLabel, dangers, approval::signIfIdentityUnchanged,
                 "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
                 "Transaction hash", "transactionHash", true, () -> {
                     // A signature exists: count its counterparties in this phone's history and offer to name them.
                     safety().record(approval.reviewedAddress(), review.parties, System.currentTimeMillis());
                     receiptParties = review.parties;
-                });
+                }));
         present(root, "approval");
     }
 
@@ -2600,17 +2600,59 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private interface SeedSigner { JSONObject sign(byte[] seed) throws Exception; }
 
-    /**
-     * The acknowledgement checkbox, Sign and Reject for one request, shared by the transaction and
-     * message reviews: one decision, check → sign → send as one step under stateLock.
-     */
-    private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
-                                     String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
-                                     ReviewedSigner signer,
-                                     String doneMessage, String receiptLabel, String receiptField, boolean transaction,
-                                     Runnable afterSigned) {
-        addDecisionControls(root, source, decision, s, requestId, prompt, signText, dangers, signer, null, null,
-                doneMessage, receiptLabel, response -> response.optString(receiptField), transaction, afterSigned);
+    /** What one review's Sign and Reject do; the request's session (source, decision, s) is passed beside it. */
+    private static final class SignSpec {
+        final String requestId;
+        /** The "I verified…" checkbox text and the Sign button label. */
+        final String prompt, signText;
+        /** The review's DANGER rows: when any, a second box must state them before Sign unlocks. */
+        final List<MessageReview.Row> dangers;
+        /** EVM: signs with the live credentials under stateLock. Null when {@link #seedSigner} is set. */
+        final ReviewedSigner signer;
+        /** Bitcoin: signs from the seed inside the PIN window; {@link #seedWhy} is the PIN prompt's reason. */
+        final SeedSigner seedSigner;
+        final String seedWhy;
+        /** The receipt after a signature: its message, and the label and value of its one card. */
+        final String doneMessage, receiptLabel;
+        final Function<JSONObject, String> receiptValue;
+        /** A transaction (true) or a message (false): picks the receipt wording. */
+        final boolean transaction;
+        /** Runs on the UI thread once a signature has been sent (may be null). */
+        final Runnable afterSigned;
+
+        private SignSpec(String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
+                         ReviewedSigner signer, SeedSigner seedSigner, String seedWhy, String doneMessage,
+                         String receiptLabel, Function<JSONObject, String> receiptValue, boolean transaction,
+                         Runnable afterSigned) {
+            this.requestId = requestId;
+            this.prompt = prompt;
+            this.signText = signText;
+            this.dangers = dangers;
+            this.signer = signer;
+            this.seedSigner = seedSigner;
+            this.seedWhy = seedWhy;
+            this.doneMessage = doneMessage;
+            this.receiptLabel = receiptLabel;
+            this.receiptValue = receiptValue;
+            this.transaction = transaction;
+            this.afterSigned = afterSigned;
+        }
+
+        /** EVM: the receipt shows {@code receiptField} of the response. */
+        static SignSpec withCredentials(String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
+                                        ReviewedSigner signer, String doneMessage, String receiptLabel, String receiptField,
+                                        boolean transaction, Runnable afterSigned) {
+            return new SignSpec(requestId, prompt, signText, dangers, signer, null, null, doneMessage, receiptLabel,
+                    response -> response.optString(receiptField), transaction, afterSigned);
+        }
+
+        /** Bitcoin: Sign first opens the seed-key window; a dismissed PIN prompt answers "rejected". */
+        static SignSpec withSeed(String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
+                                 SeedSigner seedSigner, String seedWhy, String doneMessage, String receiptLabel,
+                                 Function<JSONObject, String> receiptValue, boolean transaction, Runnable afterSigned) {
+            return new SignSpec(requestId, prompt, signText, dangers, null, seedSigner, seedWhy, doneMessage, receiptLabel,
+                    receiptValue, transaction, afterSigned);
+        }
     }
 
     /** Kicker of a screenshot build's reviews, in place of the review's own. */
@@ -2670,24 +2712,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     /**
-     * @param seedSigner when non-null (Bitcoin), Sign first opens the seed-key window ({@code seedWhy}
-     *                   is the PIN prompt's reason) and the signature is made from the seed; a
-     *                   dismissed PIN prompt answers "rejected" and signs nothing
+     * The acknowledgement checkbox, Sign and Reject for one request, shared by the transaction,
+     * message and Bitcoin reviews: one decision, check → sign → send as one step under stateLock.
      */
     private void addDecisionControls(LinearLayout root, AccessoryTransport source, ApprovalDecision decision, int s,
-                                     String requestId, String prompt, String signText, List<MessageReview.Row> dangers,
-                                     ReviewedSigner signer,
-                                     SeedSigner seedSigner, String seedWhy,
-                                     String doneMessage, String receiptLabel,
-                                     Function<JSONObject, String> receiptValue, boolean transaction,
-                                     Runnable afterSigned) {
+                                     SignSpec spec) {
         // Approve needs: the end of the review on screen once, "I verified…", and for a review with
         // a DANGER row a second box that states that danger in words (ApprovalGate).
-        ApprovalGate gate = new ApprovalGate(dangers != null && !dangers.isEmpty());
+        ApprovalGate gate = new ApprovalGate(spec.dangers != null && !spec.dangers.isEmpty());
         CheckBox dangerAck = null;
         if (gate.dangerRequired) {
             dangerAck = new CheckBox(this);
-            dangerAck.setText(ReviewStyle.dangerAcknowledgement(dangers));
+            dangerAck.setText(ReviewStyle.dangerAcknowledgement(spec.dangers));
             VaultTheme.size(dangerAck, VaultTheme.BODY_SIZE);
             dangerAck.setTextColor(VaultTheme.DANGER_INK);
             dangerAck.setButtonTintList(ColorStateList.valueOf(VaultTheme.DANGER_INK));
@@ -2697,7 +2733,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             root.addView(dangerAck, matchWrap(dp(12)));
         }
         CheckBox reviewed = new CheckBox(this);
-        reviewed.setText(prompt);
+        reviewed.setText(spec.prompt);
         VaultTheme.size(reviewed, VaultTheme.BODY_SIZE);
         reviewed.setTextColor(VaultTheme.INK);
         reviewed.setMinHeight(dp(56));
@@ -2706,7 +2742,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.addView(reviewed, matchWrap(dp(gate.dangerRequired ? 4 : 12)));
         TextView readToEnd = VaultTheme.bodyText(this, "Approve unlocks once you have scrolled to the end of this review.", 13, VaultTheme.FAINT);
         root.addView(readToEnd, matchWrap(dp(4)));
-        TextView sign = VaultTheme.pixelButton(this, signText, true);
+        TextView sign = VaultTheme.pixelButton(this, spec.signText, true);
         TextView reject = VaultTheme.pixelButton(this, "Reject request", false);
         hardenTouch(sign);
         hardenTouch(reject);
@@ -2724,10 +2760,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         reject.setOnClickListener(v -> {
             if (!decision.reject()) return;
             Haptics.reject(v);
-            source.send(json("id", requestId, "status", "rejected"));
+            source.send(json("id", spec.requestId, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Request rejected · no signature created";
-            showReceipt("Request rejected", "No signature was created for this request.", null, null, transaction);
+            showReceipt("Request rejected", "No signature was created for this request.", null, null, spec.transaction);
         });
         sign.setOnClickListener(v -> {
             synchronized (stateLock) {
@@ -2743,14 +2779,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             sign.setText("Signing…");
             statusMessage = "Signing approved request";
             Runnable work = () -> cryptoExecutor.execute(() -> {
-                boolean mayHaveLeft = seedSigner == null; // the seed path sends only after signing completes
+                boolean mayHaveLeft = spec.seedSigner == null; // the seed path sends only after signing completes
                 try {
                     JSONObject response;
-                    if (seedSigner != null) {
+                    if (spec.seedSigner != null) {
                         synchronized (stateLock) {
                             if (!owns(source, s, decision, RequestOwnership.SIGNING)) throw new IllegalStateException("Session ended before signing");
                         }
-                        JSONObject prepared = vault.withStandardSeed(seedSigner::sign);
+                        JSONObject prepared = vault.withStandardSeed(spec.seedSigner::sign);
                         synchronized (stateLock) {
                             if (!owns(source, s, decision, RequestOwnership.SIGNING)) throw new IllegalStateException("Session ended before signing");
                             mayHaveLeft = true;
@@ -2762,7 +2798,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         synchronized (stateLock) {
                             if (!owns(source, s, decision, RequestOwnership.SIGNING))
                                 throw new IllegalStateException("Session ended before signing");
-                            response = signer.sign(credentials);
+                            response = spec.signer.sign(credentials);
                             if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
                             decision.finish();
                         }
@@ -2772,13 +2808,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         if (s != session.get() || !unlocked || approvalDecision != decision) return;
                         finishApproval(decision);
                         statusMessage = "Signature created · delivery not confirmed";
-                        if (afterSigned != null) afterSigned.run();
-                        showReceipt("Signature created", doneMessage, receiptLabel, receiptValue.apply(sent), transaction);
+                        if (spec.afterSigned != null) spec.afterSigned.run();
+                        showReceipt("Signature created", spec.doneMessage, spec.receiptLabel, spec.receiptValue.apply(sent), spec.transaction);
                     });
                 } catch (Exception e) {
                     final boolean uncertain = mayHaveLeft;
                     final boolean lapsed = authLapsed(e);
-                    sendError(source, requestId, uncertain ? e.getMessage()
+                    sendError(source, spec.requestId, uncertain ? e.getMessage()
                             : (lapsed ? "PIN confirmation expired before signing; nothing was signed" : "Not signed: " + e.getMessage()));
                     if (!uncertain) Log.w(TAG, "seed signing failed: " + chain(e));
                     runOnUiThread(() -> {
@@ -2788,27 +2824,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             statusMessage = "Not signed";
                             showReceipt("Not signed", lapsed
                                     ? "Your PIN confirmation expired before signing finished. No signature left the phone; send the request again."
-                                    : "Signing did not complete. No signature left the phone.", null, null, transaction);
+                                    : "Signing did not complete. No signature left the phone.", null, null, spec.transaction);
                             return;
                         }
-                        showReceipt("Check the host", transaction
+                        showReceipt("Check the host", spec.transaction
                                 ? "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction."
                                 : "Signing or delivery did not complete normally. A signature may have reached the host. Check before signing again.",
-                                null, null, transaction);
+                                null, null, spec.transaction);
                     });
                 }
             });
-            if (seedSigner == null) {
+            if (spec.seedSigner == null) {
                 work.run();
                 return;
             }
-            withSeedKey(seedWhy, work, () -> {
+            withSeedKey(spec.seedWhy, work, () -> {
                 synchronized (stateLock) { if (approvalDecision != decision) return; }
                 decision.cancel();
-                source.send(json("id", requestId, "status", "rejected"));
+                source.send(json("id", spec.requestId, "status", "rejected"));
                 finishApproval(decision);
                 statusMessage = "Not signed · PIN not confirmed";
-                showReceipt("Not signed", "The PIN was not confirmed, so nothing was signed.", null, null, transaction);
+                showReceipt("Not signed", "The PIN was not confirmed, so nothing was signed.", null, null, spec.transaction);
             });
         });
         root.addView(sign, matchWrap(dp(8)));
@@ -2823,10 +2859,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
         LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
                 review.summary, review.details, "details");
-        addDecisionControls(root, source, decision, s, approval.request.id, review.reviewPrompt, review.signLabel, dangers,
-                approval::signIfIdentityUnchanged,
+        addDecisionControls(root, source, decision, s, SignSpec.withCredentials(approval.request.id, review.reviewPrompt,
+                review.signLabel, dangers, approval::signIfIdentityUnchanged,
                 "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
-                "Signed digest", "digest", false, null);
+                "Signed digest", "digest", false, null));
         present(root, "message-approval");
     }
 
@@ -3260,7 +3296,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, null,
                 review.summary, review.details, "technical details");
         final String txid = BtcCrypto.hex(BtcCrypto.reversed(review.psbt.tx.txid()));
-        addDecisionControls(root, source, decision, s, r.id, review.reviewPrompt, review.signLabel, dangers, null,
+        addDecisionControls(root, source, decision, s, SignSpec.withSeed(r.id, review.reviewPrompt, review.signLabel, dangers,
                 seed -> {
                     byte[] signed = BtcPsbtSigner.sign(review, seed, random);
                     // Remember what each coin was signed as (SegWit fee-attack guard), before it can leave;
@@ -3275,7 +3311,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 "Transaction ID (once broadcast)", response -> txid, true, () -> {
                     safety().record(review.walletKey, review.parties, System.currentTimeMillis());
                     receiptParties = review.parties;
-                });
+                }));
         present(root, "btc-approval");
     }
 
