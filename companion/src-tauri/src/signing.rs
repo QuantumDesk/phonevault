@@ -27,7 +27,7 @@ pub struct SignedMessage {
 }
 
 fn chain_quantity(chain_id: u64) -> CmdResult<String> {
-    if !matches!(chain_id, 1 | 11155111 | 8453 | 10 | 42161 | 137) {
+    if !crate::chains::allowed(chain_id) {
         return Err(format!("the phone has no reviewed profile for chain {chain_id}"));
     }
     Ok(verify::to_quantity(chain_id as u128))

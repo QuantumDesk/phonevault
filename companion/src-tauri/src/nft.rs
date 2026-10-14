@@ -207,7 +207,7 @@ pub(crate) async fn nft_list(chain_id: u64) -> CmdResult<Vec<Nft>> {
 pub(crate) async fn nft_scan(rpc_url: String) -> CmdResult<Scan> {
     blocking(move || {
         let (rpc, chain, owner, block) = connect(&rpc_url)?;
-        let window = watcher::network(chain).map(|n| n.4).unwrap_or(5_000);
+        let window = crate::chains::get(chain).map(|n| n.log_window).unwrap_or(5_000);
         let owner_topic = watcher::topic_address(&owner);
         let (logs, covered, error) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, None, json!([abi::TRANSFER_TOPIC, Value::Null, owner_topic]));
         let error = error.map(|e| if covered.is_none() && e.to_ascii_lowercase().contains("address") { format!("this node only answers log searches for specific contracts ({e}); add a collection by its contract address, or use your own node") } else { e });
@@ -235,7 +235,7 @@ pub(crate) async fn nft_add_contract(rpc_url: String, contract: String) -> CmdRe
         }
         let (mut from, mut error) = (None, None);
         if candidates.len() < count.min(50) as usize {
-            let window = watcher::network(chain).map(|n| n.4).unwrap_or(5_000);
+            let window = crate::chains::get(chain).map(|n| n.log_window).unwrap_or(5_000);
             let owner_topic = watcher::topic_address(&owner);
             let (logs, covered, e) = watcher::search_logs(&rpc, block.saturating_sub(window - 1), block, Some(json!(c)), json!([abi::TRANSFER_TOPIC, Value::Null, owner_topic]));
             candidates.extend(erc721_candidates(&logs, &owner_topic));

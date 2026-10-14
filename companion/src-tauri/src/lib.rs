@@ -5,6 +5,8 @@
 // Solidity ABI words, selectors and the Transfer topic (untrusted input: checked, never indexed)
 mod abi;
 mod aoa;
+// the EVM networks: ids, names, native coin, rollup or not, wrapped native, default node
+mod chains;
 // device attestation: is the phone genuine Phone Vault hardware + firmware + app?
 pub mod attest;
 mod eth;
@@ -283,14 +285,9 @@ struct Quote {
 }
 
 fn network_name(chain: u128) -> String {
-    match chain {
-        1 => "Ethereum Mainnet".into(),
-        11155111 => "Sepolia Testnet".into(),
-        8453 => "Base".into(),
-        10 => "Optimism".into(),
-        42161 => "Arbitrum One".into(),
-        137 => "Polygon".into(),
-        c => format!("chain {c}"),
+    match u64::try_from(chain).ok().and_then(chains::get) {
+        Some(c) => c.quote_name.into(),
+        None => format!("chain {chain}"),
     }
 }
 
@@ -306,7 +303,7 @@ async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quo
         }
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
-        if !matches!(chain, 1 | 11155111 | 8453 | 10 | 42161 | 137) {
+        if !chains::allowed_u128(chain) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
         }
         let balance = rpc.balance(&from)?;

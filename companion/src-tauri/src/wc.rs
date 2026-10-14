@@ -18,8 +18,6 @@ use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::time::Duration;
 
-/// Chains the phone has a reviewed profile for (Eip1559Request.supportedChain). Must match it.
-pub const ALLOWED_CHAINS: [u64; 6] = [1, 10, 137, 8453, 42161, 11155111];
 /// Methods a session is offered. Everything else is refused per request.
 pub const SUPPORTED_METHODS: [&str; 7] = [
     "eth_sendTransaction",
@@ -59,19 +57,16 @@ fn bad(message: impl Into<String>) -> RpcError {
     rpc_err(INVALID_PARAMS, message)
 }
 
+/// Chains the phone has a reviewed profile for (Eip1559Request.supportedChain; tested below).
 pub fn chain_allowed(id: u64) -> bool {
-    ALLOWED_CHAINS.contains(&id)
+    crate::chains::allowed(id)
 }
 
+/// A chain's name in dApp-facing text.
 pub fn chain_name(id: u64) -> String {
-    match id {
-        1 => "Ethereum".into(),
-        10 => "Optimism".into(),
-        137 => "Polygon".into(),
-        8453 => "Base".into(),
-        42161 => "Arbitrum One".into(),
-        11155111 => "Sepolia (testnet)".into(),
-        c => format!("Chain {c}"),
+    match crate::chains::get(id) {
+        Some(c) => c.dapp_name.into(),
+        None => format!("Chain {id}"),
     }
 }
 
@@ -1226,9 +1221,9 @@ mod tests {
             .map(|t| t.trim_start().split(|c: char| !c.is_ascii_digit()).next().unwrap().parse().unwrap())
             .collect();
         ids.sort();
-        let mut ours = ALLOWED_CHAINS.to_vec();
+        let mut ours = crate::chains::IDS.to_vec();
         ours.sort();
-        assert_eq!(ids, ours, "wc::ALLOWED_CHAINS must equal Eip1559Request.supportedChain");
+        assert_eq!(ids, ours, "chains::CHAINS must equal Eip1559Request.supportedChain");
     }
 
     #[test]

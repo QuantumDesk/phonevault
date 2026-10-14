@@ -20,7 +20,7 @@
 //! simulation in this session reverted. Uncertainty (the node could not simulate at all) only asks
 //! the user to confirm ("Send anyway").
 
-use crate::{blocking, eth, pairing, tokens, verify, CmdResult, Quote};
+use crate::{blocking, chains, eth, pairing, tokens, verify, CmdResult, Quote};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -44,22 +44,7 @@ const FRESH: Duration = Duration::from_secs(600);
 /// The canonical wrapped native coin per chain: its Deposit/Withdrawal events move the wallet's
 /// wrapped balance without a Transfer log (WETH9 does not emit one).
 fn wrapped_native(chain: u64) -> Option<&'static str> {
-    match chain {
-        1 => Some("0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2"),
-        8453 | 10 => Some("0x4200000000000000000000000000000000000006"),
-        42161 => Some("0x82af49447d8a07e3bd95bd0d56f35241523fbab1"),
-        137 => Some("0x0d500b1d8e8ef31e21c99d1db9a6444d3adf1270"),
-        11155111 => Some("0xfff9976782d46cc05630d1f6ebab18b2324d6b14"),
-        _ => None,
-    }
-}
-
-fn native_symbol(chain: u64) -> &'static str {
-    if chain == 137 {
-        "POL"
-    } else {
-        "ETH"
-    }
+    chains::get(chain).map(|c| c.wrapped_native)
 }
 
 // ---------------------------------------------------------------- 256-bit amounts
@@ -373,7 +358,7 @@ fn describe(asset: &str, token_id: Option<U256>, negative: bool, magnitude: U256
     let raw = magnitude.to_decimal();
     let delta = if negative { format!("-{raw}") } else { raw.clone() };
     if asset == "native" {
-        let sym = native_symbol(chain);
+        let sym = chains::native_symbol(chain);
         return Change {
             asset: asset.into(),
             token_id: None,
@@ -543,7 +528,8 @@ pub fn interpret_simulate_v1(
     if let Some(e) = resp.get("error") {
         if is_insufficient_funds(e) {
             let mut s = Simulation::new("reverts", "eth_simulateV1", node, block);
-            s.reason = Some(format!("not enough {} for the amount ({})", native_symbol(tx.chain), error_text(e)));
+            s.reason =
+                Some(format!("not enough {} for the amount ({})", chains::native_symbol(tx.chain), error_text(e)));
             return Some(s);
         }
         return None;
@@ -582,7 +568,7 @@ pub fn interpret_simulate_v1(
     }
     s.fee_wei = Some(fee.to_string());
     s.gas_used = Some(gas_used.to_string());
-    if matches!(tx.chain, 8453 | 10 | 42161) {
+    if chains::has_l1_data_fee(u128::from(tx.chain)) {
         s.note = Some("Plus a small L1 data fee the simulation does not include.".into());
     }
     s.for_phone = s.changes.len() <= MAX_CLAIM_CHANGES;
@@ -607,7 +593,8 @@ pub fn interpret_fallback(
     if let Some(e) = call.get("error") {
         if is_insufficient_funds(e) {
             let mut s = Simulation::new("reverts", "eth_call", node, block);
-            s.reason = Some(format!("not enough {} for the amount ({})", native_symbol(tx.chain), error_text(e)));
+            s.reason =
+                Some(format!("not enough {} for the amount ({})", chains::native_symbol(tx.chain), error_text(e)));
             return s;
         }
         if is_revert(e) {

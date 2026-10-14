@@ -207,7 +207,7 @@ pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResu
             _ => 21_000,
         };
         let cost = gas.saturating_mul(max_fee).saturating_mul(5) / 4;
-        let l1_reserve: u128 = if matches!(chain, 8453 | 10 | 42161) { 50_000_000_000_000 } else { 0 }; // 0.00005 ETH
+        let l1_reserve: u128 = if crate::chains::has_l1_data_fee(chain) { 50_000_000_000_000 } else { 0 }; // 0.00005 ETH
         let amount = balance.saturating_sub(cost).saturating_sub(l1_reserve);
         // round down to what format_eth shows (8 decimals) so the field and the quote agree
         let shown = eth::parse_eth(&eth::format_eth(amount))?;

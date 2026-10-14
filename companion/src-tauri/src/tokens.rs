@@ -16,7 +16,6 @@ use std::sync::OnceLock;
 /// SHA-256 of `app/src/main/res/raw/tokens.json`. Must equal `TokenList.PINNED_SHA256` (tested).
 pub const PINNED_SHA256: &str = "1021c5c5be1393df34c089d79e48aada223c6517ab03e70035efd0132e081506";
 const LIST_BYTES: &[u8] = include_bytes!("../../../app/src/main/res/raw/tokens.json");
-pub const ALLOWED_CHAINS: [u64; 6] = [1, 11155111, 8453, 10, 42161, 137];
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -48,7 +47,7 @@ fn parse_list(bytes: &[u8]) -> Result<Vec<Token>, String> {
     let mut seen = std::collections::HashSet::new();
     for (i, t) in file.tokens.iter().enumerate() {
         let w = format!("token #{i}");
-        if !ALLOWED_CHAINS.contains(&t.chain_id) {
+        if !crate::chains::allowed(t.chain_id) {
             return Err(format!("{w}: chain {} is not in the phone's allow-list", t.chain_id));
         }
         let a = match verify::parse_address(&t.address, verify::Case::Checksummed) {
@@ -281,7 +280,7 @@ pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amou
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
         let chain64 = u64::try_from(chain).map_err(|_| "chain id out of range".to_string())?;
-        if !ALLOWED_CHAINS.contains(&chain64) {
+        if !crate::chains::allowed(chain64) {
             return Err(format!("the phone has no reviewed profile for chain {chain}"));
         }
         let t = lookup(chain64, &token).ok_or("that token is not in the built-in list for this network")?;
@@ -363,7 +362,7 @@ mod tests {
         assert_eq!(java_pin, PINNED_SHA256, "phone and companion pins differ");
         let l = list().unwrap();
         assert_eq!(l.len(), 30);
-        for chain in ALLOWED_CHAINS {
+        for chain in crate::chains::IDS {
             assert!(l.iter().any(|t| t.chain_id == chain && t.symbol == "USDC" && t.decimals == 6), "USDC on {chain}");
         }
         let usdc = lookup(1, "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48").unwrap();

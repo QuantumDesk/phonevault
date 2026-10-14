@@ -17,7 +17,7 @@
 // Everything here parses node answers (untrusted): no unchecked indexing or slicing.
 #![deny(clippy::indexing_slicing)]
 
-use crate::{eth, history, pairing, price, tokens, verify, CmdResult};
+use crate::{chains, eth, history, pairing, price, tokens, verify, CmdResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -30,20 +30,6 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use crate::abi::TRANSFER_TOPIC;
-
-/// (chain id, name, native symbol, default node, initial log window in blocks ≈ the last day or
-/// what public nodes still serve without an archive token)
-pub const NETWORKS: [(u64, &str, &str, &str, u128); 6] = [
-    (8453, "Base", "ETH", "https://mainnet.base.org", 21_600),
-    (1, "Ethereum", "ETH", "https://ethereum-rpc.publicnode.com", 7_200),
-    (10, "Optimism", "ETH", "https://optimism-rpc.publicnode.com", 9_000),
-    (42161, "Arbitrum One", "ETH", "https://arbitrum-one-rpc.publicnode.com", 20_000),
-    (137, "Polygon", "POL", "https://polygon-bor-rpc.publicnode.com", 2_000),
-    (11155111, "Sepolia", "ETH", "https://ethereum-sepolia-rpc.publicnode.com", 7_200),
-];
-pub fn network(chain: u64) -> Option<(u64, &'static str, &'static str, &'static str, u128)> {
-    NETWORKS.iter().copied().find(|n| n.0 == chain)
-}
 
 /// Blocks a native-transfer search may read after a balance increase (full block bodies).
 const MAX_NATIVE_SCAN_BLOCKS: u128 = 40;
@@ -154,7 +140,7 @@ fn persist() -> Result<(), String> {
 
 pub fn rpc_for(chain: u64) -> Option<String> {
     let custom = with_state(|s| s.rpcs.get(&chain.to_string()).cloned()).ok().flatten();
-    custom.or_else(|| network(chain).map(|n| n.3.to_string()))
+    custom.or_else(|| chains::get(chain).map(|n| n.default_rpc.to_string()))
 }
 /// Settings → Notifications (shared with the Bitcoin watcher).
 pub fn notify_enabled() -> bool {
@@ -172,7 +158,7 @@ pub(crate) fn watch_configure(rpcs: HashMap<String, String>, notify: bool, chain
     with_state(|s| {
         s.rpcs = rpcs;
         s.notify = notify;
-        if network(chain_id).is_some() {
+        if chains::allowed(chain_id) {
             s.chain_id = chain_id;
         }
     })?;
@@ -345,7 +331,7 @@ fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String
     let listed: Vec<&tokens::Token> =
         tokens::list().map(|l| l.iter().filter(|t| t.chain_id == chain).collect()).unwrap_or_default();
     if !listed.is_empty() {
-        let window = network(chain).map(|n| n.4).unwrap_or(5_000);
+        let window = chains::get(chain).map(|n| n.log_window).unwrap_or(5_000);
         let cursor = with_state(|s| s.chains.get(&key).and_then(|c| c.cursor))?;
         let first = cursor.is_none() || block.saturating_sub(cursor.unwrap_or(0)) > window;
         let from = if first { block.saturating_sub(window - 1) } else { cursor.unwrap_or(block) + 1 };
@@ -409,8 +395,8 @@ fn check_chain(app: &AppHandle, chain: u64, owner: &str) -> Result<Found, String
 }
 
 fn describe(e: &history::Entry) -> String {
-    let net = network(e.chain_id as u64);
-    let (name, symbol) = net.map(|n| (n.1, n.2)).unwrap_or(("this network", "ETH"));
+    let net = chains::get(e.chain_id as u64);
+    let (name, symbol) = net.map(|n| (n.watch_name, n.symbol)).unwrap_or(("this network", "ETH"));
     let what = match (&e.token_symbol, &e.token_amount) {
         (Some(s), Some(a)) => format!("{a} {s}"),
         _ => format!("{} {symbol}", e.amount_eth),
@@ -444,7 +430,7 @@ pub fn start(app: AppHandle) {
                 }
                 let selected = selected_chain();
                 let mut any = false;
-                for (chain, ..) in NETWORKS {
+                for chain in chains::IDS {
                     if woke && chain == selected {
                         due.remove(&chain);
                     }
@@ -524,7 +510,7 @@ mod tests {
     #[ignore]
     fn live_log_search_on_public_nodes() {
         let busy = "0x28c6c06298d514db089934071355e5743bf21d60"; // a busy exchange address on Ethereum
-        let rpc = eth::Rpc::new(network(1).unwrap().3).unwrap();
+        let rpc = eth::Rpc::new(chains::get(1).unwrap().default_rpc).unwrap();
         let head = rpc.block_number().unwrap();
         let usdc = json!(["0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "0xdac17f958d2ee523a2206206994597c13d831ec7"]);
         let (logs, covered, err) = search_logs(
@@ -543,7 +529,7 @@ mod tests {
             search_logs(&rpc, head - 1_999, head, None, json!([TRANSFER_TOPIC, Value::Null, topic_address(busy)]));
         println!("ethereum wallet-wide search: from {c2:?}, {e2:?}");
         for chain in [10u64, 137, 42161, 8453] {
-            let rpc = eth::Rpc::new(network(chain).unwrap().3).unwrap();
+            let rpc = eth::Rpc::new(chains::get(chain).unwrap().default_rpc).unwrap();
             let Ok(head) = rpc.block_number() else {
                 println!("{chain}: node unreachable");
                 continue;
@@ -558,7 +544,7 @@ mod tests {
             );
             let (logs, covered, err) = search_logs(
                 &rpc,
-                head - (network(chain).unwrap().4 - 1),
+                head - (chains::get(chain).unwrap().log_window - 1),
                 head,
                 Some(toks),
                 json!([TRANSFER_TOPIC, Value::Null, topic_address(busy)]),
@@ -566,7 +552,7 @@ mod tests {
             println!(
                 "{chain}: {} logs, covered from {covered:?} of {}..{head}, {err:?}",
                 logs.len(),
-                head - (network(chain).unwrap().4 - 1)
+                head - (chains::get(chain).unwrap().log_window - 1)
             );
         }
     }
@@ -588,15 +574,6 @@ mod tests {
         let old: Persisted =
             serde_json::from_str(r#"{"owner":null,"rpcs":{},"notify":true,"chain_id":8453,"chains":{}}"#).unwrap();
         assert!(old.other_owners.is_empty());
-    }
-
-    #[test]
-    fn every_network_has_a_window_and_https_node() {
-        for (id, _, _, rpc, window) in NETWORKS {
-            assert!(rpc.starts_with("https://"));
-            assert!(window >= 1_000);
-            assert!(tokens::ALLOWED_CHAINS.contains(&id));
-        }
     }
 
     /// The background watcher parses eth_getLogs answers from the configured node. A Transfer log with
