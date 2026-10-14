@@ -168,7 +168,7 @@ all read this one file.
 - Unassigned-code-point detection follows the device's Unicode tables, which can differ from the
   JVM's; this affects only the readable/unreadable classification, never the digest.
 
-## EIP-7702 refusal (2026-10-11)
+## EIP-7702 refusal
 
 `MessageRequest.parse` refuses, with "Account delegation (EIP-7702) is not supported: it can hand
 control of this wallet to a contract", a `personal_sign` whose bytes are an EIP-7702

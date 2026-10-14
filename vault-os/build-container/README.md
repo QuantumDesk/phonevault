@@ -15,7 +15,7 @@ they use Docker's case-sensitive Linux filesystem. The host project is mounted
 read-only at `/workspace`; `install-overlay.sh` copies reviewed Vault OS files
 into the source checkout.
 
-Docker Desktop is currently allocated 64 GB RAM and a 296 GB sparse disk. The
+Give Docker Desktop as much RAM as you can (64 GB works) and a large disk. The
 official LineageOS guidance for version 21 and newer is 400 GB, so the build may
-still require a larger external disk or native Linux host. Ccache is capped at
+require a larger external disk or a native Linux host. Ccache is capped at
 5 GB and source sync is depth-limited to reduce local use.

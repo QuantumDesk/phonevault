@@ -1,10 +1,15 @@
 # Bluejay ladder (Pixel 6a, LineageOS 24.0 / Android 17)
 
-The Pixel 6a counterpart of `dev-ladder/` (crosshatch). The plan, the partition layout, the
-rung list and the firmware rules are in `docs/port-bluejay.md`; this directory holds what each
-rung actually builds. Nothing here is shared with the crosshatch tree: the scripts default to
-`/build/lineage-24` (the real path; `/root/lineage-24` is a symlink) and the Kleaf workspace
-`/build/gs-6.1-kernel`, and never touch `/root/lineage-src`.
+The Pixel 6a counterpart of [`dev-ladder/`](../dev-ladder/README.md) (crosshatch). The plan,
+the partition layout, the firmware rules and the reasoning are in
+[`docs/port-bluejay.md`](../docs/port-bluejay.md); this directory holds what each rung actually
+builds. Nothing here is shared with the crosshatch tree.
+
+Paths are placeholders: `$LINEAGE_TREE` is a LineageOS 24.0 tree with the bluejay repos
+(`vault-os/manifest/bluejay/local_manifests-bluejay.xml`), `$KERNEL_TREE` the Kleaf workspace
+(`LineageOS/android_kernel_google_gs-6.1_manifest`, branch `lineage-24.0`), `$OUT_DIR` the rung
+output directory, `<build-host>` the Linux machine that builds. The scripts take these as
+arguments or environment variables; read each script's header for the exact names.
 
 ```
 dev-ladder-bluejay/
@@ -12,7 +17,7 @@ dev-ladder-bluejay/
   build-rung.sh  RUNG [TREE] [OUT]                 target-files → firmware-free fastboot zip + loose images + SHA256SUMS
                                                    (b1+: AVB/launcher checks, sparse super.img, flash-RUNG-mac.sh)
   flash-mac.sh                                     bootloader-only slot-a flash from macOS (installed as flash-RUNG-mac.sh)
-  check-build.sh RUNG TF OUT [TREE]                b2+ artifact gate on the build box (run by build-rung.sh)
+  check-build.sh RUNG TF OUT [TREE]                b2+ artifact gate on the build host (run by build-rung.sh)
   check-rung.sh  RUNG [--no-usb]                   on-phone pass criteria over adb, from the Mac (cumulative)
   rung-b0/       files that still override release intent at b0
   rung-b1/       … at b1 (AVB dev key, no launcher, sysconfig)
@@ -24,10 +29,10 @@ dev-ladder-bluejay/
 ```
 
 A rung directory has the same meaning as on crosshatch: it holds only the files that still
-override release intent (`common.mk`, `BoardConfigVault.mk`, `Android.bp`, `config.xml`,
-`debug_adbkey.pub`), plus optional diffs against four upstream trees
-(`device-google-bluejay.diff`, `device-google-gs101.diff`, `vendor-google-bluejay.diff`,
-`device-google-bluejay-kernels.diff`) and, from b2, `expect-build.txt` (check-build.sh). `sync-rung.sh`:
+override release intent (`common.mk`, `BoardConfigVault.mk`, `Android.bp`, `config.xml`), plus
+optional diffs against four upstream trees (`device-google-bluejay.diff`,
+`device-google-gs101.diff`, `vendor-google-bluejay.diff`, `device-google-bluejay-kernels.diff`)
+and, from b2, `expect-build.txt` (check-build.sh). `sync-rung.sh`:
 
 1. rsyncs `device/phonevault/bluejay` and `vendor/phonevault` (no `keys/`, no APK; `keys/` in the
    tree is neither overwritten nor deleted, see "AVB dev key" below);
@@ -45,78 +50,67 @@ override release intent (`common.mk`, `BoardConfigVault.mk`, `Android.bp`, `conf
    (b4a+); it reports when the dist disagrees with them;
 6. bakes the signer APK as `vendor/phonevault/prebuilt/PhoneVault.apk`.
 
-Kernel: `cd /build/gs-6.1-kernel && ./build_bluejay.sh` (as aipg). Lineage 24.0's kernel
+**Development adb key.** Rungs are `userdebug` with adb pre-authorised for the builder. No adb
+key is committed: the sync reads your public adb key from the path in `PV_DEV_ADB_KEY` (for
+example `~/.android/adbkey.pub` on the Mac that will talk to the phone) and installs it only in
+the build tree.
+
+Kernel: `cd $KERNEL_TREE && ./build_bluejay.sh` as the tree owner. Lineage 24.0's kernel
 manifest pins the GKI `android14-6.1-2025-12_r30` as a downloaded prebuilt, so only the Pixel
-vendor modules are compiled: about 6 min on the build box.
+vendor modules are compiled (minutes, not hours).
 
-Build: as aipg, `build-rung.sh b0` → lunch `vault_bluejay-cp2a-userdebug`, `WITH_ADB_INSECURE=true`
-(without it Lineage turns userdebug into `ro.adb.secure=1` + `ro.debuggable=0`),
-`m target-files-package`, `img_from_target_files`, then the zip is rebuilt **without** the nine
-firmware images (`abl bl1 bl2 bl31 gsa ldfw pbl tzsw modem`) and checked to hold exactly
-`android-info.txt` + boot dtbo pvmfw vendor_boot vbmeta vbmeta_system vbmeta_vendor system
-system_ext product vendor vendor_dlkm (+ `super_empty.img` / `fastboot-info.txt` if present),
-with `android-info.txt` = `vendor/phonevault/config/board-info-bluejay.txt`
-(`require board=bluejay`, `version-bootloader=bluejay-17.0-15199431`,
-`version-baseband=g5123b-145971-260414-B-15201439`). Output in `/build/out-<rung>/`.
+Build: as the tree owner, `build-rung.sh RUNG $LINEAGE_TREE $OUT_DIR` → lunch
+`vault_bluejay-cp2a-userdebug`, `WITH_ADB_INSECURE=true` (without it Lineage turns userdebug into
+`ro.adb.secure=1` + `ro.debuggable=0`), `m target-files-package`, `img_from_target_files`, then
+the zip is rebuilt **without** the nine firmware images (`abl bl1 bl2 bl31 gsa ldfw pbl tzsw
+modem`) and checked to hold exactly `android-info.txt` + boot dtbo pvmfw vendor_boot vbmeta
+vbmeta_system vbmeta_vendor system system_ext product vendor vendor_dlkm (+ `super_empty.img` /
+`fastboot-info.txt` if present), with `android-info.txt` =
+`vendor/phonevault/config/board-info-bluejay.txt` (`require board=bluejay`,
+`version-bootloader=bluejay-17.0-15199431`, `version-baseband=g5123b-145971-260414-B-15201439`;
+fastboot compares the baseband string exactly, including the upper-case `B`). A first full build
+takes several hours; an incremental rung build tens of minutes.
 
-Flashing: from the owner's Mac, **from the bootloader only** (fastbootd writes fail on macOS, see
-"b0 on the phone"). From b1 the out directory carries everything for that path: `images/` (slot
-partitions + `android-info.txt`), a sparse `super.img` (slot a populated, built by
-`build/make/tools/releasetools/build_super_image.py` from the target files) and
-`flash-<rung>-mac.sh`, which checks SHA256SUMS and the phone (product, bootloader, upper-case-B
-baseband, unlocked, not fastbootd), then `fastboot --slot=a flash` boot vendor_boot dtbo pvmfw
-vbmeta vbmeta_system vbmeta_vendor, `fastboot flash super super.img`, `erase metadata`, `-w`,
-`--set-active=a`, `reboot`. `--check` runs the checks only. Bootloader, radio and
-`avb_custom_key` are never written.
+Flashing: from a Mac, **from the bootloader only**. Userspace fastboot (fastbootd) enumerates on
+macOS but every write fails ("Write to device failed"), so `fastboot update` cannot be used; an
+interrupted `fastboot update` can leave `super` reset. From b1 the out directory carries
+everything for the bootloader-only path: `images/` (slot partitions + `android-info.txt`), a
+sparse `super.img` (slot a populated, built by `build/make/tools/releasetools/build_super_image.py`
+from the target files) and `flash-<rung>-mac.sh`, which checks SHA256SUMS and the phone (product,
+bootloader, upper-case-B baseband, unlocked, not fastbootd), then `fastboot --slot=a flash` boot
+vendor_boot dtbo pvmfw vbmeta vbmeta_system vbmeta_vendor, `fastboot flash super super.img`,
+`erase metadata`, `-w`, `--set-active=a`, `reboot`. `--check` runs the checks only. Bootloader,
+radio and `avb_custom_key` are never written. Pixel firmware is per slot: before flashing slot
+a, make sure it carries the same CP2A bootloader and radio as the phone's current slot (write
+Google's CP2A.260705.006 bootloader + radio to it with exactly the two `flash-all.sh` steps if
+not).
 
 AVB dev key (b1+): RSA-4096, **development only, not the release key**, generated on the build
-box as aipg: private key `/home/aipg/.phonevault-keys/avb/phonevault_bluejay_avb_DEV_rsa4096.pem`
-(0400, dir 0700, never committed, never copied off the box), public blob
-`/home/aipg/.phonevault-keys/avb/avb_pkmd_bluejay_DEV.bin` (`avbtool extract_public_key`;
-sha256 `068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c`, sha1
-`af09b166ade90fb31a184e9ab6c59819cd33fc8a` = what `avbtool info_image` prints). The tree reaches it
-through the symlink `vendor/phonevault/keys/avb_bluejay_dev.pem`; the rung's
-`BoardConfigVault.mk` stops the build if it is missing. The release key for b8/b9 is a separate
-key that never lives on the build box.
+host and kept outside the repository (private key mode 0400 in a 0700 directory, never
+committed, never copied off the host). Public blob (`avbtool extract_public_key`) sha256
+`068a9865f04cc9b91f6838b537c14f32e4fa6e32682cbcfbfd6c9782ab71ae8c`, sha1
+`af09b166ade90fb31a184e9ab6c59819cd33fc8a` (what `avbtool info_image` prints). The tree reaches
+it through the symlink `vendor/phonevault/keys/avb_bluejay_dev.pem`; the rung's
+`BoardConfigVault.mk` stops the build if it is missing. A builder without this key generates
+their own and gets their own digests. The release key for b8/b9 is a separate key that never
+lives on a build host.
 
 ## Rung log
 
-| Rung | Change | Status | Notes |
+| Rung | Change | Result on hardware | Pass criteria |
 |---|---|---|---|
-| b0 | Lineage 24.0 bluejay (CP2A.260705.006 blobs, GKI 6.1 + Kleaf vendor modules) + `vault_bluejay` product: signer app as an ordinary system app on **/product** (`privileged: false`, `product_specific: true`: gs101 enforces generic_system's artifact path requirement, so nothing product-specific may go to /system; props and `preferred-apps` moved to /product for the same reason), frameworks/base 0003 + 0004 rebased to Android 17 (`patches/frameworks-base-a17/`), Phone Vault overlay ahead of Lineage's (wallpaper, `config_fixedFunctionDeviceOwner`, no doze/AOD, airplane mode default on; becomes the auto-generated product RRO), preferred HOME, `LineageSetupWizard` overridden, userdebug (`ro.debuggable=1`, `ro.adb.secure=0`) with pre-authorised build-box and owner-Mac keys, `board-info-bluejay.txt` bootloader/baseband pins. `boot.img` is built (kernel `Image.lz4` + generic ramdisk) instead of the kernel-only Kleaf prebuilt, see `BoardConfigVault.mk`. **AVB is the Lineage gs101 default: vbmeta signed with the public AOSP `testkey_rsa4096`, boot/vbmeta_system/vbmeta_vendor chained with the public `testkey_rsa2048`, vbmeta `--flags 3`** (verification off), rollback indexes 1790812800 (2026-10-01) — unlocked dev phone only; b1 re-keys. Not ported yet: 0001/0002 (GrapheneOS imports), 0005 (keyguard clock), the boot animation, appliance/device patches. | **built 2026-10-11, not flashed.** Full build 6 h 58 min (kernel 6 min). `/build/out-b0/`: `vault_bluejay-img-b0.zip` sha256 `90ac0b78…`, app `c5def7d6…`, `boot.img` `c0c0fa6b…`; zip holds exactly android-info + boot dtbo pvmfw vendor_boot vbmeta vbmeta_system vbmeta_vendor system system_ext product vendor vendor_dlkm super_empty (firmware, `system_other`, `userdata` dropped) | Boot test per `docs/port-bluejay.md` §5 b0 row (owner `fixed-function-system-image`, `mLockTaskModeState=LOCKED`, SET PIN on genuine first boot, inventory, `attesttest.sh`) |
-| b1 | b0 + **factory-boot wake-up**: frameworks/base 0003 unstops the configured owner before `setActiveAdmin` and re-sends `DEVICE_ADMIN_ENABLED` once user 0 is unlocked (b0's enable broadcast was never sent: user 0 is locked at `PHASE_ACTIVITY_MANAGER_READY`, the receiver is not direct-boot aware, and the package was scanned stopped), plus `/product/etc/sysconfig/phonevault-initial-package-state.xml` (`stopped=false`); **no launcher** (`Launcher3QuickStep`, `Launcher3Overlay` overridden); **own AVB dev key** on vbmeta + boot + vbmeta_system + vbmeta_vendor (RSA-4096, key sha1 `af09b166…`, pkmd sha256 `068a9865…`), vbmeta **flags 0** (verification on), rollback indexes 1790812800 as before, not relocked; frameworks/base **0005** rebased (no keyguard clock/smartspace/date; SystemUI overlay synced again); **no Lineage Trust** (bluejay overlay drops `TrustInterfaceService` from `config_externalLineageServices`, sysconfig `unavailable-feature org.lineageos.trust`). Same kernel and app (`c5def7d6…`) as b0. | **built 2026-10-11, not flashed.** Incremental build 46 min (13:01–13:47). `/build/out-b1/`: `super.img` (sparse, slot a populated) `a3f09f7d…`, `vbmeta.img` `62c12610…`, `boot.img` `13cee4a5…`, `vendor_boot.img` `90998a7e…`, image zip `50dc5f8d…`, `flash-b1-mac.sh` `d26bab20…`; checks in build-rung.sh passed (all four AVB signatures = dev key, flags 0, no launcher in target files, both sysconfigs present); RROs verified with aapt2 (`config_phonevaultHideKeyguardClock` true, `config_externalLineageServices` 7 entries without Trust) | On the phone: `./flash-b1-mac.sh --check`, then `./flash-b1-mac.sh`. Must land on SET PIN with **no** manual step; see the b1 checklist below |
-| b2 | b1 + **kernel hardening slice 1** (crosshatch 2d-a/2d-d intent within GKI): 56 GKI/vendor modules nothing in userspace uses are left out of vendor_dlkm and the load lists (Linux BT host stack, mac80211, Linux NFC, 802.15.4/6LoWPAN, CAN, PPP/PPTP/L2TP, TIPC, VLAN, WWAN, USB-host class drivers: USB ethernet, USB serial, CDC-ACM); `usbcore.authorized_default=0` on the vendor_boot cmdline | **PASSED on the 6a 2026-10-13**: check-rung 0 FAIL (56 modules absent, `usbcore.authorized_default=0` on the cmdline, kiosk + device owner, verity). Earlier note: **built 2026-10-13, not flashed** (40 min). `/build/out-b2/`: `super.img` `415d82c0…`, `boot.img` `b87e18fa…`, `vendor_boot.img` `a0972aef…`, `vbmeta.img` `ed4b05b4…`, image zip `4d810e82…`, `flash-b2-mac.sh` `d26bab20…`; check-build: 56 modules absent, modules.dep consistent, cmdline present, 18 expectations OK; AVB 4× dev key, flags 0 | [b2](#b2-kernel-slice-1) |
-| b3 | b2 + **USB lock-down** (crosshatch 2d-d + rung 3 intent, adapted to the prebuilt gs101 USB HALs): gadget function instances only `accessory.gs2` + userspace-AOA `ffs.aoa`/`ffs.ctrl` (+ `ffs.adb` only while `ro.debuggable=1`); configfs `functions/` and the gadget root stay root-owned; Type-C port pinned **sink/UFP** at boot and boot_completed, role/mode nodes and the DWC3 OTG id root-only; no charger-mode MIDI gadget, no usbuwb mode; `android.hardware.usb.host` not declared; `ro.vendor.phonevault.offline=true` | **PASSED on the 6a 2026-10-13**: 0 FAIL; MTP/RNDIS/MIDI refused, port UFP, the Mac sees one vendor-specific interface, the companion's AOA handshake reached the phone. Earlier note: **built 2026-10-13, not flashed** (40 min). `/build/out-b3/`: `super.img` `4d85a899…`, `boot.img` `4f19efaf…`, `vendor_boot.img` `19bc22f1…`, `vbmeta.img` `8b37abfd…`, image zip `ad747f3b…`; check-build: 33 expectations OK (instances, sink pin, ueventd modes, no usb.host, Titan/Trusty rc present) | [b3](#b3-usb) |
-| b4a | b3 + **radios off** (crosshatch 2d-a/2d-b/2d-c2/4b-feature intent): Wi-Fi (bcmdhd4389, cfg80211, rfkill), Bluetooth (nitrous), NFC + eSE (st21nfc, st54spi, st33spi), GNSS (bcm47765, bbd_pps_gpio), modem interface (cpif stack) out of the kernel image **together with** their services (BT HAL, NFC HAL, gto eSE HAL, GNSS HAL + gpsd/lhd/scd, cbd/rfsd/dmd/shared_modem_platform), VINTF entries and features (BT, NFC, OMAPI, GPS). Telephony framework, rild and the radio HAL stay (telephony rung, as on crosshatch); the modem firmware stays on its partitions, never booted | **PASSED on the 6a 2026-10-13**: 0 FAIL, no reboot; no wlan/rmnet/bluetooth/umts, radio services undefined, Titan M2 gatekeeperd running. Found: `pktrouter` (wfc-pkt-router) crash-looped with the modem gone (124 exits / 5 min) → removed in b4c. Earlier note: **built 2026-10-13, not flashed** (second build, 80 min; the first failed check-build: BT feature from handheld_core_hardware.xml, stale ramdisk `.ko`, both fixed). `/build/out-b4a/`: `super.img` `8abfc4e5…`, `boot.img` `7e402142…`, `vendor_boot.img` `d2ab8cc6…`, `vbmeta.img` `850173ce…`, image zip `476609aa…`; check-build: 70 modules absent (444 `.ko` left), 20 overrides absent, 62 expectations OK; `check_target_files_vintf` rc 0 (also on b4c) | [b4a](#b4a-radios) |
-| b4b | b4a + **app strip slice A** (= crosshatch 4a, adapted): 32 user-facing modules (camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF/Canvas, AudioFX, Updater, pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceAsWebcam, …) | **PASSED on the 6a 2026-10-13**: 0 FAIL (31 packages absent). Earlier note: **built 2026-10-13, not flashed** (16 min). `/build/out-b4b/`: `super.img` `f9227b4f…`, `boot.img` `3badaab3…`, `vendor_boot.img` `bc090820…`, `vbmeta.img` `e6249699…`, image zip `8bc8b818…`; check-build: 52 overrides absent, 109 APKs remain | [b4b](#b4b--b4c-app-strip) |
-| b4c | b4b + **app strip slice B** (= crosshatch 4b, adapted): 47 on-demand system modules (telephony UI/role apps, backup, print, WebView + feature, MTP, Lineage parts/profiles, CDM/credential/DSU/cert/PAC/VPN/captive-portal/SE/BT-MIDI satellites, providers, Pixel blobs). **ModuleMetadata kept** (4b boot loop), Settings, LatinIME, GoogleParts (eUICC disabler on gs101) kept | **PASSED on the 6a 2026-10-13** (rebuilt as `out-b4c2` with pktrouter removed, super `see /build/out-b4c2/SHA256SUMS`): 0 FAIL, 167 packages, no pktrouter, only crash = euiccpixel ×2 at boot. With the current dev app (4593c028…): firstrun, usbsigntest, msgsigntest, credentialtest all PASS (credentialtest after making its keyguard swipe screen-relative). Lock screen still says "Emergency calls only" on this dev rung: the release overlay's `config_voice_capable=false` is not in the ladder; check it on the release build. Earlier note: **built 2026-10-13, not flashed** (14 min). `/build/out-b4c/`: `super.img` `93782a2e…`, `boot.img` `124d6528…`, `vendor_boot.img` `f78f06d4…`, `vbmeta.img` `4162c12e…`, image zip `6b2d5f3c…`; check-build: 99 overrides absent, 63 APKs remain (`apks-rung-b4c.txt`) | [b4b](#b4b--b4c-app-strip) |
+| b0 | Lineage 24.0 bluejay (CP2A.260705.006 blobs, GKI 6.1 + Kleaf vendor modules) + `vault_bluejay` product: signer app as an ordinary system app on **/product** (`privileged: false`, `product_specific: true`: gs101 enforces generic_system's artifact path requirement, so nothing product-specific may go to /system; props and `preferred-apps` moved to /product for the same reason), frameworks/base 0003 + 0004 rebased to Android 17 (`patches/frameworks-base-a17/`), Phone Vault overlay ahead of Lineage's (wallpaper, `config_fixedFunctionDeviceOwner`, no doze/AOD, airplane mode default on; becomes the auto-generated product RRO), preferred HOME, `LineageSetupWizard` overridden, userdebug (`ro.debuggable=1`, `ro.adb.secure=0`) with the builder's pre-authorised adb key, `board-info-bluejay.txt` bootloader/baseband pins. `boot.img` is built (kernel `Image.lz4` + generic ramdisk) instead of the kernel-only Kleaf prebuilt, see `BoardConfigVault.mk`. **AVB is the Lineage gs101 default: vbmeta signed with the public AOSP `testkey_rsa4096`, boot/vbmeta_system/vbmeta_vendor chained with the public `testkey_rsa2048`, vbmeta `--flags 3`** (verification off), rollback indexes 1790812800 — unlocked dev phone only; b1 re-keys | boots; device owner `dev.phonevault.signer` with provisioning context `fixed-function-system-image` (the Android 17 port of patch 0003 works). Gap: the app was never started after provisioning (keyguard + a HOME chooser); fixed in b1. First run (PIN on the Titan M2, wallet, spot check, kiosk LOCKED) and attestation (factory-provisioned StrongBox chain, verdict development) pass | `docs/port-bluejay.md` §5 b0 row |
+| b1 | b0 + **factory-boot wake-up**: frameworks/base 0003 unstops the configured owner before `setActiveAdmin` and re-sends `DEVICE_ADMIN_ENABLED` once user 0 is unlocked (b0's enable broadcast was never sent: user 0 is locked at `PHASE_ACTIVITY_MANAGER_READY`, the receiver is not direct-boot aware, and the package was scanned stopped), plus `/product/etc/sysconfig/phonevault-initial-package-state.xml` (`stopped=false`); **no launcher** (`Launcher3QuickStep`, `Launcher3Overlay` overridden); **own AVB dev key** on vbmeta + boot + vbmeta_system + vbmeta_vendor, vbmeta **flags 0** (verification on), rollback indexes as before, not relocked; frameworks/base **0005** rebased (no keyguard clock/smartspace/date); **no Lineage Trust** (bluejay overlay drops `TrustInterfaceService` from `config_externalLineageServices`, sysconfig `unavailable-feature org.lineageos.trust`). Same kernel and app as b0 | **passed**: hands-off factory boot to SET PIN (`VaultProvision: appliance provisioned on admin enable`), organization name Phone Vault, HOME = Phone Vault only, no Trust notification, `ro.boot.veritymode=enforcing`, vbmeta digest from our dev key, orange (unlocked). After a reboot the boot lock screen shows no clock, date or notifications, the padlock wallpaper and the device-owner text "Phone Vault · enter your PIN to unlock" (Android 17 renders `setDeviceOwnerLockScreenInfo`; Android 15 on crosshatch did not); one PIN unlocks storage and the vault | [b1 checklist](#b1-checklist) |
+| b2 | b1 + **kernel hardening slice 1** (crosshatch 2d-a/2d-d intent within GKI): 56 GKI/vendor modules nothing in userspace uses are left out of vendor_dlkm and the load lists (Linux BT host stack, mac80211, Linux NFC, 802.15.4/6LoWPAN, CAN, PPP/PPTP/L2TP, TIPC, VLAN, WWAN, USB-host class drivers: USB ethernet, USB serial, CDC-ACM); `usbcore.authorized_default=0` on the vendor_boot cmdline | **passed**: `check-rung.sh b2` 0 FAIL (56 modules absent, `usbcore.authorized_default=0`, kiosk + device owner, verity) | [b2](#b2-kernel-slice-1) |
+| b3 | b2 + **USB lock-down** (crosshatch 2d-d + rung 3 intent, adapted to the prebuilt gs101 USB HALs): gadget function instances only `accessory.gs2` + userspace-AOA `ffs.aoa`/`ffs.ctrl` (+ `ffs.adb` only while `ro.debuggable=1`); configfs `functions/` and the gadget root stay root-owned; Type-C port pinned **sink/UFP** at boot and boot_completed, role/mode nodes and the DWC3 OTG id root-only; no charger-mode MIDI gadget, no usbuwb mode; `android.hardware.usb.host` not declared; `ro.vendor.phonevault.offline=true` | **passed**: 0 FAIL; MTP/RNDIS/MIDI refused, port UFP, the Mac sees one vendor-specific interface, the companion's AOA handshake reaches the phone | [b3](#b3-usb) |
+| b4a | b3 + **radios off** (crosshatch 2d-a/2d-b/2d-c2/4b-feature intent): Wi-Fi (bcmdhd4389, cfg80211, rfkill), Bluetooth (nitrous), NFC + eSE (st21nfc, st54spi, st33spi), GNSS (bcm47765, bbd_pps_gpio), modem interface (cpif stack) out of the kernel image **together with** their services (BT HAL, NFC HAL, gto eSE HAL, GNSS HAL + gpsd/lhd/scd, cbd/rfsd/dmd/shared_modem_platform), VINTF entries and features (BT, NFC, OMAPI, GPS). Telephony framework, rild and the radio HAL stay (telephony rung, as on crosshatch); the modem firmware stays on its partitions, never booted | **passed**: 0 FAIL; no wlan/rmnet/bluetooth/umts, radio services undefined, Titan M2 gatekeeperd running. Found: `pktrouter` (wfc-pkt-router) crash-loops with the modem gone; removed in b4c | [b4a](#b4a-radios) |
+| b4b | b4a + **app strip slice A** (= crosshatch 4a, adapted): 32 user-facing modules (camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF/Canvas, AudioFX, Updater, pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceAsWebcam, …) | **passed**: 0 FAIL | [b4b / b4c](#b4b--b4c-app-strip) |
+| b4c | b4b + **app strip slice B** (= crosshatch 4b, adapted): 47 on-demand system modules (telephony UI/role apps, backup, print, WebView + feature, MTP, Lineage parts/profiles, CDM/credential/DSU/cert/PAC/VPN/captive-portal/SE/BT-MIDI satellites, providers, Pixel blobs) and `pktrouter`. **ModuleMetadata kept** (crosshatch 4b boot loop), Settings, LatinIME, GoogleParts (eUICC disabler on gs101) kept | **passed**: 0 FAIL, 167 packages, only crash `euiccpixel` ×2 at boot. `firstrun.sh`, `usbsigntest.sh`, `msgsigntest.sh`, `credentialtest.sh` pass. The lock screen still says "Emergency calls only" on this dev rung: the release overlay's `config_voice_capable=false` is not in the ladder; check it on the release build | [b4b / b4c](#b4b--b4c-app-strip) |
 
-- 2026-10-11: android-info.txt required baseband `…-260414-b-…` but the phone reports `…-260414-B-…` (fastboot compares exactly; it would have refused the flash). Fixed in board-info and build-rung.sh; the b0 zip on the Mac was patched in place (android-info.txt only): sha256 `bd26a0f13f9800a4889e84cac1d6054c3708e6e5027b708c6f9848aeac970aec`. Pre-flight on the phone (read-only) matched board, bootloader, baseband and slot b.
+Not yet done on the 6a: the appliance VINTF manifest, the camera/TPU/sensor slice, the telephony
+rung, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
 
-## b0 on the phone (2026-10-11)
-
-- Flashing: `fastboot update` from the Mac failed at the switch to userspace fastboot (fastbootd
-  enumerates on macOS but every write fails "Write to device failed (No such file or directory)",
-  also through a hub). The interrupted update had already flashed slot b's boot partitions and
-  reset super (slot a's dynamic partitions gone). Worked around entirely from the bootloader:
-  `build_super_image.py` on the target files → sparse `super.img` (489e7429…, slot a populated),
-  then `fastboot --slot=a flash` boot / vendor_boot / dtbo / pvmfw / vbmeta / vbmeta_system /
-  vbmeta_vendor, `fastboot flash super super.img`, `erase metadata`, `-w`, `--set-active=a`.
-  Bootloader and radio never written. **Use this bootloader-only path from macOS.**
-- Booted in ~50 s: `24.0-20261011-UNOFFICIAL-bluejay`, slot `_a`, verified boot orange (unlocked).
-  Device owner = `dev.phonevault.signer`, provisioning context `fixed-function-system-image`
-  (the Android 17 port of patch 0003 works).
-- Gap: the app was never started after provisioning (no VaultProvision log, keyguard + a HOME
-  chooser with Trebuchet). `am start` → kiosk LOCKED at SET PIN. Same class of first-boot gap as
-  crosshatch before the USER_STARTED fallback; on 17 the fallback did not fire. Fix in b1.
-- Also seen: "Discover Trust" notification, "belongs to your organization" (org name not yet
-  applied because provisioning never ran), clock/date on the keyguard (patch 0005 not ported yet).
-- First run from the Mac (harness needs Homebrew bash ≥4; macOS bash 3.2 lacks `mapfile`): PIN →
-  credential installed on the Titan M2, wallet created with **no** extra PIN prompt (the keystore
-  readiness check works), 3-word spot check, Home, kiosk LOCKED. Attestation: factory-provisioned
-  StrongBox chain, verdict development (see device-attestation.md).
-
-## b1 checklist (on the phone)
+## b1 checklist
 
 1. Mac, phone in the bootloader: `./flash-b1-mac.sh --check` (hashes, product, bootloader,
    upper-case-B baseband, unlocked, not fastbootd), then `./flash-b1-mac.sh` (type FLASH).
@@ -137,23 +131,17 @@ key that never lives on the build box.
 6. AVB: `getprop ro.boot.verifiedbootstate` = orange (unlocked), `ro.boot.veritymode` =
    enforcing, `ro.boot.vbmeta.digest` non-empty, `ro.boot.vbmeta.avb_version` set; no dm-verity
    errors in `dmesg`. (Unlocked: a mis-signed image would still boot orange, so this is safe.)
-7. First run as in b0 (PIN, wallet, Titan M2 keystore, kiosk LOCKED), `attesttest.sh` (verdict
-   stays development: unlocked, dev key not pinned), crash-loop count 0.
+7. First run (PIN, wallet, Titan M2 keystore, kiosk LOCKED), `attesttest.sh` (verdict stays
+   development: unlocked, dev key not pinned), crash-loop count 0.
 
-
-## b1 on the phone (2026-10-11)
-
-- Slot a carried an older bootloader/radio (16.4-14097577 / 251030) — Pixel firmware is per-slot and b0 ran on slot a. Wrote Google's CP2A.260705.006 bootloader + radio to slot a from the factory zip (sha256 03992adc…cb33 verified against Google's page) with exactly the two flash-all.sh steps; slot a now 17.0-15199431 / 260414-B-15201439.
-- `flash-b1-mac.sh` (bootloader-only) pre-flight passed, flashed. **Hands-off factory boot PASSED**: no input at all → kiosk LOCKED at SET PIN; `VaultProvision: appliance provisioned on admin enable (attempt 1)`; organizationName=Phone Vault; HOME = Phone Vault only (no launcher3/trebuchet); no Trust notification; `ro.boot.veritymode=enforcing`, vbmeta digest present (our dev AVB key), orange (unlocked).
-- First run from the Mac passes (PIN on the Titan M2, wallet, spot check, Home). Reboot: boot lock screen shows **no clock / no date / no notifications**, our padlock wallpaper, and the device-owner lock-screen text **"Phone Vault · enter your PIN to unlock"** (Android 17 renders `setDeviceOwnerLockScreenInfo`; Android 15 on crosshatch did not). One PIN → storage unlocked → vault, kiosk LOCKED, no second prompt.
+The on-phone tests run from the Mac need Homebrew bash ≥ 4 (macOS bash 3.2 lacks `mapfile`).
 
 ## Hardening rungs b2–b4c (crosshatch 2d-a … 4b parity)
 
-Prepared and built 2026-10-13 from the b1 tree, one cumulative rung each, so a failed flash
-bisects to one change set. All are **userdebug dev rungs with adb kept** (release adb-off is
-the `vendor/phonevault` user-build work, not these rungs). Same signer app as b0/b1
-(`c5def7d6…`, from `/build/pv-b1/PhoneVault.apk`) so only the OS changes between rungs. The
-rung numbers differ from the plan in `docs/port-bluejay.md` §5 (b2 VINTF, b3 radios, b4 modem,
+One cumulative rung each on top of b1, so a failed flash bisects to one change set. All are
+**userdebug dev rungs with adb kept** (release adb-off is the `vendor/phonevault` user-build
+work, not these rungs). The same signer APK is baked into every rung so only the OS changes
+between rungs. The rung numbers differ from the plan in `docs/port-bluejay.md` §5 (b2 VINTF, b3 radios, b4 modem,
 b5 camera, b6 USB, b7 apps): this ladder did kernel → USB → radios+modem → apps first; the
 appliance VINTF manifest and the camera/TPU/sensor slice are still open (b5+).
 
@@ -370,7 +358,7 @@ fatal).
 ```sh
 # 1. fetch the out dir (images/, super.img, SHA256SUMS, flash script; ~4.5 GB without the zips)
 mkdir -p ~/pv-bluejay && cd ~/pv-bluejay
-rsync -av --exclude 'vault_bluejay-*.zip' root@192.168.20.98:/build/out-b2/ out-b2/
+rsync -av --exclude 'vault_bluejay-*.zip' <build-host>:$OUT_DIR/ out-b2/
 cd out-b2
 # 2. read-only pre-flight + hash check (product, bootloader 17.0-15199431, baseband …-B-…, unlocked, not fastbootd)
 ./flash-b2-mac.sh --check
@@ -383,8 +371,8 @@ PV_THROWAWAY_DEVICE=1 tools/dev-device/firstrun.sh   # then usbsign/tokensign/ms
 ```
 
 Same for every rung (`out-b3`/`flash-b3-mac.sh`, …). Every flash wipes userdata+metadata
-(genuine factory boot each time). **Rollback for any rung:** there is no fallback slot (slot b
-has had no system partitions since b0's interrupted `fastboot update`), but the bootloader is
+(genuine factory boot each time). **Rollback for any rung:** do not count on the other slot
+(after an interrupted `fastboot update` it may hold no system partitions), but the bootloader is
 never written and always reachable (power off, hold Volume-Down + Power): run the previous good
 rung's `flash-<rung>-mac.sh` (or b1's) from its out dir. If slot a fails repeatedly the
 bootloader may switch to slot b and stop in fastboot mode: that is fine, the flash script

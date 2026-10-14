@@ -1,10 +1,17 @@
-# Development-device scripts (0.3.x UI)
+# Development-device scripts
 
-Scripts that drive the **development** Pixel 3 XL (crosshatch) over ADB from the native
-build box. They exist so the physical checks the audits could not repeat are reproducible.
-They assume the dev-appliance build (`assembleAppliance`: debug-signed, `DevTools` UI dumps
-and screenshots enabled) and a phone provisioned as described in `NOTES.md`; they are
-useless — by design — against a release build, which has no dump hook and refuses `adb install`.
+Scripts that drive a **development** phone (Pixel 3 XL or Pixel 6a running a dev-ladder image)
+over adb and USB, so the physical checks are reproducible. They assume the dev-appliance app
+build (`gradle :app:assembleAppliance`: debug-signed, `DevTools` UI dumps and screenshots
+enabled) and a phone flashed and provisioned with a development rung
+([`vault-os/dev-ladder/README.md`](../../vault-os/dev-ladder/README.md) or
+[`vault-os/dev-ladder-bluejay/README.md`](../../vault-os/dev-ladder-bluejay/README.md)), with your
+adb key pre-authorised (`PV_DEV_ADB_KEY` at build time). They are useless, by design, against a
+release build, which has no dump hook and refuses `adb install`.
+
+**Throwaway devices and wallets only.** Several scripts wipe, replace or restore the wallet,
+and every wrong PIN counts toward the 10-attempt erase. See
+[CONTRIBUTING.md](../../CONTRIBUTING.md#on-phone-tests-toolsdev-device).
 
 Every tap is located by the widget's **text and live bounds** (`uiautomator dump`). There is
 no coordinate table any more; `uiautomator` only lists visible nodes, so `tap_text` scrolls
@@ -12,8 +19,7 @@ once when a button is below the fold.
 
 | Script | What it does |
 |---|---|
-| `buildapp.sh` | `gradle :app:assembleAppliance` with the pinned JDK/SDK paths of the build box |
-| `deploy.sh` | build → `adb install -r` → re-assert device owner + kiosk → launch → pull the first UI dump |
+| `deploy.sh` | build the dev appliance → `adb install -r` → re-assert device owner + kiosk → launch → pull the first UI dump (set `JAVA_HOME`, `ANDROID_HOME` and the Gradle path for your host) |
 | `firstrun.sh` | SET PIN → Create-or-Restore → Create → fresh-PIN reveal → 24 words (saved to `PV_WORDS_FILE`, 0600) → 3-word spot check → confirm account → Home |
 | `backupcheck.sh` | fresh PIN → 3 random positions answered from `PV_WORDS_FILE` → confirm; checks the account binding |
 | `seedqrtest.sh` | SeedQR + reminder (resets the gadget first: an open AOA session blocks sensitive screens): Security → Show as SeedQR behind the PIN shows the 25 × 25 CompactSeedQR with the seed timer and no menu, switches to the 29 × 29 Standard SeedQR and to the words and back, Hide returns Home; `PV_USB_CHECK=1` plugs a host in while it is shown and requires the attach to stay parked; Security → Backup reminder saves each interval and restores "Every 3 months" |
@@ -21,18 +27,20 @@ once when a button is below the fold.
 | `usbsigntest.sh` | AOA pair (USB address == screen), mainnet-shaped 0.5 ETH example transfer reviewed and approved on the phone, host recomputes hash + recovers signer against the pinned pairing |
 | `msgsigntest.sh` | Message signing (needs the pairing from `usbsigntest.sh`): personal_sign text approved, sign-in for another account and unreadable bytes rejected, EIP-712 Mail and Permit2 (UNLIMITED) approved, Permit2 on the wrong host chain rejected; host checks each digest and recovers the signer |
 | `btctest.sh` | Bitcoin (testnet, fabricated coins, nothing broadcast; rerunnable): first revokes every remembered account in ☰ → Bitcoin sharing; `btc-account` share screen approved then remembered (no screen, same descriptor) and listed in ☰ → Bitcoin sharing, declined for another account; `btc-show` address on screen == answered address; `btc-sign` P2WPKH and P2TR reviewed ("Send 0.00060000 tBTC", change ✓, fee) and signed, each signature verified on the host with embit (`tools/btc_psbt_tool.py verify`); a rejection; a coin of another wallet refused with "Bitcoin transaction refused"; a revoked account is asked for again. Every step prints PASS or FAIL. Needs `PV_BTC_TOOL` and embit==0.8.0 in `PV_HOST_PY` |
-| `btc-signet-e2e.sh` | A REAL signet round trip (needs a person to fund the printed address from a signet faucet; the script never contacts a faucet): signet P2WPKH account 1, receive address 0 shown on the phone, wait for a coin (mempool.space Esplora), PSBT to own receive address 1 + change at the recommended fee, signed on the phone, verified with embit (`tools/btc_signet.py`), broadcast, waited on until confirmed. Resumable from `$PV_SIGNET_DIR` (default /root/pv-signet); `--address-only` stops after printing the address |
-| `tokensigntest.sh` | ERC-20 review (needs the pairing from `usbsigntest.sh`; not yet run on a phone): USDC transfer shown as "Send 50 USDC" and approved, UNLIMITED approval and unknown-contract transfer rejected, Base USDC increaseAllowance approved, calldata with a trailing byte refused before review; host checks to/value/data, hash and signer |
+| `btc-signet-e2e.sh` | A REAL signet round trip (needs a person to fund the printed address from a signet faucet; the script never contacts a faucet): signet P2WPKH account 1, receive address 0 shown on the phone, wait for a coin (mempool.space Esplora), PSBT to own receive address 1 + change at the recommended fee, signed on the phone, verified with embit (`tools/btc_signet.py`), broadcast, waited on until confirmed. Resumable from `$PV_SIGNET_DIR` (set it to a private directory of your own); `--address-only` stops after printing the address |
+| `tokensigntest.sh` | ERC-20 review (needs the pairing from `usbsigntest.sh`): USDC transfer shown as "Send 50 USDC" and approved, UNLIMITED approval and unknown-contract transfer rejected, Base USDC increaseAllowance approved, calldata with a trailing byte refused before review; host checks to/value/data, hash and signer |
 | `polishtest.sh` | Display polish: the header battery indicator on every page; Display & auto-lock → screen timeout 30 s sets `settings get system screen_off_timeout` to 30000 (and caps the idle lock), back to 1 minute = 60000; haptics off/on; the power-button hint; then screenshots Home, ☰, Security, Display & auto-lock, Device information, Address book, Coming next, Backup reminder and the locked gate at standard and large text and fails if any text node leaves the screen horizontally (`PV_POLISH_OUT`, default `/tmp/polishtest`; `PV_POLISH_KEEP_LARGE=1` leaves large text on for running the review scripts) |
 | `safetytest.sh` | Safety reviews (needs the pairing from `usbsigntest.sh`): first send to a fresh `0xabcd…1234` address each run (the per-wallet send history cannot be cleared) shows "First time sending", is approved and saved as contact "Alice" on the phone keyboard; the repeat send shows the contact and "Sent here once before"; a first-4/last-4 look-alike shows the DIFFERENT-address DANGER grid; setApprovalForAll and a real Universal Router swap are reviewed and rejected; an unknown contract call and an EIP-7702 authorization message are refused with the reason on screen; the contact is deleted from ☰ → Address book |
 | `accountstest.sh` | Accounts and passphrase wallet (rerunnable: resets an earlier run's Account 2 first; an EXIT trap always leaves Account 1 active): getAddress names Account 1; ☰ → Accounts adds Account 2 and switches; a request whose `from` is Account 1 is refused ("Switch to the right account on the phone"); the Account 2 review shows "Signing with"; rename to "Savings" on the phone keyboard; back to Account 1 and hide Savings; open a throwaway passphrase wallet (fingerprint preview, getAddress `wallet: passphrase`, review says "(passphrase wallet)"); relock forgets the passphrase and keeps the saved list |
 | `simtest.sh` | The Mac's simulation claim (needs the pairing from `usbsigntest.sh` and the current `aoa_client.py`): an honest `hostSimulation` for a 100 USDC send shows in the box "NOT VERIFIED BY THIS PHONE" and is approved and host-verified; a lying claim shows the red "does not match what this transaction does" row and is rejected; a malformed claim is refused with a schema error; no claim shows no box |
-| `attesttest.sh` | Device attestation (needs the pairing from `usbsigntest.sh` and `PV_ATTEST_VERIFIER`, the companion's `attest_verify` example; not yet run on a phone): StrongBox attestation of a fresh challenge verified by the companion's code (DEVELOPMENT with Developer mode, FAIL without), a repeated challenge refused, a locked phone holds the request until the PIN; no review screen, no crash |
-| `lifecycletest.sh` | stop-during-PIN-verify race, unlock, reveal/hide behind a fresh PIN, sleep-lock, wrong PIN counted, unlock, reboot persistence |
-| `capture_backup.sh` | screencaps the six phrase pages for UI review (**dev wallets only**) |
+| `attesttest.sh` | Device attestation (needs the pairing from `usbsigntest.sh` and `PV_ATTEST_VERIFIER`, the companion's `attest_verify` example; the attestation itself has been verified on both phones, the repeated-challenge and locked-phone cases not yet): StrongBox attestation of a fresh challenge verified by the companion's code (DEVELOPMENT with Developer mode, FAIL without), a repeated challenge refused, a locked phone holds the request until the PIN; no review screen, no crash |
+| `credentialtest.sh` | Credential mode (vault PIN = device PIN, `vault-os/docs/pin-credential-design.md`): relock → the vault's gate → system PIN prompt → Home; wrong-then-right PIN; phrase reveal inside and after the seed key's window; reboot → Android's boot lock screen once → Home without a second prompt. The system prompt is a secure window, so the PIN is keyed in blind |
+| `lifecycletest.sh` | stop-during-PIN-verify race, unlock, reveal/hide behind a fresh PIN, sleep-lock, wrong PIN counted, unlock, reboot persistence (still expects the app-side "WRONG PIN · N ATTEMPTS LEFT" text; in credential mode the count lives in the system prompt) |
 
-2026-10-12, dev phone 2 (rung 4b, credential mode): `safetytest`, `simtest`, `accountstest`,
-`seedqrtest`, `polishtest`, then `usbsigntest` and `credentialtest`, passed in one sequential run.
+On the Pixel 3 XL at rung 4b (credential mode), `safetytest`, `simtest`, `accountstest`,
+`seedqrtest`, `polishtest`, `usbsigntest` and `credentialtest` pass in one sequential run. On the
+Pixel 6a at rung b4c, `firstrun`, `usbsigntest`, `msgsigntest` and `credentialtest` pass. Running
+the scripts from macOS needs Homebrew bash ≥ 4.
 
 Not yet ported: the two-phase **Replace wallet** drill (`regentest.sh`, removed with the 0.2.0
 coordinate harness). Drive it by hand via Security → Replace wallet until it is rewritten on
@@ -48,7 +56,7 @@ Environment:
 * `PV_HOST_PY`, `PV_HOST_CLIENT`, `PV_PAIRING_FILE` — host client for `usbsigntest.sh`, `msgsigntest.sh`, `tokensigntest.sh`, `safetytest.sh` and `simtest.sh` (`PV_VECTORS` overrides the vector fixture path).
 * `ANDROID_SERIAL` — pick the phone when more than one is attached (adb honours it; keep `ADB` a bare binary).
 
-Conventions that bit us (see `NOTES.md` for the history):
+Conventions learned the hard way:
 
 * Wake the screen and hold it (`svc power stayon usb`, `KEYCODE_WAKEUP`) before tapping.
 * The vault locks on screen-off and on idle (30 s / 60 s / 2 min; set 2 min on a throwaway
