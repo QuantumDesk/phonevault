@@ -44,7 +44,6 @@ let poll = 0;
 function fresh(): S { return { step: 0, mismatch: false, pairing: false, pairError: null, baseline: new Map(), since: 0, arrived: null }; }
 
 export function setupStart(host: SetupHost) { s = fresh(); clearInterval(poll); advance(host); }
-export const setupStep = () => s.step;
 
 /** Move forward on its own when the real state allows it (phone plugged in; already paired). */
 function advance(host: SetupHost) {

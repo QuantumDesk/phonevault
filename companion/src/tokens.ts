@@ -8,13 +8,12 @@ import { h, short } from "./ui";
 
 let listPromise: Promise<TokenInfo[]> | null = null;
 let listError: string | null = null;
-/** The built-in list (loaded once). Empty if the Rust side refused it; `tokenListError()` says why. */
+/** The built-in list (loaded once). Empty if the Rust side refused it; `tokenSection` shows why. */
 export function tokenList(): Promise<TokenInfo[]> {
   return (listPromise ??= api.tokenList()
     .then((l) => { cached = l; listError = null; return l; })
     .catch((e) => { listError = errText(e); listPromise = null; return [] as TokenInfo[]; }));
 }
-export const tokenListError = () => listError;
 
 let cached: TokenInfo[] = [];
 void tokenList();

@@ -58,7 +58,7 @@ function row(k: string, v: Node | string | null | undefined, title?: string) {
 }
 
 /** The phrase Settings → Device asks for before Developer mode turns on (Rust checks it too). */
-export const DEV_CONFIRMATION = "I FLASHED THIS PHONE";
+const DEV_CONFIRMATION = "I FLASHED THIS PHONE";
 /** Settings → Device's Developer-mode form: open, and the last error. Survives drawer re-renders. */
 const devForm = { open: false, error: null as string | null, busy: false };
 

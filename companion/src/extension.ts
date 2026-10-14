@@ -15,7 +15,7 @@ import { NETWORKS } from "./networks";
 import { h, icon, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 
-export const EXT_PREFIX = "ext:";
+const EXT_PREFIX = "ext:";
 export const isExtTopic = (topic: string) => topic.startsWith(EXT_PREFIX);
 const originOf = (topic: string) => topic.slice(EXT_PREFIX.length);
 

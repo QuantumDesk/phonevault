@@ -93,9 +93,9 @@ function usd(sats: number, price: number | null, test: boolean): string | null {
   return usdFmt.format(v);
 }
 /** bc1q xxxx xxxx … in groups of four, for comparing by eye. */
-export const groupedBtc = (a: string) => a.match(/.{1,4}/g)?.join(" ") ?? a;
+const groupedBtc = (a: string) => a.match(/.{1,4}/g)?.join(" ") ?? a;
 /** "0.0005" BTC → sats, exactly; null when not a valid amount. */
-export function btcToSats(s: string): number | null {
+function btcToSats(s: string): number | null {
   const m = /^(\d{0,8})(?:\.(\d{0,8}))?$/.exec(s.trim());
   if (!m || (!m[1] && !m[2])) return null;
   return Number(m[1] || "0") * 1e8 + Number((m[2] ?? "").padEnd(8, "0"));
@@ -790,7 +790,7 @@ function exportModal(): HTMLElement | null {
       body));
 }
 
-export async function openExport(a: BtcAccount) {
+async function openExport(a: BtcAccount) {
   exporting = { a, e: null };
   const show = () => { document.getElementById("btc-export")?.remove(); const m = exportModal(); if (m) document.body.append(m); };
   show();

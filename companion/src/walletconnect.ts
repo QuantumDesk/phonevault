@@ -112,7 +112,6 @@ const notices: { text: string; time: number }[] = [];
 
 /** True while a WalletConnect request is with the phone (main.ts holds its own USB traffic). */
 export const wcPhoneBusy = () => phoneBusy;
-export const wcSessionCount = () => sessions.length;
 
 const inFlight = (it: Item) => ["connecting", "on_phone", "verifying", "broadcasting"].includes(it.stage.s);
 const sessionOf = (topic: string) => sessions.find((s) => s.topic === topic);
@@ -480,7 +479,7 @@ async function disconnect(topic: string) {
   sync();
 }
 
-export function openConnect() {
+function openConnect() {
   connect = { uri: "", busy: false, error: null, waiting: false };
   render();
 }

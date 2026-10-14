@@ -296,7 +296,7 @@ input:focus { outline: none; border-color: var(--accent-line); box-shadow: 0 0 0
 .modal-scrim { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 30; display: grid; place-items: center; padding: 16px; }
 .modal { width: min(400px, 100%); display: grid; gap: 12px; }
 .modal .actions { display: grid; gap: 8px; }
-.chip.danger { color: var(--danger, #ff6b6b); border-color: currentColor; }
+.chip.danger { color: var(--danger); border-color: currentColor; }
 button.chip { cursor: pointer; font: inherit; }
 
 /* ---------------------------------------------------------------- tokens (built-in list) */
@@ -331,4 +331,3 @@ button.chip { cursor: pointer; font: inherit; }
 .att-details { display: grid; gap: 0; border-top: 1px solid var(--line); padding-top: 6px; }
 .att-details .set-row { min-height: 26px; font-size: 12.5px; align-items: flex-start; }
 .att-details .att-val { text-align: right; overflow-wrap: anywhere; max-width: 64%; }
-.toggle.dev-on > span { color: var(--warn); font-weight: 600; }
