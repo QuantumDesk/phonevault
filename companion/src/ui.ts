@@ -67,11 +67,16 @@ export const shortHash = (a: string) => (a.length > 16 ? `${a.slice(0, 10)}…${
 /** 0x + groups of four, for comparing addresses by eye. */
 export const grouped = (a: string) => `0x ${a.slice(2).match(/.{1,4}/g)?.join(" ") ?? ""}`;
 
+/** An integer with thousands separators (block numbers, gas, sats). */
+export const fmtInt = (n: number) => n.toLocaleString("en-US");
+/** The block window a scan covered: "blocks 20,480,000–20,511,233". */
+export const blockRange = (from: number, to: number) => `blocks ${fmtInt(from)}–${fmtInt(to)}`;
+
 /** Trim an exact decimal string for display (never used for amounts that get signed). */
 export function fmtAmount(eth: string, maxDecimals = 6): string {
   const [w, f = ""] = eth.split(".");
   const frac = f.slice(0, maxDecimals).replace(/0+$/, "");
-  const whole = Number(w).toLocaleString("en-US");
+  const whole = fmtInt(Number(w));
   if (!frac && /[1-9]/.test(f) && w === "0") return `< 0.${"0".repeat(maxDecimals - 1)}1`;
   return frac ? `${whole}.${frac}` : whole;
 }

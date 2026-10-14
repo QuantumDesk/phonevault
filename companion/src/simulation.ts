@@ -10,7 +10,7 @@
 // from any card. The numbers are the node's: the phone shows them as the Mac's unverified claim.
 
 import { api, errText, type Quote, type Simulation } from "./api";
-import { h, icon } from "./ui";
+import { h, icon, fmtInt } from "./ui";
 
 export type SimState = { s: "loading" } | { s: "done"; r: Simulation } | { s: "failed"; message: string };
 
@@ -79,7 +79,7 @@ export function simPanel(st: SimState, retry: () => void): HTMLElement {
       h("button", { class: "link small", onclick: retry }, icon("refresh", 13), "Try again"));
   }
   const r = st.r;
-  const where = `${r.method === "none" ? "" : r.method + " on "}${r.node}${r.block !== null ? ` · block ${r.block.toLocaleString("en-US")}` : ""}`;
+  const where = `${r.method === "none" ? "" : r.method + " on "}${r.node}${r.block !== null ? ` · block ${fmtInt(r.block)}` : ""}`;
   switch (r.status) {
     case "ok":
       return h("div", { class: "sim-box ok" },
@@ -99,7 +99,7 @@ export function simPanel(st: SimState, retry: () => void): HTMLElement {
     case "no_changes":
       return h("div", { class: "sim-box" },
         h("p", { class: "sim-head" }, icon("check", 15), "Balance changes unavailable on this node"),
-        h("p", { class: "small" }, `It does not revert (eth_call${r.gas_used ? `, about ${Number(r.gas_used).toLocaleString("en-US")} gas` : ""}).`),
+        h("p", { class: "small" }, `It does not revert (eth_call${r.gas_used ? `, about ${fmtInt(Number(r.gas_used))} gas` : ""}).`),
         r.note ? h("p", { class: "muted small" }, r.note) : null,
         h("p", { class: "muted small" }, "A node that supports eth_simulateV1 shows the balance changes too (Settings → Nodes)."));
     default:

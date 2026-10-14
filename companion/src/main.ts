@@ -6,7 +6,7 @@ import { api, onProgress, onEvent, openExternal, appVersion, notify, errText, is
 import type { Status, Quote, Signed, SendError, HistoryEntry, FeeEstimate, Attestation, WatchBalance, PairedAccount } from "./api";
 import { badge as attBadge, verdictCard, deviceSection, type DeviceCheck } from "./attestation";
 import { NETWORKS, DEFAULT_CHAIN, byId, type Network } from "./networks";
-import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, copy, capitalize, fact, statusCard } from "./ui";
+import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, fmtInt, blockRange, copy, capitalize, fact, statusCard } from "./ui";
 import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenAt, tokenBalanceOf, tokenBalancesFor, tokenUsd, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
@@ -899,13 +899,13 @@ function flowBody(): Node {
       if (r && r.kind === "cancel" && flow.ok) return h("section", { class: "card result" },
         h("div", { class: "result-ic ok big" }, icon("check", 32)),
         h("h3", null, "Cancelled"),
-        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${flow.block.toLocaleString("en-US")}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
+        h("p", { class: "muted" }, `Your 0 ${n.symbol} self-transfer was included in block ${fmtInt(flow.block)}, so ${shortHash(r.hash)} can never be included. Only the network fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go("home") }, "Done")));
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
-        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${flow.block.toLocaleString("en-US")}.` : `The network ran it in block ${flow.block.toLocaleString("en-US")} and it reverted. The amount was not sent, but the fee was paid.`),
+        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${fmtInt(flow.block)}.` : `The network ran it in block ${fmtInt(flow.block)} and it reverted. The amount was not sent, but the fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" },
           h("button", { class: "big primary", onclick: () => go("home") }, "Done"),
@@ -1162,7 +1162,7 @@ async function submitted(quote: Quote, hash: string) {
         if (ro.mined) {
           try { history = await api.historyMark(orig, ro.success ? "confirmed" : "failed", ro.block); } catch { /* best effort */ }
           setFlow({ s: "done", quote, hash: orig, block: ro.block, ok: ro.success,
-            note: `${shortHash(orig)} was included in block ${ro.block.toLocaleString("en-US")} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
+            note: `${shortHash(orig)} was included in block ${fmtInt(ro.block)} before the ${quote.replaces!.kind === "cancel" ? "cancel" : "speed-up"}, so the replacement was dropped. Nothing was paid for the replacement.` });
           refreshBalance(n);
           return;
         }
@@ -1204,7 +1204,7 @@ function scanStatusSection() {
   api.scanStatus().then((rows) => {
     list.replaceChildren(...NETWORKS.map((x) => {
       const r = rows.find((s) => s.chain_id === x.id);
-      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : `blocks ${r.from_block.toLocaleString("en-US")}–${(r.to_block ?? 0).toLocaleString("en-US")}`;
+      const text = !r ? "not searched yet" : r.from_block === null ? `not available from this node` : blockRange(r.from_block, r.to_block ?? 0);
       return h("div", { class: "set-row" }, h("span", { class: "muted" }, x.name), h("span", { class: "att-val", title: r?.error ?? "" }, text, r?.error && r.from_block !== null ? " (partial)" : ""));
     }));
   }).catch(() => list.replaceChildren(h("p", { class: "muted small" }, "Unavailable.")));

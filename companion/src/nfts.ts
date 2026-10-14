@@ -5,7 +5,7 @@
 import { api, errText, openExternal } from "./api";
 import type { Nft } from "./api";
 import { byId } from "./networks";
-import { h, icon, short } from "./ui";
+import { h, icon, short, blockRange } from "./ui";
 
 interface ChainView { nfts: Nft[]; scanned: boolean; scanning: boolean; error: string | null; window: string | null }
 const views = new Map<number, ChainView>();
@@ -36,7 +36,7 @@ async function scan(chainId: number, host: NftHost) {
     const r = await api.nftScan(host.rpcFor(chainId));
     if (r.chain_id !== chainId) throw `the node is on chain ${r.chain_id}`;
     v.nfts = r.nfts; v.error = r.error;
-    v.window = r.from_block !== null && r.to_block !== null ? `blocks ${r.from_block.toLocaleString("en-US")}–${r.to_block.toLocaleString("en-US")}` : null;
+    v.window = r.from_block !== null && r.to_block !== null ? blockRange(r.from_block, r.to_block) : null;
   } catch (e) { v.error = errText(e); }
   v.scanning = false; v.scanned = true; host.rerender();
 }

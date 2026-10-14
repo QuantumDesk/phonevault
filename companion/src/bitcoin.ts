@@ -6,7 +6,7 @@
 
 import { call, onProgress, onEvent, openExternal, errText, REVIEW_LIMIT_MS } from "./api";
 import type { SendError } from "./api";
-import { h, icon, padlock, short, copy, ago, toast, usdFmt, capitalize, fact, statusCard } from "./ui";
+import { h, icon, padlock, short, fmtInt, copy, ago, toast, usdFmt, capitalize, fact, statusCard } from "./ui";
 import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { qrSvg } from "./qr";
 import { explainSendError, explainPlain, asSendError } from "./errors";
@@ -84,9 +84,9 @@ export function fmtBtc(sats: number, trim = true): string {
   const neg = sats < 0; const s = Math.abs(Math.trunc(sats));
   const whole = Math.floor(s / 1e8); const frac = String(s % 1e8).padStart(8, "0");
   const f = trim ? frac.replace(/0+$/, "") : frac;
-  return `${neg ? "−" : ""}${whole.toLocaleString("en-US")}${f ? "." + f : ""}`;
+  return `${neg ? "−" : ""}${fmtInt(whole)}${f ? "." + f : ""}`;
 }
-const fmtSats = (n: number) => `${Math.abs(n).toLocaleString("en-US")} sat`;
+const fmtSats = (n: number) => `${fmtInt(Math.abs(n))} sat`;
 function usd(sats: number, price: number | null, test: boolean): string | null {
   if (price === null || test) return null;
   const v = (Math.abs(sats) / 1e8) * price;
