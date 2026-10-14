@@ -214,7 +214,7 @@ const t0 = Date.now();
 if (q.get("ext") === "connect") mockPending.push({ id: 1, kind: "connect", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "eth_requestAccounts", params: [], chain_id: 8453, created: 0 });
 if (q.get("ext") === "requests") {
   mockPending.push({ id: 2, kind: "request", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "eth_sendTransaction", chain_id: 8453, created: 0,
-    params: [{ from: ADDR, to: "0x51eA0B8f1a0C6f3F0c1B2E5A6d7C8b9A0e1F2d3C", value: "0x38d7ea4c68000" }] });
+    params: [{ from: ADDR, to: "0x51Ea0B8F1a0c6f3f0c1b2E5a6d7c8b9a0e1F2d3C", value: "0x38d7ea4c68000" }] });
   mockPending.push({ id: 3, kind: "request", origin: "https://app.uniswap.org", host: "app.uniswap.org", local: false, method: "personal_sign", chain_id: 8453, created: 0,
     params: ["0x" + [...new TextEncoder().encode("Sign in to app.uniswap.org\nNonce: 8f3a1c2b")].map((b) => b.toString(16).padStart(2, "0")).join(""), ADDR] });
 }
