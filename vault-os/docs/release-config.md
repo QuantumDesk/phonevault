@@ -2,7 +2,7 @@
 
 `vault-os/vendor/phonevault/`, `vault-os/device/phonevault/` and `vault-os/patches/` are the
 **release intent**. This note records how the release configuration was brought in line with
-what the development ladder (`dev-ladder/README.md`) proved on a phone, which development
+what the development ladder ([hardening-ladder.md](hardening-ladder.md), [`dev-ladder/`](../dev-ladder/README.md)) proved on a phone, which development
 deviations from the early boot debugging were removed, what a release build consists of, which
 gates enforce it, and what still needs a phone.
 
@@ -12,23 +12,27 @@ gates enforce it, and what still needs a phone.
 |---|---|
 | `common.mk`: `persist.sys.usb.config=adb   # DEBUG-38: temporary` | `persist.sys.usb.config=none` |
 | `common.mk` installed `prebuilt/zzz-debug-earlyadb.rc` (DEBUG-41): configfs gadget + `ffs.adb` + `start adbd` in `post-fs`, on **every** build type | file and install line deleted |
-| `common.mk`: commented DEBUG-39 `PRODUCT_SYSTEM_SERVER_APPS -=` block | deleted (FusedLocation is required; `-=` never worked, see rung 4) |
+| `common.mk`: commented DEBUG-39 `PRODUCT_SYSTEM_SERVER_APPS -=` block | deleted (FusedLocation is required; `-=` never worked, see [the app strip mechanism](../dev-ladder/README.md#app-strip-mechanism)) |
 | `common.mk`: `TARGET_DISABLE_LINEAGE_SDK := true` | deleted: it was inert (evaluated after Lineage's config) and must not be made effective — Lineage's SystemUI/Settings use the SDK and LineageSettingsProvider |
 | tracked `common.mk.rel-bak`, `common.mk.b38-bak` | deleted |
 
-The dev-ladder rung directories (`dev-ladder/rung-*`, `dev-ladder-bluejay/rung-*`) still carry adb
+The dev-ladder rung directories (`dev-ladder/rung-4b`, `dev-ladder-bluejay/rung-*`; the archived
+crosshatch rungs under the `crosshatch-ladder-archive` tag) still carry adb
 for their userdebug images; they override the release files only inside the build tree
 (`dev-ladder-sync.sh`), never in the repository's release config, and the release-source gate
 below rejects any of it reappearing there.
 
 ## 2. Release build = rung 4b hardening + user build + adb off
 
+Each rung below is summarised, with what it proved and how it failed, in
+[hardening-ladder.md](hardening-ladder.md).
+
 | Area | Proven by | Release config |
 |---|---|---|
 | Kernel fragment | rung 2d-d (slices A-D), passed on hardware | `patches/kernel-crosshatch/0001` is symbol-for-symbol slices A-D. DWC3 stays **dual-role** (gadget-only never enumerated); `policy/forbidden-kernel-config.regex` now forbids only `CONFIG_USB_DWC3_HOST`, and the appliance gate requires `CONFIG_USB_DWC3_DUAL_ROLE=y` |
 | USB HALs / init | rung 3, passed on hardware | device patches 0002/0003 (already release) + new 0027 (no vendor diag/serial/rmnet functions), 0028 (failed mode switch falls back to `sink`; port reported UFP-only, no role/mode changes), 0029 (dwc3 `id` node root-only); `init.phonevault.usb.rc` re-pins `port_type sink` on `sys.boot_completed=1`. The appliance gate rejects any init file that chowns/chmods `a600000.ssusb/id` |
 | App strip | rungs 4a + 4b, passed on hardware | every rung-4b override is in the release `Android.bp` (test-enforced). Section comments kept |
-| Kept modules | rung 4 "Kept, and why"; 4b boot loop | **Settings** (FallbackHome, confirm-credential, device-admin UI), **PackageInstaller** (PMS needs exactly one installer), **LatinIME** (only IME; the step-up PIN prompt needs it), **FusedLocation** (LocationManagerService), **ModuleMetadata** (system_server boot loop). Removed from the release overrides and from `policy/forbidden-target-files.regex`; `tests/test_forbidden_policy_coverage.py` fails if any of them (or SystemUI, SettingsProvider, PermissionController) is overridden or forbidden again |
+| Kept modules | ["Kept, and why"](../dev-ladder/README.md#kept-and-why); 4b boot loop | **Settings** (FallbackHome, confirm-credential, device-admin UI), **PackageInstaller** (PMS needs exactly one installer), **LatinIME** (only IME; the step-up PIN prompt needs it), **FusedLocation** (LocationManagerService), **ModuleMetadata** (system_server boot loop). Removed from the release overrides and from `policy/forbidden-target-files.regex`; `tests/test_forbidden_policy_coverage.py` fails if any of them (or SystemUI, SettingsProvider, PermissionController) is overridden or forbidden again |
 | Variant / adb | — | `user` lunch target, `persist.sys.usb.config=none`, no adb keys, no early-adb rc; recovery hardened (section 4) |
 
 ### Ahead of the ladder (not yet boot-tested)

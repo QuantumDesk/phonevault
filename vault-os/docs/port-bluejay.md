@@ -186,6 +186,9 @@ vendor modules are compiled), first full Android 17 build about 7 hours, increme
 
 ## 4. How each crosshatch rung maps to gs101 / GKI
 
+(The crosshatch rungs, what each proved and where it lives in the release config:
+[hardening-ladder.md](hardening-ladder.md).)
+
 The patch series under `patches/` targets Android 15 and the crosshatch trees. Every patch
 must be **rebased to Android 17**: patches against `frameworks/base` and AOSP projects are
 re-applied, and `device-crosshatch`/`kernel-crosshatch` patches are rewritten for gs101.
