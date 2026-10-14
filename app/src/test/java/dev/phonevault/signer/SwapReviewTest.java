@@ -487,6 +487,23 @@ public final class SwapReviewTest {
                 Calldata.payPortion(WETH, FEE_COLLECTOR, 500), Calldata.unwrap(MSG_SENDER, new BigInteger("29600000000000000"))), dl));
         expect.put("ur-fee-to-zero-address", Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(usdcForWeth,
                 Calldata.payPortion(WETH, ETH, 25), Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), dl));
+        // audit proofs (SwapAuditTest)
+        int[] split = new int[16];
+        java.util.List<byte[]> splitInputs = new java.util.ArrayList<>();
+        split[0] = 0x00;
+        splitInputs.add(usdcForWeth);
+        for (int i = 0; i < 14; i++) {
+            split[1 + i] = 0x06;
+            splitInputs.add(Calldata.payPortion(WETH, i % 2 == 0 ? FEE_COLLECTOR : "0x000000fee23a103a10d593b9ae06b3e05f2e7e2d", 300));
+        }
+        split[15] = 0x0c;
+        splitInputs.add(Calldata.unwrap(MSG_SENDER, BigInteger.ZERO));
+        expect.put("audit-split-fees-under-three-percent", Calldata.execute(cmds(split), splitInputs, dl));
+        expect.put("audit-wrapped-eth-left-in-router", Calldata.execute(cmds(0x0b, 0x00), Arrays.asList(
+                Calldata.wrap(ADDRESS_THIS, CONTRACT_BALANCE),
+                Calldata.v3Swap(MSG_SENDER, E18, BigInteger.valueOf(1200).multiply(E6), Calldata.v3Path(WETH, 500, USDC), false)), dl));
+        expect.put("audit-one-wei-minimum", Calldata.execute(cmds(0x00), Collections.singletonList(
+                Calldata.v3Swap(MSG_SENDER, BigInteger.valueOf(1000).multiply(E6), BigInteger.ONE, Calldata.v3Path(USDC, 500, WETH), true)), dl));
         JSONArray vs = syntheticVectors();
         assertEquals(expect.size(), vs.length());
         for (int i = 0; i < vs.length(); i++) {

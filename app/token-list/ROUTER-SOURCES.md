@@ -96,3 +96,8 @@ supply — a zero-minimum swap output paid back in the coin the wallet also gave
 rather than "unused input"; a 5% `PAY_PORTION` (shown as OTHER ADDRESS); a fee to the zero address
 (refused). Their calldata comes from an independent Python ABI encoder and `SwapReviewTest`
 re-encodes it with web3j and compares.
+
+Three more synthetic entries (`synthetic-audit-…`, encoded with Python `eth_abi` 5.2.0) are the
+proofs of the 2026-10-13 adversarial audit, asserted in `SwapAuditTest` as the CURRENT behaviour:
+fourteen 3% `PAY_PORTION`s (no DANGER), 1 WETH of wrapped native value left in the router (WARNING
+only), and a 1-wei minimum (no No-minimum DANGER).
