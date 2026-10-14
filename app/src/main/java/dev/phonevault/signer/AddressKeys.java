@@ -25,7 +25,7 @@ final class AddressKeys {
     /** Canonical form of an address key; throws IllegalArgumentException for anything else. */
     static String normalize(String key) {
         if (key == null) throw new IllegalArgumentException("not an address");
-        if (key.matches("0x[0-9a-fA-F]{40}")) return key.toLowerCase(Locale.ROOT);
+        if (Addresses.isEvm(key)) return Addresses.lowercase(key);
         if (key.matches(BTC + NETWORKS + ":([a-z0-9]{14,90}|[1-9A-HJ-NP-Za-km-z]{25,35})")) return key;
         throw new IllegalArgumentException("not an address");
     }
@@ -35,7 +35,7 @@ final class AddressKeys {
 
     static String walletKey(String key) {
         if (key == null) throw new IllegalArgumentException("not a wallet");
-        if (key.matches("0x[0-9a-fA-F]{40}")) return key.toLowerCase(Locale.ROOT);
+        if (Addresses.isEvm(key)) return Addresses.lowercase(key);
         if (key.matches(BTC_WALLET + NETWORKS + ":[0-9a-f]{8}")) return key;
         throw new IllegalArgumentException("not a wallet");
     }
@@ -52,12 +52,11 @@ final class AddressKeys {
     /** "0xAbCd…1234" or "bc1qcr8t…306fyu". */
     static String shortForm(String key) {
         if (isBtc(key)) return shortBtc(address(key));
-        String c = Keys.toChecksumAddress(key);
-        return c.substring(0, 6) + "…" + c.substring(c.length() - 4);
+        return Addresses.shortEvm(key);
     }
 
     static String shortBtc(String address) {
-        return address.length() <= 16 ? address : address.substring(0, 8) + "…" + address.substring(address.length() - 6);
+        return Addresses.shorten(address, 8, 6, 16);
     }
 
     /** Network suffix for a contact list ("" for EVM). */

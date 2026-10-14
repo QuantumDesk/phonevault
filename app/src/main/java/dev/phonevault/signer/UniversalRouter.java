@@ -569,7 +569,7 @@ final class UniversalRouter {
     }
 
     private static void hooks(SwapPlan.Sim sim, String hooks, byte[] hookData) {
-        if (!hooks.matches("0x0{40}")) {
+        if (!Addresses.isZero(hooks)) {
             String note = "A pool in this swap runs extra contract code (hook " + org.web3j.crypto.Keys.toChecksumAddress(hooks)
                     + ") that the phone cannot check. Your minimum-received limit still applies.";
             if (!sim.notes.contains(note)) sim.notes.add(note);

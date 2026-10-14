@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * How review rows are PRESENTED (no Android types, so it is unit-tested): the level of a row
@@ -176,15 +175,9 @@ final class ReviewStyle {
 
     // ------------------------------------------------------------------ EVM addresses
 
-    private static final Pattern EVM = Pattern.compile("(?<![0-9A-Za-z])0x[0-9a-fA-F]{40}(?![0-9A-Za-z])");
-
-    static boolean isEvmAddress(String s) {
-        return s != null && EVM.matcher(s).matches();
-    }
-
     /** "0x51dd9Afd5f32…" → "0x51dd 9Afd 5f32 …" (case preserved). Anything else is returned as is. */
     static String groupEvm(String address) {
-        if (!isEvmAddress(address)) return address;
+        if (!Addresses.isEvm(address)) return address;
         StringBuilder b = new StringBuilder(51).append(address, 0, 6);
         for (int i = 6; i < 42; i += 4) b.append(' ').append(address, i, i + 4);
         return b.toString();
@@ -192,7 +185,7 @@ final class ReviewStyle {
 
     /** The grouped address on two lines of five groups ("0x51dd 9Afd 5f32 1a2b 3c4d\n5e6f …"). */
     static String groupEvmTwoLines(String address) {
-        if (!isEvmAddress(address)) return address;
+        if (!Addresses.isEvm(address)) return address;
         String g = groupEvm(address); // "0x" + 4, then 9 groups: the 5th space ends the first line
         int at = -1;
         for (int i = 0; i < 5; i++) at = g.indexOf(' ', at + 1);
@@ -202,7 +195,7 @@ final class ReviewStyle {
     /** Every whole 20-byte 0x address inside a text, grouped; longer hex (hashes, calldata) is untouched. */
     static String groupEvmIn(String text) {
         if (text == null || text.indexOf("0x") < 0) return text;
-        Matcher m = EVM.matcher(text);
+        Matcher m = Addresses.EVM_IN_TEXT.matcher(text);
         StringBuilder out = new StringBuilder(text.length() + 16);
         int at = 0;
         while (m.find()) {
@@ -229,12 +222,11 @@ final class ReviewStyle {
     /** "0xAbCd…1234" for every whole address in a text (for one-line sentences like the danger checkbox). */
     static String shortenEvm(String text) {
         if (text == null || text.indexOf("0x") < 0) return text;
-        Matcher m = EVM.matcher(text);
+        Matcher m = Addresses.EVM_IN_TEXT.matcher(text);
         StringBuilder out = new StringBuilder(text.length());
         int at = 0;
         while (m.find()) {
-            String a = m.group();
-            out.append(text, at, m.start()).append(a, 0, 6).append('…').append(a, 38, 42);
+            out.append(text, at, m.start()).append(Addresses.shorten(m.group(), 6, 4)); // case as written
             at = m.end();
         }
         return out.append(text, at, text.length()).toString();

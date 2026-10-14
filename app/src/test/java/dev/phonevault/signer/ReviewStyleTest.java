@@ -149,8 +149,8 @@ public final class ReviewStyleTest {
         assertEquals("0x51dd…5678", ReviewStyle.groupEvmIn("0x51dd…5678"));
         assertEquals("not an address", ReviewStyle.groupEvm("not an address"));
         assertEquals("to 0x51dd…5678 now", ReviewStyle.shortenEvm("to " + a + " now"));
-        assertTrue(ReviewStyle.isEvmAddress(a));
-        assertFalse(ReviewStyle.isEvmAddress(a + "0"));
+        assertTrue(Addresses.isEvm(a));
+        assertFalse(Addresses.isEvm(a + "0"));
     }
 
     @Test public void signedTextIsNeverRegrouped() {

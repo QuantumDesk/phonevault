@@ -121,7 +121,7 @@ final class NftCall {
 
     private static String nonZero(Object address, String what) throws JSONException {
         String a = Abi.address(address);
-        if (a.matches("0x0{40}")) throw new JSONException("Zero " + what + " is not allowed");
+        if (Addresses.isZero(a)) throw new JSONException("Zero " + what + " is not allowed");
         return a;
     }
 }

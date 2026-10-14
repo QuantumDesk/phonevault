@@ -114,10 +114,10 @@ final class HostSimulation {
         JSONObject json = (JSONObject) raw;
         exactFields(json, CHANGE_REQUIRED, CHANGE_ALLOWED, "hostSimulation change");
         String asset = string(json.get("asset"), "asset");
-        if (!NATIVE.equals(asset) && !asset.matches("0x[0-9a-f]{40}")) {
+        if (!NATIVE.equals(asset) && !Addresses.isEvmLowercase(asset)) {
             throw new JSONException("hostSimulation asset must be \"native\" or a lower-case 0x address");
         }
-        if (asset.matches("0x0{40}")) throw new JSONException("hostSimulation asset must not be the zero address");
+        if (Addresses.isZero(asset)) throw new JSONException("hostSimulation asset must not be the zero address");
         String deltaText = string(json.get("delta"), "delta");
         if (!deltaText.matches("-?[1-9][0-9]{0," + (MAX_DIGITS - 1) + "}")) {
             throw new JSONException("hostSimulation delta must be a non-zero canonical decimal integer");

@@ -140,9 +140,9 @@ final class TokenList {
             if (!Eip1559Request.supportedChain(chainId))
                 throw new InvalidTokenListException(where + ": chain " + chainId + " is not in the phone's allow-list");
             String address = string(t.get("address"), where + " address");
-            if (!address.matches("0x[0-9a-fA-F]{40}") || address.matches("0x0{40}"))
+            if (!Addresses.isEvm(address) || Addresses.isZero(address))
                 throw new InvalidTokenListException(where + ": bad address");
-            if (!Keys.toChecksumAddress(address).equals(address))
+            if (!Addresses.isChecksummed(address))
                 throw new InvalidTokenListException(where + ": address is not in EIP-55 checksum casing");
             String symbol = string(t.get("symbol"), where + " symbol");
             if (!symbol.matches("[A-Za-z0-9]{1,11}")) throw new InvalidTokenListException(where + ": bad symbol");

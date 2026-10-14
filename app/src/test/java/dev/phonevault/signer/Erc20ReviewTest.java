@@ -60,20 +60,20 @@ public final class Erc20ReviewTest {
     // ------------------------------------------------------------------ formatting
 
     @Test public void formatsExactValuesTrimmingOnlyTrailingZeros() {
-        assertEquals("50", Erc20Call.formatUnits(BigInteger.valueOf(50_000_000), 6));
-        assertEquals("0", Erc20Call.formatUnits(BigInteger.ZERO, 6));
-        assertEquals("0", Erc20Call.formatUnits(BigInteger.ZERO, 0));
-        assertEquals("0.000001", Erc20Call.formatUnits(BigInteger.ONE, 6));
-        assertEquals("0.000000000000000001", Erc20Call.formatUnits(BigInteger.ONE, 18));
-        assertEquals("1.234567890123456789", Erc20Call.formatUnits(new BigInteger("1234567890123456789"), 18));
-        assertEquals("1.5", Erc20Call.formatUnits(new BigInteger("1500000000000000000"), 18));
-        assertEquals("0.12345678", Erc20Call.formatUnits(BigInteger.valueOf(12_345_678), 8));
-        assertEquals("1,000", Erc20Call.formatUnits(BigInteger.valueOf(1_000_000_000), 6));
-        assertEquals("1,234,567.000001", Erc20Call.formatUnits(new BigInteger("1234567000001"), 6));
-        assertEquals("100", Erc20Call.formatUnits(BigInteger.valueOf(100), 0));
+        assertEquals("50", Units.format(BigInteger.valueOf(50_000_000), 6, true));
+        assertEquals("0", Units.format(BigInteger.ZERO, 6, true));
+        assertEquals("0", Units.format(BigInteger.ZERO, 0, true));
+        assertEquals("0.000001", Units.format(BigInteger.ONE, 6, true));
+        assertEquals("0.000000000000000001", Units.format(BigInteger.ONE, 18, true));
+        assertEquals("1.234567890123456789", Units.format(new BigInteger("1234567890123456789"), 18, true));
+        assertEquals("1.5", Units.format(new BigInteger("1500000000000000000"), 18, true));
+        assertEquals("0.12345678", Units.format(BigInteger.valueOf(12_345_678), 8, true));
+        assertEquals("1,000", Units.format(BigInteger.valueOf(1_000_000_000), 6, true));
+        assertEquals("1,234,567.000001", Units.format(new BigInteger("1234567000001"), 6, true));
+        assertEquals("100", Units.format(BigInteger.valueOf(100), 0, true));
         // the full uint256 range stays exact: no rounding, no exponent
         assertEquals("115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457.584007913129639935",
-                Erc20Call.formatUnits(MAX, 18));
+                Units.format(MAX, 18, true));
         assertEquals("115,792,089,237,316,195,423,570,985,008,687,907,853,269,984,665,640,564,039,457,584,007,913,129,639,935 base units",
                 Erc20Call.baseUnits(MAX));
         assertEquals("1 base unit", Erc20Call.baseUnits(BigInteger.ONE));
@@ -193,7 +193,7 @@ public final class Erc20ReviewTest {
         BigInteger half = BigInteger.ONE.shiftLeft(255);
         assertEquals("UNLIMITED USDC", value(review("0x1", USDC_ETH, approve(SPENDER, half)), "Allowance"));
         TransactionReview below = review("0x1", USDC_ETH, approve(SPENDER, half.subtract(BigInteger.ONE)));
-        assertEquals(Erc20Call.formatUnits(half.subtract(BigInteger.ONE), 6) + " USDC", value(below, "Allowance"));
+        assertEquals(Units.format(half.subtract(BigInteger.ONE), 6, true) + " USDC", value(below, "Allowance"));
         assertTrue(value(below, "DANGER").contains("will be able to take up to"));
         assertEquals("Approve permission & sign", below.signLabel);
     }

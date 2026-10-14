@@ -3,7 +3,6 @@ package dev.phonevault.signer;
 import org.json.JSONException;
 import org.web3j.utils.Numeric;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Locale;
 
@@ -93,35 +92,14 @@ final class Erc20Call {
     private static String address(String word, String what) throws JSONException {
         if (!word.startsWith("000000000000000000000000")) throw new JSONException(what + " has non-zero ABI padding");
         String address = "0x" + word.substring(24);
-        if (address.matches("0x0{40}")) throw new JSONException("Zero " + what + " is not allowed");
+        if (Addresses.isZero(address)) throw new JSONException("Zero " + what + " is not allowed");
         return address;
     }
 
     boolean unlimited() { return function.grantsAllowance() && amount.compareTo(UNLIMITED_THRESHOLD) >= 0; }
 
-    /**
-     * Exact decimal value of {@code raw} base units with {@code decimals}: every significant digit is
-     * kept, only trailing fractional zeros are dropped, and the whole part is grouped with commas
-     * (1,234.5). No rounding, no scientific notation.
-     */
-    static String formatUnits(BigInteger raw, int decimals) {
-        if (raw.signum() < 0 || decimals < 0) throw new IllegalArgumentException("negative amount or decimals");
-        // Zero is special-cased: stripTrailingZeros on a scaled zero differs across Java versions.
-        String plain = raw.signum() == 0 ? "0"
-                : new BigDecimal(raw).movePointLeft(decimals).stripTrailingZeros().toPlainString();
-        int dot = plain.indexOf('.');
-        String whole = dot < 0 ? plain : plain.substring(0, dot);
-        String fraction = dot < 0 ? "" : plain.substring(dot);
-        StringBuilder grouped = new StringBuilder();
-        for (int i = 0; i < whole.length(); i++) {
-            if (i > 0 && (whole.length() - i) % 3 == 0) grouped.append(',');
-            grouped.append(whole.charAt(i));
-        }
-        return grouped + fraction;
-    }
-
     /** Base units with digit grouping, for unknown tokens: "1,000,000 base units". */
     static String baseUnits(BigInteger raw) {
-        return formatUnits(raw, 0) + (BigInteger.ONE.equals(raw) ? " base unit" : " base units");
+        return Units.format(raw, 0, true) + (BigInteger.ONE.equals(raw) ? " base unit" : " base units");
     }
 }

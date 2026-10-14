@@ -318,7 +318,7 @@ final class SimulationCheck {
         }
 
         String amount(String asset, BigInteger tokenId, BigInteger magnitude, HostSimulation.Change claim) {
-            if (HostSimulation.NATIVE.equals(asset)) return Erc20Call.formatUnits(magnitude, 18) + " " + request.nativeSymbol();
+            if (HostSimulation.NATIVE.equals(asset)) return Units.format(magnitude, 18, true) + " " + request.nativeSymbol();
             String contract = Keys.toChecksumAddress(asset);
             if (tokenId != null) {
                 NftCollections.Collection col = NftCollections.lookup(request.chainId, asset);
@@ -326,9 +326,9 @@ final class SimulationCheck {
                 return magnitude + " × " + name + " #" + tokenId;
             }
             TokenList.Token t = tokens.lookup(request.chainId, asset);
-            if (t != null) return Erc20Call.formatUnits(magnitude, t.decimals) + " " + t.symbol;
+            if (t != null) return Units.format(magnitude, t.decimals, true) + " " + t.symbol;
             UniswapRouters.Router router = request.swap != null ? request.swap.router : null;
-            if (router != null && router.wrappedNative.equals(asset)) return Erc20Call.formatUnits(magnitude, 18) + " " + router.wrappedSymbol;
+            if (router != null && router.wrappedNative.equals(asset)) return Units.format(magnitude, 18, true) + " " + router.wrappedSymbol;
             String macLabel = claim != null && claim.symbol != null
                     ? " (the Mac calls it \"" + claim.symbol + "\"" + (claim.decimals != null ? ", " + claim.decimals + " decimals" : "") + "; unverified)"
                     : "";

@@ -16,7 +16,6 @@ final class Siwe {
     private static final String HEADER_SUFFIX = " wants you to sign in with your Ethereum account:";
     private static final Pattern HEADER = Pattern.compile(
             "(?:([A-Za-z][A-Za-z0-9+.-]*)://)?([^\\s/?#]+)" + Pattern.quote(HEADER_SUFFIX));
-    private static final Pattern ADDRESS = Pattern.compile("0x[0-9a-fA-F]{40}");
     private static final Pattern CHAIN_ID = Pattern.compile("[1-9][0-9]{0,17}");
     private static final Pattern NONCE = Pattern.compile("[A-Za-z0-9]{8,64}");
     private static final Pattern DATE_TIME = Pattern.compile(
@@ -81,7 +80,7 @@ final class Siwe {
         asciiAuthority(domain); // an internationalized name that has no valid ASCII form is malformed
 
         String address = c.next("address");
-        if (!ADDRESS.matcher(address).matches()) throw new InvalidSiwe("the account line is not an address");
+        if (!Addresses.isEvm(address)) throw new InvalidSiwe("the account line is not an address");
         if (!c.next("blank line").isEmpty()) throw new InvalidSiwe("missing blank line after the address");
 
         String statement = null;

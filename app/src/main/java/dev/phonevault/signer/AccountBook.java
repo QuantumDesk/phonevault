@@ -7,7 +7,6 @@ import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Locale;
 
 /**
  * The accounts the user has opened in one wallet (m/44'/60'/0'/0/i, i = 0…{@link
@@ -211,13 +210,7 @@ final class AccountBook {
     }
 
     static String address(String value) {
-        if (value == null || !value.matches("0x[0-9a-fA-F]{40}")) throw new IllegalArgumentException("invalid address");
-        return value.toLowerCase(Locale.ROOT);
-    }
-
-    /** "0x1234…abcd". */
-    static String shortAddress(String address) {
-        String checksum = org.web3j.crypto.Keys.toChecksumAddress(address);
-        return checksum.substring(0, 6) + "…" + checksum.substring(checksum.length() - 4);
+        if (!Addresses.isEvm(value)) throw new IllegalArgumentException("invalid address");
+        return Addresses.lowercase(value);
     }
 }

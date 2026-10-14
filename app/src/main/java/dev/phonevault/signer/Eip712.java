@@ -1,7 +1,6 @@
 package dev.phonevault.signer;
 
 import org.web3j.crypto.Hash;
-import org.web3j.crypto.Keys;
 
 import java.io.ByteArrayOutputStream;
 import java.math.BigInteger;
@@ -12,7 +11,6 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
@@ -58,7 +56,6 @@ final class Eip712 {
     private static final Pattern DIMENSION = Pattern.compile("\\[([0-9]*)\\]");
     private static final Pattern DECIMAL = Pattern.compile("-?(?:0|[1-9][0-9]*)");
     private static final Pattern HEX_QUANTITY = Pattern.compile("0x[0-9a-fA-F]{1,64}");
-    private static final Pattern ADDRESS = Pattern.compile("0x[0-9a-fA-F]{40}");
     private static final Pattern HEX_BYTES = Pattern.compile("0x[0-9a-fA-F]*");
 
     enum Kind { BOOL, ADDRESS, UINT, INT, FIXED_BYTES, BYTES, STRING, STRUCT, ARRAY }
@@ -325,17 +322,14 @@ final class Eip712 {
                 if (!(raw instanceof Boolean)) throw new InvalidTypedData(path + " must be true or false");
                 return new Value(type, kind, raw);
             case ADDRESS: {
-                if (!(raw instanceof String) || !ADDRESS.matcher((String) raw).matches()) {
+                if (!(raw instanceof String) || !Addresses.isEvm((String) raw)) {
                     throw new InvalidTypedData(path + " must be a 0x-prefixed 20-byte address");
                 }
                 String address = (String) raw;
-                String lower = address.toLowerCase(Locale.ROOT);
-                String hex = address.substring(2);
-                boolean mixed = !hex.equals(hex.toLowerCase(Locale.ROOT)) && !hex.equals(hex.toUpperCase(Locale.ROOT));
-                if (mixed && !Keys.toChecksumAddress(lower).equals(address)) {
+                if (Addresses.hasMixedCase(address) && !Addresses.isChecksummed(address)) {
                     throw new InvalidTypedData(path + " fails its EIP-55 checksum");
                 }
-                return new Value(type, kind, lower);
+                return new Value(type, kind, Addresses.lowercase(address));
             }
             case UINT:
             case INT: {

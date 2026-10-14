@@ -5,7 +5,6 @@ import org.json.JSONObject;
 import org.web3j.crypto.Keys;
 import org.web3j.utils.Numeric;
 
-import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -117,7 +116,7 @@ final class Eip1559Request {
 
         if (chainId <= 0) throw new JSONException("chainId must be positive");
         if (!supportedChain(chainId)) throw new JSONException("Unsupported network: no reviewed chain profile for " + chainId);
-        if (!to.matches("0x[0-9a-fA-F]{40}")) throw new JSONException("Invalid destination address");
+        if (!Addresses.isEvm(to)) throw new JSONException("Invalid destination address");
         if (nonce.signum() < 0 || priority.signum() < 0 || fee.signum() < 0 || gas.signum() <= 0 || value.signum() < 0) {
             throw new JSONException("Transaction quantities must not be negative");
         }
@@ -177,10 +176,10 @@ final class Eip1559Request {
     static String optionalFrom(JSONObject json) throws JSONException {
         if (!json.has("from")) return null;
         Object value = json.get("from");
-        if (!(value instanceof String) || !((String) value).matches("0x[0-9a-fA-F]{40}")) {
+        if (!(value instanceof String) || !Addresses.isEvm((String) value)) {
             throw new JSONException("from must be a 0x address with 40 hex characters");
         }
-        return ((String) value).toLowerCase(java.util.Locale.ROOT);
+        return Addresses.lowercase((String) value);
     }
 
     static String validatedId(String id) throws JSONException {
@@ -228,7 +227,7 @@ final class Eip1559Request {
 
     private static String normalizeAddress(String address) throws JSONException {
         String normalized = "0x" + Numeric.cleanHexPrefix(address).toLowerCase(java.util.Locale.ROOT);
-        if (normalized.matches("0x0{40}")) throw new JSONException("Zero destination address is not allowed");
+        if (Addresses.isZero(normalized)) throw new JSONException("Zero destination address is not allowed");
         return normalized;
     }
 
@@ -288,7 +287,7 @@ final class Eip1559Request {
     }
 
     String valueEth() {
-        return new BigDecimal(value).movePointLeft(18).stripTrailingZeros().toPlainString() + " " + nativeSymbol();
+        return Units.format(value, 18, false) + " " + nativeSymbol();
     }
 
     String transactionTypeLabel() {
@@ -302,9 +301,7 @@ final class Eip1559Request {
     /** Upper bound on what execution can cost, in the native coin: gas limit × max fee per gas. */
     String maximumFeeEth() {
         BigInteger maximumFeeWei = gasLimit.multiply(maxFeePerGas);
-        String nativeAmount = new BigDecimal(maximumFeeWei).movePointLeft(18)
-                .stripTrailingZeros().toPlainString();
-        return "up to " + nativeAmount + " " + nativeSymbol();
+        return "up to " + Units.format(maximumFeeWei, 18, false) + " " + nativeSymbol();
     }
 
     String maximumFeeWeiLabel() {
@@ -324,7 +321,7 @@ final class Eip1559Request {
     }
 
     private static String feeRateLabel(BigInteger wei) {
-        String gwei = new BigDecimal(wei).movePointLeft(9).stripTrailingZeros().toPlainString();
+        String gwei = Units.format(wei, 9, false);
         return gwei + " gwei (" + wei + " wei, " + canonicalQuantity(wei) + ")";
     }
 
