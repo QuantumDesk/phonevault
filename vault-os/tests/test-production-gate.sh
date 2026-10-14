@@ -214,6 +214,162 @@ mv "${fixture}/BOOT/RAMDISK/system/etc/init/hw/init.rc.bak" \
 find "${fixture}" -name '*.bak' -delete
 expect_production_pass restored
 
+# ---- Android init model: realistic layout positives, targeted negatives -----
+# A stock-looking user build laid out like the bluejay (Lineage 24.0) and
+# crosshatch target-files: partition-local build.props (odm/system_dlkm inside
+# their parents, vendor_dlkm separate), the second-stage ramdisk build.prop,
+# the recovery ramdisk in vendor_boot with a default.prop symlink, the empty
+# first-stage debug_ramdisk mount point, property formatting init accepts,
+# safe imports, and the stock init idioms that mention adbd, expansions,
+# continuations, indented sections and `enable`.
+real="${work_dir}/realistic"
+rm -rf "${real}"
+cp -R "${fixture}" "${real}"
+mkdir -p "${real}/SYSTEM_EXT/etc" "${real}/SYSTEM/system_dlkm/etc" \
+  "${real}/VENDOR/odm/etc" "${real}/VENDOR_DLKM/etc" "${real}/PRODUCT/etc" \
+  "${real}/VENDOR/etc/init/hw" "${real}/BOOT/RAMDISK/system/etc/ramdisk" \
+  "${real}/BOOT/RAMDISK/first_stage_ramdisk/debug_ramdisk" \
+  "${real}/BOOT/RAMDISK/first_stage_ramdisk/second_stage_resources" \
+  "${real}/VENDOR_BOOT/RAMDISK/system/etc/init/hw" "${real}/VENDOR/etc/vault"
+printf '%s\n' \
+  '# begin common build properties' \
+  'ro.system.build.tags=release-keys' \
+  'ro.zygote=zygote64_32' \
+  'ro.secure=1' \
+  'ro.debuggable = 0' \
+  '#ro.debuggable=1' \
+  '   # persist.sys.usb.config=adb' \
+  'persist.sys.usb.config=none' \
+  > "${real}/SYSTEM/build.prop"
+printf '%s\n' 'ro.system_ext.build.tags=release-keys' 'ro.adb.secure=1' \
+  > "${real}/SYSTEM_EXT/etc/build.prop"
+printf '%s\n' 'ro.system_dlkm.build.tags=release-keys' > "${real}/SYSTEM/system_dlkm/etc/build.prop"
+printf '%s\n' \
+  'ro.vendor.build.tags=release-keys' \
+  'ro.vendor.vault.svc=vaultd' \
+  'ro.vendor.vault.usb=none' \
+  'import /vendor/etc/vault/vault.prop' \
+  'import /vendor/etc/vault/filtered.prop ro.vendor.vault.*' \
+  > "${real}/VENDOR/build.prop"
+printf '%s\n' 'ro.vendor.vault.offline=true' > "${real}/VENDOR/etc/vault/vault.prop"
+printf '%s\n' 'ro.vendor.vault.extra=1' 'ro.adb.secure=0' > "${real}/VENDOR/etc/vault/filtered.prop"
+printf '%s\n' 'ro.odm.build.tags=release-keys' > "${real}/VENDOR/odm/etc/build.prop"
+printf '%s\n' 'ro.vendor_dlkm.build.tags=release-keys' > "${real}/VENDOR_DLKM/etc/build.prop"
+printf '%s\n' 'ro.product.build.tags=release-keys' '  ro.adb.secure =  1  ' \
+  > "${real}/PRODUCT/etc/build.prop"
+printf '%s\n' 'ro.bootimage.build.tags=release-keys' \
+  > "${real}/BOOT/RAMDISK/system/etc/ramdisk/build.prop"
+printf '%s\n' 'ro.debuggable=0' 'ro.secure=1' 'ro.adb.secure=1' 'persist.sys.usb.config=none' \
+  > "${real}/VENDOR_BOOT/RAMDISK/prop.default"
+ln -s prop.default "${real}/VENDOR_BOOT/RAMDISK/default.prop"
+mkdir -p "${real}/SYSTEM/etc/init/hw"
+printf '%s\n' \
+  'import /init.environ.rc' \
+  'import /system/etc/init/hw/init.usb.rc' \
+  'import /init.${ro.hardware}.rc' \
+  'import /vendor/etc/init/hw/init.${ro.hardware}.rc' \
+  'import /system/etc/init/hw/init.usb.configfs.rc' \
+  'import /system/etc/init/hw/init.${ro.zygote}.rc' \
+  'on early-init' \
+  '    start ueventd' \
+  'on boot' \
+  '    setprop sys.usb.config ${persist.sys.usb.config}' \
+  '    start llkd-${ro.debuggable:-0}' \
+  '    enable update_engine' \
+  '    start ${ro.vendor.vault.svc}' \
+  '    setprop persist.sys.usb.config ${ro.vendor.vault.usb}' \
+  'service vold /system/bin/vold \' \
+  '        --blkid_context=u:r:blkid:s0 --blkid_untrusted_context=u:r:blkid_untrusted:s0 \' \
+  '        --fsck_context=u:r:fsck:s0' \
+  '    class core' \
+  > "${real}/SYSTEM/etc/init/hw/init.rc"
+printf '%s\n' 'service zygote /system/bin/app_process64 -Xzygote' '    class main' \
+  > "${real}/SYSTEM/etc/init/hw/init.zygote64_32.rc"
+printf '%s\n' \
+  'on property:sys.usb.config=adb && property:sys.usb.configfs=1' \
+  '    start adbd' \
+  > "${real}/SYSTEM/etc/init/hw/init.usb.configfs.rc"
+printf '%s\n' \
+  'import /vendor/etc/init/hw/init.gs101.usb.rc' \
+  '    service BIP-Channel-Manager /vendor/bin/bipchmgr' \
+  '        class main' \
+  'on boot' \
+  '    enable vendor.citadeld' \
+  '    setprop sys.usb.controller "11110000.dwc3"' \
+  > "${real}/VENDOR/etc/init/hw/init.bluejay.rc"
+cp "${real}/VENDOR/etc/init/hw/init.sdm845.usb.rc" "${real}/VENDOR/etc/init/hw/init.gs101.usb.rc"
+mv "${real}/BOOT/RAMDISK/system/etc/init/hw/init.rc" \
+  "${real}/VENDOR_BOOT/RAMDISK/system/etc/init/hw/init.rc"
+sed -i.bak '1i\
+import /init.recovery.${ro.hardware}.rc
+' "${real}/VENDOR_BOOT/RAMDISK/system/etc/init/hw/init.rc"
+rm "${real}/VENDOR_BOOT/RAMDISK/system/etc/init/hw/init.rc.bak"
+printf '%s\n' 'on init' '    setprop sys.usb.configfs 1' > "${real}/VENDOR_BOOT/RAMDISK/init.recovery.bluejay.rc"
+
+real_case() {  # NAME EXPECTED_STDERR|'' MUTATION...
+  local name="$1" expected="$2"; shift 2
+  local case_dir="${work_dir}/real-${name}" archive="${work_dir}/real-${name}.zip"
+  rm -rf "${case_dir}"
+  cp -R "${real}" "${case_dir}"
+  ( cd "${case_dir}" && eval "$*" )
+  (cd "${case_dir}" && zip -qry "${archive}" .)
+  if [[ -z "${expected}" ]]; then
+    "${ROOT}/scripts/verify-production-target-files.sh" "${archive}" release-keys > /dev/null || {
+      echo "realistic positive ${name} was rejected" >&2
+      "${ROOT}/scripts/verify-production-target-files.sh" "${archive}" release-keys >&2 || true
+      exit 1
+    }
+    return
+  fi
+  if "${ROOT}/scripts/verify-production-target-files.sh" "${archive}" \
+      > "${work_dir}/real-${name}.stdout" 2> "${work_dir}/real-${name}.stderr"; then
+    echo "realistic negative ${name} unexpectedly passed" >&2
+    exit 1
+  fi
+  grep -Fq -- "${expected}" "${work_dir}/real-${name}.stderr" || {
+    echo "realistic negative ${name} failed for the wrong reason:" >&2
+    cat "${work_dir}/real-${name}.stderr" >&2
+    exit 1
+  }
+}
+# shellcheck disable=SC2016  # literal init/property syntax below
+{
+real_case stock-layout ''
+# The filtered import only loads ro.vendor.vault.*, so its ro.adb.secure=0 is ignored, as init does.
+real_case filtered-import-honoured ''
+real_case filtered-import-wildcard 'production target-files contains contradictory ro\.adb\.secure' \
+  "sed -i.x 's/ro.vendor.vault.\\*/ro.adb.*/' VENDOR/build.prop && rm VENDOR/build.prop.x"
+real_case prop-import-writable 'imports from outside the image' \
+  "printf 'import /data/local/tmp/vault.prop\n' >> VENDOR/build.prop"
+real_case prop-import-symlink-target 'production target-files lacks ro.debuggable=0' \
+  "printf 'ro.debuggable=1\n' > VENDOR/etc/vault/notes.txt && ln -s ../../etc/vault/notes.txt VENDOR/odm/etc/debug.prop && printf 'import /odm/etc/debug.prop\n' >> VENDOR/odm/etc/build.prop"
+real_case effective-later-partition 'production target-files lacks ro.secure=1' \
+  "printf 'ro.secure = 0 \n' >> VENDOR/odm/etc/build.prop"
+real_case force-debuggable-alone 'contains debug/ADB artifacts' \
+  ": > BOOT/RAMDISK/force_debuggable"
+real_case adb-debug-prop-safe-values 'contains debug/ADB artifacts' \
+  "printf 'ro.debuggable=0\n' > VENDOR_BOOT/RAMDISK/adb_debug.prop"
+real_case userdebug-sepolicy 'contains debug/ADB artifacts' \
+  ": > BOOT/RAMDISK/first_stage_ramdisk/userdebug_plat_sepolicy.cil"
+real_case init-import-writable 'imports an init file from outside the image' \
+  "printf 'import /data/vault/late.rc\n' >> VENDOR/etc/init/hw/init.bluejay.rc"
+real_case init-import-directory 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "mkdir -p VENDOR/etc/vault/init && printf 'import /vendor/etc/vault/init\n' >> VENDOR/etc/init/hw/init.bluejay.rc && printf 'on boot\n    exec_start adbd\n' > VENDOR/etc/vault/init/late.conf"
+real_case init-quoted-continuation 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "printf '%s\n' 'on boot' '    \"start\" ad\\' '  bd' >> VENDOR/etc/init/hw/init.bluejay.rc"
+real_case init-runtime-property 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "printf '%s\n' 'on boot' '    start \${ro.boot.vault_svc}' >> VENDOR/etc/init/hw/init.bluejay.rc"
+real_case init-mutable-property 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "printf '%s\n' 'on boot' '    setprop sys.usb.config \${vendor.vault.usb:-none}' >> VENDOR/etc/init/hw/init.bluejay.rc"
+real_case init-exec-adbd 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "printf '%s\n' 'on boot' '    exec_background - root -- /system/bin/adbd' >> VENDOR/etc/init/hw/init.bluejay.rc"
+real_case adbd-not-disabled 'adbd service is not disabled' \
+  "sed -i.x '/^    disabled\$/d' SYSTEM/etc/init/hw/init.usb.rc && rm SYSTEM/etc/init/hw/init.usb.rc.x"
+real_case debuggable-wildcard-trigger 'start adbd or set up its endpoint outside ro.debuggable=1' \
+  "printf '%s\n' 'on property:ro.debuggable=*' '    mkdir /dev/usb-ffs/adb 0770 shell shell' >> VENDOR/etc/init/hw/init.bluejay.rc"
+}
+echo "Realistic target-files positives and init-model negatives passed."
+
 release_script="${ROOT}/scripts/sign-release.sh"
 # These are literal source snippets; the variables must not expand in the test.
 # shellcheck disable=SC2016
