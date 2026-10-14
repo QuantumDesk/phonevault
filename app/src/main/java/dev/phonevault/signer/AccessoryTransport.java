@@ -6,7 +6,6 @@ import android.os.ParcelFileDescriptor;
 
 import org.json.JSONException;
 import org.json.JSONObject;
-import org.json.JSONTokener;
 
 import java.io.BufferedInputStream;
 import java.io.ByteArrayOutputStream;
@@ -18,8 +17,6 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
-import java.util.HashSet;
-import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
@@ -123,8 +120,11 @@ final class AccessoryTransport implements Closeable {
                     listener.onRequest(this, request);
                 }
                 fail("USB cable disconnected");
-            } catch (Exception exception) {
-                fail(exception.getMessage());
+            } catch (Throwable failure) {
+                // Errors too (StackOverflowError, OutOfMemoryError from a hostile frame): the
+                // session must end and be reported, never left open with a dead reader.
+                fail(failure instanceof Exception ? failure.getMessage()
+                        : "USB request could not be processed (" + failure.getClass().getSimpleName() + ")");
             }
         });
     }
@@ -200,71 +200,35 @@ final class AccessoryTransport implements Closeable {
         return false;
     }
 
-    /** Parses the deliberately flat request schema without JSONObject's duplicate-key ambiguity. */
+    /**
+     * Parses the deliberately flat request schema without JSONObject's duplicate-key ambiguity.
+     * The whole line goes through {@link StrictJson} (RFC 8259, the companion's rules): duplicate
+     * keys, comments, invalid or non-ASCII {@code \\u} escapes, raw control characters, unpaired
+     * surrogates and ANY data after the closing brace (a NUL included) are refused. Only JSON
+     * whitespace may follow the object. Every value is a string, except the one nested object
+     * {@link HostSimulation#FIELD} (the Mac's display-only simulation claim).
+     */
     static JSONObject parseStrictRequest(String line) throws JSONException {
-        JSONTokener tokens = new JSONTokener(line);
-        if (tokens.nextClean() != '{') throw new JSONException("USB request must be a JSON object");
-
-        JSONObject request = new JSONObject();
-        Set<String> fields = new HashSet<>();
-        char next = tokens.nextClean();
-        if (next == '}') {
-            if (tokens.nextClean() != 0) throw new JSONException("Trailing data after USB request");
-            return request;
-        }
-
-        while (true) {
-            if (next != '"') throw new JSONException("USB request field names must be quoted");
-            String field = tokens.nextString('"');
-            if (!fields.add(field)) throw new JSONException("Duplicate USB request field: " + field);
-            if (tokens.nextClean() != ':') throw new JSONException("Missing colon after USB request field");
-            char open = tokens.nextClean();
-            if (open == '{' && HostSimulation.FIELD.equals(field)) {
-                // The one nested value: the Mac's simulation claim (display-only, HostSimulation
-                // validates it). Parsed with StrictJson: duplicate keys refused, numbers exact.
-                request.put(field, nestedObject(tokens));
-            } else {
-                if (open != '"') throw new JSONException("USB request values must be strings");
-                request.put(field, tokens.nextString('"'));
-            }
-
-            next = tokens.nextClean();
-            if (next == '}') break;
-            if (next != ',') throw new JSONException("Missing comma between USB request fields");
-            next = tokens.nextClean();
-        }
-        if (tokens.nextClean() != 0) throw new JSONException("Trailing data after USB request");
-        return request;
-    }
-
-    /** Reads one balanced JSON object (its '{' already consumed) and parses it strictly. */
-    private static JSONObject nestedObject(JSONTokener tokens) throws JSONException {
-        StringBuilder raw = new StringBuilder("{");
-        int depth = 1;
-        boolean inString = false, escaped = false;
-        while (depth > 0) {
-            char c = tokens.next();
-            if (c == 0) throw new JSONException("Unterminated nested USB request value");
-            raw.append(c);
-            if (inString) {
-                if (escaped) escaped = false;
-                else if (c == '\\') escaped = true;
-                else if (c == '"') inString = false;
-            } else if (c == '"') {
-                inString = true;
-            } else if (c == '{' || c == '[') {
-                if (++depth > StrictJson.MAX_DEPTH) throw new JSONException("Nested USB request value too deep");
-            } else if (c == '}' || c == ']') {
-                depth--;
-            }
-        }
         Object parsed;
         try {
-            parsed = StrictJson.parse(raw.toString());
+            parsed = StrictJson.parse(line);
         } catch (StrictJson.ParseException e) {
-            throw new JSONException(HostSimulation.FIELD + ": " + e.getMessage());
+            throw new JSONException("Malformed USB request: " + e.getMessage());
         }
-        return (JSONObject) toOrgJson(parsed);
+        if (!(parsed instanceof java.util.Map)) throw new JSONException("USB request must be a JSON object");
+        JSONObject request = new JSONObject();
+        for (java.util.Map.Entry<?, ?> e : ((java.util.Map<?, ?>) parsed).entrySet()) {
+            String field = (String) e.getKey();
+            Object value = e.getValue();
+            if (value instanceof java.util.Map && HostSimulation.FIELD.equals(field)) {
+                request.put(field, toOrgJson(value));
+            } else if (value instanceof String) {
+                request.put(field, value);
+            } else {
+                throw new JSONException("USB request values must be strings");
+            }
+        }
+        return request;
     }
 
     private static Object toOrgJson(Object v) throws JSONException {
