@@ -1,5 +1,5 @@
-//! The send flow behind the redesigned UI. Same request, same verifier and same pinned signer as
-//! the original `sign`/`broadcast` commands, with three differences the UI needs to be honest:
+//! The send flow: the transaction request goes to the phone, the answer is checked by the verifier
+//! against the pinned signer, and only then is it broadcast. Three properties the UI relies on:
 //!
 //! * progress events (`send-progress`) say when the phone was reached and when the request was
 //!   actually delivered, so "Review on your phone" is only shown once it is true;

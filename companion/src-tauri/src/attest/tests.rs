@@ -674,10 +674,10 @@ mod synthetic {
     }
 }
 
-/// Security-audit regression (2026-10-13): a check that read Developer mode as ON must not cache
-/// its verdict when the user turned Developer mode off while it ran. The setting is now read after
-/// the epoch, and `set_developer_mode` writes the setting before bumping the epoch, so the check's
-/// epoch is stale and its (DEVELOPMENT) verdict is dropped instead of cached.
+/// A check that read Developer mode as ON must not cache its verdict when the user turned Developer
+/// mode off while it ran. The setting is read after the epoch, and `set_developer_mode` writes the
+/// setting before bumping the epoch, so the check's epoch is stale and its (DEVELOPMENT) verdict is
+/// dropped instead of cached.
 #[test]
 fn developer_mode_turned_off_mid_check_is_not_undone() {
     // the user turns Developer mode off exactly while the check reads the (old, ON) setting

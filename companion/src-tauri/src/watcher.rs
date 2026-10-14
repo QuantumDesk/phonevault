@@ -430,11 +430,10 @@ mod tests {
     }
 }
 
-/// Security-audit regression (2026-10-13): the background watcher parses eth_getLogs answers from
-/// the configured node. `parse_erc20_in` used to slice `topics[1]` at byte 24 without checking its
-/// length, so a node answering a Transfer log with a short (or non-ASCII) sender topic panicked
-/// the "watcher" thread (with panic=abort, the whole app on every poll). Malformed logs are now
-/// ignored, and a malformed counterparty never panics the notification text.
+/// The background watcher parses eth_getLogs answers from the configured node. A Transfer log with
+/// a short, non-hex or non-ASCII topic, address or amount is ignored rather than panicking the
+/// "watcher" thread (with panic=abort, the whole app), and a malformed counterparty never panics
+/// the notification text.
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
 mod audit_proof {

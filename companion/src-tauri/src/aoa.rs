@@ -196,9 +196,9 @@ impl Drop for Session {
 // ---------------------------------------------------------------- one conversation at a time
 //
 // The accessory interface can be claimed by one session at a time; a second `connect` while
-// another request is on the phone fails with "held by another program", which used to surface as
-// "USB busy" when Send started during an identify or a WalletConnect request. Every exchange now
-// takes a turn first. Holders are bounded by their own timeouts, so a turn always comes.
+// another request is on the phone fails with "held by another program" ("USB busy" if Send starts
+// during an identify or a WalletConnect request). So every exchange takes a turn first. Holders
+// are bounded by their own timeouts, so a turn always comes.
 
 use std::cell::Cell;
 use std::sync::{Mutex, MutexGuard, TryLockError};
@@ -266,7 +266,7 @@ mod turn_tests {
 // Same framing, caps and id check as `exchange`, plus two hooks the send flow needs so the UI can
 // tell the truth: `on_delivered` fires once the request is actually in the phone's hands (the bulk
 // write completed), and `cancelled` is polled about once a second so the user can stop waiting.
-// Kept as a separate block so `exchange` stays exactly the audited path.
+// Kept as a separate block so `exchange` itself stays minimal.
 pub const CANCELLED: &str = "cancelled on this Mac";
 impl Session {
     pub fn exchange_observed(

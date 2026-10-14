@@ -195,10 +195,10 @@ mod tests {
         assert_eq!(cache.unconfirmed(), 0);
     }
 
-    /// Audit proof (2026-10-13): an untrusted Esplora that reports change addresses 0..=899 as used
-    /// moves `next[1]` (the change index btc_quote builds with, mod.rs) to 900. The phone shows
-    /// change up to index 1000 as "Change back to your wallet ✓" with no warning
-    /// (BtcAuditProofTest), yet an honest gap-20 scan never reaches it.
+    /// The scan trusts the Esplora server's "used" answers: one that reports change addresses
+    /// 0..=899 as used moves `next[1]` (the change index btc_quote builds with, mod.rs) to 900, far
+    /// past what an honest gap-20 scan reaches. This pins that behaviour: the change index the
+    /// Mac proposes is only as honest as the server, so it must not be trusted on its own.
     #[test]
     fn lying_server_pushes_change_index_far_past_the_gap_limit() {
         struct Liar { used: BTreeSet<String> }

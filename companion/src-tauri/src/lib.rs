@@ -10,7 +10,7 @@ mod message;
 mod pairing;
 mod signing;
 mod verify;
-// redesigned UI: honest send flow, local history, fiat display
+// send flow with progress and cancel, local history, fiat display
 mod history;
 mod price;
 mod send;

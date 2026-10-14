@@ -213,9 +213,8 @@ mod tests {
         assert!(read_capped(std::io::repeat(b' '), 1024).is_err(), "an endless body stops at the cap");
     }
 
-    /// Security-audit regression (2026-10-13): a failed request's error text used to be reqwest's
-    /// Display, which includes the node URL (and so the user's provider API key); it reaches the
-    /// UI and, through wc.rs, WalletConnect dApps.
+    /// A failed request's error text must not include the node URL (which can carry the user's
+    /// provider API key): it reaches the UI and, through wc.rs, WalletConnect dApps.
     #[test]
     fn node_errors_never_contain_the_node_url() {
         let rpc = Rpc::new("https://127.0.0.1:9/v3/SECRET-API-KEY-1234").unwrap();

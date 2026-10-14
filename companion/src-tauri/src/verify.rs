@@ -156,8 +156,8 @@ fn rlp_encode(item: &Rlp) -> Vec<u8> {
         if len < 56 { return vec![short + len as u8]; }
         let mut be = len.to_be_bytes().to_vec();
         while be.first() == Some(&0) { be.remove(0); }
-        // long form: 0xB7 / 0xF7 + length-of-length (was off by one, which broke signer
-        // recovery for any transaction whose payload or calldata is 56 bytes or longer)
+        // long form: 0xB7 / 0xF7 + length-of-length, for any payload or calldata of 56 bytes
+        // or longer (signer recovery depends on getting this exactly right)
         let mut out = vec![long + be.len() as u8];
         out.extend(be);
         out
