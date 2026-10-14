@@ -80,7 +80,7 @@ path consumed by the build, signing, and packaging scripts.
    signing it runs the release-source gate (`scripts/verify-release-source.sh`:
    no adb default, early-adb init script, `DEBUG-` marker or backup file in
    `vendor/phonevault`/`device/phonevault`), the production ADB policy on the
-   target-files, `dev-ladder/check-overrides.sh release`, and the AVB
+   target-files, `scripts/verify-release-overrides.sh`, and the AVB
    rollback-index gate (`scripts/verify-rollback-index.sh`: the index equals
    `vendor/phonevault/config/release-version.mk` and is strictly greater than
    the previous signed release manifest's). See `docs/release-config.md`.

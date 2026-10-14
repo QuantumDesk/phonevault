@@ -92,7 +92,7 @@ Run by `sign-release.sh` before anything is signed (new usage:
    bluejay/crosshatch-shaped user layout with the stock idioms as a positive.
 3. `scripts/verify-appliance-target-files.sh` (DWC3 dual-role required, host-only forbidden, dwc3
    `id` node root-only).
-4. `dev-ladder/check-overrides.sh release TARGET_FILES`: no release override is packaged.
+4. `scripts/verify-release-overrides.sh TARGET_FILES`: no release override is packaged.
 5. `scripts/verify-rollback-index.sh` (section 5).
 
 Tests: `tests/test-release-gate-gaps.sh` (adversarial negatives from a security audit),
