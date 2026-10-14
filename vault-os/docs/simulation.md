@@ -1,4 +1,4 @@
-# Transaction simulation (2026-10-11)
+# Transaction simulation
 
 Before anything goes to the phone, the Mac companion simulates the exact transaction on the
 user's own node and shows what it would do to the wallet's balances. The phone shows the Mac's
@@ -58,7 +58,7 @@ The revert block is enforced in Rust too: `send::sign_start` refuses a quote who
 simulation in this session reverted (SendError kind `reverts`), whichever card it came from. No
 third-party simulation service and no API keys are used: only the node in Settings.
 
-### Node support (checked 2026-10-11)
+### Node support (as checked when written)
 
 All six default nodes answer `eth_simulateV1` with `traceTransfers`
 (`sim::tests::live_default_nodes`, run with `cargo test -- --ignored`):

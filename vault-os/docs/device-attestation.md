@@ -1,9 +1,9 @@
 # Device attestation: is this phone genuine Phone Vault?
 
 Status: implemented and unit-tested (phone JVM, companion Rust with real Google attestation
-chains, host Python); **not yet run on a phone** (`tools/dev-device/attesttest.sh`). Today's
+chains, host Python) and run on both development phones (see "Hardware results" below). Today's
 phones are unlocked development devices and are reported as DEVELOPMENT, as they should be.
-Nothing in `path-to-release.md` is ticked by this.
+GENUINE needs the release keys and a relocked bootloader ([ROADMAP.md](../../ROADMAP.md), G2).
 
 ## Why
 
@@ -223,7 +223,7 @@ certificate (`d8eab12d…4b53`) that signs the dev appliance APK.
 - `cargo run --example attest_verify -- request.json response.json [--dev-mode]` runs the same
   verifier on a captured exchange (used by `attesttest.sh`).
 
-- Accounts (2026-10-11): the attestation binds the phone's ACTIVE account. A cached verdict for a
+- Accounts: the attestation binds the phone's ACTIVE account. A cached verdict for a
   different address (the user switched accounts on the phone during the same USB connection) is
   asked again once before a request is refused; pairing is per address, each address attested
   when it is paired.
@@ -255,24 +255,25 @@ certificate (`d8eab12d…4b53`) that signs the dev appliance APK.
 5. Re-check Google's root list and revocation format at each release.
 
 
-## First phone result (phone 2, Pixel 3 XL, rung 2d-d, 2026-10-10)
+## Hardware results
 
-Phone side over AOA on the build host (`aoa_client.py attest`), verified on the Mac with
-`attest_verify` (the build host has no Rust toolchain). StrongBox chain of 4 to the Google RSA root
+Both runs used `aoa_client.py attest` on the phone side and the companion's `attest_verify`
+example to verify the saved exchange.
+
+**Pixel 3 XL (Titan M), development rung 2d-d.** StrongBox chain of 4 to the Google RSA root
 (pinned by key; that root certificate expired 2026-05-24), factory provisioning, attestation v4 /
-KeyMint 41, package `dev.phonevault.signer` with the development signer, address binding to the
-paired `0x0c16…CdEd`, not revoked (Google status list of 2026-10-10). Boot state: unlocked, orange,
-boot key all zeros. Verdict: **fail** with Developer mode off (development signer), **development**
-with it on — as designed. Also visible: vendor/boot patch level 2021-10-05 (the Pixel 3's last
-firmware). Still to run: repeated-challenge refusal and the locked-phone hold (`attesttest.sh`
-cases 2–3, which need the verifier on the build host or a Mac-side runner).
+KeyMint 41, package `dev.phonevault.signer` with the development signer, binding to the paired
+address, not revoked. Boot state: unlocked, orange, boot key all zeros. Verdict: **FAIL** with
+Developer mode off (development signer), **DEVELOPMENT** with it on, as designed. Vendor/boot
+patch level 2021-10-05 (the Pixel 3's last firmware).
 
-## Pixel 6a (Titan M2) result (b0, 2026-10-11)
+**Pixel 6a (Titan M2), development rung b0.** StrongBox chain of 4 to the Google RSA root,
+**factory provisioning**: no remote key provisioning is needed, so the offline vault can attest
+on the 6a (this settles the open question in `port-bluejay.md` §6). Attestation/KeyMint 300,
+OS 17.0.0, OS patch 2026-10, vendor patch 2026-07-05, boot patch 2026-10; unlocked/orange;
+development signer; bound to the wallet address; not revoked. Verdict with Developer mode:
+**DEVELOPMENT**. (The companion app must be closed while the Python client runs: it holds the
+accessory.)
 
-Run from the owner's Mac (`aoa_client.py attest` in a venv with pyusb + Homebrew libusb; the
-companion app must be closed, it grabs the accessory). StrongBox chain of 4 to the Google RSA root,
-**provisioning: factory** — no remote key provisioning needed, so the offline vault can attest on
-the 6a (the open question in `port-bluejay.md` is settled). Attestation/KeyMint 300, OS 17.0.0,
-OS patch 2026-10, vendor patch 2026-07-05, boot patch 2026-10; unlocked/orange; package
-`dev.phonevault.signer` (dev signer); bound to the wallet `0x0E21…EcBb`; not revoked. Verdict with
-Developer mode: **development**.
+Still to run on a phone: the repeated-challenge refusal and the locked-phone hold
+(`attesttest.sh` cases 2–3), and GENUINE on a relocked phone with release keys.

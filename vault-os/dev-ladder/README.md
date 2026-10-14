@@ -1,82 +1,106 @@
-# Re-hardening ladder (chunk 4)
+# Re-hardening ladder (Pixel 3 XL / crosshatch)
 
-(Crosshatch / Lineage 22.2 only. The Pixel 6a ladder — rungs b0… on Lineage 24.0 — lives in
-`dev-ladder-bluejay/`.)
+(Crosshatch / LineageOS 22.2 only. The Pixel 6a ladder, rungs b0… on LineageOS 24.0, lives in
+[`../dev-ladder-bluejay/`](../dev-ladder-bluejay/README.md).)
 
 `vault-os/vendor/phonevault/`, `device/phonevault/` and `patches/` describe the **release
-intent**. The development phone, however, boots an image whose tree deliberately deviates from
-that intent: the multi-week boot failures were debugged by peeling hardening off until the
-image booted (the DEBUG-40/44/47/48 markers), and the working state was never written down as
-files — only as a tree on the build box.
-
-This directory makes each step of putting the hardening back an explicit, reviewable,
-boot-tested **rung**:
+intent**. The first images that booted on the development phone did so only after much of that
+hardening had been peeled off (the `DEBUG-40/44/47/48` markers in rung 0). This ladder puts the
+hardening back one explicit, reviewable, boot-tested **rung** at a time:
 
 ```
 dev-ladder/
-  rung-0/   the exact deviations that produced the known-good boot of 2026-09-02
+  rung-0/   the deviations of the first known-good development boot
   rung-1/   rung-0 minus one deviation (owner provisioning restored)
   rung-N/   …
 ```
 
 A rung directory contains **only the files that still override release intent** at that rung,
-plus `device-google-crosshatch.diff` for the two upstream device-tree edits. Climbing a rung
-means deleting a file from the next rung directory, syncing, building, sideloading, and running
-the boot-test checklist. When the last rung directory is empty, the tree *is* the release intent.
+plus `device-google-crosshatch.diff` (and, from rung 2d-c2, `vendor-google-crosshatch.diff`)
+for upstream device-tree edits, and kernel config fragments / patches where the rung needs them.
+Climbing a rung means removing a deviation, syncing, building, flashing and running the
+per-rung checklist. When the last rung directory is empty, the tree *is* the release intent.
+The release configuration already folds in everything proven through rung 4b
+([release-config.md](../docs/release-config.md)).
 
-`scripts/dev-ladder-sync.sh RUNG /path/to/lineage` does the sync:
+## Using the ladder
 
-1. `rsync` the release `vendor/phonevault/` and `device/phonevault/` into the tree
-   (keeping the tree's `keys/` — never versioned);
+Paths below are placeholders: `$LINEAGE_TREE` is your LineageOS 22.2 tree with the crosshatch
+device, vendor and kernel repos, `$OUT_DIR` where the rung OTA goes.
+
+`scripts/dev-ladder-sync.sh RUNG $LINEAGE_TREE [APK]` syncs a rung into the tree:
+
+1. `rsync` the release `vendor/phonevault/` and `device/phonevault/` into the tree (keeping the
+   tree's `keys/`, which are never versioned);
 2. copy the rung's override files over their targets;
-3. restore `device/google/crosshatch` (and the extract-utils makefiles of `vendor/google/crosshatch`)
-   to upstream, then apply the rung's `device-google-crosshatch.diff` (and
-   `vendor-google-crosshatch.diff`, from rung 2d-c2) — each rung carries exactly its own edits;
-4. bake the current **dev-appliance** APK as `prebuilt/PhoneVault.apk` (rungs are dev images:
-   `verify-signer-apk.sh` correctly refuses this variant, so the release path —
-   `install-overlay.sh` with a release-signed APK — is not used here);
+3. restore `device/google/crosshatch` (and the extract-utils makefiles of
+   `vendor/google/crosshatch`) to upstream, then apply the rung's diffs, so each rung carries
+   exactly its own edits; apply `rung-*/kernel-*.patch` to the kernel tree and every
+   `patches/frameworks-base/*.patch` not already in the tree;
+4. bake the **dev-appliance** APK as `prebuilt/PhoneVault.apk` (rungs are development images:
+   `verify-signer-apk.sh` correctly refuses this variant, so the release path, `install-overlay.sh`
+   with a release-signed APK, is not used here);
 5. append the `BoardConfigVault.mk` include to the Lineage board file if missing.
 
-Build with `dev-ladder/build-rung.sh` (userdebug, `WITH_ADB_INSECURE` while a rung still
-carries the adb deviation), then flash with the sideload flow in `NOTES.md`.
+**Development adb key.** Rung images are `userdebug` with adb pre-authorised for the builder. No
+adb key is committed: the sync reads your public adb key from the path in `PV_DEV_ADB_KEY`
+(for example `~/.android/adbkey.pub`) and installs it only in the build tree. The release
+configuration carries no adb key, and the release-source gate refuses one.
+
+Build with `dev-ladder/build-rung.sh RUNG` as the tree owner (never root; `PV_TREE` names the
+tree, `PV_OUT_DIR` the output directory, i.e. `$LINEAGE_TREE` and `$OUT_DIR`): a `userdebug`
+build with `WITH_ADB_INSECURE` while the rung still carries the adb deviation, producing
+`rung-RUNG-ota.zip`. From rung 4a, run `dev-ladder/check-overrides.sh RUNG TARGET_FILES` on the
+target-files before flashing; it must print OK.
+
+Flash with `dev-ladder/flash-rung.sh RUNG [--wipe]` (`PV_OTA` = the OTA, `PV_SERIAL` = the
+phone's serial). It sideloads the OTA; until the OTA key is trusted, the recovery shows
+"Signature verification failed — install anyway?" and someone must confirm on the phone.
+`--wipe` erases userdata and metadata afterwards so the next boot is a genuine first boot; it
+destroys the on-device wallet and requires `PV_THROWAWAY_DEVICE=1`. The script refuses to run
+while any other device is attached. `dev-ladder/wipe-data.sh` erases userdata and metadata on
+its own, under the same rules.
 
 ## Rung log
 
-| Rung | Deviation removed | Boot-tested | Notes |
+| Rung | Deviation removed / change | Result on hardware | Notes |
 |---|---|---|---|
-| 0 | — (known-good baseline) | ✅ 2026-09-02 | overrides disabled (DEBUG48), AVB/VINTF/kernel fragment disabled (DEBUG44), minimal `common.mk` with insecure adb + pre-authorised key (DEBUG-47), owner string emptied (DEBUG-40), wifi-keystore HAL `optional`, branding boot animation |
-| 1 | `config.xml` — `config_fixedFunctionDeviceOwner` restored | ⚠️ partial 2026-09-04 | OS provisioned the owner on a wiped /data (`mProvisioningContext=fixed-function-system-image`, `device_provisioned=1`) but HOME resolved to `org.lineageos.setupwizard` (priority 9) behind the keyguard: the app had never run, so its HOME preference did not exist |
-| 1b | app provisions itself from `DeviceAdminReceiver.onEnabled` (`ApplianceProvisioning`: lock-task packages, persistent HOME, keyguard off, setup wizards hidden); `Android.bp` strips `LineageSetupWizard` | ✅ 2026-09-04 | genuine first boot (userdata+metadata erased) landed on SET PIN with zero adb: owner `fixed-function-system-image`, HOME=PhoneVault, `mLockTaskModeState=LOCKED`, keyguard off, 0 setupwizard packages. OTA `f0a836b4…` |
-| 2a | `BoardConfigVault.mk` partially: `WITH_AVB`, our AVB key/algorithm for vbmeta + vbmeta_system, `board-info.txt` | ✅ boot 2026-09-05 | vbmeta in the OTA signed with our key (sha1 `75cadb14…`, SHA256_RSA4096, flags 3); this tree folds boot/dtbo/system/system_ext/product/vendor into the single vbmeta (no chained `vbmeta_system`). Booted (both slots): owner, provisioned, HOME, kiosk LOCKED, PIN gate, no popup. After a /data wipe restored adb: PIN-lifecycle (pintest 4/4, regentest 3/3, lifecycletest 6/6) ✓; AOA getAddress round-trip + host receive ✓ (host `address` rc=0, screen shows CONNECTED/WAITING). Full on-device sign-approval round-trip: transport proven, automation flaky (adb-server vs libusb), finish manually |
-| 2b | `--flags 3` removed → verity and hashtree enforcement on | ✅ boot 2026-09-05 | OTA `385ece79` (rebuilt clean: wizard stripped, app 0.3.0 `7c803ca`). On device: `ro.boot.veritymode=enforcing`, `ro.boot.vbmeta.digest=7f16f2fb…` (bootloader processed our signed vbmeta; empty under 2a's flags 3), owner+kiosk survived the OTA, 0.3.0 UI up. Bootloader still unlocked → refuse-to-boot proof waits for relock (chunk 5). |
-| 2c | appliance VINTF manifest + matrices | ✅ boot 2026-09-05 | device manifest loaded (28 HALs), our appliance manifest packaged; 0 VINTF/isBuildConsistent popup hits, owner+kiosk+verity intact, no app crash. OTA `469a1372`. |
-| 2d-a | kernel fragment slice A: connectivity (BT/NFC/WLAN/CNSS/IPA/RMNET) `phonevault-a.config`; plus `etc/preferred-apps/phonevault-home.xml` (first-boot HOME chooser race seen on phone 2 at rung 2c, 2026-09-13; the Soong `overrides` route did not remove Trebuchet) | ✅ 2026-09-16 (phone 2) | OTA `7c57e435…`. The 2026-09-13 "did not boot" verdict was WRONG: the phone had simply left the USB port; on 09-16 it was found running slot B with 2.5 days of uptime. Verified: no bluetooth/nfc/wlan/cnss/ipa/rmnet modules, no `/sys/class/bluetooth`, no `wlan0`, verity enforcing, owner + kiosk LOCKED, backupcheck / usbsigntest / lifecycletest (reboot) all pass. Leftover `/dev/subsys_ipa_fws`, `ramdump_ipa_fws`, `rmnet_ctrl` nodes come from the PIL/subsystem-restart framework, not the removed drivers. |
-| ~~2d-a1 / a2 / a23~~ | bisect of slice A | not needed | built 2026-09-13/14 while 2d-a was wrongly believed to hang; directories removed |
-| 2d-b | slice B: modem/GLINK (`MODEMSMEM`, `MSM_PIL_MSS_QDSP6V5`, `MSM_GLINK_*`) `phonevault-b.config` (dir `rung-2d-b`, on top of 2d-a) | ✅ 2026-09-16 (phone 2) | OTA `353ae19b…` sideloaded 09-16 (the host saw `adb: failed to read command` right after the tap — that is the install proceeding on-device, not a failure). Booted slot A, verity enforcing, kiosk LOCKED, no `pil_mss` module (core `glink` transport remains, expected), usbsigntest + lifecycletest (reboot) pass with the ☰-menu app `9093e49c…`+. |
-| 2d-c | slice C: camera / media / video codecs / DVB / sensor hub / touchscreen heatmap / compute-DSP `phonevault-c.config` + `CONFIG_PHONEVAULT_APPLIANCE=y` + kernel patch 0002 (carried in the rung dir; `dev-ladder-sync.sh` applies `rung-*/kernel-*.patch` to the kernel tree) | **PASSED 2026-09-27** on phone 2 (OTA f7624d38…): 0 cameras, no sensors, no DSP nodes, display fine; credential, USB tx and message signing pass. Found: vendor services for removed hardware crash-loop (cdsprpcd/adsprpcd/sscrpcd every 100 ms, gnss, NN HALs, easelmanagerd, ppd, cnss-daemon, sensors HAL) — flood logcat, cost battery; cleanup queued | a camera/media-only sub-slice without the patch fails to LINK (`sde_hw_rot` needs the V4L2 rotator, `heatmap.c` needs `video_unregister_device`) — so slice C goes in whole, with its patch |
-| 2d-c2 | 2d-c + services for hardware the image no longer has are not installed: `vendor-google-crosshatch.diff` drops the rc + binary of `vendor.sensors` (sscrpcd), `vendor.sensors.qti`, `vendor.sensors-hal-2-0`, `neuralnetworks_hal_service(_paintbox)`, `easelmanagerd` and the `adsprpcd`/`cdsprpcd`/`cnss-daemon`/`mm-pp-dpps` binaries; the device diff removes the `adsprpcd`, `cdsprpcd`, `cnss-daemon`, `ppd` service blocks (and ppd's hwcomposer triggers) from `init.hardware.rc` and the GNSS HAL service/impl from `device.mk`. No VINTF change: none of these HALs is in the appliance manifest (that is why the HIDL ones crash-looped: hwservicemanager refused to register them). `dev-ladder-sync.sh` now resets device + vendor makefiles to upstream before applying a rung's diffs | built 2026-09-27 (OTA `43dd7c89…`), ready to flash | kept: audio HAL, camera provider, contexthub/CHRE, loc_launcher/lowi/xtra (not crash-looping; later slices) · **PASSED 2026-09-28** on phone 2: targeted loops gone, Titan M services up; usbsign, tokensign (5/5), msgsign, credential pass. Still looping: nfc_hal, chre, camera-provider (→ 2d-c3) |
-| 2d-c3 | 2d-c2 + lock-screen cleanup and three more crash-loopers. (1) frameworks-base patch 0005 (`config_phonevaultHideKeyguardClock`, default false; overlay sets it true in `overlay/frameworks/base/packages/SystemUI`): the default keyguard blueprint leaves out the clock and smartspace sections and the date slice is detached, so no time/date on the keyguard or AOD; lock icon, bouncer, owner disclosure and charging line unchanged (blueprint path: `migrate_clocks_to_blueprint` is ENABLED/READ_ONLY in bp1a). `dev-ladder-sync.sh` now applies every `patches/frameworks-base/*.patch` (0001-0004 are already commits in the tree). (2) No ambient display: overlay restores the AOSP doze defaults (empty `config_dozeComponent`, AOD unavailable, no pickup pulse). (3) Wallpaper: the Phone Vault overlay lost to `vendor/lineage/overlay/common` (earlier `PRODUCT_PACKAGE_OVERLAYS` entries win and common.mk is inherited last), which on the build box holds a hand-copied copy of the OLD padlock, so 2d-c/2d-c2 shipped the old image; the overlay is now added in `vault_crosshatch.mk` before any inherit (policy gate enforces it), and the wallpaper is a small centered padlock. (4) Device diff also drops `android.hardware.nfc@1.2-service`, `android.hardware.camera.provider@2.4-service_64` and `chre_daemon_msm` (all optional in the FCM, none in the appliance manifest). | built 2026-09-28 (OTA `3182bbd3…`, app `5d781e25…`), ready to flash | rungs before 2d-c3 still list the overlay in their own common.mk: rebuilding one with the new `vault_crosshatch.mk` would list the directory twice — drop that line first · **PASSED 2026-09-28** on phone 2 (OTA 3182bbd3…): boot lock screen has no clock/date, new centred padlock wallpaper, no crash loops (68 service exits over a full test run incl. reboot, all one-shot); usbsign, tokensign 5/5, msgsign 6/6, credential pass |
-| 2d-d | 2d-c3 + slice D `phonevault-d.config`: USB gadget functions — only adb (FunctionFS) and Android Open Accessory remain; no mass storage/MTP/PTP/MIDI/HID/CCID/audio/cdev/diag/QDSS/GSI. DWC3 stays dual-role | **first attempt FAILED 2026-09-28** (OTA e6d32269…, also DUAL_ROLE/HOST off): booted, but USB never enumerated (host: error -71 from the running kernel; bootloader on the same port fine) — rolled back to slot b (2d-c3) with `fastboot --set-active`. Retry without the DWC3 role lines | the release defconfig patch 0001 also turns DUAL_ROLE/HOST off: fix it before release (keep dual-role; refuse host role in the USB HAL) · **retry PASSED 2026-10-10** on phone 2 (OTA 8ebda5bd…): USB enumerates, `svc usb setFunctions mtp` leaves `sys.usb.config=adb` (function gone); usbsign, tokensign 5/5, msgsign 6/6, credential pass |
-| 3 | 2d-d + USB lock-down at the OS level (DWC3 stays dual-role in the kernel, per 2d-d). Device diff: (1) release device patch 0002 in the gadget HAL — `setCurrentUsbFunctions` rejects (CONFIGURATION_NOT_SUPPORTED, current gadget kept) anything but none / accessory / adb / accessory+adb, adb only with `ro.debuggable=1`; plus `getVendorFunctions()` returns nothing, so `vendor.usb.config` / `persist.vendor.usb.usbradio.config` / usbradio boot mode can no longer append diag/serial/rmnet outside that allowlist. (2) Release patch 0003 in the port HAL — `switchRole` refuses source power role, host data role and DFP/DRP mode; plus a failed mode switch falls back to `sink` instead of `dual`, and port status reports UFP-only with no role/mode changes. (3) `init.sdm845.usb.rc`: port pinned with `write /sys/class/typec/port0/port_type sink` on boot and again on boot_completed (tcpm then presents Rd only: charges, is a USB device, never sources VBUS or hosts, rejects DR/PR_SWAP; same write stock off-mode charging does); only `accessory.gs2` is created unconditionally, `ffs.adb` only `on early-boot && property:ro.debuggable=1`; audio_source/MIDI/MTP/PTP/diag/cser/gsi/QDSS instances, the mtp/ptp FunctionFS mounts, `sys.usb.mtp.device_type`, the RNDIS class id and the charger-mode MIDI gadget are gone. (4) The dwc3 `id` node (writing 0 forces host mode) is no longer chowned to system. (5) `android.hardware.usb.host` feature not declared. `common.mk` adds `ro.vendor.phonevault.offline=true` (vendor property; only these two HALs read it in this tree) and keeps `persist.sys.usb.config=adb` — the user build (rung 5) sets `none`, AOA links accessory on attach | built 2026-10-10, not flashed (OTA `03227ed6…`, app `c5def7d6…`) | release patch 0001 replaces this rc wholesale with `init.phonevault.usb.rc`; the rung edits the stock rc instead (smaller step from the 2d-d boot). Recovery keeps the stock DRP port (sideload only) · **PASSED 2026-10-10** on phone 2 (OTA 03227ed6…): `svc usb setFunctions` mtp / rndis / midi each refused by the gadget HAL ("Phone Vault rejected USB gadget functions: 0x5 / 0x21 / 0x9"), `sys.usb.config` stays `adb`; charging on USB; usbsign, tokensign 5/5, msgsign 6/6, credential (reboot) pass; 71 service exits over the run (one-shots). Not yet shown: an OTG device left unpowered (needs a physical test), port-role readout (`/sys/class/typec` is root-only) |
-| 4a | rung 3 + the app strip, slice A: `Android.bp` overrides 40 more modules, user-facing apps that nothing in system_server or SystemUI binds at boot — the Trebuchet launcher (with `Launcher3QuickStep`, the AOSP module whose Trebuchet definition `required`s it, its overlay and the six icon-pack launcher overlays), camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF apps, AudioFX, Updater, wallpaper/theme/avatar/sound pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceDiagnostics, DeviceAsWebcam, CameraExtensionsProxy, AccessibilityMenu, EmergencyInfo, SettingsIntelligence, DownloadProviderUi. Board, kernel, device/vendor diffs, `common.mk` = rung 3. Full list, mechanism and reasons: [Rung 4](#rung-4-app-strip) | **prepared, not built** | before flashing: `check-overrides.sh 4a` on the target-files must print OK (the 2026-09-13 Trebuchet override silently did nothing). HOME after the launcher goes: PhoneVault (priority 0) is the only HOME besides Settings' direct-boot `FallbackHome` (priority -1000) · **built 2026-10-11** (OTA 0fc70803…, 74 MB smaller than rung 3). `check-overrides.sh 4a`: every 4a module gone EXCEPT `Gallery2` (product) and `DeviceAsWebcam` (system priv-app) — **cause found 2026-10-11 (4b prep): the overrides worked** — neither APK (nor odex) was in the image; what survived were their dangling JNI-lib symlinks from an August build (`PRODUCT/app/Gallery2/lib/arm64/libjni_*.so → /product/lib64/…`, `SYSTEM/priv-app/DeviceAsWebcam/lib/arm64/libjni_deviceAsWebcam.so`), which soong_ui's stale-install cleaner cannot delete (see [Rung 4](#rung-4-app-strip), "Stale staging leftovers"). On the phone that is an APK-less dir PackageManager skips. No `build/make` change needed; `build-rung.sh` now scrubs such dirs before building. Not flashed yet · **PASSED 2026-10-11** on phone 2: checked removed apps absent, HOME = Phone Vault, kiosk LOCKED; usbsign, tokensign 5/5, msgsign 6/6, credential pass; 71 service exits. Crash log: 489 FATALs, all `org.protonaosp.elmyra` (sensor-less gesture service, removed in 4b) |
-| 4b | 4a + slice B: 57 system-side modules bound only on demand (Active Edge `ElmyraService` + `GoogleParts`, telephony UI/role apps, backup, print, WebView + its feature, DocumentsUI/StorageManager/MtpService, LineageParts/Profiles/QuickAccessWallet, CDM/credential/DSU/cert/app-link/PAC/VPN/captive-portal/SE/BT-MIDI satellites, four unused providers, the non-radio Pixel blobs). Device diff additionally drops the Bluetooth, NFC (+ per-SKU ODM NFC/eSE/OMAPI, FeliCa) and OMAPI-UICC feature declarations: SystemServer then skips BluetoothManagerService and the APEX NFC app never creates NfcService (the `com.android.nfc` ANRs) | **built 2026-10-11**, not flashed (OTA `/home/aipg/rung-4b-ota.zip`, 812 MB, sha256 `419dbff59190cb23e10dc18c93cc782f06986bfb9dbfa3ef4436539864cd8246`; app `c5def7d6…`); `check-overrides.sh 4b`: **OK** — 98 active overrides, none packaged, 65 APKs remain (the build-time scrub removed the stale `Gallery2` / `DeviceAsWebcam` dirs and, before soong_ui could strand its JNI symlink, `PrintSpooler`'s) | build only after 4a passes. Kept for later rungs: the telephony core + radio glue, NetworkStack, the media providers, ManagedProvisioning, the APEXes (see [Rung 4](#rung-4-app-strip)) · **first flash FAILED 2026-10-11**: boot loop — system_server `IllegalStateException: Call to getInstalledModules before metadata loaded` (ModuleMetadata was removed); log captured over adb during the loop, rolled back to slot a (4a) with `fastboot --set-active`. Rebuilt keeping ModuleMetadata. Also seen: `com.android.nfc` / `com.android.bluetooth` remain installed (APEX-bundled; features withdrawn instead) · **rebuild PASSED 2026-10-11** on phone 2 (OTA 9ee2c7c2…): boots, 160 packages (4a: 221), HOME = Phone Vault, kiosk LOCKED, crash log empty (Elmyra gone), usbsign / tokensign 5/5 / msgsign 6/6 pass; credentialtest passed on rerun (first run hit one "Backup unavailable" after a successful PIN check — seed-key window race; app now re-prompts once instead) · **root-caused 2026-10-11, app-side, not a 4b removal**: keystore2 admits the seed key's `Cipher.init` until ~31 s after it *received* the PIN token (whole seconds), the Titan M refuses the update after 30.000 s from the token's *issue* time; a controlled sweep fails every decrypt at +29.7…+30.8 s on **both** 4a and 4b (4/4 each), and the harness's "inside the window" reveal lands right there (4a +29.3 s ×2 pass, 4b +30.0/+30.2 s fail). The re-prompt never worked (re-entered `beginSensitive`, stuck on "Opening secure backup"). Also a cold-start race made the vault prompt again after the boot PIN on 4b (2/2). App fix: no edge probing after our own PIN check, full-operation probe, same-flow retry, one boot gate per session ([pin-credential-design.md](../docs/pin-credential-design.md)); then on 4b: credentialtest 3/3 in a row incl. reboot, usbsign pass. No rung change |
-| 4c… | `Android.bp` overrides in further slices (telephony/radio + system_server gating → media → APEXes → vendor prune; ManagedProvisioning needs a wiped first boot of its own) | planned | chunk-4 item 4 |
-| final | `common.mk` release version, no `debug_adbkey.pub`, `user` variant | planned | chunk-4 item 5 · **2026-10-13**: the release config now folds in 2d-d (kernel, DWC3 dual-role), rung 3 (USB HAL/init as device patches 0027-0029) and 4a/4b (overrides, kept modules), with release adb off and gated; see [release-config.md](../docs/release-config.md). Not built or booted as a release yet |
+| 0 | — (known-good baseline) | boots | overrides disabled (DEBUG48), AVB/VINTF/kernel fragment disabled (DEBUG44), minimal `common.mk` with insecure adb + pre-authorised key (DEBUG-47), owner string emptied (DEBUG-40), wifi-keystore HAL `optional`, branding boot animation |
+| 1 | `config.xml`: `config_fixedFunctionDeviceOwner` restored | partial | the OS provisioned the owner on wiped /data (`fixed-function-system-image`, `device_provisioned=1`), but HOME resolved to the Lineage setup wizard behind the keyguard: the app had never run, so its HOME preference did not exist. Fixed in 1b |
+| 1b | the app provisions itself from `DeviceAdminReceiver.onEnabled` (`ApplianceProvisioning`: lock-task packages, persistent HOME, keyguard off, setup wizards hidden); `Android.bp` strips `LineageSetupWizard` | passed | genuine first boot (userdata + metadata erased) lands on SET PIN with no adb interaction: owner `fixed-function-system-image`, HOME = Phone Vault, `mLockTaskModeState=LOCKED`, keyguard off, no setup-wizard packages |
+| 2a | `BoardConfigVault.mk` partially: `WITH_AVB`, our AVB key/algorithm for vbmeta, `board-info.txt` | passed | vbmeta signed with our key (SHA256_RSA4096, flags 3); this tree folds boot/dtbo/system/system_ext/product/vendor into the single vbmeta (no chained `vbmeta_system`). Owner, provisioning, HOME, kiosk, PIN lifecycle and AOA `getAddress` pass |
+| 2b | `--flags 3` removed: verity and hashtree enforcement on | passed | `ro.boot.veritymode=enforcing`, `ro.boot.vbmeta.digest` set; owner and kiosk survive the OTA. The bootloader is still unlocked, so the refuse-to-boot proof waits for the relock |
+| 2c | appliance VINTF manifest + matrices | passed | device manifest loads, no VINTF / `isBuildConsistent` popup, owner, kiosk and verity intact |
+| 2d-a | kernel fragment slice A: connectivity (BT/NFC/WLAN/CNSS/IPA/RMNET) `phonevault-a.config`; `etc/preferred-apps/phonevault-home.xml` against a first-boot HOME-chooser race | passed | no bluetooth/nfc/wlan/cnss/ipa/rmnet modules, no `/sys/class/bluetooth`, no `wlan0`; backup check, USB signing and lifecycle (reboot) pass. Leftover `/dev/subsys_ipa_fws`, `ramdump_ipa_fws`, `rmnet_ctrl` nodes come from the PIL/subsystem-restart framework, not the removed drivers. (Directory `rung-2d`.) |
+| 2d-b | slice B: modem/GLINK (`MODEMSMEM`, `MSM_PIL_MSS_QDSP6V5`, `MSM_GLINK_*`) `phonevault-b.config` | passed | no `pil_mss` module (core `glink` transport remains, expected); USB signing and lifecycle (reboot) pass. Note: `adb: failed to read command` right after the recovery confirmation is the install proceeding on the phone, not a failure |
+| 2d-c | slice C: camera / media / video codecs / DVB / sensor hub / touchscreen heatmap / compute DSP `phonevault-c.config` + `CONFIG_PHONEVAULT_APPLIANCE=y` + kernel patch 0002 (carried in the rung directory) | passed | 0 cameras, no sensors, no DSP nodes, display fine; credential, USB transaction and message signing pass. Vendor services for the removed hardware then crash-loop (addressed in 2d-c2/2d-c3). A camera/media-only sub-slice without the patch fails to link (`sde_hw_rot` needs the V4L2 rotator, `heatmap.c` needs `video_unregister_device`), so slice C goes in whole, with its patch |
+| 2d-c2 | services for hardware the image no longer has are not installed: `vendor-google-crosshatch.diff` drops the rc + binary of `vendor.sensors` (sscrpcd), `vendor.sensors.qti`, `vendor.sensors-hal-2-0`, `neuralnetworks_hal_service(_paintbox)`, `easelmanagerd` and the `adsprpcd`/`cdsprpcd`/`cnss-daemon`/`mm-pp-dpps` binaries; the device diff removes the `adsprpcd`, `cdsprpcd`, `cnss-daemon`, `ppd` service blocks (and ppd's hwcomposer triggers) from `init.hardware.rc` and the GNSS HAL from `device.mk`. No VINTF change: none of these HALs is in the appliance manifest (which is why the HIDL ones crash-looped) | passed | targeted loops gone, Titan M services up; USB, token and message signing and credential pass. Kept for later slices: audio HAL, camera provider, contexthub/CHRE, loc_launcher/lowi/xtra |
+| 2d-c3 | 2d-c2 + lock-screen cleanup and three more crash-loopers: (1) frameworks-base patch 0005 (`config_phonevaultHideKeyguardClock`; the overlay sets it true): no clock, smartspace or date on the keyguard or AOD; lock icon, bouncer, owner disclosure and charging line unchanged. (2) No ambient display (AOSP doze defaults). (3) The Phone Vault overlay is added in `vault_crosshatch.mk` before any inherit, because earlier `PRODUCT_PACKAGE_OVERLAYS` entries win over `vendor/lineage/overlay/common` (policy gate enforces it); new centred padlock wallpaper. (4) The device diff also drops `android.hardware.nfc@1.2-service`, `android.hardware.camera.provider@2.4-service_64` and `chre_daemon_msm` | passed | no clock/date on the boot lock screen, new wallpaper, no crash loops (only one-shot service exits over a full run including reboot); USB, token and message signing and credential pass. Rungs before 2d-c3 list the overlay in their own `common.mk`: drop that line before rebuilding one with the new `vault_crosshatch.mk` |
+| 2d-d | 2d-c3 + slice D `phonevault-d.config`: USB gadget functions — only adb (FunctionFS) and Android Open Accessory remain; no mass storage/MTP/PTP/MIDI/HID/CCID/audio/cdev/diag/QDSS/GSI. **DWC3 stays dual-role** | passed (second attempt) | a first build that also turned DWC3 `DUAL_ROLE`/`HOST` off booted but never enumerated on USB (host saw error -71) and was rolled back to the previous slot. Without the DWC3 role lines: USB enumerates, `svc usb setFunctions mtp` leaves `sys.usb.config=adb`; signing suites and credential pass. The release defconfig was fixed accordingly |
+| 3 | 2d-d + USB lock-down at the OS level (DWC3 dual-role in the kernel). Device diff: (1) gadget HAL (release device patch 0002): `setCurrentUsbFunctions` rejects (`CONFIGURATION_NOT_SUPPORTED`, current gadget kept) anything but none / accessory / adb / accessory+adb, adb only with `ro.debuggable=1`; `getVendorFunctions()` returns nothing, so `vendor.usb.config` / `persist.vendor.usb.usbradio.config` / usbradio boot mode cannot append diag/serial/rmnet. (2) Port HAL (release patch 0003): `switchRole` refuses source power role, host data role and DFP/DRP mode; a failed mode switch falls back to `sink`; status reports UFP-only. (3) `init.sdm845.usb.rc`: port pinned with `write /sys/class/typec/port0/port_type sink` on boot and on boot_completed (charges, is a USB device, never sources VBUS or hosts, rejects DR/PR swaps); only `accessory.gs2` is created unconditionally, `ffs.adb` only on `ro.debuggable=1`; audio_source/MIDI/MTP/PTP/diag/cser/gsi/QDSS instances, the mtp/ptp FunctionFS mounts and the charger-mode MIDI gadget are gone. (4) The dwc3 `id` node (writing 0 forces host mode) stays root-owned. (5) `android.hardware.usb.host` not declared. `common.mk` adds `ro.vendor.phonevault.offline=true` and keeps `persist.sys.usb.config=adb` (the user build sets `none`) | passed | `svc usb setFunctions` mtp / rndis / midi each refused by the gadget HAL ("Phone Vault rejected USB gadget functions"), `sys.usb.config` stays `adb`; charging works; signing suites and credential (reboot) pass. Release patch 0001 replaces this rc wholesale with `init.phonevault.usb.rc`; the rung edits the stock rc (smaller step). Recovery keeps the stock DRP port (sideload only). Not yet shown: an OTG device left unpowered (physical test), port-role readout (`/sys/class/typec` is root-only) |
+| 4a | rung 3 + app strip slice A: `Android.bp` overrides 40 more modules, user-facing apps that nothing in system_server or SystemUI binds at boot (launcher, camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF apps, AudioFX, Updater, pickers, dreams, …). Full list, mechanism and reasons: [Rung 4](#rung-4-app-strip) | passed | removed apps absent, HOME = Phone Vault, kiosk LOCKED; signing suites and credential pass. `check-overrides.sh 4a` first reported `Gallery2` and `DeviceAsWebcam`: not installed apps but dangling JNI-lib symlinks left in the staging tree (see "Stale staging leftovers"); `build-rung.sh` now scrubs them. Remaining crashes: `org.protonaosp.elmyra` (sensor-less gesture service, removed in 4b) |
+| 4b | 4a + slice B: 57 system-side modules bound only on demand (Active Edge `ElmyraService` + `GoogleParts`, telephony UI/role apps, backup, print, WebView + its feature, DocumentsUI/StorageManager/MtpService, LineageParts/Profiles/QuickAccessWallet, CDM/credential/DSU/cert/app-link/PAC/VPN/captive-portal/SE/BT-MIDI satellites, four unused providers, the non-radio Pixel blobs). The device diff also drops the Bluetooth, NFC (+ per-SKU ODM NFC/eSE/OMAPI, FeliCa) and OMAPI-UICC feature declarations, so SystemServer skips BluetoothManagerService and the NFC APEX app never creates NfcService | passed (second build) | the first build boot-looped: system_server `IllegalStateException: Call to getInstalledModules before metadata loaded` because `ModuleMetadata` was removed; rolled back to the previous slot and rebuilt keeping it. Rebuilt: 160 packages (4a: 221), HOME = Phone Vault, kiosk LOCKED, crash log empty, signing suites and credential (reboot) pass. `com.android.nfc` / `com.android.bluetooth` stay installed inside their APEXes and are made dormant by the feature removal |
+| 4c… | `Android.bp` overrides in further slices (telephony/radio + system_server gating → media → APEXes → vendor prune; ManagedProvisioning needs a wiped first boot of its own) | planned | |
+| final | `common.mk` release version, no adb key, `user` variant | planned | the release configuration already folds in 2d-d (kernel, DWC3 dual-role), rung 3 (USB HAL/init as device patches 0027–0029) and 4a/4b (overrides, kept modules), with release adb off and gated ([release-config.md](../docs/release-config.md)). Not built or booted as a release yet |
 
 ## Per-rung checklist (all must pass before the next rung)
 
-1. `vault-os/tests/*.sh` policy gates on the repo.
-2. Build → OTA → sideload (recovery signature tap until the OTA key is trusted) → boot.
+1. `vault-os/tests/*.sh` policy gates on the repository.
+2. Build → OTA → sideload (confirm the recovery signature prompt until the OTA key is trusted)
+   → boot. From rung 4a, `check-overrides.sh RUNG` on the target-files prints OK first.
 3. Owner + kiosk: `dumpsys device_policy` shows the owner, `mLockTaskModeState=LOCKED`,
    `settings get global device_provisioned` = 1, no setup wizard.
-4. PIN lifecycle (`tools/dev-device/pintest.sh` on a throwaway wallet), identity persists
-   across a reboot, USB signing round-trip with `tools/aoa_client.py`.
-5. Rollback image at hand: `/root/rollback/known-good-2026-09-02.zip` (sha256 `0de27021…`).
+4. On a throwaway wallet (`tools/dev-device/`): `firstrun.sh` on a wiped phone, `credentialtest.sh`
+   (PIN lifecycle including reboot), `lifecycletest.sh`, `usbsigntest.sh`, `tokensigntest.sh`,
+   `msgsigntest.sh`; identity persists across a reboot.
+5. No crash-looping services (`logcat -b crash`, repeated `init: Service … exited`).
+6. A known-good rollback image at hand (the previous rung's OTA, or the inactive A/B slot with
+   `fastboot --set-active`).
 
 ## Rung 4: app strip
 
-Prepared 2026-10-10 from the rung-3 build output on the build box (`out/target/product/crosshatch`
-target-files, 152 APKs) and its sources; nothing was built. `rung-4a/` and `rung-4b/` are full
+Prepared from the rung-3 build output (`out/target/product/crosshatch` target-files, 152 APKs)
+and its sources. `rung-4a/` and `rung-4b/` are full
 rung directories (copies of rung 3 plus the changes below), synced and built like any rung:
 `dev-ladder-sync.sh 4a …`, `build-rung.sh 4a`, then **`check-overrides.sh 4a`** before sideloading.
 
@@ -106,7 +130,7 @@ since rung 1b, and it is the only product-level tool that works on this build sy
 - **Editing `vendor/lineage/config/*.mk` / `build/make/target/product/*.mk` via a rung diff** would
   also work, but scatters the removal over three upstream trees (two of them not ladder-managed
   today) and loses the single reviewable list.
-- **Why `overrides` failed for Trebuchet on 2026-09-13, and the trap it shows.**
+- **Why an earlier `overrides` attempt did not remove Trebuchet, and the trap it shows.**
   `product-installed-modules` (main.mk) drops every overridden name before expanding `required`, so
   an override beats any inherited `PRODUCT_PACKAGES` entry. But
   `add-all-target-to-target-required-modules-deps` separately makes an installed module's files
@@ -117,7 +141,7 @@ since rung 1b, and it is the only product-level tool that works on this build sy
   `handheld_system_ext.mk`; Lineage's Trebuchet `Android.bp` defines it with
   `required: ["TrebuchetQuickStep"]`), `Aperture → ApertureLensLauncher` and
   `Seedvault → LocalContactsBackup`. Both ends of each are overridden. (On paper Trebuchet's own
-  override of Launcher3QuickStep should already have cut the first edge, so the 09-13 result is not
+  override of Launcher3QuickStep should already have cut the first edge, so that result is not
   fully explained from sources; whatever the cause, `check-overrides.sh` now proves the result on
   the target-files instead of assuming it.) No Android.mk module in the device/vendor/Lineage trees
   `required`s a removed module.
@@ -225,7 +249,7 @@ over everything. Settings therefore stays (FallbackHome, confirm-credential and 
 | `CompanionDeviceManager` | `com.android.companiondevicemanager` | system/app | CDM pairing UI |
 | `CredentialManager` | `com.android.credentialmanager` | system/priv-app | Credential Manager selector UI |
 | `DynamicSystemInstallationService` | `com.android.dynsystem` | system/priv-app | DSU (GSI) installer; `PRODUCT_NO_DYNAMIC_SYSTEM_UPDATE` in common.mk is evaluated too late to work |
-| ~~`ModuleMetadata`~~ **KEPT** | `com.android.modulemetadata` | product/app | REQUIRED: without it `ModuleInfoProvider` never loads metadata and `AppRestrictionController.onSystemReady` → `getInstalledModules` throws "Call to getInstalledModules before metadata loaded": system_server crash loop (4b first build, phone 2, 2026-10-11) |
+| ~~`ModuleMetadata`~~ **KEPT** | `com.android.modulemetadata` | product/app | REQUIRED: without it `ModuleInfoProvider` never loads metadata and `AppRestrictionController.onSystemReady` → `getInstalledModules` throws "Call to getInstalledModules before metadata loaded": system_server crash loop (4b first build) |
 | `PacProcessor` | `com.android.pacprocessor` | system/app | PAC proxy resolver, bound only when a PAC URL is set |
 | `ProxyHandler` | `com.android.proxyhandler` | system/priv-app | PAC proxy handler, same |
 | `SecureElement` | `com.android.se` | system/app | OMAPI service; OMAPI feature dropped in this rung, SE HAL is the -disabled stub |
@@ -286,7 +310,7 @@ of the rung-3 device diff is unchanged (diff regenerated from upstream `device.m
 
 ### On-phone checks
 
-Before flashing either rung: `check-overrides.sh RUNG` on the build box prints OK.
+Before flashing either rung: `check-overrides.sh RUNG` on the target-files prints OK.
 
 **4a** (after the per-rung checklist above: owner, kiosk LOCKED, provisioned, PIN suites):
 

@@ -43,7 +43,7 @@ they can queue requests for review, never sign or bypass the on-device approval.
    `transferFrom(address,address,uint256)` or `increaseAllowance(address,uint256)`
    calls (exact length: missing or trailing bytes, dirty address padding, zero
    addresses and native value on a token call are refused) are accepted during
-   the prototype phase, plus — since 2026-10-11 — canonical ERC-721/1155
+   the prototype phase, plus canonical ERC-721/1155
    `setApprovalForAll`/`safeTransferFrom`/`safeBatchTransferFrom` and calls to the
    pinned Uniswap routers that decode completely (see "Safety you can see"
    below). Every other non-empty calldata is refused with a reason shown on the
@@ -138,16 +138,16 @@ they can queue requests for review, never sign or bypass the on-device approval.
 ## Known limitations
 
 - Pixel 3 XL is end-of-life and no longer receives current vendor firmware or
-  full platform security support. It is a low-cost proof-of-concept target, not
-  the eventual high-assurance recommendation.
+  full platform security support. It is the development phone, not a
+  recommendation; the launch target is the Pixel 6a (Titan M2, LineageOS 24.0).
 - The wallet is a BIP39 24-word seed (see `entropy-design.md` "Implementation
-  status" for what the generator does and does not meet) behind an in-app 6-digit
-  PIN with a verified erase after 10 failures. The 0.3.0 source requires an account-bound
-  24-word backup check before receiving or signing, and fresh PIN authorization for seed
-  access/replacement; physical validation of the new UI is pending. There is still no seed
-  import, independent restore drill in-app, duress, or inheritance, and the
-  PIN is not yet folded into the at-rest wrapping (a rooted attacker with the
-  StrongBox key does not need it). Replacing the wallet (two-phase: new phrase
+  status" for what the generator does and does not meet). The 6-digit PIN is the
+  Android device credential: the seed key is StrongBox-bound to a recent credential
+  check, and 10 failures wipe the phone by device policy
+  (`pin-credential-design.md`). The app requires an account-bound 24-word backup
+  check before receiving or signing, and fresh PIN authorization for seed
+  access/replacement. Restore exists; there is no duress or inheritance design.
+  Replacing the wallet (two-phase: new phrase
   shown, then explicit activate) changes the active key but does not prove
   forensic erasure of old process memory or flash history; "lock" drops
   references to key material, it does not prove memory erasure.
@@ -173,7 +173,7 @@ they can queue requests for review, never sign or bypass the on-device approval.
 New features must preserve these invariants or update this document with the
 new trusted components and corresponding negative tests.
 
-## Device attestation (2026-10-10)
+## Device attestation
 
 The companion asks the phone to attest a fresh challenge on every connection and before every
 signature (`device-attestation.md`). A StrongBox key generated for that challenge signs the wallet
@@ -184,7 +184,7 @@ and the release-signed app on certified hardware; it does not prove a genuine im
 uncompromised at runtime, resist physical attacks, or survive a Google root or batch-key
 compromise. No phone can be GENUINE until the release APK signer and AVB key are pinned.
 
-## 0.3.0 app interaction boundary (2026-09-05)
+## App interaction boundary
 
 The updated app presents full-screen native pages for review and sensitive work. A request owns
 an `ApprovalDecision`: reject can win during review, while a successful Sign transition disables
@@ -201,13 +201,12 @@ challenge is answered correctly and the account is confirmed. Receiving/signing 
 that proof matching the loaded identity. This is a usability safeguard, not an anti-root or
 rollback-resistant hardware record and not an independent restoration test. Missing proof on
 upgrade requires a check without replacing the wallet. Replacement requires the old proof and
-a new full challenge before activation. Backup/PIN state remains app-managed until PIN-derived
-wrapping and stronger storage threat-model work land.
+a new full challenge before activation. The backup-check record is app-managed state.
 
 The development dump skips sensitive flows, but external screen capture remains available on
 the development OS. Physical UI verification and the hardened/relocked release remain required.
 
-## Safety you can see (2026-10-11)
+## Safety you can see
 
 Display-only additions to the review; none of them changes what is signed, and every review is
 still built from the one parsed `Eip1559Request` / `MessageRequest` that is signed.
@@ -277,7 +276,7 @@ attacker could edit it to suppress a first-time warning — which is why every r
 the full address.
 
 
-## Accounts and passphrase wallets (2026-10-11)
+## Accounts and passphrase wallets
 
 **Accounts.** The phone derives m/44'/60'/0'/0/i for i = 0…19 from the one stored 24-word phrase.
 ☰ → Accounts lists the opened ones (number, short address, optional label typed on the phone),
@@ -328,7 +327,7 @@ active when it starts: it carries `from`, the attestation must name it, and the 
 must equal it. The single-address file of earlier versions migrates to "Account 1" (its history
 moves to `history-<address>.json`); history, NFTs and the watcher's scan state are per address.
 
-## Stronger backups (2026-10-11)
+## Stronger backups
 
 **Printable backup card** (`tools/backup-card/make_card.py` → `tools/backup-card/out/*.pdf`, A4 and
 US Letter, with a 25 × 25 or 29 × 29 SeedQR grid). The PDFs are generated deterministically by a
@@ -375,7 +374,7 @@ wallet" in the simulation is the ACTIVE paired account: the companion simulates 
 address the request names in `from`), remembers the result per account (a result for one account
 never stands in for another), and the phone checks the claim against the account it signs with.
 
-## Bitcoin on the companion (2026-10-12)
+## Bitcoin on the companion
 
 The Mac is a **watch-only** Bitcoin wallet for keys that stay on the phone (BIP-84 P2WPKH and
 BIP-86 P2TR, accounts 1–20). It holds the account xpub, fingerprint and descriptor
@@ -416,7 +415,7 @@ missing signatures and altered spent amounts are all refused.
 paging); RBF speed-up only for transactions sent from this Mac that have change; no coin control,
 no Tor, no BIP-21 parameters, no script-path/multisig; testnet uses Testnet4 servers by default.
 
-## Bitcoin (2026-10-12)
+## Bitcoin
 
 **Scope.** The phone signs Bitcoin from the SAME 24 words as the EVM accounts: Native SegWit
 (P2WPKH, BIP-84, m/84'/coin'/a') and Taproot key path (P2TR, BIP-86, m/86'/coin'/a', no script

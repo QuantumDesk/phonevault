@@ -44,7 +44,7 @@ scripts cover useful PIN/replacement paths, but not the new interleavings below.
 ### F01 — P1: Reject can report cancellation after Sign without cancelling signing
 
 **New; confirmed control-flow defect, device timing not reproduced.** In
-[`MainActivity.showApproval`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L1037),
+[`MainActivity.showApproval`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L1037),
 Sign disables itself and the checkbox, then queues a crypto task. Reject remains enabled. Its
 callback sends `rejected` and clears `requestPending`, but does not invalidate the approval or
 cancel the queued job. The signing task checks session/transport/identity, not a rejected state.
@@ -66,8 +66,8 @@ never yield a signature. Each request owns exactly one terminal result.
 
 ### F02 — P1: A new wallet can receive and sign before backup; no restore exists
 
-**Existing gap, confirmed.** [`unlock`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L283)
-shows Home and calls `loadKey`; [`loadOrCreate`](../../app/src/main/java/dev/phonevault/signer/VaultKeyStore.java#L74)
+**Existing gap, confirmed.** [`unlock`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L283)
+shows Home and calls `loadKey`; [`loadOrCreate`](../../../app/src/main/java/dev/phonevault/signer/VaultKeyStore.java#L74)
 creates and persists a wallet on empty storage. There is no durable backup-verification state or
 create/restore choice. Replacement activation also has no proof that either backup is usable.
 
@@ -94,12 +94,12 @@ recover matching addresses in an independent compatible implementation.
 
 **New audit finding; source-confirmed, modal survival needs device reproduction.** An unlocked
 user can reach the entire seed through Recovery phrase → Show, with no new PIN challenge.
-[`confirmRevealBackup`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L603)
+[`confirmRevealBackup`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L603)
 and the replacement confirmation keep their dialogs only in local variables. `lock()` dismisses
 `approvalDialog`, not these sensitive confirmations.
 
 The reveal callback captures its session when Show is clicked, rather than when the confirmation
-was opened. [`showBackup`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L624)
+was opened. [`showBackup`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L624)
 decrypts before its eventual UI-side session/unlocked check. Consequently the code does not
 enforce a pre-decryption locked-state guard. A surviving confirmation after lock can trigger
 decryption while locked, although the final UI check prevents displaying the phrase while locked.
@@ -119,7 +119,7 @@ still need the PIN to reveal the seed.
 
 **New; confirmed control flow, requires storage-fault UI test.** The same Home view retains its
 address and QR across locks. `unlock()` displays it immediately, before asynchronous key loading.
-[`loadKey`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L809) handles a load
+[`loadKey`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L809) handles a load
 failure by changing status text only. The replacement persistence-failure path deliberately drops
 credentials and locks because the durable identity is uncertain, but it does not clear the old
 receiving identity.
@@ -141,7 +141,7 @@ and QR for the same reconciled identity.
 ### F05 — P1: “Maximum network fee” is not a valid total-fee promise for every accepted chain
 
 **New; confirmed calculation and upstream fee-model mismatch.**
-[`maximumFeeEth`](../../app/src/main/java/dev/phonevault/signer/Eip1559Request.java#L271)
+[`maximumFeeEth`](../../../app/src/main/java/dev/phonevault/signer/Eip1559Request.java#L271)
 always uses `gasLimit × maxFeePerGas`. The parser accepts arbitrary positive chain IDs and names
 Optimism/Base, yet the approval labels the result “Maximum network fee.” OP Stack transactions
 can additionally owe L1 data and operator fees, as described in the
@@ -181,7 +181,7 @@ reading ABI hex. This is the practical bar behind
 ### F07 — P2: Approval typography and information hierarchy make mistakes harder to spot
 
 **Measured from source; physical reading test outstanding.**
-[`detail`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L1103) uses 7 sp pixel
+[`detail`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L1103) uses 7 sp pixel
 labels and 14 sp values. `VaultTheme.FAINT` (`#606268`) has approximately 3.32:1 contrast on
 `BG` (`#060608`) and 3.12:1 on `SURFACE` (`#0f1014`). This is below the 4.5:1 normal-text
 benchmark in [WCAG contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum).
@@ -211,7 +211,7 @@ trust decision; do not enable arbitrary Android services simply to claim accessi
 ### F08 — P2: Seed backup is a timed, fixed-layout transcription task
 
 **Confirmed implementation; clipping risk requires rendering.**
-[`buildBackupView`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L736) puts all
+[`buildBackupView`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L736) puts all
 24 words in two columns inside a non-scrolling layout. Twelve rows each have 18 dp vertical
 padding plus 17 sp text. Headers, captions, and replacement's two actions consume the remaining
 height. There is no accommodation for large text or longer words. The phrase disappears after a
@@ -252,7 +252,7 @@ attempts; recoverability is part of the security design.
 
 **New; confirmed state omission.** `confirmRevealBackup` checks USB only when opening its
 confirmation. Neither confirmation nor ordinary phrase display occupies replacement state.
-[`handleIntent`](../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L908) parks only
+[`handleIntent`](../../../app/src/main/java/dev/phonevault/signer/MainActivity.java#L908) parks only
 when locked or replacing. A host attached after the initial check can connect and present a
 signing dialog over the phrase; timeout can replace its underlying screen as well.
 
@@ -270,7 +270,7 @@ host signing work.
 ### F11 — P2: The UI reports delivery before the USB writer delivers anything
 
 **New; confirmed semantics.** After `source.send(response)` succeeds, MainActivity reports
-“signature returned.” [`AccessoryTransport.send`](../../app/src/main/java/dev/phonevault/signer/AccessoryTransport.java)
+“signature returned.” [`AccessoryTransport.send`](../../../app/src/main/java/dev/phonevault/signer/AccessoryTransport.java)
 only enqueues; its writer can subsequently fail, or close can clear the queue. Conversely, once
 bytes reach a host, unplugging cannot revoke them. There is no persistent user-facing receipt or
 protocol delivery acknowledgement.

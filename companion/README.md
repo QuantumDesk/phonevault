@@ -100,10 +100,11 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    `eth_signTypedData_v4` → `sign_message` / `sign_typed_data`. `eth_sign`, `eth_signTransaction`
    and anything unknown are refused with a JSON-RPC error. One request goes to the phone at a
    time; the rest wait in a visible queue. Request policy and parameter checks: `src-tauri/src/wc.rs`.
-   The phone currently signs only plain transfers and ERC-20 transfer/approve calls, so other
-   contract calls (e.g. a swap router) are shown with a warning and the phone refuses them.
+   The phone signs only what it can decode in full (native transfers, ERC-20 and NFT calls,
+   pinned Uniswap routers; see `vault-os/docs/protocol.md`); any other contract call is shown
+   with a warning here and refused by the phone.
 
-6. **Browser extension.** Sites in Chrome, Brave or Edge can use Phone Vault directly: the
+11. **Browser extension.** Sites in Chrome, Brave or Edge can use Phone Vault directly: the
    extension (`extension/`, load unpacked) announces "Phone Vault" through EIP-6963 and passes each
    request, with the site's origin as the browser reports it, to this app over native messaging.
    Settings → Browser extension → Install browser connection writes the host manifest (pinned to
@@ -112,7 +113,7 @@ verifies what comes back on its own, and broadcasts only after you click Broadca
    `src-tauri/src/bridge.rs` (reusing `wc.rs`). Design and threat model:
    `vault-os/docs/browser-extension.md`.
 
-11. **Bitcoin (watch-only).** Pick Bitcoin in the network menu (Testnet/Signet: Settings → Bitcoin →
+12. **Bitcoin (watch-only).** Pick Bitcoin in the network menu (Testnet/Signet: Settings → Bitcoin →
    Developer toggle). *Add from phone* asks for Native SegWit (BIP-84, default) or Taproot (BIP-86) and
    an account number; the phone asks you to approve sharing that account's xpub (`btcGetAccount`).
    The answer is checked strictly (path, depth/child number, xpub network, and the descriptor must be

@@ -1,10 +1,10 @@
-# Release configuration and release gates (2026-10-13)
+# Release configuration and release gates
 
 `vault-os/vendor/phonevault/`, `vault-os/device/phonevault/` and `vault-os/patches/` are the
-**release intent**. Until this change they disagreed with what the development ladder
-(`dev-ladder/README.md`) had proven on a phone, and they still carried two development
-deviations from the August boot debugging. This note records what was changed, what a release
-build now consists of, which gates enforce it, and what still needs a phone.
+**release intent**. This note records how the release configuration was brought in line with
+what the development ladder (`dev-ladder/README.md`) proved on a phone, which development
+deviations from the early boot debugging were removed, what a release build consists of, which
+gates enforce it, and what still needs a phone.
 
 ## 1. Development deviations removed from the release config
 
@@ -25,9 +25,9 @@ below rejects any of it reappearing there.
 
 | Area | Proven by | Release config |
 |---|---|---|
-| Kernel fragment | rung 2d-d (slices A-D), PASSED 2026-10-10 | `patches/kernel-crosshatch/0001` is symbol-for-symbol slices A-D. DWC3 stays **dual-role** (gadget-only never enumerated); `policy/forbidden-kernel-config.regex` now forbids only `CONFIG_USB_DWC3_HOST`, and the appliance gate requires `CONFIG_USB_DWC3_DUAL_ROLE=y` |
-| USB HALs / init | rung 3, PASSED 2026-10-10 | device patches 0002/0003 (already release) + new 0027 (no vendor diag/serial/rmnet functions), 0028 (failed mode switch falls back to `sink`; port reported UFP-only, no role/mode changes), 0029 (dwc3 `id` node root-only); `init.phonevault.usb.rc` re-pins `port_type sink` on `sys.boot_completed=1`. The appliance gate rejects any init file that chowns/chmods `a600000.ssusb/id` |
-| App strip | rungs 4a + 4b, PASSED 2026-10-11 | every rung-4b override is in the release `Android.bp` (test-enforced). Section comments kept |
+| Kernel fragment | rung 2d-d (slices A-D), passed on hardware | `patches/kernel-crosshatch/0001` is symbol-for-symbol slices A-D. DWC3 stays **dual-role** (gadget-only never enumerated); `policy/forbidden-kernel-config.regex` now forbids only `CONFIG_USB_DWC3_HOST`, and the appliance gate requires `CONFIG_USB_DWC3_DUAL_ROLE=y` |
+| USB HALs / init | rung 3, passed on hardware | device patches 0002/0003 (already release) + new 0027 (no vendor diag/serial/rmnet functions), 0028 (failed mode switch falls back to `sink`; port reported UFP-only, no role/mode changes), 0029 (dwc3 `id` node root-only); `init.phonevault.usb.rc` re-pins `port_type sink` on `sys.boot_completed=1`. The appliance gate rejects any init file that chowns/chmods `a600000.ssusb/id` |
+| App strip | rungs 4a + 4b, passed on hardware | every rung-4b override is in the release `Android.bp` (test-enforced). Section comments kept |
 | Kept modules | rung 4 "Kept, and why"; 4b boot loop | **Settings** (FallbackHome, confirm-credential, device-admin UI), **PackageInstaller** (PMS needs exactly one installer), **LatinIME** (only IME; the step-up PIN prompt needs it), **FusedLocation** (LocationManagerService), **ModuleMetadata** (system_server boot loop). Removed from the release overrides and from `policy/forbidden-target-files.regex`; `tests/test_forbidden_policy_coverage.py` fails if any of them (or SystemUI, SettingsProvider, PermissionController) is overridden or forbidden again |
 | Variant / adb | — | `user` lunch target, `persist.sys.usb.config=none`, no adb keys, no early-adb rc; recovery hardened (section 4) |
 
@@ -95,7 +95,7 @@ Run by `sign-release.sh` before anything is signed (new usage:
 4. `dev-ladder/check-overrides.sh release TARGET_FILES`: no release override is packaged.
 5. `scripts/verify-rollback-index.sh` (section 5).
 
-Tests: `tests/test-release-gate-gaps.sh` (adversarial negatives, audit 2026-10-13),
+Tests: `tests/test-release-gate-gaps.sh` (adversarial negatives from a security audit),
 `tests/test-production-gate.sh` (ADB negatives incl. the exact DEBUG-41 script),
 `tests/test-release-gates.sh` (source gate incl. the exact DEBUG-38 line, rollback gate,
 release overrides gate), `tests/test-appliance-gate.sh` (DWC3 / id node),
@@ -108,9 +108,8 @@ unverified, downgrade or SPL-downgrade packages, no "Enable ADB" (and no system 
 items, and recovery adbd is never started; the explicit "Apply from ADB" sideload stays (the
 package must still verify against the release OTA certificate). Userdebug ladder images keep the
 install-anyway prompt they rely on. Applied by `install-overlay.sh`. Verified: `git apply
---check` clean on both `/root/lineage-src/bootable/recovery` (Lineage 22.2) and
-`/build/lineage-24/bootable/recovery` (Lineage 24.0, offsets only), and `m recovery` compiled
-on the crosshatch tree (2026-10-13).
+--check` clean on both `$LINEAGE_TREE/bootable/recovery` trees (Lineage 22.2, and Lineage 24.0
+with offsets only), and `m recovery` compiled on the crosshatch tree.
 
 ## 5. AVB rollback index
 

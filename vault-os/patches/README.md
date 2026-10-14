@@ -141,15 +141,14 @@ camera, sensor-hub, and unused compute-DSP drivers, and removes every configfs
 USB function except Android Open Accessory and FunctionFS (the latter is
 retained only for gated userdebug ADB). It is symbol-for-symbol the union of the
 boot-tested dev-ladder slices A-D (rung 2d-d). DWC3 stays dual-role: a
-gadget-only kernel booted but never enumerated on USB (rung 2d-d first attempt,
-2026-09-28); the host-only mode is forbidden, and host/source roles are refused
+gadget-only kernel booted but never enumerated on USB (rung 2d-d first attempt); the host-only mode is forbidden, and host/source roles are refused
 in user space instead (device patches 0002, 0003, 0027-0029 and the sink pin in
 `init.phonevault.usb.rc`). The target-files gate evaluates
 `META/kernel_configs.txt`, so a future upstream config change cannot silently
 re-enable these drivers.
 
 Device patches 0027-0029 fold the dev-ladder rung-3 USB lock-down (boot-tested
-2026-10-10) into the release series: the gadget HAL appends no Qualcomm vendor
+on hardware) into the release series: the gadget HAL appends no Qualcomm vendor
 functions (diag/serial/rmnet via `vendor.usb.config` or the usbradio boot mode),
 a failed port mode switch falls back to `sink` instead of dual-role and the port
 status reports UFP-only with no role or mode changes, and the dwc3 `id` node

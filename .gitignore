@@ -33,3 +33,12 @@ adbkey.pub
 paired-signer.json
 *.dump.png
 vault_dump*.png
+
+# ---- OS / editor / local noise
+.DS_Store
+.env
+.env.*
+*.log
+
+# ---- release-gate test fixtures generated locally
+.gate-fixture/

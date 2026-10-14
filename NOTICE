@@ -3,22 +3,42 @@ Copyright 2026 QuantumDesk / Phone Vault contributors
 
 Licensed under the Apache License, Version 2.0 (see LICENSE).
 
-Licensing boundaries (open-core, as recorded in vault-os/docs/roadmap.md §5):
+Licensing boundaries (open-core; see ROADMAP.md, "Decisions recorded"):
 
-* Everything inside the trust boundary — the signer app (app/), the host
-  tooling (tools/), the Vault OS overlay, scripts, tests and documentation
+* Everything inside the trust boundary — the signer app (app/), the macOS
+  companion (companion/), the browser extension (extension/), the host
+  tooling (tools/), and the Vault OS overlay, scripts, tests and documentation
   (vault-os/) — is Apache-2.0 and intended to be reproducible by anyone.
 
 * Patches under vault-os/patches/ that modify GPL-2.0 code (the Linux kernel
   and any other GPL component of LineageOS/AOSP) are, and must remain,
   licensed under the same GPL-2.0 terms as the code they modify. The
-  Apache-2.0 grant above does not apply to those patches.
+  Apache-2.0 grant above does not apply to those patches. Patches imported
+  from GrapheneOS keep their upstream attribution and license (see
+  vault-os/patches/README.md).
 
-* Third-party components retain their own licenses: LineageOS/AOSP
-  (Apache-2.0 / GPL-2.0 as applicable), web3j (Apache-2.0), Bouncy Castle
-  (MIT), ZXing (Apache-2.0), PyUSB (BSD-3-Clause), the Press Start 2P font
-  (SIL OFL 1.1), and the Pixel 3 XL vendor blobs (proprietary; never
-  redistributed by this repository).
+* Hosted services outside the trust boundary, if any, may be licensed
+  separately.
+
+Third-party components (each retains its own license):
+
+* LineageOS / AOSP: Apache-2.0 / GPL-2.0 as applicable.
+
+* Libraries: web3j (Apache-2.0), Bouncy Castle (MIT), ZXing (Apache-2.0),
+  PyUSB (BSD-3-Clause), embit (MIT, host test tooling only); the
+  companion's Rust crates (companion/src-tauri/Cargo.lock) and npm packages
+  (companion/package-lock.json) carry their own licenses.
+
+* Press Start 2P font, Copyright 2012 The Press Start 2P Project Authors,
+  SIL Open Font License 1.1. The license text ships with the font:
+  app/src/main/assets/fonts/OFL.txt.
+
+* Proprietary vendor firmware and blobs: the Pixel 3 XL (crosshatch) and the
+  Pixel 6a (bluejay; TheMuppets proprietary_vendor_google_bluejay, extracted
+  from Google's CP2A.260705.006 factory image) vendor blobs, bootloader and
+  radio images are Google/vendor proprietary. They are fetched into a build
+  tree at build time and are never redistributed by this repository. Built
+  OS images contain them and are subject to their terms.
 
 * companion/src-tauri/src/attest/testdata/ holds key attestation sample
   certificate chains and their expected parses from
@@ -26,5 +46,24 @@ Licensing boundaries (open-core, as recorded in vault-os/docs/roadmap.md §5):
   Copyright Google LLC, Apache-2.0; and Google's published attestation root
   certificates (https://android.googleapis.com/attestation/root).
 
-* Companion software and services outside the trust boundary may be
-  licensed separately.
+* Token, NFT and router lists (app/src/main/res/raw/tokens.json,
+  NftCollections.java, UniswapRouters.java). These hold factual data
+  (contract addresses, symbols, decimals) that the project re-entered by hand
+  and cross-checked on chain; no third-party list file is redistributed.
+  Sources and their licenses, as published by each repository:
+  - Uniswap Labs Default Token List (https://tokens.uniswap.org,
+    github.com/Uniswap/default-token-list): GPL-3.0.
+  - Superchain Token List (https://static.optimism.io/optimism.tokenlist.json,
+    github.com/ethereum-optimism/ethereum-optimism.github.io): no license
+    declared in the publishing repository; license could not be determined.
+  - Arbitrum token lists (https://tokenlist.arbitrum.io): no license declared
+    in the publishing repository (github.com/OffchainLabs/arbitrum-token-lists);
+    license could not be determined.
+  - Polygon token list (https://api-polygon-tokens.polygon.technology,
+    github.com/0xPolygon/polygon-token-list): MIT.
+  - Issuer pages (Circle, Tether, USDT0, Sky/MakerDAO chainlog, Coinbase),
+    Uniswap deployment documentation and the Uniswap/universal-router
+    deploy-addresses files, and ENS deployment documentation: cited as sources
+    of addresses only.
+  Per-entry sources: app/token-list/SOURCES.md, NFT-SOURCES.md and
+  ROUTER-SOURCES.md.

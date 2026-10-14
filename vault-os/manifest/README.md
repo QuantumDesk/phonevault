@@ -1,5 +1,9 @@
 # Source baseline
 
+This file covers the Pixel 3 XL (crosshatch, LineageOS 22.2). The Pixel 6a uses LineageOS 24.0
+with the local manifest `bluejay/local_manifests-bluejay.xml`; how to sync it is in
+[`../docs/port-bluejay.md`](../docs/port-bluejay.md) §2.
+
 Initialize the official LineageOS 22.2 manifest, then sync the crosshatch device
 dependencies declared by its device tree. Record the manifest revision in every
 Vault OS release; do not build from a moving branch without that release record.
