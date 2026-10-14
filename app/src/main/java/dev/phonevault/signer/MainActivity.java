@@ -149,10 +149,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private boolean credentialPromptOpen;
     /**
      * Right after a boot the user has just entered the PIN on Android's lock screen (to unlock
-     * encrypted storage), which also opens the seed key's window. The FIRST gate of this process,
-     * shortly after boot, therefore tries the key before prompting. Any later lock always prompts.
+     * encrypted storage), which also opens the seed key's window. The FIRST credential gate after
+     * a boot therefore tries the key before prompting — once per BOOT, persisted against the boot
+     * id (BootUnlockGuard), so re-creating the activity cannot re-arm it, and never once the vault
+     * has locked since that boot. Any later gate always prompts.
      */
-    private boolean bootUnlockEligible = true;
+    private BootUnlockGuard bootUnlock;
     /** Session whose boot-time silent unlock attempt is still pending (-1: none). */
     private int bootAttemptSession = -1;
     private boolean silentUnlockAttempt;
@@ -186,9 +188,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      */
     private JSONObject heldRequest;
     private String heldSummary;
+    /** The connection {@link #heldRequest} arrived on; it is dispatched only to that same, live one. */
+    private AccessoryTransport heldSource;
     private String gateNotice;
     private int shiftPhase;
-    /** Release builds: watches Settings.Global.ADB_ENABLED (see adbRefused). */
+    /** Release builds: watches Settings.Global.ADB_ENABLED and adb_wifi_enabled (see adbRefused). */
     private android.database.ContentObserver adbObserver;
 
     @Override protected void onCreate(Bundle state) {
@@ -205,6 +209,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 @Override public void onChange(boolean selfChange) { activateIfPolicyReady(); }
             };
             getContentResolver().registerContentObserver(Settings.Global.getUriFor(Settings.Global.ADB_ENABLED), false, adbObserver);
+            getContentResolver().registerContentObserver(Settings.Global.getUriFor(ADB_WIFI_ENABLED), false, adbObserver);
         }
     }
 
@@ -310,6 +315,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (!operational) {
             vault = new VaultKeyStore(this);
             pin = new VaultPin(this);
+            bootUnlock = new BootUnlockGuard(getSharedPreferences("vault", MODE_PRIVATE));
+            // Credential mode keeps only a marker, never the app PIN hash. Also migrates phones
+            // that entered credential mode before the marker existed (hash still stored).
+            pin.reconcile(SystemCredential.isSet(this));
             backupCheck = new BackupCheck(getSharedPreferences("vault", MODE_PRIVATE));
             backupReminder = new BackupReminder(getSharedPreferences("vault", MODE_PRIVATE));
             operational = true;
@@ -367,8 +376,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     // ------------------------------------------------------------------ device-PIN (credential) mode
 
-    /** The vault PIN is the Android lock credential; the seed key needs a fresh system check. */
-    private boolean credentialMode() { return SystemCredential.isSet(this); }
+    /**
+     * The vault PIN is the Android lock credential; the seed key needs a fresh system check. Decided
+     * by VaultPin's persisted credential-mode marker (set once SystemCredential.install succeeded).
+     */
+    private boolean credentialMode() { return pin != null && pin.credentialHeld(); }
+
+    /** Settings.Global.BOOT_COUNT: identifies this boot for BootUnlockGuard (-1 when unknown). */
+    private int bootId() {
+        return Settings.Global.getInt(getContentResolver(), Settings.Global.BOOT_COUNT, -1);
+    }
 
     /**
      * Run {@code op} with the seed key usable: in credential mode ask the system to verify the PIN
@@ -443,10 +460,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         // attempt shows the gate itself if the keystore refuses; a new session (lock) passes.
         if (bootAttemptSession == s) return;
         boolean freshBoot = android.os.SystemClock.elapsedRealtime() < 10 * 60 * 1000L;
-        if (bootUnlockEligible && freshBoot) {
+        if (freshBoot && bootUnlock.tryConsume(bootId())) {
             // The boot lock screen may still be animating away: give it up to 4 s to report the
             // device unlocked, then try the key; if the keystore refuses we come back and prompt.
-            bootUnlockEligible = false;
+            // tryConsume committed "used for this boot" before we got here.
             bootAttemptSession = s;
             android.app.KeyguardManager keyguard = getSystemService(android.app.KeyguardManager.class);
             final long deadline = android.os.SystemClock.elapsedRealtime() + 4000;
@@ -467,7 +484,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             ui.post(attempt);
             return;
         }
-        bootUnlockEligible = false;
         LinearLayout root = page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
         synchronized (stateLock) { if (heldSummary != null) card(root, "Incoming request", heldSummary); }
@@ -529,8 +545,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pinScreen.setSubtitle("Saving…");
         cryptoExecutor.execute(() -> {
             try {
-                pin.set(chosen); // zeroes the array
+                // Chip first: once it holds the PIN the app stores only the credential-mode
+                // marker, never a PBKDF2 hash an offline guesser could search. The app hash is
+                // the no-chip fallback only. (A crash after install but before the marker is
+                // repaired at startup: VaultPin.reconcile sees the device credential.)
                 boolean bound = SystemCredential.install(this, forSystem); // zeroes forSystem
+                if (bound) {
+                    java.util.Arrays.fill(chosen, '0');
+                    pin.markCredentialHeld();
+                } else {
+                    pin.set(chosen); // zeroes the array
+                }
                 runOnUiThread(() -> {
                     if (!bound) { firstRunPinFresh = true; unlock(s); return; }
                     // The chip now holds the PIN; the next step (creating the wallet) needs it once.
@@ -558,6 +583,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     // One-time upgrade: the verified PIN becomes the device credential.
                     boolean bound = SystemCredential.install(this, forSystem);
                     if (bound) {
+                        pin.markCredentialHeld(); // the app hash goes: the chip is the verifier now
                         runOnUiThread(() -> {
                             if (s != session.get() || pinScreen == null) return;
                             pinScreen.setSubtitle("Your PIN is now held by the security chip. Confirm it once more on the next screen.");
@@ -652,14 +678,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // can never send after this point (send + close are linearized with signing).
             staleTransport = transport;
             transport = null;
-            heldRequest = null;
-            heldSummary = null;
+            clearHeldRequest();
             if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
             keepScreenOn(false);
         }
         clearSensitiveUi();
         clearPinEntry();
         if (!operational) return;
+        bootUnlock.noteLock(bootId()); // no silent boot unlock after any lock this boot
         requestPending.set(false);
         ui.removeCallbacks(idleLock);
         ui.removeCallbacks(hideSeed);
@@ -711,12 +737,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         drainPendingUsb();
     }
 
-    /** After unlock: the request that waited behind the gate goes through the ordinary path. */
+    /**
+     * After unlock: the request that waited behind the gate goes through the ordinary path — only
+     * on the connection it arrived on, and only while that connection is still the live one.
+     */
     private void dispatchHeldRequest() {
         final JSONObject held; final AccessoryTransport source;
-        synchronized (stateLock) { held = heldRequest; heldRequest = null; heldSummary = null; source = transport; }
-        if (held == null || source == null) return;
+        synchronized (stateLock) {
+            held = heldRequest;
+            source = heldSource;
+            boolean live = source != null && source == transport && !source.isClosed();
+            clearHeldRequest();
+            if (held == null || !live) return;
+        }
         cryptoExecutor.execute(() -> onRequest(source, held));
+    }
+
+    /** Under stateLock (or before any transport runs): forget the held request and its source. */
+    private void clearHeldRequest() {
+        heldRequest = null;
+        heldSummary = null;
+        heldSource = null;
     }
 
     private void drainPendingUsb() {
@@ -806,12 +847,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return BuildConfig.VAULT_DEV_BUILD && DevTools.SCREENSHOTS;
     }
 
-    /** Settings.Global.ADB_ENABLED (0 when absent). */
+    /** Settings.Global.ADB_WIFI_ENABLED (hidden constant): wireless debugging. */
+    static final String ADB_WIFI_ENABLED = "adb_wifi_enabled";
+
+    /** Non-zero when USB (Settings.Global.ADB_ENABLED) OR wireless (adb_wifi_enabled) debugging is on. */
     private int adbEnabled() {
-        return Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
+        int usb = Settings.Global.getInt(getContentResolver(), Settings.Global.ADB_ENABLED, 0);
+        int wifi = Settings.Global.getInt(getContentResolver(), ADB_WIFI_ENABLED, 0);
+        return usb != 0 ? usb : wifi;
     }
 
-    /** Release build with USB debugging on: nothing is shown or approved (ApplianceLockdown). */
+    /** Release build with USB or wireless debugging on: nothing is shown or approved (ApplianceLockdown). */
     private boolean adbRefused() {
         return ApplianceLockdown.refuseForAdb(devBuild(), adbEnabled());
     }
@@ -2186,6 +2232,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // is entered and the request has gone through the ordinary review path.
             UsbAccessory gated = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
             if (gated == null) return;
+            synchronized (stateLock) { clearHeldRequest(); } // a new connection never inherits a held request
+            if (pinScreen != null) pinScreen.setPending(null, null);
             if (transport != null) { AccessoryTransport previous = transport; transport = null; previous.close(); }
             try {
                 AccessoryTransport opened = AccessoryTransport.open((UsbManager) getSystemService(USB_SERVICE), gated, this);
@@ -2211,6 +2259,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
         if (accessory == null) return;
+        synchronized (stateLock) { clearHeldRequest(); }
         if (transport != null) {
             AccessoryTransport previous = transport;
             transport = null;
@@ -2265,11 +2314,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 } else {
                     b = TransactionReview.build(Eip1559Request.parse(json), null, tokens()).lockedSummary;
                 }
-                synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
+                synchronized (stateLock) { if (!unlocked && source == transport) { heldRequest = json; heldSummary = b; heldSource = source; } }
             } catch (Exception e) {
                 b = e instanceof RequestRefusal ? e.getMessage() + " It will be refused after you unlock."
                         : "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
-                synchronized (stateLock) { if (!unlocked) { heldRequest = json; heldSummary = b; } }
+                synchronized (stateLock) { if (!unlocked && source == transport) { heldRequest = json; heldSummary = b; heldSource = source; } }
             }
             label = l; body = b;
             runOnUiThread(() -> { if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body); });
@@ -2925,7 +2974,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Under stateLock or on the UI thread: the Bitcoin request still owns an undecided slot in this session. */
     private boolean btcStillOwned(AccessoryTransport source, ApprovalDecision decision, int s) {
         return s == session.get() && unlocked && source == transport && approvalDecision == decision
-                && decision.state() == ApprovalDecision.State.REVIEW && !sensitive.active();
+                && decision.state() == ApprovalDecision.State.REVIEW && !sensitive.active()
+                && !adbRefused(); // release: never answer while debugging is on
     }
 
     /**
@@ -3565,7 +3615,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     @Override public void onDisconnected(AccessoryTransport source, String reason) {
+        boolean droppedHeld;
+        synchronized (stateLock) {
+            droppedHeld = heldSource == source;
+            if (droppedHeld) clearHeldRequest(); // its host is gone
+        }
         runOnUiThread(() -> {
+            if (droppedHeld && !unlocked && pinScreen != null) pinScreen.setPending(null, null);
             if (source != transport) return;
             boolean hadApproval = approvalDecision != null;
             transport = null;

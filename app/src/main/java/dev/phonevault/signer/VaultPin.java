@@ -20,6 +20,9 @@ import javax.crypto.spec.PBEKeySpec;
  * <p>Stored as PBKDF2-HMAC-SHA256(pin, salt, iterations) with a per-device random salt. Wrong
  * attempts are counted persistently; at {@link #MAX_ATTEMPTS} the supplied wipe hook runs and the
  * PIN is cleared (the wallet is gone — that is the point).
+ *
+ * <p>That hash exists only in the no-chip fallback mode. Once the PIN is the device credential
+ * ({@link SystemCredential}) only a marker is stored ({@link #markCredentialHeld}).
  */
 final class VaultPin {
     static final int PIN_LENGTH = 6;
@@ -31,6 +34,13 @@ final class VaultPin {
     private static final String SALT = "pin_salt_v1";
     private static final String ITER = "pin_iter_v1";
     private static final String ATTEMPTS = "pin_attempts_v1";
+    /**
+     * Credential-mode marker: the PIN is the Android lock credential and the Titan M (Gatekeeper)
+     * is its only verifier. While it is present the app keeps NO hash/salt/work factor — an
+     * offline copy of prefs must give a guesser nothing to search without the chip's throttle.
+     * Authoritative once written: a leftover hash next to it is removed, never consulted.
+     */
+    private static final String CREDENTIAL = "pin_device_credential_v1";
 
     /**
      * {@code ERASE_FAILED}: the attempt limit was reached but the wallet could NOT be verifiably
@@ -65,19 +75,61 @@ final class VaultPin {
         this.iterations = iterations;
     }
 
+    /** A PIN exists in either mode: the chip holds it (marker) or the app holds its hash. */
     synchronized boolean isSet() {
+        return credentialHeld() || appPinSet();
+    }
+
+    /** The device credential holds the PIN (credential mode). Decides the gate's mode. */
+    synchronized boolean credentialHeld() {
+        return preferences.getBoolean(CREDENTIAL, false);
+    }
+
+    /** The app-level PBKDF2 record exists (no-chip fallback mode only). */
+    synchronized boolean appPinSet() {
         return preferences.getString(HASH, null) != null && preferences.getString(SALT, null) != null;
+    }
+
+    /**
+     * The PIN was installed as the device credential: write the marker FIRST (its own commit), then
+     * drop the hash, salt, work factor and app attempt counter (the chip throttles from now on). A
+     * crash between the two leaves marker + hash, which {@link #reconcile} finishes. Idempotent.
+     */
+    synchronized void markCredentialHeld() {
+        if (!credentialHeld() && !preferences.edit().putBoolean(CREDENTIAL, true).commit()) {
+            throw new IllegalStateException("Credential-mode marker could not be committed");
+        }
+        if (preferences.contains(HASH) || preferences.contains(SALT) || preferences.contains(ITER)
+                || preferences.contains(ATTEMPTS)) {
+            if (!preferences.edit().remove(HASH).remove(SALT).remove(ITER).remove(ATTEMPTS).commit()) {
+                throw new IllegalStateException("App PIN record could not be removed");
+            }
+        }
+    }
+
+    /**
+     * Startup reconciliation (and migration of phones that entered credential mode before the
+     * marker existed, which still store the hash). {@code deviceCredentialSet}: the system reports a
+     * lock credential. If it does, or the marker is already present, the chip holds the PIN:
+     * marker on, app record gone. Otherwise (fallback mode) nothing changes.
+     */
+    synchronized void reconcile(boolean deviceCredentialSet) {
+        if (deviceCredentialSet || credentialHeld()) markCredentialHeld();
     }
 
     synchronized int attemptsRemaining() {
         return Math.max(0, MAX_ATTEMPTS - preferences.getInt(ATTEMPTS, 0));
     }
 
-    /** Set (or replace) the PIN. Digits only, exactly {@link #PIN_LENGTH}. */
+    /**
+     * Set (or replace) the app-held PIN: the no-chip fallback mode only. Digits only, exactly
+     * {@link #PIN_LENGTH}. Refused in credential mode (the chip holds the PIN there).
+     */
     synchronized void set(char[] pin) throws Exception {
         byte[] hash = null;
         try {
             validate(pin);
+            if (credentialHeld()) throw new IllegalStateException("The device credential holds the PIN");
             byte[] salt = new byte[16];
             new SecureRandom().nextBytes(salt);
             hash = derive(pin, salt, iterations);
@@ -104,7 +156,8 @@ final class VaultPin {
      */
     synchronized Result verify(char[] pin, Eraser eraser) throws Exception {
         try {
-            if (!isSet()) throw new IllegalStateException("No PIN is set");
+            if (credentialHeld()) throw new IllegalStateException("The device credential holds the PIN");
+            if (!appPinSet()) throw new IllegalStateException("No PIN is set");
             if (eraseOutstanding()) {
                 // Limit already reached and the wallet is still not verifiably gone: no further
                 // PIN comparisons (that would be attempt 11+) — only the erase is retried.
@@ -155,7 +208,7 @@ final class VaultPin {
 
     /** True once the attempt limit has been hit without a verified erase. */
     synchronized boolean eraseOutstanding() {
-        return isSet() && preferences.getInt(ATTEMPTS, 0) >= MAX_ATTEMPTS;
+        return !credentialHeld() && appPinSet() && preferences.getInt(ATTEMPTS, 0) >= MAX_ATTEMPTS;
     }
 
     synchronized void clear() {
