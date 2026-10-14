@@ -135,6 +135,10 @@ pub(crate) async fn btc_accounts() -> CmdResult<AccountsView> {
     .await
 }
 
+/// A Bitcoin account request (`btcGetAccount`, `btcShowAddress`), behind the device check. Unlike
+/// `crate::ask_phone` the gate is here: `btc_confirm_account` stores the xpub read through this
+/// with no check of its own, so the phone it came from must have passed when it was read (EVM
+/// pairing is gated at `confirm_pairing` instead). Signing (`btc_sign_start`) gates separately.
 fn phone_request(request: &Value, timeout: Duration) -> Result<Value, String> {
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     crate::attest::require_genuine().map_err(|m| m.trim_start_matches("attestation:").trim().to_string())?;

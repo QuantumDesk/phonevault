@@ -111,6 +111,12 @@ pub(crate) fn pinned_request(mut request: Value, pinned: &str) -> Value {
     request
 }
 
+/// One request to the phone, with no device check of its own (unlike `btc::phone_request`), on
+/// purpose: it is the transport the device check itself uses (`attest::run`), and its other callers
+/// gate where it matters. `read_address` only reads the phone's address; nothing is pinned until
+/// `confirm_pairing` passes `attest::require_pairable` (a passing check for that very address).
+/// `signing::request_signature` calls `attest::require_ok` before asking. The send flows have their
+/// own exchange (`send_flow`) behind the same gates. A new signing caller must gate first.
 fn ask_phone(request: Value, timeout: Duration) -> CmdResult<Value> {
     // One conversation with the phone at a time: wait for any other request to finish.
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
