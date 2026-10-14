@@ -673,3 +673,15 @@ mod synthetic {
         assert!(keydesc::parse(&bad).is_err());
     }
 }
+
+/// Security-audit regression (2026-10-13): a check that read Developer mode as ON must not cache
+/// its verdict when the user turned Developer mode off while it ran. The setting is now read after
+/// the epoch, and `set_developer_mode` writes the setting before bumping the epoch, so the check's
+/// epoch is stale and its (DEVELOPMENT) verdict is dropped instead of cached.
+#[test]
+fn developer_mode_turned_off_mid_check_is_not_undone() {
+    // the user turns Developer mode off exactly while the check reads the (old, ON) setting
+    let (epoch, allow_dev) = epoch_then_dev_mode(|| { let old = true; invalidate(); old }).unwrap();
+    assert!(allow_dev);
+    assert_ne!(epoch, STATE.lock().unwrap().epoch, "the in-flight check's verdict will not be cached");
+}
