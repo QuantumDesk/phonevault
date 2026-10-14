@@ -16,6 +16,7 @@ import { NETWORKS, byId, netName } from "./networks";
 import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast, fact } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
 import { createExtBackend, combine, isExtTopic, onExtChange } from "./extension";
+import { explainSendError, explainPlain, asSendError } from "./errors";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import "./walletconnect.css";
 
@@ -303,7 +304,7 @@ async function sendTransaction(it: Item, quote: Quote, chain: number) {
   try {
     hash = (await api.signStart(ticket, quote)).hash;
   } catch (e) {
-    txFailure(it, e && typeof e === "object" && "kind" in e ? e as SendError : { kind: "internal", message: errText(e), delivered: false });
+    txFailure(it, asSendError(e));
     return;
   } finally { it.ticket = null; }
   if (!backend!.isPending(it.req.id)) {
@@ -327,26 +328,19 @@ async function broadcast(it: Item, hash: string, chain: number) {
 }
 
 function txFailure(it: Item, err: SendError) {
-  const sent = err.delivered;
+  const x = explainSendError(err, { chain: "eth" });
   switch (err.kind) {
     case "busy": it.stage = { s: "review", error: "The phone is still finishing another request. Try again in a few seconds." }; return;
-    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
-    case "cancelled": return finalFail(it, USER_REJECTED, "User cancelled the request.", "Cancelled", sent ? "Stopped waiting on this Mac. If the phone still shows the request, tap Reject there." : "Stopped before anything reached the phone.", "neutral");
-    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", "Signature failed verification", "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
-    case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, "The phone refused this", plainPhone(err.message), "warn", err.message);
-    case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", "Not paired", "Pair this Mac with your phone first.", "warn");
-    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, "It would revert", `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
+    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", x.title, "No signature was created. The dApp was told you declined.", "neutral");
+    case "cancelled": return finalFail(it, USER_REJECTED, "User cancelled the request.", x.title, x.body, "neutral");
+    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", x.title, "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
+    case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, x.title, x.body, "warn", err.message);
+    case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", x.title, x.body, "warn");
+    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, x.title, `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
   }
-  const title = err.kind === "no_phone" ? "Phone not found" : err.kind === "usb_busy" ? "USB is in use" : err.kind === "timeout" ? "No answer from the phone" : err.kind === "disconnected" ? "The USB connection dropped" : "The phone didn't take the request";
-  const body = err.kind === "usb_busy" ? "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server`, then try again."
-    : sent ? "Nothing was broadcast. If the phone still shows the request, reject it there, then try again or reject it here."
-    : "Nothing reached the phone. Plug it in, wake and unlock it, then try again.";
-  it.stage = { s: "failed", title, body, detail: err.message, retry: true, tone: "warn" };
+  // anything else can be tried again, or rejected here
+  it.stage = { s: "failed", title: x.title, body: x.body, detail: err.message, retry: true, tone: x.danger ? "danger" : "warn" };
 }
-
-const plainPhone = (m: string) => /Only canonical transfer|calldata/i.test(m)
-  ? "Your phone signs only plain transfers and token transfer/approve calls, and this transaction is something else. Nothing was signed."
-  : m;
 
 async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_sign" | "typed_data" }>) {
   it.stage = { s: "on_phone", t0: Date.now() }; render();
@@ -365,7 +359,7 @@ async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_s
     const m = errText(e);
     if (m.startsWith("Blocked:")) return finalFail(it, 4100, m, "Blocked: sign-in for another site", m, "danger");
     if (/rejected on the phone/i.test(m)) return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
-    if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused this", m.replace(/^phone error:\s*/i, ""), "warn");
+    if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused the request", explainPlain(m.replace(/^phone error:\s*/i, "")), "warn");
     if (/no Android device|held by another program|did not answer|not reading USB|re-enumerate|USB|timed out/i.test(m))
       { it.stage = { s: "failed", title: "The phone didn't answer", body: "Nothing was signed. Plug the phone in, unlock it, and try again, or reject the request.", detail: m, retry: true, tone: "warn" }; return; }
     if (/digest|recovered signer|claimed address|signature|unexpected fields|correlate/i.test(m))

@@ -8,6 +8,7 @@ import { call, onProgress, onEvent, openExternal, errText } from "./api";
 import type { SendError } from "./api";
 import { h, icon, padlock, short, clock, copy, ago, toast, usdFmt, capitalize, fact } from "./ui";
 import { qrSvg } from "./qr";
+import { explainSendError, explainPlain, asSendError } from "./errors";
 import "./bitcoin.css";
 
 export type BtcNet = "bitcoin" | "testnet" | "signet";
@@ -267,7 +268,7 @@ async function verifyOnPhone(a: BtcAccount, index: number) {
     const r = await btcApi.showAddress(a.id, 0, index);
     recv = r.matches ? { s: "match", index } : { s: "mismatch", index, shown: r.address };
     if (r.matches) await loadWallet(a.id);
-  } catch (e) { recv = { s: "error", message: plain(errText(e)) }; }
+  } catch (e) { recv = { s: "error", message: explainPlain(errText(e), "btc") }; }
   host.renderNow();
 }
 
@@ -329,7 +330,7 @@ function pairView() {
       try {
         const r = await btcApi.showAddress(c.id, 0, 0);
         pair = r.matches ? { s: "compare", c, shown: r } : { s: "mismatch", c, shown: r.address };
-      } catch (e) { pair = { s: "compare", c, error: plain(errText(e)) }; }
+      } catch (e) { pair = { s: "compare", c, error: explainPlain(errText(e), "btc") }; }
       host.renderNow();
     };
     body = h("section", { class: "card" },
@@ -374,7 +375,7 @@ function pairView() {
       if (host.phoneBusy()) { pair = { s: "choose", error: "The phone is answering another request. Finish it first." }; host.renderNow(); return; }
       pair = { s: "reading" }; host.renderNow();
       try { const c = await btcApi.readAccount(host.net(), pairDraft.kind, pairDraft.account); pair = { s: "compare", c }; }
-      catch (e) { pair = { s: "choose", error: plain(errText(e)) }; }
+      catch (e) { pair = { s: "choose", error: explainPlain(errText(e), "btc") }; }
       host.renderNow();
     };
     body = h("section", { class: "card pair" },
@@ -578,7 +579,7 @@ function flowBody(a: BtcAccount): Node {
     }
     case "verifying": return statusCard("Checking the signatures…", "Comparing the signed transaction with what you reviewed and verifying every signature on this Mac.", [], []);
     case "failed": {
-      const x = explain(flow.err);
+      const x = explainSendError(flow.err, { chain: "btc" });
       const q = flow.q;
       return h("section", { class: `card result ${x.danger ? "danger-card" : ""}` },
         h("div", { class: `result-ic ${x.danger ? "bad" : x.neutral ? "neutral" : "warn"}` }, icon(x.danger ? "alert" : "x", 28)),
@@ -691,8 +692,7 @@ async function sendToPhone(q: BtcQuote) {
     if (activeTicket === ticket) setFlow({ s: "signed", q, signed });
   } catch (e) {
     if (activeTicket !== ticket) return;
-    const err: SendError = e && typeof e === "object" && "kind" in e ? (e as SendError) : { kind: "internal", message: errText(e), delivered: false };
-    setFlow({ s: "failed", q, err });
+    setFlow({ s: "failed", q, err: asSendError(e) });
   }
 }
 
@@ -727,32 +727,6 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
 
 function statusCard(title: string, body: string, extra: Node[], actions: Node[]) {
   return h("section", { class: "card result" }, h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })), h("h3", null, title), h("p", { class: "muted" }, body), extra, actions.length ? h("div", { class: "actions" }, actions) : null);
-}
-
-function plain(m: string): string {
-  if (/no Android device/i.test(m)) return "No phone found on USB. Plug it in and unlock it.";
-  if (/held by another program|adb/i.test(m)) return "Another program holds the phone's USB connection, usually the adb server. Run `adb kill-server` and try again.";
-  if (/did not answer|not reading/i.test(m)) return "The phone didn't answer. Wake and unlock it; if that fails, unplug and reconnect the cable.";
-  if (/Unknown method|unknown method|not supported|schema/i.test(m)) return `The phone's app doesn't support Bitcoin yet (${m}). Update Phone Vault on the phone.`;
-  return capitalize(m);
-}
-
-function explain(err: SendError): { title: string; body: string; danger?: boolean; neutral?: boolean; hideDetail?: boolean } {
-  const sent = err.delivered;
-  switch (err.kind) {
-    case "no_phone": return { title: "Phone not found", body: "No phone on USB. Plug the vault into this Mac and unlock it, then try again. Nothing was sent." };
-    case "usb_busy": return { title: "USB is in use", body: "Another program holds the phone's USB connection, usually the Android adb server. Run `adb kill-server`, then try again." };
-    case "connect": case "not_delivered": return { title: "The phone didn't take the request", body: "Nothing reached the phone. Wake and unlock it; if that doesn't help, unplug and reconnect the cable." };
-    case "timeout": return { title: sent ? "No answer from the phone" : "The phone didn't respond", body: sent ? `The request reached the phone, but no answer came back within ${REVIEW_LIMIT_MS / 60_000} minutes. If the phone still shows it, reject it there.` : "Nothing reached the phone. Wake and unlock it and try again." };
-    case "disconnected": return { title: "The USB connection dropped", body: "Nothing was broadcast. Reconnect and try again." };
-    case "cancelled": return { title: "Cancelled", neutral: true, hideDetail: true, body: sent ? "Stopped waiting on this Mac. If the phone still shows the request, tap Reject there." : "Stopped before anything reached the phone." };
-    case "rejected": return { title: "Rejected on the phone", neutral: true, hideDetail: true, body: "You declined on the phone. Nothing was signed or broadcast." };
-    case "phone_error": return { title: "The phone refused it", body: plain(err.message) };
-    case "verify": return { title: "Signature failed verification", danger: true, body: "What came back is not exactly the transaction you reviewed, or is not signed by your paired account's keys. It was thrown away and will not be broadcast. Stop and check the phone, the cable and this Mac before trying again." };
-    case "attestation": return { title: "This phone failed the device check", danger: true, body: "The phone on USB could not prove it is genuine Phone Vault hardware and firmware, so nothing was sent to it. Settings → Device has the details." };
-    case "protocol": return { title: "Unexpected reply from the phone", body: "The reply didn't follow the protocol, so it was discarded. Nothing was broadcast." };
-    default: return { title: "Something went wrong", body: capitalize(err.message || "The request didn't complete. Nothing was broadcast.") };
-  }
 }
 
 function explainBroadcast(m: string): string {
