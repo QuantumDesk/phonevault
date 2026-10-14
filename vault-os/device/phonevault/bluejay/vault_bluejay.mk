@@ -3,7 +3,7 @@
 #
 # Phone Vault resources take precedence over every inherited overlay. The earliest entry in
 # PRODUCT_PACKAGE_OVERLAYS wins, and a product's own value set before its first
-# inherit-product lands ahead of all inherited ones (crosshatch rung 2d-c3 lesson: otherwise
+# inherit-product lands ahead of all inherited ones (otherwise
 # vendor/lineage/overlay/common's default_wallpaper wins).
 #
 # device/phonevault/bluejay/overlay holds what only applies to the Lineage 24.0 tree (the

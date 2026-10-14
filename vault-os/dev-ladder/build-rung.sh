@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# Build one ladder rung on the native build box: target-files → OTA zip.
+# Build one ladder rung on a native Linux build host: target-files → OTA zip.
 #   build-rung.sh RUNG [insecure-adb=1]
-# Runs as the tree owner (never root). Output: $PV_OUT_DIR/rung-RUNG-ota.zip.
+# Runs as the tree owner (never root). Tree: $LINEAGE_TREE (required). Output:
+# $PV_OUT_DIR/rung-RUNG-ota.zip ($PV_OUT_DIR defaults to the tree owner's home).
 # No `set -u`: build/envsetup.sh and lunch reference unset variables by design.
 set -o pipefail
 RUNG="${1:?rung}"
 INSECURE="${2:-1}"
-TREE="${PV_TREE:-/root/lineage-src}"
+TREE="${LINEAGE_TREE:?set LINEAGE_TREE to the LineageOS 22.2 crosshatch source tree}"
 # NOTE: lunch exports OUT and OUT_DIR itself — never reuse those names here.
 PV_OTA_DIR="${PV_OUT_DIR:-${HOME}}"   # the tree owner's home: this script must run as the tree owner
 PV_OTA="${PV_OTA_DIR}/rung-${RUNG}-ota.zip"
@@ -22,8 +23,8 @@ echo "=== RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} variant=${T
 # installed, soong_ui's stale-install cleaner (cleanOldFiles in build/soong/ui/build/cleanbuild.go)
 # os.Stat()s each old path, which follows the symlink, finds nothing on the host and skips it: the
 # APK and odex go, the dangling symlinks stay, and target-files / the partition images copy the
-# staging dir wholesale. That is what check-overrides.sh flagged as Gallery2 and DeviceAsWebcam in
-# 4a (PrintSpooler would follow in 4b). Removed here: every app dir without an APK (a leftover
+# staging dir wholesale, and check-overrides.sh then flags the overridden app as still present.
+# Removed here: every app dir without an APK (a leftover
 # from an earlier build), and every app dir named in the rung's active `overrides` (removed this
 # rung; the APK is still there until soong_ui's cleaner runs). If an overridden module really is
 # still installed, ninja simply re-creates it and check-overrides.sh fails as it should.

@@ -3,10 +3,12 @@
 # ONLY with the owner's explicit approval, ONLY on a throwaway wallet. The phone must already be
 # in the bootloader (Power + Volume Down) or reachable over adb (it is rebooted there).
 # Requires PV_THROWAWAY_DEVICE=1 and exactly one attached device ($PV_SERIAL); every adb/fastboot
-# call is pinned to that serial.
+# call is pinned to that serial. PV_SERIAL (or ANDROID_SERIAL) is required; ADB / FASTBOOT
+# default to adb / fastboot on PATH.
 set -uo pipefail
-A="${ADB:-/root/android-sdk/platform-tools/adb}"; FB="${FASTBOOT:-/root/android-sdk/platform-tools/fastboot}"
-SERIAL="${PV_SERIAL:-8A7Y0FJ6Z}"
+A="${ADB:-adb}"; FB="${FASTBOOT:-fastboot}"
+SERIAL="${PV_SERIAL:-${ANDROID_SERIAL:-}}"
+[[ -n "$SERIAL" ]] || { echo "set PV_SERIAL (or ANDROID_SERIAL) to the development phone's serial (adb devices / fastboot devices)" >&2; exit 2; }
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 # Exactly one phone may be attached: every adb/fastboot call below is pinned to "$SERIAL", and a
 # second phone on the bus is refused outright, so a flash or erase can never land on the wrong

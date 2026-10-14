@@ -8,7 +8,7 @@ fi
 
 APK="$1"
 EXPECTED_CERT="${2:-}"
-SDK_ROOT="${ANDROID_SDK_ROOT:-$(cd "$(dirname "$0")/../../.." && pwd)/.tools/android-sdk}"
+SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
 SOURCE_ROOT="${ANDROID_BUILD_TOP:-/home/builder/android/lineage}"
 SOURCE_TOOLS="${SOURCE_ROOT}/prebuilts/sdk/tools/linux"
 SOURCE_JAVA="${SOURCE_ROOT}/prebuilts/jdk/jdk21/linux-x86/bin/java"
@@ -20,6 +20,10 @@ elif [[ -f /.dockerenv && -x "${SOURCE_TOOLS}/bin/aapt" \
   AAPT=("${SOURCE_TOOLS}/bin/aapt")
   APKSIGNER=("${SOURCE_JAVA}" -jar "${SOURCE_TOOLS}/lib/apksigner.jar")
 else
+  [[ -n "${SDK_ROOT}" && -d "${SDK_ROOT}/build-tools" ]] || {
+    echo "set ANDROID_SDK_ROOT (or ANDROID_HOME) to an Android SDK with build-tools, or PHONEVAULT_AAPT and PHONEVAULT_APKSIGNER" >&2
+    exit 1
+  }
   AAPT=("$(find "${SDK_ROOT}/build-tools" -type f -name aapt -perm -111 | sort -V | tail -1)")
   APKSIGNER=("$(find "${SDK_ROOT}/build-tools" -type f -name apksigner -perm -111 | sort -V | tail -1)")
 fi
@@ -40,7 +44,7 @@ if grep -q "application-debuggable" <<<"${BADGING}"; then
   echo "release APK must not be debuggable" >&2
   exit 1
 fi
-# Exact allowlist. USE_BIOMETRIC (reviewed 2026-09-24): opens the credential-only system prompt
+# Exact allowlist. USE_BIOMETRIC: opens the credential-only system prompt
 # that has the Titan M verify the vault PIN. Any other permission is a release blocker.
 ALLOWED_PERMISSIONS_RE="^uses-permission: name='android\.permission\.USE_BIOMETRIC'$"
 unexpected="$(grep -E "uses-permission:|uses-permission-sdk-" <<<"${PERMISSIONS}" | grep -Ev "${ALLOWED_PERMISSIONS_RE}" || true)"

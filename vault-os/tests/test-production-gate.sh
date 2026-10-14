@@ -127,7 +127,7 @@ expect_production_pass() {
 }
 expect_production_pass baseline
 
-# DEBUG-38: adb as the default USB function, in any installed property file.
+# adb as the default USB function, in any installed property file.
 cp "${fixture}/SYSTEM/build.prop" "${work_dir}/build.prop.saved"
 sed -i.bak 's/^persist\.sys\.usb\.config=none$/persist.sys.usb.config=adb/' \
   "${fixture}/SYSTEM/build.prop"
@@ -145,12 +145,12 @@ printf '%s\n' 'persist.adb.notify=0' >> "${fixture}/SYSTEM/build.prop"
 expect_production_failure negative-debug-property 'contains debugging properties'
 cp "${work_dir}/build.prop.saved" "${fixture}/SYSTEM/build.prop"
 
-# DEBUG-47: a pre-authorised adb host key.
+# A pre-authorised adb host key.
 printf 'QAAAA fixture-host-key\n' > "${fixture}/BOOT/RAMDISK/adb_keys"
 expect_production_failure negative-adb-keys 'contains debug/ADB artifacts'
 rm "${fixture}/BOOT/RAMDISK/adb_keys"
 
-# DEBUG-41: the early-adb init script, exactly as it was installed.
+# An early-boot adb init script as a development image installs it.
 zzz="${fixture}/SYSTEM/etc/init/zzz-debug-earlyadb.rc"
 printf '%s\n' \
   'on post-fs' \

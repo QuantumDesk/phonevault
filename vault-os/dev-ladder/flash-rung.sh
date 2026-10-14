@@ -1,18 +1,23 @@
 #!/usr/bin/env bash
 # Flash one ladder rung to the development phone over adb sideload and verify the boot.
 #   flash-rung.sh RUNG [--wipe]
+# Environment: PV_SERIAL (or ANDROID_SERIAL) the phone's serial, required; PV_OTA the OTA zip
+# (default $PV_OUT_DIR/rung-RUNG-ota.zip, as build-rung.sh writes it); ADB / FASTBOOT tool paths
+# (default: adb / fastboot on PATH).
 # --wipe erases userdata+metadata from the bootloader after the sideload so the NEXT boot is a
 # genuine first boot (automatic owner provisioning only happens then). It destroys the on-device
 # wallet and PIN: only with the owner's explicit approval, only on a throwaway wallet.
 # --wipe requires PV_THROWAWAY_DEVICE=1. Exactly one device ($PV_SERIAL) may be attached; every
 # adb/fastboot call is pinned to it.
 # The recovery still shows "Signature verification failed — install anyway?" at ~47%: someone
-# must tap Yes on the phone (until the OTA key is trusted, release-trust chunk).
+# must tap Yes on the phone (development OTAs are not signed with a key the recovery trusts).
 set -uo pipefail
 RUNG="${1:?rung}"; WIPE=0; [[ "${2:-}" == "--wipe" ]] && WIPE=1
-OTA="${PV_OTA:-/home/aipg/rung-${RUNG}-ota.zip}"
-A="${ADB:-/root/android-sdk/platform-tools/adb}"; FB="${FASTBOOT:-/root/android-sdk/platform-tools/fastboot}"
-SERIAL="${PV_SERIAL:-8A7Y0FJ6Z}"
+OTA="${PV_OTA:-${PV_OUT_DIR:-${HOME}}/rung-${RUNG}-ota.zip}"   # build-rung.sh's output by default
+A="${ADB:-adb}"; FB="${FASTBOOT:-fastboot}"
+SERIAL="${PV_SERIAL:-${ANDROID_SERIAL:-}}"
+[[ -n "$SERIAL" ]] || { echo "set PV_SERIAL (or ANDROID_SERIAL) to the development phone's serial (adb devices / fastboot devices)" >&2; exit 2; }
+SIDELOAD_LOG="${TMPDIR:-/tmp}/rung-${RUNG}-sideload.log"
 log(){ echo "[$(date +%H:%M:%S)] $*"; }
 # Exactly one phone may be attached: every adb/fastboot call below is pinned to "$SERIAL", and a
 # second phone on the bus is refused outright, so a flash or erase can never land on the wrong
@@ -45,8 +50,8 @@ for attempt in 1 2 3; do
   # Long timeout: the transfer finishes in minutes but the recovery waits at ~47% for the
   # physical "Install anyway" tap (unsigned OTA). A short timeout just wastes the session; give
   # a late tap up to 2 h so one attempt still completes cleanly and the boot-watch runs.
-  timeout 7200 "$A" -s "$SERIAL" sideload "$OTA" > "/root/rung-${RUNG}-sideload.log" 2>&1; rc=$?
-  log "attempt $attempt rc=$rc ($(tail -c 80 "/root/rung-${RUNG}-sideload.log" | tr -d '\r\n'))"
+  timeout 7200 "$A" -s "$SERIAL" sideload "$OTA" > "$SIDELOAD_LOG" 2>&1; rc=$?
+  log "attempt $attempt rc=$rc ($(tail -c 80 "$SIDELOAD_LOG" | tr -d '\r\n'))"
   [[ $rc -eq 0 ]] && break; sleep 8
 done
 [[ $rc -eq 0 ]] || { log "sideload failed"; exit 1; }

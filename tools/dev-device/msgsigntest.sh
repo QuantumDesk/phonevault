@@ -11,11 +11,8 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
 VECTORS="${PV_VECTORS:-$(cd "$(dirname "$0")/../.." && pwd)/app/src/test/resources/message-signing-vectors.json}"
-OUT="${PV_MSG_OUT:-/tmp/msgsign}"
+OUT="${PV_MSG_OUT:-$PV_LOG_DIR/msgsign}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"
 [[ -s "$VECTORS" ]] || die "vector fixture not found: $VECTORS"

@@ -12,8 +12,9 @@
 #      outputs and fee exactly as planned), finalize, broadcast (POST /signet/api/tx)
 #   7. wait until mempool.space sees it and (up to PV_SIGNET_CONFIRM_WAIT s) until it confirms
 #
-# Resumable: everything is kept in $PV_SIGNET_DIR (default /root/pv-signet). A rerun skips what is
-# done (account, address, broadcast txid) and continues; delete that directory to start over.
+# Resumable: everything is kept in $PV_SIGNET_DIR (default $PV_STATE_DIR/signet, see env.sh). A
+# rerun skips what is done (account, address, broadcast txid) and continues; delete that directory
+# to start over.
 #   --address-only   stop after step 3's address (do not wait for funds)
 #
 # Needs the btctest.sh environment plus PV_SIGNET_TOOL (tools/btc_signet.py, default next to
@@ -22,7 +23,7 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-STATE="${PV_SIGNET_DIR:-/root/pv-signet}"
+STATE="${PV_SIGNET_DIR:-$PV_STATE_DIR/signet}"
 OUT="$STATE/log"
 source "$(dirname "$0")/btclib.sh"
 SIGNET="${PV_SIGNET_TOOL:-$(dirname "$TOOL")/btc_signet.py}"

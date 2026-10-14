@@ -13,6 +13,13 @@ RUNG_DIR="${OVERLAY}/dev-ladder/rung-${RUNG}"
 [[ -d "${RUNG_DIR}" ]] || { echo "no such rung: ${RUNG_DIR}" >&2; exit 2; }
 [[ -d "${TREE}/build" ]] || { echo "not a Lineage tree: ${TREE}" >&2; exit 2; }
 
+# Every dev rung pre-authorises the builder's adb host (common.mk PRODUCT_ADB_KEYS). The key is
+# the builder's own and is never committed: PV_DEV_ADB_KEY names their adb public key.
+ADB_PUBKEY="${PV_DEV_ADB_KEY:?set PV_DEV_ADB_KEY to your adb public key (e.g. ~/.android/adbkey.pub)}"
+[[ -s "${ADB_PUBKEY}" ]] || { echo "PV_DEV_ADB_KEY: no such file: ${ADB_PUBKEY}" >&2; exit 2; }
+grep -q '^QAAAA' "${ADB_PUBKEY}" \
+  || { echo "PV_DEV_ADB_KEY: not an adb public key (expected adbkey.pub format): ${ADB_PUBKEY}" >&2; exit 2; }
+
 echo "== release overlay → tree"
 mkdir -p "${TREE}/device/phonevault" "${TREE}/vendor/phonevault"
 rsync -a --delete "${OVERLAY}/device/phonevault/" "${TREE}/device/phonevault/"
@@ -25,7 +32,6 @@ declare -A TARGET=(
   [BoardConfigVault.mk]="vendor/phonevault/config/BoardConfigVault.mk"
   [Android.bp]="vendor/phonevault/prebuilt/Android.bp"
   [config.xml]="vendor/phonevault/overlay/frameworks/base/core/res/res/values/config.xml"
-  [debug_adbkey.pub]="vendor/phonevault/config/debug_adbkey.pub"
 )
 for name in "${!TARGET[@]}"; do
   if [[ -f "${RUNG_DIR}/${name}" ]]; then
@@ -35,6 +41,8 @@ for name in "${!TARGET[@]}"; do
     echo "   release : ${TARGET[$name]}"
   fi
 done
+install -m 0644 "${ADB_PUBKEY}" "${TREE}/vendor/phonevault/config/debug_adbkey.pub"
+echo "   dev adb key: vendor/phonevault/config/debug_adbkey.pub (from PV_DEV_ADB_KEY)"
 
 KCONF="${TREE}/kernel/google/msm-4.9/arch/arm64/configs"
 for frag in "${RUNG_DIR}"/*.config; do
@@ -46,7 +54,7 @@ done
 KERNEL="${TREE}/kernel/google/msm-4.9"
 # Each rung carries exactly its own kernel patches: drop any a previous rung left applied (a stale
 # patch can add Kconfig symbols the current rung's config does not answer, and the kernel build
-# then waits forever on an interactive prompt — seen 2026-09-24 going 2d-c → 2d-b).
+# then waits forever on an interactive prompt).
 if ! git -C "${KERNEL}" diff --quiet; then
   echo "   kernel tree had tracked changes from another rung: reset"
   git -C "${KERNEL}" diff --stat | tail -1
@@ -88,8 +96,8 @@ sync_tree_diff vendor "${TREE}/vendor/google/crosshatch" "${RUNG_DIR}/vendor-goo
   crosshatch-vendor.mk Android.bp Android.mk BoardConfigVendor.mk
 
 # Release frameworks/base patches (vault-os/patches/frameworks-base) are release intent, not rung
-# deviations: every rung gets all of them. 0001-0004 were applied to this tree as commits long
-# ago (they reverse-apply → "present"); later ones are applied to the working tree here.
+# deviations: every rung gets all of them. A patch already in the tree (committed, or applied by
+# an earlier sync) reverse-applies and is reported "present"; the others are applied here.
 # packages/SystemUI is first restored to HEAD so a revised SystemUI patch replaces its earlier
 # revision instead of failing to apply (the tree carries no other SystemUI edits).
 FWB="${TREE}/frameworks/base"

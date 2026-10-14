@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Adversarial negatives for the release gates (audit 2026-10-13).
+# Adversarial negatives for the release gates.
 #
 # Every case below builds an input that a production image must never contain and that
 # Android really honours (init/property_service.cpp, init/parser.cpp, init/tokenizer.cpp,

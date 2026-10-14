@@ -7,6 +7,8 @@
 #   PV_WORDS_FILE=path      a 0600 file holding a THROWAWAY 24-word phrase, one word per line or
 #                           space-separated; read by backupcheck/restore scripts, never echoed
 #   ADB=/path/to/adb        optional override
+#   ANDROID_SERIAL=serial   names the target when more than one device is attached
+#   host paths (Python, USB client, pairing file, logs): see env.sh
 #
 # Every tap is found by the widget's text and live bounds (uiautomator). No coordinates are
 # guessed. uiautomator only lists VISIBLE nodes, so scroll before tapping anything below the fold.
@@ -14,12 +16,17 @@ set -euo pipefail
 
 A="${ADB:-adb}"
 PKG=dev.phonevault.signer
+# shellcheck source=env.sh
+source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
 die()  { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
+# Every script that acts on the phone starts here: the phone must be a throwaway AND the only
+# possible target (see require_single_device), so nothing ever lands on an ambiguous device.
 require_throwaway() {
   [[ "${PV_THROWAWAY_DEVICE:-}" == "1" ]] || die "refusing: set PV_THROWAWAY_DEVICE=1 only for a dev phone whose wallet holds nothing (every wrong PIN counts toward the 10-attempt erase)"
+  require_single_device
 }
 
 require_dev_appliance() {
@@ -29,7 +36,8 @@ require_dev_appliance() {
   [[ "$version" == *0.3.*dev-appliance* ]] || die "harness targets the 0.3.x UI (installed: $version)"
   # NEVER call `adb root` here. On LineageOS it is gated by the "Rooted debugging" developer
   # toggle (adbroot service), which a fresh /data resets; the refused call is harmless, but
-  # chasing it by toggling adb_enabled remotely disabled adb on a kiosk with no UI (2026-09-05).
+  # chasing it by toggling adb_enabled remotely can disable adb on a kiosk that has no UI to
+  # turn it back on.
 }
 
 # Exactly one target: either ANDROID_SERIAL names an attached device (adb honours it for every

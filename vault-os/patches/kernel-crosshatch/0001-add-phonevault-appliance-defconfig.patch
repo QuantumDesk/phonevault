@@ -57,7 +57,7 @@ index 000000000000..b49ced12bf67
 +# CONFIG_MSM_CDSP_LOADER is not set
 +# DWC3 stays dual-role (b1c1_defconfig): the msm DWC3 glue needs it for cable
 +# and role detection; a gadget-only kernel never enumerated on USB (dev ladder
-+# rung 2d-d, 2026-09-28). Host and source roles are refused by the USB HALs and
++# rung 2d-d). Host and source roles are refused by the USB HALs and
 +# init pins the Type-C port to sink (device patches 0002/0003/0027-0029).
 +# CONFIG_USB_DWC3_OF_SIMPLE is not set
 +# CONFIG_USB_DWC3_PCI is not set

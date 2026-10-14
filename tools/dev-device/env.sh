@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Host-side paths for the development-device scripts. Sourced by lib.sh; source, don't run.
+# Every value is an environment override with a default that works from a checkout of this repo:
+#
+#   PV_HOST_PY       Python with pyusb (and embit==0.8.0 for the Bitcoin scripts)
+#                    default: python3 on PATH (e.g. point it at a venv built from
+#                    tools/requirements.txt with --require-hashes)
+#   PV_HOST_CLIENT   the USB host client                 default: <repo>/tools/aoa_client.py
+#   PV_BTC_TOOL      the PSBT helper                      default: <repo>/tools/btc_psbt_tool.py
+#   PV_STATE_DIR     persistent harness state (0700)      default: ${XDG_STATE_HOME:-~/.local/state}/phonevault
+#   PV_PAIRING_FILE  the host pairing usbsigntest.sh pins default: $PV_STATE_DIR/paired-signer.json
+#   PV_LOG_DIR       per-run host logs (0700)             default: ${TMPDIR:-/tmp}/phonevault
+# shellcheck disable=SC2034  # the variables below are read by the scripts that source lib.sh
+
+PV_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+PY="${PV_HOST_PY:-python3}"
+PY="$(command -v -- "$PY" 2>/dev/null || printf '%s' "$PY")"   # a bare command name → its path
+CLIENT="${PV_HOST_CLIENT:-${PV_REPO_ROOT}/tools/aoa_client.py}"
+TOOL="${PV_BTC_TOOL:-${PV_REPO_ROOT}/tools/btc_psbt_tool.py}"
+
+PV_STATE_DIR="${PV_STATE_DIR:-${XDG_STATE_HOME:-${HOME}/.local/state}/phonevault}"
+PAIRING="${PV_PAIRING_FILE:-${PV_STATE_DIR}/paired-signer.json}"
+pv_tmp="${TMPDIR:-/tmp}"
+PV_LOG_DIR="${PV_LOG_DIR:-${pv_tmp%/}/phonevault}"
+unset pv_tmp
+
+mkdir -p "$PV_STATE_DIR" "$PV_LOG_DIR" "$(dirname "$PAIRING")"
+chmod 700 "$PV_STATE_DIR" "$PV_LOG_DIR"

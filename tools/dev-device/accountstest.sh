@@ -35,9 +35,7 @@ restore_account1() {
   exit $rc
 }
 trap restore_account1 EXIT
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-OUT="${PV_ACCOUNTS_OUT:-/tmp/accountstest}"
+OUT="${PV_ACCOUNTS_OUT:-$PV_LOG_DIR/accountstest}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 PASS_PHRASE="pv test"   # throwaway; typed on the phone keyboard below
 

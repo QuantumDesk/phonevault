@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Artifact gate for one bluejay rung (b2+): proves on the built target files and images that the
 # rung did what its files say, before anything goes near the phone. build-rung.sh runs it; it can
-# also be run by hand on the build box:
-#   check-build.sh RUNG TARGET_FILES.zip OUT_DIR [TREE]
+# also be run by hand on the build host:
+#   check-build.sh RUNG TARGET_FILES.zip OUT_DIR [TREE]   (TREE default: $LINEAGE_TREE)
 # Checks, each only when the rung dir carries the input:
 #   1. kernel  PHONEVAULT_KMODS_REMOVED (BoardConfigVault.mk): no such .ko anywhere in the target
 #              files (vendor_dlkm, vendor_boot ramdisk), no load list names one, and every
@@ -21,7 +21,7 @@ set -euo pipefail
 RUNG="${1:?rung}"
 TF="${2:?target files zip}"
 OUTD="${3:?out dir (images/)}"
-TREE="${4:-/build/lineage-24}"
+TREE="${4:-${LINEAGE_TREE:?usage: check-build.sh RUNG TARGET_FILES.zip OUT_DIR TREE (or set LINEAGE_TREE)}}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNG_DIR="${SCRIPT_DIR}/rung-${RUNG}"
 [[ -d "${RUNG_DIR}" ]] || { echo "no such rung: ${RUNG_DIR}" >&2; exit 2; }

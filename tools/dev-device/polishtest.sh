@@ -15,7 +15,7 @@ source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
 require_pin
-OUT="${PV_POLISH_OUT:-/tmp/polishtest}"
+OUT="${PV_POLISH_OUT:-$PV_LOG_DIR/polishtest}"
 mkdir -p "$OUT"
 wake
 trap unwake EXIT

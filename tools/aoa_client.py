@@ -84,7 +84,7 @@ def open_endpoints(device):
         raise RuntimeError("USB device is not an allowed Android Open Accessory product")
     # Only configure a device that has no active configuration. On Linux, re-issuing
     # SET_CONFIGURATION to an already-configured Android gadget resets it: the phone drops out
-    # of accessory mode and re-enumerates as plain adb (observed 2026-09-05 on the build box).
+    # of accessory mode and re-enumerates as plain adb.
     try:
         configuration = device.get_active_configuration()
     except usb.core.USBError:

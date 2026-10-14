@@ -11,7 +11,7 @@ android_app_import {
     // Android expands inherited product lists after evaluating the leaf
     // product, so Make's -= cannot reliably remove upstream entries. Module
     // overrides are applied to the fully expanded install graph.
-    // Release removal list = the boot-tested dev ladder (rung 4b, PASSED 2026-10-11 on phone 2)
+    // Release removal list = the boot-tested dev ladder (crosshatch rung 4b)
     // plus the release-only entries below it. See vault-os/docs/release-config.md.
     //
     // NEVER override (proven required by the ladder; tests/test_forbidden_policy_coverage.py
@@ -130,8 +130,7 @@ android_app_import {
         "CredentialManager",
         "DynamicSystemInstallationService",
         // "ModuleMetadata": KEPT — without it ModuleInfoProvider never loads and
-        // AppRestrictionController.onSystemReady crashes system_server on every boot
-        // (boot loop on phone 2, 2026-10-11).
+        // AppRestrictionController.onSystemReady crashes system_server on every boot.
         "PacProcessor",
         "ProxyHandler",
         "SecureElement",

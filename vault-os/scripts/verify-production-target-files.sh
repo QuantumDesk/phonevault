@@ -534,8 +534,8 @@ EOF
 # A production image has no USB debugging path: adb is never the default USB
 # function, no host key is pre-authorised, no debug init script ships, and no
 # init file brings up adbd or its FunctionFS endpoint outside triggers that a
-# user build can never satisfy. (DEBUG-38/41, 2026-08: a release common.mk
-# carried persist.sys.usb.config=adb and an early-boot adbd script.)
+# user build can never satisfy. persist.sys.usb.config=adb and an early-boot
+# adbd script are the development settings most likely to leak into a release.
 usb_config_lines="$(grep -E '^(persist\.)?(sys|vendor)\.usb\.config=' \
   "${properties_file}" || true)"
 adb_usb_config="$(grep -Ei 'adb' <<<"${usb_config_lines}" || true)"

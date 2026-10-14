@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
-# Build one bluejay rung on the native build box: target-files → firmware-free fastboot image zip
+# Build one bluejay rung on a native Linux build host: target-files → firmware-free fastboot image zip
 # plus the loose images, with SHA256SUMS.
-#   build-rung.sh RUNG [TREE] [OUT]
-#     TREE default /build/lineage-24, OUT default /build/out-RUNG
-# Run as the tree owner (aipg), after sync-rung.sh. No `set -u`: envsetup/lunch use unset vars.
+#   build-rung.sh RUNG [TREE] [DEST]
+#     TREE  the synced LineageOS 24.0 bluejay tree (default: $LINEAGE_TREE)
+#     DEST  where the images, target files and checksums go (default: $PV_RUNG_OUT_ROOT/out-RUNG)
+# Run as the tree owner, after sync-rung.sh. No `set -u`: envsetup/lunch use unset vars.
 set -o pipefail
 RUNG="${1:?rung}"
-TREE="${2:-/build/lineage-24}"
-PV_DEST="${3:-/build/out-${RUNG}}"     # lunch exports OUT/OUT_DIR: never reuse those names
+TREE="${2:-${LINEAGE_TREE:-}}"
+PV_DEST="${3:-${PV_RUNG_OUT_ROOT:+${PV_RUNG_OUT_ROOT}/out-${RUNG}}}"  # lunch exports OUT/OUT_DIR: never reuse those names
+[[ -n "${TREE}" ]] || { echo "usage: build-rung.sh RUNG TREE [DEST] (or set LINEAGE_TREE)" >&2; exit 2; }
+[[ -n "${PV_DEST}" ]] || { echo "usage: build-rung.sh RUNG TREE DEST (or set PV_RUNG_OUT_ROOT)" >&2; exit 2; }
 JOBS="${PV_JOBS:-24}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${TREE}" || exit 9
@@ -17,8 +20,8 @@ source build/envsetup.sh
 lunch vault_bluejay-cp2a-userdebug
 [[ -n "${TARGET_PRODUCT:-}" ]] || { echo "LUNCH FAILED"; exit 8; }
 echo "=== BLUEJAY RUNG ${RUNG} BUILD START $(date) product=${TARGET_PRODUCT} variant=${TARGET_BUILD_VARIANT}"
-# Scrub stale app dirs from the staging tree before building (crosshatch rung 4a finding, see
-# dev-ladder/README.md "Stale staging leftovers"): an app with JNI libs leaves dangling lib/<abi>
+# Scrub stale app dirs from the staging tree before building (dev-ladder/README.md, "Stale
+# staging leftovers"): an app with JNI libs leaves dangling lib/<abi>
 # symlinks that soong_ui's stale-install cleaner cannot delete, and target files copy the staging
 # dir wholesale. Removed here: every app dir without an APK, and every app dir named in the rung's
 # active `overrides` (if such a module really is still installed, ninja re-creates it and
@@ -35,10 +38,10 @@ for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-ap
     echo "   scrub overridden app dir: ${d}"; rm -rf "${d}"
   fi
 done
-# Same problem for kernel modules leaving the vendor_boot ramdisk (b4a, 2026-10-13): the dlkm
-# fragment's staging dirs are filled by per-file copy rules and never pruned, so a module dropped
-# from BOARD_VENDOR_RAMDISK_KERNEL_MODULES stayed in vendor_boot (no load list named it, but the
-# .ko was there). Both dirs are regenerated from the current module list on every build.
+# Same problem for kernel modules leaving the vendor_boot ramdisk: the dlkm fragment's staging
+# dirs are filled by per-file copy rules and never pruned, so a module dropped from
+# BOARD_VENDOR_RAMDISK_KERNEL_MODULES would stay in vendor_boot (no load list names it, but the
+# .ko is there). Both dirs are regenerated from the current module list on every build.
 for d in "${PV_PRODUCT_OUT}"/obj/PACKAGING/vendor_ramdisk_fragment-stage-*_intermediates \
          "${PV_PRODUCT_OUT}"/obj/PACKAGING/depmod_vendor_ramdisk*_intermediates; do
   [[ -d "${d}" ]] && { echo "   scrub ramdisk module staging: ${d}"; rm -rf "${d}"; }

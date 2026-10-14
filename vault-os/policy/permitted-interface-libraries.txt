@@ -6,7 +6,7 @@
 # checked separately. Only lines that match ^(SYSTEM|VENDOR)/lib(64)?/NAME.so$
 # are accepted, and matching is exact, so any newly appearing interface
 # library still fails the gate. Evidence: reverse NEEDED analysis of the first
-# full crosshatch appliance image (2026-08-18).
+# full crosshatch appliance image.
 #
 # system_server JNI (libandroid_servers -> libservices.core-gnss / ContextHub).
 # Follow-up hardening: drop the GNSS and ContextHub JNI from

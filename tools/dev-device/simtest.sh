@@ -19,10 +19,7 @@ require_throwaway
 require_dev_appliance
 require_pin
 wake
-PY="${PV_HOST_PY:-/root/pv-host/.venv/bin/python}"
-CLIENT="${PV_HOST_CLIENT:-/root/pv-host/tools/aoa_client.py}"
-PAIRING="${PV_PAIRING_FILE:-/root/pv-host/paired-signer.json}"
-OUT="${PV_SIM_OUT:-/tmp/simtest}"
+OUT="${PV_SIM_OUT:-$PV_LOG_DIR/simtest}"
 [[ -x "$PY" && -s "$CLIENT" ]] || die "host client not staged ($PY / $CLIENT)"
 [[ -s "$PAIRING" ]] || die "no pinned pairing at $PAIRING: run usbsigntest.sh first"
 grep -q -- "--host-simulation" "$CLIENT" || die "$CLIENT predates --host-simulation: restage tools/aoa_client.py"
