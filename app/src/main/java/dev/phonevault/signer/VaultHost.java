@@ -110,6 +110,11 @@ interface VaultHost {
     void markBackupVerified();
 
     // ---------------------------------------------------------------- USB requests
+    /**
+     * One request at a time: take the approval slot (a new decision), or answer "Another approval
+     * is pending" and return null. Any thread.
+     */
+    ApprovalDecision claimApproval(AccessoryTransport source, String id);
     /** Under stateLock or on the UI thread: the request still owns its slot, with the checks {@code need} names. */
     boolean owns(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need);
     /** Before drawing a request's screen: false if it still owns its slot; else cancels, releases the slot, true. */
