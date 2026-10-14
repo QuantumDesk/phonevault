@@ -10,7 +10,7 @@
 //    goes to the phone for review and returns only what Rust verified against the pinned signer.
 //  * One request goes to the phone at a time; the rest wait in a visible queue.
 
-import { api, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
+import { api, call, registerPreview, onProgress, onEvent, openExternal, errText, isTauri } from "./api";
 import type { Quote, SendError } from "./api";
 import { NETWORKS, byId, netName } from "./networks";
 import { h, icon, short, shortHash, grouped, fmtAmount, clock, copy, toast, fact } from "./ui";
@@ -54,14 +54,8 @@ const INTERNAL = -32603;
 
 // ------------------------------------------------------------------ bridge
 
-let mockMod: Promise<typeof import("./wc-mock")> | null = null;
-const mock = () => (mockMod ??= import("./wc-mock"));
-
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) return (await mock()).mockInvoke<T>(cmd, args);
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
-}
+const mock = () => import("./wc-mock");
+registerPreview((cmd) => cmd.startsWith("wc_") || cmd === "dapp_icon", async () => (await mock()).mockInvoke);
 
 /** The site that asked, only when it is trusted: the browser-reported origin (extension), or
  *  WalletConnect Verify's origin when it says VALID and does not flag it. Rust checks sign-in

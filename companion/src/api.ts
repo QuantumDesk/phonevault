@@ -81,11 +81,27 @@ export type Stage = "waiting" | "connecting" | "delivered" | "verifying";
 
 export const isTauri = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
+/** How long the phone review may take before Rust gives up on it (sign_start, sign_message: 300 s). */
+export const REVIEW_LIMIT_MS = 300_000;
+
 let mockPromise: Promise<Mock> | null = null;
 const mock = () => (mockPromise ??= import("./mock").then((m) => m.createMock()));
 
+/** A module's own preview stand-in for the commands it owns (WalletConnect, browser extension). */
+export type PreviewInvoke = (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+const previews: { owns: (cmd: string) => boolean; load: () => Promise<PreviewInvoke> }[] = [];
+
+/** In the browser preview, send the commands `owns` accepts to `load()`'s mock instead of mock.ts.
+ *  Does nothing inside the app. */
+export function registerPreview(owns: (cmd: string) => boolean, load: () => Promise<PreviewInvoke>) {
+  if (!isTauri) previews.push({ owns, load });
+}
+
 export async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) return (await mock()).invoke<T>(cmd, args);
+  if (!isTauri) {
+    const p = previews.find((x) => x.owns(cmd));
+    return p ? (await (await p.load())(cmd, args ?? {})) as T : (await mock()).invoke<T>(cmd, args);
+  }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<T>(cmd, args);
 }

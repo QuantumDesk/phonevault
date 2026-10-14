@@ -10,7 +10,7 @@
 //  * A request reaches this queue only after Rust's checks (connected site, wc.rs parameters).
 //  * What goes back is limited by Rust to a verified hash, a verified signature, or null.
 
-import { isTauri } from "./api";
+import { call, registerPreview, onEvent } from "./api";
 import { NETWORKS, netName } from "./networks";
 import { h, icon, copy, toast } from "./ui";
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, VerifyIn } from "./wc-backend";
@@ -29,13 +29,9 @@ const ALL_CHAINS = NETWORKS.map((n) => n.id); // the phone's reviewed networks, 
 const BRIDGE_POLL_MS = 2000;
 const NODES_PUSH_MS = 10_000;
 
-// ------------------------------------------------------------------ Rust calls (or the preview mock)
+// ------------------------------------------------------------------ Rust calls (bridge_*: the preview mock below)
 
-async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!isTauri) return previewInvoke<T>(cmd, args ?? {});
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke<T>(cmd, args);
-}
+registerPreview((cmd) => cmd.startsWith("bridge_"), async () => previewInvoke);
 
 // ------------------------------------------------------------------ state shared with Settings
 
@@ -91,7 +87,7 @@ export function createExtBackend(ev: Events, rpcFor: (chainId: number) => string
     call("bridge_set_nodes", { nodes }).catch(() => {});
   };
 
-  if (isTauri) import("@tauri-apps/api/event").then(({ listen }) => listen("bridge-changed", () => refresh())).catch(() => {});
+  onEvent("bridge-changed", () => { void refresh(); }).catch(() => {});
   refresh(); pushNodes();
   window.setInterval(refresh, BRIDGE_POLL_MS);
   window.setInterval(pushNodes, NODES_PUSH_MS);
