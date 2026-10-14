@@ -85,10 +85,21 @@ public final class ApplianceLockdownTest {
         assertTrue(src.contains("registerContentObserver(Settings.Global.getUriFor(ADB_WIFI_ENABLED), false, adbObserver)"));
     }
 
-    /** Bitcoin xpub sharing replies under btcStillOwned, which refuses while debugging is on. */
-    @Test public void btcShareOwnershipChecksAdb() throws Exception {
+    /**
+     * Bitcoin answers (xpub sharing included) and every signature are re-checked with
+     * RequestOwnership sets that refuse while debugging is on, and the live state's
+     * debuggingRefused is MainActivity's adbRefused().
+     */
+    @Test public void btcShareAndSigningOwnershipChecksAdb() throws Exception {
+        assertTrue(RequestOwnership.BTC_UNDECIDED.contains(RequestOwnership.Require.NO_ADB));
+        assertTrue(RequestOwnership.BTC_SHOW.contains(RequestOwnership.Require.NO_ADB));
+        assertTrue(RequestOwnership.SIGNING.contains(RequestOwnership.Require.NO_ADB));
         String src = SourceGuard.mainActivity();
-        assertTrue(SourceGuard.body(src, "private boolean btcStillOwned(").contains("!adbRefused()"));
-        assertTrue(SourceGuard.body(src, "private boolean signingStillOwned(").contains("!adbRefused()"));
+        assertTrue(src.contains("@Override public boolean debuggingRefused() { return adbRefused(); }"));
+        assertTrue(SourceGuard.body(src, "private boolean owns(").contains("RequestOwnership.holds(live, "));
+        String share = SourceGuard.body(src, "private void showBtcShare(");
+        assertTrue(share.contains("owns(source, s, decision, RequestOwnership.BTC_UNDECIDED) || !decision.beginSigning()"));
+        // the Sign worker's three re-checks under stateLock (before the seed opens, before sending, EVM sign)
+        assertEquals(3, SourceGuard.code(src).split("owns\\(source, s, decision, RequestOwnership\\.SIGNING\\)", -1).length - 1);
     }
 }

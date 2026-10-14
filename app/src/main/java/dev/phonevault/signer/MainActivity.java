@@ -58,6 +58,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
@@ -92,6 +93,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private ImageView qrView;
     private TextView statusView;
     private final SensitiveFlow sensitive = new SensitiveFlow(stateLock);
+    /** The live state behind every "does this request still own its slot" re-check (RequestOwnership). */
+    private final RequestOwnership.Live live = new RequestOwnership.Live() {
+        @Override public AccessoryTransport transport() { return transport; }
+        @Override public int session() { return session.get(); }
+        @Override public boolean unlocked() { return unlocked; }
+        @Override public ApprovalDecision approvalDecision() { return approvalDecision; }
+        @Override public boolean sensitiveFlowActive() { return sensitive.active(); }
+        @Override public boolean walletLoaded() { return walletLoaded; }
+        @Override public boolean backupVerified() { return backupVerified; }
+        @Override public boolean operational() { return operational; }
+        @Override public boolean debuggingRefused() { return adbRefused(); } // release: never while debugging is on
+    };
     private TokenList tokenList;
     /** Address book + recipient history for the reviews (AddressSafety); opened on first use. */
     private AddressSafety addressSafety;
@@ -2513,14 +2526,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
     }
 
+    /** Under stateLock or on the UI thread: the request still owns its slot, with the checks {@code need} names. */
+    private boolean owns(AccessoryTransport source, int s, ApprovalDecision decision, Set<RequestOwnership.Require> need) {
+        return RequestOwnership.holds(live, source, s, decision, need);
+    }
+
+    /** Before drawing a request's screen: false if it still owns its slot; else cancels, releases the slot, true. */
+    private boolean abandonUnlessOwned(AccessoryTransport source, int s, ApprovalDecision decision,
+                                       Set<RequestOwnership.Require> need) {
+        if (owns(source, s, decision, need)) return false;
+        decision.cancel();
+        finishApproval(decision);
+        return true;
+    }
+
     private void showApproval(AccessoryTransport source, ApprovalSession approval,
                               ApprovalDecision decision, int s) {
-        if (source != transport || s != session.get() || !unlocked || sensitive.active()
-                || approvalDecision != decision || !walletLoaded || !backupVerified) {
-            decision.cancel();
-            finishApproval(decision);
-            return;
-        }
+        if (abandonUnlessOwned(source, s, decision, RequestOwnership.SHOW_REVIEW)) return;
         // Rendered from the review built with this exact request in ApprovalSession (same object that is signed).
         TransactionReview review = approval.review;
         keepScreenOn(true);
@@ -2692,8 +2714,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         sign.setOnClickListener(v -> {
             synchronized (stateLock) {
-                if (source != transport || s != session.get() || !unlocked
-                        || approvalDecision != decision || !reviewed.isChecked() || !gate.mayApprove()
+                if (!owns(source, s, decision, RequestOwnership.SIGN_PRESSED) || !reviewed.isChecked() || !gate.mayApprove()
                         || (dangerBox != null && !dangerBox.isChecked()) || !decision.beginSigning()) return;
             }
             // The decision is now irreversible through Reject. Lock still invalidates queued work.
@@ -2710,11 +2731,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     JSONObject response;
                     if (seedSigner != null) {
                         synchronized (stateLock) {
-                            if (!signingStillOwned(source, s, decision)) throw new IllegalStateException("Session ended before signing");
+                            if (!owns(source, s, decision, RequestOwnership.SIGNING)) throw new IllegalStateException("Session ended before signing");
                         }
                         JSONObject prepared = vault.withStandardSeed(seedSigner::sign);
                         synchronized (stateLock) {
-                            if (!signingStillOwned(source, s, decision)) throw new IllegalStateException("Session ended before signing");
+                            if (!owns(source, s, decision, RequestOwnership.SIGNING)) throw new IllegalStateException("Session ended before signing");
                             mayHaveLeft = true;
                             if (!source.send(prepared)) throw new IllegalStateException("Signature delivery is uncertain");
                             decision.finish();
@@ -2722,7 +2743,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         response = prepared;
                     } else {
                         synchronized (stateLock) {
-                            if (!signingStillOwned(source, s, decision))
+                            if (!owns(source, s, decision, RequestOwnership.SIGNING))
                                 throw new IllegalStateException("Session ended before signing");
                             response = signer.sign(credentials);
                             if (!source.send(response)) throw new IllegalStateException("Signature delivery is uncertain");
@@ -2777,22 +2798,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         root.addView(reject, matchWrap(dp(10)));
     }
 
-    /** Under stateLock: this request still owns the signing decision in the live, reviewed session. */
-    private boolean signingStillOwned(AccessoryTransport source, int s, ApprovalDecision decision) {
-        return operational && unlocked && s == session.get() && !sensitive.active() && backupVerified
-                && source == transport && !source.isClosed() && approvalDecision == decision && decision.maySign()
-                && !adbRefused(); // release: never sign while USB debugging is on
-    }
-
     /** Review for personal_sign / eth_signTypedData_v4, rendered from the parsed request only. */
     private void showMessageApproval(AccessoryTransport source, MessageApprovalSession approval,
                                      ApprovalDecision decision, int s) {
-        if (source != transport || s != session.get() || !unlocked || sensitive.active()
-                || approvalDecision != decision || !walletLoaded || !backupVerified) {
-            decision.cancel();
-            finishApproval(decision);
-            return;
-        }
+        if (abandonUnlessOwned(source, s, decision, RequestOwnership.SHOW_REVIEW)) return;
         MessageReview review = approval.review;
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker,
@@ -3000,13 +3009,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
-    /** Under stateLock or on the UI thread: the Bitcoin request still owns an undecided slot in this session. */
-    private boolean btcStillOwned(AccessoryTransport source, ApprovalDecision decision, int s) {
-        return s == session.get() && unlocked && source == transport && approvalDecision == decision
-                && decision.state() == ApprovalDecision.State.REVIEW && !sensitive.active()
-                && !adbRefused(); // release: never answer while debugging is on
-    }
-
     /**
      * Run {@code use} with the standard wallet's Bitcoin accounts for {@code network}: from the
      * session cache, or derived now from the seed (PIN window; a dismissed prompt answers "rejected").
@@ -3022,7 +3024,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             return;
         }
         runOnUiThread(() -> {
-            if (!btcStillOwned(source, decision, s)) { finishApproval(decision); return; }
+            if (!owns(source, s, decision, RequestOwnership.BTC_UNDECIDED)) { finishApproval(decision); return; }
             showLoading("Opening your Bitcoin accounts", "Deriving your " + network.label + " accounts from your recovery phrase…");
             withSeedKey("Confirm your PIN to open your Bitcoin accounts", () -> {
                 try {
@@ -3030,7 +3032,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         try {
                             final String owner;
                             synchronized (stateLock) {
-                                if (!btcStillOwned(source, decision, s)) throw new IllegalStateException("Session ended before the Bitcoin accounts opened");
+                                if (!owns(source, s, decision, RequestOwnership.BTC_UNDECIDED)) throw new IllegalStateException("Session ended before the Bitcoin accounts opened");
                                 owner = walletId;
                             }
                             BtcWallet derived = vault.withStandardSeed(seed -> BtcWallet.derive(seed, network));
@@ -3079,7 +3081,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         JSONObject reply = BtcRequest.accountResponse(r.id, wallet, r.type, r.account);
         synchronized (stateLock) {
-            if (btcStillOwned(source, decision, s) && decision.beginSigning()) {
+            if (owns(source, s, decision, RequestOwnership.BTC_UNDECIDED) && decision.beginSigning()) {
                 source.send(reply);
                 decision.finish();
             }
@@ -3094,11 +3096,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showBtcShare(AccessoryTransport source, BtcRequest r, BtcWallet wallet, ApprovalDecision decision, int s) {
-        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
-            decision.cancel();
-            finishApproval(decision);
-            return;
-        }
+        if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         keepScreenOn(true);
         LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
                 "Share Bitcoin account with the Mac?",
@@ -3123,7 +3121,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 return;
             }
             synchronized (stateLock) {
-                if (!btcStillOwned(source, decision, s) || !decision.beginSigning()) return;
+                if (!owns(source, s, decision, RequestOwnership.BTC_UNDECIDED) || !decision.beginSigning()) return;
                 BtcSharing sharing = btcSharing();
                 sharing.share(r.network, r.type, r.account);
                 saveBtcSharing(sharing);
@@ -3194,11 +3192,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** btcShowAddress: the address big, for comparison with the Mac; answered only after Done. */
     private void showBtcAddress(AccessoryTransport source, BtcRequest r, BtcWallet wallet, String address,
                                 ApprovalDecision decision, int s) {
-        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
-            decision.cancel();
-            finishApproval(decision);
-            return;
-        }
+        if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         keepScreenOn(true);
         LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
                 "Compare with your Mac", "Check that your Mac shows exactly this address, every group. Only this phone's screen is trusted.");
@@ -3225,7 +3219,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 return;
             }
             synchronized (stateLock) {
-                if (!btcStillOwned(source, decision, s) || !decision.beginSigning()) return;
+                if (!owns(source, s, decision, RequestOwnership.BTC_UNDECIDED) || !decision.beginSigning()) return;
                 source.send(reply);
                 decision.finish();
             }
@@ -3249,11 +3243,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** btcSignPsbt review, rendered from the BtcPsbtReview built once in handleBitcoin. */
     private void showBtcApproval(AccessoryTransport source, BtcRequest r, BtcPsbtReview review, ApprovalDecision decision, int s) {
-        if (!btcStillOwned(source, decision, s) || !walletLoaded || !backupVerified) {
-            decision.cancel();
-            finishApproval(decision);
-            return;
-        }
+        if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         keepScreenOn(true);
         LinearLayout root = page(DevTools.SCREENSHOTS ? "DEVELOPMENT · TEST ASSETS ONLY" : review.kicker, review.title, review.subtitle);
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
