@@ -154,14 +154,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private long idleTimeoutMs = IDLE_LOCK_MS;
     /** Display & auto-lock preferences (text scale, screen timeout, idle lock, haptics). */
     private DisplaySettings display;
-    /** Last battery reading and the header indicator of the page on screen (see onBattery). */
+    /** Last battery reading (see onBattery). */
     private BatteryStatus battery = BatteryStatus.UNKNOWN;
-    private View batteryIndicator;
+    /** Page frame, cards, actions, review rows; owns the name of the screen on display. */
+    private final Pages pages = new Pages(this, new Pages.Host() {
+        @Override public BatteryStatus battery() { return battery; }
+        @Override public boolean menuAvailable() { return MainActivity.this.menuAvailable(); }
+        @Override public void showMenu() { MainActivity.this.showMenu(); }
+        @Override public boolean mayPresent(String screen) {
+            // Phrase and restore-over screens exist only inside their sensitive flow.
+            if ((screen.startsWith("backup") || "phrase".equals(screen) || "replace-confirm".equals(screen))
+                    && !sensitive.active()) return false;
+            return !(screen.startsWith("restore") && restoreReplacing && !sensitive.active());
+        }
+        @Override public boolean actionsEnabled() { return unlocked && operational; }
+        @Override public void keepScreenOn(boolean on) { MainActivity.this.keepScreenOn(on); }
+        @Override public void lock() { MainActivity.this.lock(); }
+    });
     private boolean batteryRegistered;
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { onBattery(readBattery(intent)); }
     };
-    private String screenName = "loading";
     private String statusMessage = "USB disconnected · connect a host when ready";
     private int activeSensitive = -1, backupPage, replacementOperation;
     private Runnable afterReauth;
@@ -207,7 +220,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         @Override public void post(Runnable r) { ui.post(r); }
         @Override public void postDelayed(Runnable r, long delayMs) { ui.postDelayed(r, delayMs); }
-        @Override public void showLoading(String title, String caption) { MainActivity.this.showLoading(title, caption); }
+        @Override public void showLoading(String title, String caption) { pages.showLoading(title, caption); }
         @Override public void showLockedPage(int s) { MainActivity.this.showLockedPage(s); }
         @Override public void unlock(int s) { MainActivity.this.unlock(s); }
         @Override public void systemConfirm(String why, CredentialGate.Confirmed result) {
@@ -309,9 +322,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void onBattery(BatteryStatus next) {
         boolean lowChanged = next.low() != battery.low();
         battery = next;
-        if (batteryIndicator != null) VaultTheme.showBattery(batteryIndicator, next);
+        pages.showBattery(next);
         if (pinScreen != null) pinScreen.setBattery(next);
-        if (lowChanged && unlocked && "wallet".equals(screenName)) showHome();
+        if (lowChanged && unlocked && "wallet".equals(pages.screen())) showHome();
     }
 
     /**
@@ -347,7 +360,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (approvalDecision != null) return; // use the explicit Reject action
         if (sensitive.active()) { hideBackup(); return; }
         if (passphraseEntry) { endPassphraseEntry(); showHome(); return; }
-        if ("wallet".equals(screenName)) lock();
+        if ("wallet".equals(pages.screen())) lock();
         else showHome();
     }
 
@@ -364,7 +377,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             return;
         }
         if (adbRefused()) {
-            if (operational || !"adb-refused".equals(screenName)) refuseWhileAdbOn();
+            if (operational || !"adb-refused".equals(pages.screen())) refuseWhileAdbOn();
             return;
         }
         if (!operational) {
@@ -424,7 +437,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         synchronized (stateLock) { if (heldRequest.summary() != null) pinScreen.setPending("INCOMING REQUEST", heldRequest.summary()); }
         if (transport != null && !creating && !sealed) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
         updatePinPolicy(pinScreen);
-        screenName = "pin";
+        pages.setScreen("pin");
         setContentView(pinScreen.view());
         devDumpUi();
     }
@@ -479,19 +492,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** The locked page of session {@code s}; CredentialGate then offers the system prompt. */
     private void showLockedPage(int s) {
-        LinearLayout root = page("LOCKED", "Phone Vault is locked",
+        LinearLayout root = pages.page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
-        synchronized (stateLock) { if (heldRequest.summary() != null) card(root, "Incoming request", heldRequest.summary()); }
-        if (transport != null) card(root, "USB", "A host is connected. Its request stays unanswered until you unlock and review it.");
+        synchronized (stateLock) { if (heldRequest.summary() != null) pages.card(root, "Incoming request", heldRequest.summary()); }
+        if (transport != null) pages.card(root, "USB", "A host is connected. Its request stays unanswered until you unlock and review it.");
         TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
-        hardenTouch(unlockButton);
+        Pages.hardenTouch(unlockButton);
         unlockButton.setOnClickListener(v -> credentialGate.promptUnlock(s));
-        root.addView(unlockButton, matchWrap(dp(22)));
+        root.addView(unlockButton, Pages.matchWrap(pages.dp(22)));
         TextView policy = VaultTheme.bodyText(this, SystemCredential.MAX_FAILED_FOR_WIPE
                 + " wrong PINs in a row erase this phone completely.", 14, VaultTheme.FAINT);
-        policy.setPadding(0, dp(18), 0, 0);
+        policy.setPadding(0, pages.dp(18), 0, 0);
         root.addView(policy);
-        screenName = "pin";
+        pages.setScreen("pin");
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
         scroll.setBackgroundColor(VaultTheme.BG);
@@ -897,9 +910,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         clearSensitiveUi();
         clearPinEntry();
         vault = null;
-        LinearLayout root = page(eyebrow, title, reason);
-        card(root, cardLabel, cardText);
-        present(root, screen);
+        LinearLayout root = pages.page(eyebrow, title, reason);
+        pages.card(root, cardLabel, cardText);
+        pages.present(root, screen);
     }
 
     @Override protected void onNewIntent(Intent intent) {
@@ -911,86 +924,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     // ------------------------------------------------------------------ pages
     // Native, scrollable pages. Sensitive operations never use floating dialogs.
-
-    private LinearLayout page(String eyebrow, String title, String description) {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(24), dp(48), dp(24), dp(30));
-        root.setBackgroundColor(VaultTheme.BG);
-        TextView brand = VaultTheme.pixelText(this, "PHONE VAULT", 10, VaultTheme.ACCENT);
-        // Header row: brand on the left, battery, then ☰ (when available). One menu everywhere.
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.HORIZONTAL);
-        header.setGravity(Gravity.CENTER_VERTICAL);
-        header.setMinimumHeight(dp(42));
-        LinearLayout.LayoutParams blp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        header.addView(brand, blp);
-        batteryIndicator = VaultTheme.batteryIndicator(this);
-        VaultTheme.showBattery(batteryIndicator, battery);
-        header.addView(batteryIndicator);
-        root.addView(header);
-        if (menuAvailable()) {
-            TextView menu = VaultTheme.pixelButton(this, "☰", false);
-            VaultTheme.size(menu, 22);
-            menu.setPadding(0, 0, 0, 0);
-            menu.setContentDescription("Menu");
-            hardenTouch(menu);
-            menu.setOnClickListener(v -> { if (menuAvailable()) showMenu(); });
-            LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(dp(56), dp(48));
-            mlp.setMargins(dp(12), -dp(6), 0, 0);
-            header.addView(menu, mlp);
-        }
-        TextView label = VaultTheme.bodyText(this, eyebrow.toUpperCase(Locale.ROOT), 12, VaultTheme.FAINT);
-        label.setPadding(0, dp(30), 0, dp(8));
-        root.addView(label);
-        TextView heading = VaultTheme.bodyText(this, title, 28, VaultTheme.INK);
-        heading.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        root.addView(heading);
-        if (description != null && !description.isEmpty()) {
-            String shown = ReviewStyle.groupEvmIn(description); // e.g. a refusal naming the requested account
-            TextView caption = VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.DIM);
-            if (!shown.equals(description)) keepGroupsWhole(caption);
-            caption.setPadding(0, dp(12), 0, dp(12));
-            root.addView(caption);
-        }
-        return root;
-    }
-
-    private void present(LinearLayout root, String screen) {
-        if ((screen.startsWith("backup") || "phrase".equals(screen) || "replace-confirm".equals(screen))
-                && !sensitive.active()) return;
-        if (screen.startsWith("restore") && restoreReplacing && !sensitive.active()) return;
-        screenName = screen;
-        ScrollView scroll = new ScrollView(this);
-        scroll.setFillViewport(true);
-        scroll.setBackgroundColor(VaultTheme.BG);
-        scroll.addView(root);
-        setContentView(scroll);
-        watchScrollEnd(scroll, root);
-        devDumpUi();
-    }
-
-    private void action(LinearLayout parent, String label, boolean primary, Runnable run) {
-        TextView button = VaultTheme.pixelButton(this, label, primary);
-        hardenTouch(button);
-        button.setOnClickListener(v -> {
-            if (unlocked && operational) run.run();
-        });
-        parent.addView(button, matchWrap(dp(12)));
-    }
-
-    private void card(LinearLayout parent, String label, String value) {
-        LinearLayout box = VaultTheme.box(this);
-        box.addView(VaultTheme.bodyText(this, label, 13, VaultTheme.FAINT));
-        // Whole EVM addresses in groups of four; a card that IS an address is monospace.
-        String shown = ReviewStyle.groupEvmIn(value);
-        TextView text = Addresses.isEvm(value) ? VaultTheme.monoText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK)
-                : VaultTheme.bodyText(this, shown, VaultTheme.BODY_SIZE, VaultTheme.INK);
-        if (!shown.equals(value)) keepGroupsWhole(text);
-        text.setPadding(0, dp(6), 0, 0);
-        box.addView(text);
-        parent.addView(box, matchWrap(dp(12)));
-    }
 
     /** The menu is available on the ordinary unlocked screens: never over a PIN gate, a sensitive
      *  flow, an approval, or before a wallet exists. */
@@ -1005,20 +938,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showMenu() {
-        LinearLayout root = page("MENU", "Where to?", null);
-        String current = screenName;
-        action(root, "Wallet", "wallet".equals(current), () -> { if (menuAvailable()) showHome(); });
-        action(root, "Accounts", current.startsWith("account"), () -> { if (menuAvailable()) showAccounts(); });
-        action(root, passphraseBook != null ? "Passphrase wallet · open" : "Passphrase wallet", current.startsWith("passphrase"),
+        LinearLayout root = pages.page("MENU", "Where to?", null);
+        String current = pages.screen();
+        pages.action(root, "Wallet", "wallet".equals(current), () -> { if (menuAvailable()) showHome(); });
+        pages.action(root, "Accounts", current.startsWith("account"), () -> { if (menuAvailable()) showAccounts(); });
+        pages.action(root, passphraseBook != null ? "Passphrase wallet · open" : "Passphrase wallet", current.startsWith("passphrase"),
                 () -> { if (menuAvailable()) showPassphraseWallet(); });
-        action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
-        action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
-        action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
-        action(root, "Bitcoin sharing", "btc-sharing".equals(current), () -> { if (menuAvailable()) showBtcSharing(); });
-        action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
-        action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
-        action(root, "Lock now", false, this::lock);
-        present(root, "menu");
+        pages.action(root, "Security", "security".equals(current), () -> { if (menuAvailable()) showSecurity(); });
+        pages.action(root, "Display & auto-lock", "preferences".equals(current), () -> { if (menuAvailable()) showPreferences(); });
+        pages.action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
+        pages.action(root, "Bitcoin sharing", "btc-sharing".equals(current), () -> { if (menuAvailable()) showBtcSharing(); });
+        pages.action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) showIntegrity(); });
+        pages.action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) showFeatures(); });
+        pages.action(root, "Lock now", false, this::lock);
+        pages.present(root, "menu");
     }
 
     private void buildUi() {
@@ -1032,7 +965,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         applyDisplaySettings();
         battery = readBattery(registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED)));
         statusView = VaultTheme.bodyText(this, "", VaultTheme.BODY_SIZE, VaultTheme.DIM);
-        showLoading("Opening Phone Vault", "Checking appliance policy…");
+        pages.showLoading("Opening Phone Vault", "Checking appliance policy…");
     }
 
     /** Text scale, haptics and idle lock from the saved Display & auto-lock choices. */
@@ -1043,31 +976,24 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         idleTimeoutMs = display.idleLockMs();
     }
 
-    private void showLoading(String title, String caption) {
-        LinearLayout root = page("PLEASE WAIT", title, caption);
-        card(root, "Privacy", "Your receiving address stays hidden until the wallet is ready.");
-        action(root, "Lock now", false, this::lock);
-        present(root, "loading");
-    }
-
     private void showHome() {
         if (!walletLoaded) {
-            showLoading("Opening your wallet", "Verifying the wallet saved on this device…");
+            pages.showLoading("Opening your wallet", "Verifying the wallet saved on this device…");
             return;
         }
         endPassphraseEntry();
         SigningAccount account = activeAccount;
         String accountName = account != null ? account.name : AccountBook.defaultName(0);
         boolean passphraseWallet = account != null && account.passphrase;
-        LinearLayout root = page(passphraseWallet ? "PASSPHRASE WALLET · " + accountName : accountName,
+        LinearLayout root = pages.page(passphraseWallet ? "PASSPHRASE WALLET · " + accountName : accountName,
                 !backupVerified ? "Back up your wallet" : passphraseWallet ? "Passphrase wallet" : "Your offline wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
                         : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
         if (backupVerified && passphraseWallet) {
-            card(root, "Passphrase wallet · fingerprint " + account.fingerprint,
+            pages.card(root, "Passphrase wallet · fingerprint " + account.fingerprint,
                     "Opened with your passphrase. It is not saved: locking the phone closes it. Check the fingerprint is the one you expect.");
         }
-        if (battery.low()) card(root, "Battery " + battery.label() + " · charge before signing",
+        if (battery.low()) pages.card(root, "Battery " + battery.label() + " · charge before signing",
                 "Plug in before reviewing a request. If the phone shuts down mid-review, the request is simply lost; nothing is signed.");
         if (backupVerified && walletAddress != null && walletQr != null) {
             LinearLayout box = VaultTheme.box(this);
@@ -1078,51 +1004,51 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // Shown at the bitmap's own pixel size: integer-scaled modules stay perfectly square.
             LinearLayout.LayoutParams qlp = new LinearLayout.LayoutParams(walletQr.getWidth(), walletQr.getHeight());
             qlp.gravity = Gravity.CENTER_HORIZONTAL;
-            qlp.setMargins(0, dp(4), 0, dp(18));
+            qlp.setMargins(0, pages.dp(4), 0, pages.dp(18));
             box.addView(qrView, qlp);
             box.addView(VaultTheme.bodyText(this, accountName.toUpperCase(Locale.ROOT)
                     + (passphraseWallet ? " · PASSPHRASE" : "") + " · RECEIVE", 13, VaultTheme.FAINT));
-            addressView = VaultTheme.monoText(this, formatAddress(
+            addressView = VaultTheme.monoText(this, ReviewStyle.groupEvmTwoLines(
                     Keys.toChecksumAddress(walletAddress)), 16, VaultTheme.INK);
-            keepGroupsWhole(addressView);
-            addressView.setPadding(0, dp(12), 0, dp(8));
+            Pages.keepGroupsWhole(addressView);
+            addressView.setPadding(0, pages.dp(12), 0, pages.dp(8));
             box.addView(addressView);
-            root.addView(box, matchWrap(dp(22)));
-            action(root, "Switch account", false, this::showAccounts);
-            card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
+            root.addView(box, Pages.matchWrap(pages.dp(22)));
+            pages.action(root, "Switch account", false, this::showAccounts);
+            pages.card(root, "Check the network", "This is an EVM address. Confirm the destination chain in your sending wallet. A matching address does not mean every network is supported.");
             addBackupReminderCard(root);
         } else {
-            card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
-            action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
-            action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
+            pages.card(root, "Backup not checked yet", "Receiving and signing are paused until you write the phrase down and pass the spot check. If you already wrote it down, check it now.");
+            pages.action(root, "Write down recovery phrase", true, this::confirmRevealBackup);
+            pages.action(root, "I have my backup · check words", false, () -> startBackupAccess(true));
         }
         if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
         statusView = VaultTheme.bodyText(this, statusMessage, VaultTheme.BODY_SIZE, VaultTheme.DIM);
-        statusView.setPadding(dp(2), dp(20), 0, dp(4));
+        statusView.setPadding(pages.dp(2), pages.dp(20), 0, pages.dp(4));
         root.addView(statusView);
-        action(root, "Lock now", false, this::lock);
-        card(root, DevTools.SCREENSHOTS ? "Development appliance" : "Prototype",
+        pages.action(root, "Lock now", false, this::lock);
+        pages.card(root, DevTools.SCREENSHOTS ? "Development appliance" : "Prototype",
                 "Test assets only. Hardware release verification is still pending.");
-        present(root, "wallet");
+        pages.present(root, "wallet");
     }
 
     private void showSecurity() {
-        LinearLayout root = page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
-        card(root, "Backup", backupVerified
+        LinearLayout root = pages.page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
+        pages.card(root, "Backup", backupVerified
                 ? "Spot-checked for Account 1. Keep the written 24 words somewhere safe and private."
                 : "Not checked yet. Receiving and signing stay paused until it is.");
-        action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
-        action(root, "Show recovery phrase", false, this::confirmRevealBackup);
-        card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
-        action(root, "Passphrase wallet", false, this::showPassphraseWallet);
-        action(root, "Show as SeedQR", false, this::confirmRevealSeedQr);
-        action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, this::showBackupReminderSettings);
-        action(root, "Bitcoin sharing", false, this::showBtcSharing);
-        card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
-        action(root, "Replace with a new wallet", false, this::confirmReplace);
-        action(root, "Restore a different wallet", false, this::confirmRestoreOver);
-        action(root, "Lock now", false, this::lock);
-        present(root, "security");
+        pages.action(root, "Check my backup", !backupVerified, () -> startBackupAccess(true));
+        pages.action(root, "Show recovery phrase", false, this::confirmRevealBackup);
+        pages.card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
+        pages.action(root, "Passphrase wallet", false, this::showPassphraseWallet);
+        pages.action(root, "Show as SeedQR", false, this::confirmRevealSeedQr);
+        pages.action(root, "Backup reminder · " + BackupReminder.label(backupReminder.intervalDays()), false, this::showBackupReminderSettings);
+        pages.action(root, "Bitcoin sharing", false, this::showBtcSharing);
+        pages.card(root, "This wallet", "Replacing or restoring changes the key on this phone. Keep the current backup if the wallet controls anything.");
+        pages.action(root, "Replace with a new wallet", false, this::confirmReplace);
+        pages.action(root, "Restore a different wallet", false, this::confirmRestoreOver);
+        pages.action(root, "Lock now", false, this::lock);
+        pages.present(root, "security");
     }
 
     // ------------------------------------------------------------------ first-run wizard
@@ -1130,15 +1056,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** Step 1: a fresh PIN is set and no wallet exists yet. Create or restore — never silently. */
     private void showFirstRunChoice() {
         clearRestoreEntry();
-        LinearLayout root = page("SET UP · STEP 1 OF 4", "Set up your wallet",
+        LinearLayout root = pages.page("SET UP · STEP 1 OF 4", "Set up your wallet",
                 "Create a brand-new wallet on this phone, or restore one from a 24-word recovery phrase you already have. Nothing leaves this device either way.");
-        card(root, "Create new", "Generates a fresh recovery phrase here, offline. You'll write it down and we'll spot-check a few words.");
-        action(root, "Create new wallet", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
-        card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
-        action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
-        action(root, "Advanced · add your own dice rolls", false, this::showDiceEntry);
-        action(root, "Lock now", false, this::lock);
-        present(root, "first-run");
+        pages.card(root, "Create new", "Generates a fresh recovery phrase here, offline. You'll write it down and we'll spot-check a few words.");
+        pages.action(root, "Create new wallet", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
+        pages.card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
+        pages.action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
+        pages.action(root, "Advanced · add your own dice rolls", false, this::showDiceEntry);
+        pages.action(root, "Lock now", false, this::lock);
+        pages.present(root, "first-run");
     }
 
     // ------------------------------------------------------------------ optional user entropy
@@ -1157,9 +1083,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showDiceEntry() {
         int rolls = diceRolls.length();
         int bits = (int) Math.floor(rolls * 2.585);
-        LinearLayout root = page("SET UP · ADVANCED", "Add your own randomness",
+        LinearLayout root = pages.page("SET UP · ADVANCED", "Add your own randomness",
                 "Roll a real die and tap each result. Your rolls are hashed together with the phone's two hardware entropy sources, so the wallet never depends on the phone's randomness alone. The rolls are not displayed and are discarded after the wallet is created.");
-        card(root, "Rolls so far", rolls + " of " + DICE_FULL + " · about " + Math.min(bits, 256) + " of 256 bits"
+        pages.card(root, "Rolls so far", rolls + " of " + DICE_FULL + " · about " + Math.min(bits, 256) + " of 256 bits"
                 + (rolls >= DICE_FULL ? " · full strength" : ""));
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
@@ -1169,34 +1095,34 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             VaultTheme.size(b, 20);
             b.setPadding(0, 0, 0, 0);
             b.setGravity(Gravity.CENTER);
-            hardenTouch(b);
+            Pages.hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
                 if (diceRolls.length() < 512) diceRolls.append(c);
                 showDiceEntry();
             });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(60), 1f);
-            lp.setMargins(dp(3), dp(6), dp(3), dp(6));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, pages.dp(60), 1f);
+            lp.setMargins(pages.dp(3), pages.dp(6), pages.dp(3), pages.dp(6));
             row.addView(b, lp);
         }
         root.addView(row);
         if (rolls > 0) {
-            action(root, "Create wallet with these rolls", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
-            action(root, "Undo last roll", false, () -> {
+            pages.action(root, "Create wallet with these rolls", true, () -> withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
+            pages.action(root, "Undo last roll", false, () -> {
                 diceRolls.setCharAt(rolls - 1, '0');
                 diceRolls.setLength(rolls - 1);
                 showDiceEntry();
             });
         }
-        action(root, "Back · without dice", false, () -> { clearDice(); showFirstRunChoice(); });
-        present(root, "first-run-dice");
+        pages.action(root, "Back · without dice", false, () -> { clearDice(); showFirstRunChoice(); });
+        pages.present(root, "first-run-dice");
     }
 
     private void createFirstWallet() {
         final int s = session.get();
         final byte[] userEntropy = diceRolls.toString().getBytes(StandardCharsets.US_ASCII);
         clearDice();
-        showLoading("Creating your wallet", userEntropy.length == 0
+        pages.showLoading("Creating your wallet", userEntropy.length == 0
                 ? "Generating a new recovery phrase from device entropy…"
                 : "Mixing " + userEntropy.length + " dice rolls with device entropy…");
         cryptoExecutor.execute(() -> {
@@ -1220,17 +1146,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    LinearLayout root = page("SET UP · STEP 2 OF 4", "Write down your recovery phrase",
+                    LinearLayout root = pages.page("SET UP · STEP 2 OF 4", "Write down your recovery phrase",
                             "Your new wallet is ready. Next, copy its 24 words onto paper, in order. Never photograph them or type them into another device.");
-                    card(root, "Then", "Step 3 spot-checks a few of the words. Step 4 shows your receiving address.");
-                    action(root, "Continue", true, this::confirmRevealBackup);
-                    action(root, "Lock now", false, this::lock);
-                    present(root, "first-run-created");
+                    pages.card(root, "Then", "Step 3 spot-checks a few of the words. Step 4 shows your receiving address.");
+                    pages.action(root, "Continue", true, this::confirmRevealBackup);
+                    pages.action(root, "Lock now", false, this::lock);
+                    pages.present(root, "first-run-created");
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked) return;
-                    showInfo("Could not create a wallet", "Nothing was saved. " + e.getMessage(), this::showFirstRunChoice);
+                    pages.showInfo("Could not create a wallet", "Nothing was saved. " + e.getMessage(), this::showFirstRunChoice);
                 });
             }
         });
@@ -1245,11 +1171,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void confirmRestoreOver() {
         if (!walletLoaded || credentials == null) return;
-        LinearLayout root = page("SECURITY / RESTORE", "Restore a different wallet?",
+        LinearLayout root = pages.page("SECURITY / RESTORE", "Restore a different wallet?",
                 "You will type a 24-word recovery phrase on this phone. The wallet it produces REPLACES the current one on this device. Nothing changes until you confirm the address it shows.");
-        card(root, "Current Account 1", Keys.toChecksumAddress(walletId != null ? walletId : walletAddress));
-        card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
-        action(root, "Continue · verify PIN", true, () -> beginSensitive("restore a different wallet", () -> {
+        pages.card(root, "Current Account 1", Keys.toChecksumAddress(walletId != null ? walletId : walletAddress));
+        pages.card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
+        pages.action(root, "Continue · verify PIN", true, () -> beginSensitive("restore a different wallet", () -> {
             int op;
             synchronized (stateLock) { op = beginReplacement(); }
             if (op < 0) { hideBackup(); return; }
@@ -1258,8 +1184,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             clearRestoreEntry();
             showRestoreEntry();
         }));
-        action(root, "Back to Security", false, this::showSecurity);
-        present(root, "security-restore");
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "security-restore");
     }
 
     /** Commit a restore over the existing wallet: the PREPARED → COMMITTING transition, then storage. */
@@ -1267,7 +1193,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         final int token = activeSensitive, s = session.get(), op = restoreOverOp;
         if (!restoreReplacing || !sensitiveValid(token, s) || !beginCommit(op)) return;
         clearReceivingIdentity();
-        showLoading("Restoring your wallet", "Saving and checking the restored identity. This step can no longer be cancelled.");
+        pages.showLoading("Restoring your wallet", "Saving and checking the restored identity. This step can no longer be cancelled.");
         cryptoExecutor.execute(() -> {
             try {
                 String address;
@@ -1326,7 +1252,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (restoreIndex >= SeedRestore.WORD_COUNT) restoreIndex = SeedRestore.WORD_COUNT - 1;
         String typed = restoreBuffer.toString();
         int filled = restoreFilled();
-        LinearLayout root = page((restoreReplacing ? "REPLACE BY RESTORE · WORD " : "RESTORE · WORD ") + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
+        LinearLayout root = pages.page((restoreReplacing ? "REPLACE BY RESTORE · WORD " : "RESTORE · WORD ") + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
                 typed.isEmpty() ? (restoreWords[restoreIndex] == null ? "Type word " + (restoreIndex + 1) : restoreWords[restoreIndex])
                                 : typed + "…",
                 "Type the first letters, then tap the matching word. " + filled + " of " + SeedRestore.WORD_COUNT + " entered.");
@@ -1341,7 +1267,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         List<String> suggestions = SeedRestore.suggestions(typed, 6);
         LinearLayout slot = new LinearLayout(this);
         slot.setOrientation(LinearLayout.VERTICAL);
-        slot.setMinimumHeight(dp(2 * 60 + 8));
+        slot.setMinimumHeight(pages.dp(2 * 60 + 8));
         for (int rowStart = 0; rowStart < suggestions.size(); rowStart += 3) {
             LinearLayout srow = new LinearLayout(this);
             srow.setOrientation(LinearLayout.HORIZONTAL);
@@ -1350,18 +1276,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 TextView b = VaultTheme.pixelButton(this, word, i == 0);
                 VaultTheme.size(b, 15);
                 // Fixed 52 dp slot: no vertical padding, so the word never clips at large text.
-                b.setPadding(dp(4), 0, dp(4), 0);
-                hardenTouch(b);
+                b.setPadding(pages.dp(4), 0, pages.dp(4), 0);
+                Pages.hardenTouch(b);
                 b.setOnClickListener(v -> { if (unlocked && operational) pickRestoreWord(word); });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(52), 1f);
-                lp.setMargins(dp(3), dp(4), dp(3), dp(4));
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, pages.dp(52), 1f);
+                lp.setMargins(pages.dp(3), pages.dp(4), pages.dp(3), pages.dp(4));
                 srow.addView(b, lp);
             }
             slot.addView(srow);
         }
         if (suggestions.isEmpty() && !typed.isEmpty()) {
             TextView none = VaultTheme.bodyText(this, "No recovery word starts with \"" + typed + "\". Use ⌫.", VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
-            none.setPadding(0, dp(12), 0, dp(6));
+            none.setPadding(0, pages.dp(12), 0, pages.dp(6));
             slot.addView(none);
         }
         root.addView(slot);
@@ -1375,19 +1301,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         if (strip.length() > 0) {
             TextView entered = VaultTheme.monoText(this, strip.toString(), 13, VaultTheme.DIM);
-            entered.setPadding(0, dp(8), 0, dp(8));
+            entered.setPadding(0, pages.dp(8), 0, pages.dp(8));
             root.addView(entered);
         }
 
-        if (filled == SeedRestore.WORD_COUNT) action(root, "Restore this wallet", true, this::validateRestore);
-        if (restoreIndex > 0 || restoreWords[restoreIndex] != null) action(root, "← Previous word", false, () -> {
+        if (filled == SeedRestore.WORD_COUNT) pages.action(root, "Restore this wallet", true, this::validateRestore);
+        if (restoreIndex > 0 || restoreWords[restoreIndex] != null) pages.action(root, "← Previous word", false, () -> {
             if (restoreBuffer.length() > 0) restoreBuffer.setLength(0);
             else if (restoreIndex > 0) restoreIndex--;
             showRestoreEntry();
         });
-        if (restoreReplacing) action(root, "Cancel · keep current wallet", false, this::hideBackup);
-        else action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
-        present(root, "restore-entry");
+        if (restoreReplacing) pages.action(root, "Cancel · keep current wallet", false, this::hideBackup);
+        else pages.action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+        pages.present(root, "restore-entry");
     }
 
     private void restoreKeyRow(LinearLayout parent, String[] keys) {
@@ -1398,7 +1324,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             VaultTheme.size(b, 18);
             b.setPadding(0, 0, 0, 0); // a ninth of the width: any horizontal padding hides the letter
             b.setGravity(Gravity.CENTER);
-            hardenTouch(b);
+            Pages.hardenTouch(b);
             b.setOnClickListener(v -> {
                 if (!unlocked || !operational) return;
                 if ("⌫".equals(key)) {
@@ -1410,8 +1336,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 }
                 showRestoreEntry();
             });
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f);
-            lp.setMargins(dp(2), dp(3), dp(2), dp(3));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, pages.dp(48), 1f);
+            lp.setMargins(pages.dp(2), pages.dp(3), pages.dp(2), pages.dp(3));
             row.addView(b, lp);
         }
         parent.addView(row);
@@ -1438,10 +1364,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         try {
             mnemonic = SeedRestore.validate(raw);
         } catch (SeedRestore.RestoreException bad) {
-            showInfo("Phrase not valid yet", bad.getMessage() + ". Go back and fix the word.", this::showRestoreEntry);
+            pages.showInfo("Phrase not valid yet", bad.getMessage() + ". Go back and fix the word.", this::showRestoreEntry);
             return;
         }
-        showLoading("Checking your phrase", "Deriving the wallet address these 24 words produce…");
+        pages.showLoading("Checking your phrase", "Deriving the wallet address these 24 words produce…");
         cryptoExecutor.execute(() -> {
             try {
                 final String address = SeedRestore.deriveAddress(mnemonic, 0);
@@ -1449,30 +1375,30 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     if (s != session.get() || !unlocked) return;
                     boolean replacing = restoreReplacing;
                     if (replacing && !markPrepared(restoreOverOp)) { hideBackup(); return; }
-                    LinearLayout root = page(replacing ? "REPLACE BY RESTORE · CONFIRM" : "RESTORE · CONFIRM",
+                    LinearLayout root = pages.page(replacing ? "REPLACE BY RESTORE · CONFIRM" : "RESTORE · CONFIRM",
                             replacing ? "Replace with this wallet?" : "Is this your wallet?",
                             replacing ? "This is the address your phrase produces. Confirming REPLACES the current wallet on this phone. If the address is not the one you expect, a word or its order is wrong — nothing has been saved yet."
                                       : "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
-                    card(root, replacing ? "New Account 1" : "Account 1", Keys.toChecksumAddress(address));
-                    if (replacing && walletAddress != null) card(root, "Replaces current", Keys.toChecksumAddress(walletAddress));
-                    card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
-                    action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
+                    pages.card(root, replacing ? "New Account 1" : "Account 1", Keys.toChecksumAddress(address));
+                    if (replacing && walletAddress != null) pages.card(root, "Replaces current", Keys.toChecksumAddress(walletAddress));
+                    pages.card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
+                    pages.action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
                             () -> withSeedKey("Confirm your PIN to save the restored wallet",
                                     () -> { if (restoreReplacing) commitRestoreOver(mnemonic); else commitRestore(mnemonic, s); }));
-                    action(root, "Back · fix words", false, this::showRestoreEntry);
-                    if (replacing) action(root, "Cancel · keep current wallet", false, this::hideBackup);
-                    else action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
-                    present(root, "restore-confirm");
+                    pages.action(root, "Back · fix words", false, this::showRestoreEntry);
+                    if (replacing) pages.action(root, "Cancel · keep current wallet", false, this::hideBackup);
+                    else pages.action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+                    pages.present(root, "restore-confirm");
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> { if (s == session.get()) showInfo("Could not derive an address", e.getMessage(), this::showRestoreEntry); });
+                runOnUiThread(() -> { if (s == session.get()) pages.showInfo("Could not derive an address", e.getMessage(), this::showRestoreEntry); });
             }
         });
     }
 
     /** Persist the restored phrase; the user typed it, so the backup is considered verified. */
     private void commitRestore(final String mnemonic, final int s) {
-        showLoading("Restoring your wallet", "Saving and verifying the restored identity on this device…");
+        pages.showLoading("Restoring your wallet", "Saving and verifying the restored identity on this device…");
         cryptoExecutor.execute(() -> {
             try {
                 Credentials restored;
@@ -1511,90 +1437,90 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showPreferences() {
-        LinearLayout root = page("SECURITY / PREFERENCES", "Display & auto-lock",
+        LinearLayout root = pages.page("SECURITY / PREFERENCES", "Display & auto-lock",
                 "Text size, screen timeout, locking and touch feedback. Changes apply at once.");
-        card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
-        action(root, largeText ? "Use standard text" : "Use larger text", true, () -> {
+        pages.card(root, "Text size", largeText ? "Large · easier reading" : "Standard · comfortable reading");
+        pages.action(root, largeText ? "Use standard text" : "Use larger text", true, () -> {
             if (display.setLargeText(!largeText)) {
                 applyDisplaySettings();
                 showPreferences();
-            } else showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
+            } else pages.showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
         });
 
         int screen = display.screenTimeoutSeconds();
-        card(root, "Screen timeout", "The screen turns off after " + DisplaySettings.durationLabel(screen)
+        pages.card(root, "Screen timeout", "The screen turns off after " + DisplaySettings.durationLabel(screen)
                 + " without a touch. Screen off always locks the vault.");
         for (int seconds : DisplaySettings.SCREEN_TIMEOUT_CHOICES) {
-            action(root, "Screen off after " + DisplaySettings.durationLabel(seconds), seconds == screen, () -> {
+            pages.action(root, "Screen off after " + DisplaySettings.durationLabel(seconds), seconds == screen, () -> {
                 if (display.setScreenTimeoutSeconds(seconds)) {
                     applyDisplaySettings();
                     DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
                     if (policy.isDeviceOwnerApp(getPackageName())) applyIdlePolicy(policy);
                     armIdleLock();
                     showPreferences();
-                } else showInfo("Setting not saved", "Your previous screen timeout is still active.", this::showPreferences);
+                } else pages.showInfo("Setting not saved", "Your previous screen timeout is still active.", this::showPreferences);
             });
         }
 
         int idle = display.idleSeconds();
         int effective = DisplaySettings.effectiveIdleSeconds(idle, screen);
-        card(root, "Idle lock", "Locks after " + DisplaySettings.durationLabel(effective)
+        pages.card(root, "Idle lock", "Locks after " + DisplaySettings.durationLabel(effective)
                 + " without a touch, even while a review keeps the screen on."
                 + (effective < idle ? " (Capped by the screen timeout.)" : ""));
         for (int seconds : DisplaySettings.IDLE_CHOICES) {
-            action(root, "Lock after " + DisplaySettings.durationLabel(seconds), idle == seconds, () -> {
+            pages.action(root, "Lock after " + DisplaySettings.durationLabel(seconds), idle == seconds, () -> {
                 if (display.setIdleSeconds(seconds)) {
                     applyDisplaySettings();
                     armIdleLock();
                     showPreferences();
-                } else showInfo("Setting not saved", "Your previous idle timeout is still active.", this::showPreferences);
+                } else pages.showInfo("Setting not saved", "Your previous idle timeout is still active.", this::showPreferences);
             });
         }
 
         boolean haptics = display.haptics();
-        card(root, "Haptics", haptics ? "On · a tap for PIN keys, a pulse when you sign, a double pulse on reject"
+        pages.card(root, "Haptics", haptics ? "On · a tap for PIN keys, a pulse when you sign, a double pulse on reject"
                 : "Off · no vibration feedback");
-        action(root, haptics ? "Turn haptics off" : "Turn haptics on", false, () -> {
+        pages.action(root, haptics ? "Turn haptics off" : "Turn haptics on", false, () -> {
             if (display.setHaptics(!haptics)) {
                 applyDisplaySettings();
                 showPreferences();
-            } else showInfo("Setting not saved", "Your previous haptics setting is still active.", this::showPreferences);
+            } else pages.showInfo("Setting not saved", "Your previous haptics setting is still active.", this::showPreferences);
         });
 
-        card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart.");
-        action(root, "Back to Security", false, this::showSecurity);
-        present(root, "preferences");
+        pages.card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart.");
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "preferences");
     }
 
     private void showIntegrity() {
-        LinearLayout root = page("SECURITY / DEVICE", "Know what is verified", "These are local observations, not independent attestation.");
-        card(root, "App build", BuildConfig.VERSION_NAME + " · " + (DevTools.SCREENSHOTS ? "development capture enabled" : "release capture disabled"));
-        card(root, "Platform", Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid " + Build.VERSION.RELEASE + "\nReported patch: " + Build.VERSION.SECURITY_PATCH);
-        card(root, "Device policy", isPhoneVaultApplianceBuild() && operational ? "Appliance policy active" : "Development environment · appliance policy not established");
-        card(root, "Key boundary", BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE
+        LinearLayout root = pages.page("SECURITY / DEVICE", "Know what is verified", "These are local observations, not independent attestation.");
+        pages.card(root, "App build", BuildConfig.VERSION_NAME + " · " + (DevTools.SCREENSHOTS ? "development capture enabled" : "release capture disabled"));
+        pages.card(root, "Platform", Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid " + Build.VERSION.RELEASE + "\nReported patch: " + Build.VERSION.SECURITY_PATCH);
+        pages.card(root, "Device policy", isPhoneVaultApplianceBuild() && operational ? "Appliance policy active" : "Development environment · appliance policy not established");
+        pages.card(root, "Key boundary", BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE
                 ? "StrongBox wrapping is required when loading. EVM signing runs in Android memory."
                 : "Development build permits software wrapping. EVM signing runs in Android memory.");
-        card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
+        pages.card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
         SigningAccount shownAccount = activeAccount;
-        card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
+        pages.card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
                 : shownAccount.path() + (shownAccount.passphrase ? " · passphrase wallet " + shownAccount.fingerprint : " · no passphrase"));
-        card(root, "PIN protection", credentialMode()
+        pages.card(root, "PIN protection", credentialMode()
                 ? "Checked by the security chip (Titan M), which slows repeated guesses · "
                         + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs reset the phone · the seed key works only for "
                         + SystemCredential.AUTH_WINDOW_SECONDS + " s after a correct PIN"
                 : "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
         String entropy = getPreferences(MODE_PRIVATE).getString("entropy_report", null);
-        card(root, "Entropy at wallet creation", entropy != null ? entropy
+        pages.card(root, "Entropy at wallet creation", entropy != null ? entropy
                 : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
         Intent battery = registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery != null) {
             int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
             int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
-            card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
+            pages.card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
         }
-        card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
-        action(root, "Back to Security", false, this::showSecurity);
-        present(root, "integrity");
+        pages.card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "integrity");
     }
 
     /** Persist WHICH sources fed the last generated seed and whether each passed its health tests
@@ -1612,7 +1538,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showFeatures() {
-        LinearLayout root = page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
+        LinearLayout root = pages.page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
         String[][] items = {
             {"Change PIN", "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect until then."},
             {"Account discovery", "Finding used accounts automatically and watch-only export. Accounts and passphrase wallets themselves are in ☰ → Accounts and ☰ → Passphrase wallet."},
@@ -1624,23 +1550,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             {"Advanced recovery", "Multisig, optional stateless use, and additional backup formats after core recovery is proven."},
             {"Passkeys", "A future hardware-backed authenticator with its own transport and recovery review."}
         };
-        for (String[] item : items) action(root, item[0] + " · planned", false,
+        for (String[] item : items) pages.action(root, item[0] + " · planned", false,
                 () -> showPlanned(item[0], item[1]));
-        present(root, "features");
+        pages.present(root, "features");
     }
 
     private void showPlanned(String title, String description) {
-        LinearLayout root = page("PLANNED · NOT AVAILABLE", title, description);
-        card(root, "Availability", "No wallet setting was changed. This screen describes upcoming work.");
-        action(root, "Back to Coming next", true, this::showFeatures);
-        action(root, "Wallet", false, this::showHome);
-        present(root, "planned");
-    }
-
-    private void showInfo(String title, String description, Runnable back) {
-        LinearLayout root = page("NOTICE", title, description);
-        action(root, "Continue", true, back);
-        present(root, "information");
+        LinearLayout root = pages.page("PLANNED · NOT AVAILABLE", title, description);
+        pages.card(root, "Availability", "No wallet setting was changed. This screen describes upcoming work.");
+        pages.action(root, "Back to Coming next", true, this::showFeatures);
+        pages.action(root, "Wallet", false, this::showHome);
+        pages.present(root, "planned");
     }
 
     private void setStatusActive(boolean active) {
@@ -1656,7 +1576,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void beginSensitive(String purpose, Runnable afterPin) {
         if (!walletLoaded || credentials == null || !unlocked) return;
         if (transport != null || requestPending.get()) {
-            showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", this::showSecurity);
+            pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", this::showSecurity);
             return;
         }
         int token;
@@ -1718,7 +1638,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         updatePinPolicy(pinScreen);
         pinScreen.addCancel(this::hideBackup);
-        screenName = "reauth";
+        pages.setScreen("reauth");
         setContentView(pinScreen.view());
         devDumpUi();
     }
@@ -1726,7 +1646,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void updatePinPolicy(PinScreen gate) {
         gate.setBattery(battery);
         int remaining = pin.attemptsRemaining();
-        gate.setPolicy((DevTools.SCREENSHOTS ? DEV_KICKER + "\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
+        gate.setPolicy((DevTools.SCREENSHOTS ? Pages.DEV_KICKER + "\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
                 + (SystemCredential.willBind(this) && !pin.isSet()
                         ? "Your PIN will be held by the security chip."
                         : remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet."));
@@ -1747,7 +1667,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * refused (the flow is still active) and leave the loading screen up for good.
      */
     private void openBackup(int token, int s, boolean checkOnly, boolean retried) {
-        showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
+        pages.showLoading("Opening secure backup", "Keep cameras and other people away from your screen.");
         cryptoExecutor.execute(() -> {
             try {
                 if (!sensitiveValid(token, s)) return;
@@ -1774,7 +1694,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         return;
                     }
                     Log.w(TAG, "backup open failed: " + chain(e));
-                    showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
+                    pages.showInfo("Backup unavailable", "The stored phrase could not be opened. Lock and retry; do not replace this wallet to fix a storage problem.", this::hideBackup);
                 });
             }
         });
@@ -1803,26 +1723,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             modules = SeedQr.encode(backupWords, seedQrFormat);
         } catch (RuntimeException e) {
             Log.w(TAG, "SeedQR unavailable: " + e.getClass().getSimpleName());
-            showInfo("SeedQR unavailable", "This recovery phrase could not be shown as a SeedQR. Your written words are the backup; nothing changed.", this::hideBackup);
+            pages.showInfo("SeedQR unavailable", "This recovery phrase could not be shown as a SeedQR. Your written words are the backup; nothing changed.", this::hideBackup);
             return;
         }
         boolean compact = seedQrFormat == SeedQr.Format.COMPACT;
-        LinearLayout root = page("RECOVERY PHRASE · SEEDQR",
+        LinearLayout root = pages.page("RECOVERY PHRASE · SEEDQR",
                 compact ? "CompactSeedQR · 25 × 25" : "Standard SeedQR · 29 × 29",
                 "Copy each black square onto the matching grid of your backup card: row and column numbers match. Never photograph or scan this screen.");
         seedQrView = new SeedQrView(this, modules);
-        root.addView(seedQrView, matchWrap(dp(4)));
-        card(root, "Same secret as your 24 words", compact
+        root.addView(seedQrView, Pages.matchWrap(pages.dp(4)));
+        pages.card(root, "Same secret as your 24 words", compact
                 ? "SeedSigner CompactSeedQR (binary). Use the card with the 25 × 25 grid. Wallets that support SeedQR restore it; ordinary camera apps cannot read it."
                 : "SeedSigner Standard SeedQR (digits). Use the card with the 29 × 29 grid. More squares to copy, and any QR reader can decode it.");
-        action(root, "Hide", true, this::hideBackup);
-        action(root, compact ? "Use Standard SeedQR (29 × 29)" : "Use CompactSeedQR (25 × 25)", false, () -> {
+        pages.action(root, "Hide", true, this::hideBackup);
+        pages.action(root, compact ? "Use Standard SeedQR (29 × 29)" : "Use CompactSeedQR (25 × 25)", false, () -> {
             seedQrFormat = compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT;
             showSeedQr();
         });
-        action(root, "Show as words", false, () -> { wipeSeedQr(); backupPage = 0; showPhrasePage(); });
+        pages.action(root, "Show as words", false, () -> { wipeSeedQr(); backupPage = 0; showPhrasePage(); });
         addSeedTimer(root);
-        present(root, "backup-seedqr");
+        pages.present(root, "backup-seedqr");
     }
 
     private void wipeSeedQr() {
@@ -1838,34 +1758,34 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout box = VaultTheme.box(this);
         box.addView(VaultTheme.bodyText(this, "BACKUP CHECK", 13, VaultTheme.FAINT));
         TextView headline = VaultTheme.bodyText(this, backupReminder.headline(now), VaultTheme.BODY_SIZE, VaultTheme.INK);
-        headline.setPadding(0, dp(6), 0, 0);
+        headline.setPadding(0, pages.dp(6), 0, 0);
         box.addView(headline);
         TextView body = VaultTheme.bodyText(this, "Pick 3 words from your written backup. Your phrase is not shown.", VaultTheme.BODY_SIZE - 2, VaultTheme.DIM);
-        body.setPadding(0, dp(6), 0, 0);
+        body.setPadding(0, pages.dp(6), 0, 0);
         box.addView(body);
-        action(box, "Check my backup now", false, () -> startBackupAccess(true));
-        action(box, "Remind me in 2 weeks", false, () -> {
+        pages.action(box, "Check my backup now", false, () -> startBackupAccess(true));
+        pages.action(box, "Remind me in 2 weeks", false, () -> {
             if (!backupReminder.snooze(System.currentTimeMillis())) statusMessage = "Reminder snooze not saved";
             showHome();
         });
-        root.addView(box, matchWrap(dp(12)));
+        root.addView(box, Pages.matchWrap(pages.dp(12)));
     }
 
     private void showBackupReminderSettings() {
-        LinearLayout root = page("SECURITY / BACKUP REMINDER", "Check your backup",
+        LinearLayout root = pages.page("SECURITY / BACKUP REMINDER", "Check your backup",
                 "Now and then Home suggests a two-minute check: pick 3 words from your written backup. Your phrase is not shown, and the reminder never interrupts a request.");
         int last = backupReminder.lastCheckDay();
-        card(root, "Last checked", last < 0 ? "Not recorded on this phone yet"
+        pages.card(root, "Last checked", last < 0 ? "Not recorded on this phone yet"
                 : LocalDate.ofEpochDay(last) + " (by this phone's clock)");
         int current = backupReminder.intervalDays();
         for (int days : BackupReminder.CHOICES) {
-            action(root, BackupReminder.label(days), days == current, () -> {
+            pages.action(root, BackupReminder.label(days), days == current, () -> {
                 if (backupReminder.setIntervalDays(days)) showBackupReminderSettings();
-                else showInfo("Setting not saved", "Your previous reminder setting is still active.", this::showBackupReminderSettings);
+                else pages.showInfo("Setting not saved", "Your previous reminder setting is still active.", this::showBackupReminderSettings);
             });
         }
-        action(root, "Back to Security", false, this::showSecurity);
-        present(root, "reminder-settings");
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "reminder-settings");
     }
 
     private void startSeedTimer() {
@@ -1888,7 +1808,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             hideBackup();
             statusMessage = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
                     : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of 6.";
-            showInfo("Backup hidden", statusMessage, this::showHome);
+            pages.showInfo("Backup hidden", statusMessage, this::showHome);
             return;
         }
         if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · any touch restarts the timer · 8 minute session limit");
@@ -1897,7 +1817,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void addSeedTimer(LinearLayout root) {
         seedTimer = VaultTheme.bodyText(this, "", 14, VaultTheme.FAINT);
-        seedTimer.setPadding(0, dp(18), 0, 0);
+        seedTimer.setPadding(0, pages.dp(18), 0, 0);
         root.addView(seedTimer);
         ui.removeCallbacks(hideSeed);
         tickSeedTimer();
@@ -1905,26 +1825,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void showPhrasePage() {
         if (!sensitive.active() || backupWords == null) return;
-        LinearLayout root = page(replacementCandidate == null ? "RECOVERY PHRASE" : "NEW WALLET · NOT ACTIVE",
+        LinearLayout root = pages.page(replacementCandidate == null ? "RECOVERY PHRASE" : "NEW WALLET · NOT ACTIVE",
                 "Write words " + (backupPage * 4 + 1) + "–" + (backupPage * 4 + 4),
                 "Page " + (backupPage + 1) + " of 6. Write each word beside its number. Never photograph or share your phrase.");
         for (int i = backupPage * 4; i < backupPage * 4 + 4; i++) {
             LinearLayout row = VaultTheme.box(this);
             row.setOrientation(LinearLayout.HORIZONTAL);
             TextView number = VaultTheme.monoText(this, String.format(Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
-            number.setWidth(dp(44));
+            number.setWidth(pages.dp(44));
             row.addView(number);
             row.addView(VaultTheme.monoText(this, backupWords[i], 23, VaultTheme.INK),
                     new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
-            root.addView(row, matchWrap(dp(12)));
+            root.addView(row, Pages.matchWrap(pages.dp(12)));
         }
-        if (backupPage < 5) action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
-        else action(root, "I've written them down · spot-check", true, this::startWordCheck);
-        if (backupPage > 0) action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
-        if (replacementCandidate == null) action(root, "Show as SeedQR", false, this::showSeedQr);
-        action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
+        if (backupPage < 5) pages.action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
+        else pages.action(root, "I've written them down · spot-check", true, this::startWordCheck);
+        if (backupPage > 0) pages.action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
+        if (replacementCandidate == null) pages.action(root, "Show as SeedQR", false, this::showSeedQr);
+        pages.action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, this::hideBackup);
         addSeedTimer(root);
-        present(root, "phrase");
+        pages.present(root, "phrase");
     }
 
     private void startWordCheck() {
@@ -1937,7 +1857,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showWordCheck() {
         if (backupChallenge == null || !sensitive.active()) return;
         int position = backupChallenge.position();
-        LinearLayout root = page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF " + backupChallenge.total(),
+        LinearLayout root = pages.page("BACKUP CHECK · " + (backupChallenge.progress() + 1) + " OF " + backupChallenge.total(),
                 "Find word " + (position + 1), "Use your written backup. Select the word beside this number.");
         List<String> choices = new ArrayList<>();
         choices.add(backupWords[position]);
@@ -1949,22 +1869,22 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         Collections.shuffle(choices, random);
         final BackupCheck.Challenge challenge = backupChallenge;
         final int token = activeSensitive, s = session.get();
-        for (String choice : choices) action(root, choice, false, () -> {
+        for (String choice : choices) pages.action(root, choice, false, () -> {
             if (!sensitiveValid(token, s) || backupChallenge != challenge) return;
             if (!challenge.answer(choice)) {
                 challenge.destroy();
-                LinearLayout failed = page("BACKUP NEEDS ATTENTION", "That word did not match", "Check the number and spelling on your paper. Receiving stays paused until the full check is complete.");
-                action(failed, "Review recovery words", true, () -> { backupPage = 0; showPhrasePage(); });
-                action(failed, "Restart the 24-word check", false, this::startWordCheck);
-                action(failed, "Cancel", false, this::hideBackup);
+                LinearLayout failed = pages.page("BACKUP NEEDS ATTENTION", "That word did not match", "Check the number and spelling on your paper. Receiving stays paused until the full check is complete.");
+                pages.action(failed, "Review recovery words", true, () -> { backupPage = 0; showPhrasePage(); });
+                pages.action(failed, "Restart the 24-word check", false, this::startWordCheck);
+                pages.action(failed, "Cancel", false, this::hideBackup);
                 addSeedTimer(failed);
-                present(failed, "backup-error");
+                pages.present(failed, "backup-error");
             } else if (challenge.complete()) showBackupChecked();
             else showWordCheck();
         });
-        action(root, "Cancel check", false, this::hideBackup);
+        pages.action(root, "Cancel check", false, this::hideBackup);
         addSeedTimer(root);
-        present(root, "backup-check");
+        pages.present(root, "backup-check");
     }
 
     private void showBackupChecked() {
@@ -1976,24 +1896,24 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         int checked = backupChallenge == null ? BackupCheck.SPOT_CHECK : backupChallenge.total();
         backupChallenge = null;
         String address = replacementCandidate == null ? backupIdentity : replacementCandidate.address;
-        LinearLayout root = page(checked + " OF " + checked + " WORDS CHECKED",
+        LinearLayout root = pages.page(checked + " OF " + checked + " WORDS CHECKED",
                 replacementCandidate == null ? "Your backup matches" : "Ready to replace?",
                 replacementCandidate == null ? "Confirm the account below. This check does not replace an independent restore drill."
                         : "Your current wallet will be replaced. Keep its backup if it controls any assets. The new wallet is not active until you confirm.");
-        card(root, replacementCandidate == null ? "Account 1" : "New Account 1",
+        pages.card(root, replacementCandidate == null ? "Account 1" : "New Account 1",
                 Keys.toChecksumAddress(address));
-        card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
-        action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
+        pages.card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
+        pages.action(root, replacementCandidate == null ? "Confirm account & finish" : "Activate new wallet", true,
                 replacementCandidate == null ? this::saveBackupCheck
                         : () -> withSeedKey("Confirm your PIN to activate the new wallet", this::activateReplacement));
-        action(root, "Cancel", false, this::hideBackup);
-        present(root, "backup-confirm");
+        pages.action(root, "Cancel", false, this::hideBackup);
+        pages.present(root, "backup-confirm");
     }
 
     private void saveBackupCheck() {
         final int token = activeSensitive, s = session.get();
         final String address = backupIdentity;
-        showLoading("Saving backup check", "Confirming this account's recovery status…");
+        pages.showLoading("Saving backup check", "Confirming this account's recovery status…");
         cryptoExecutor.execute(() -> {
             try {
                 synchronized (stateLock) {
@@ -2009,7 +1929,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (sensitiveValid(token, s))
-                        showInfo("Backup status not saved", "Your wallet is unchanged. Please repeat the check before receiving or signing.", this::hideBackup);
+                        pages.showInfo("Backup status not saved", "Your wallet is unchanged. Please repeat the check before receiving or signing.", this::hideBackup);
                 });
             }
         });
@@ -2017,19 +1937,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void confirmReplace() {
         if (!backupVerified) {
-            showInfo("Check your existing backup first", "Replacing a wallet requires a verified backup of the current account.", this::showHome);
+            pages.showInfo("Check your existing backup first", "Replacing a wallet requires a verified backup of the current account.", this::showHome);
             return;
         }
         beginSensitive("replace your wallet", () -> {
             final int token = activeSensitive, s = session.get();
-            LinearLayout root = page("SECURITY / REPLACE WALLET", "Keep your current backup", "Replacement creates a different account. Assets on the old account remain controlled by its original phrase.");
-            card(root, "Nothing changes yet", "You will write down all 24 new words and pass a spot-check before a separate Activate step. Cancellation keeps your current wallet.");
-            action(root, "Prepare a new wallet", true, () -> {
+            LinearLayout root = pages.page("SECURITY / REPLACE WALLET", "Keep your current backup", "Replacement creates a different account. Assets on the old account remain controlled by its original phrase.");
+            pages.card(root, "Nothing changes yet", "You will write down all 24 new words and pass a spot-check before a separate Activate step. Cancellation keeps your current wallet.");
+            pages.action(root, "Prepare a new wallet", true, () -> {
                 if (!sensitiveValid(token, s)) return;
                 int op = beginReplacement();
                 if (op < 0) return;
                 replacementOperation = op;
-                showLoading("Preparing a new wallet", "Your current wallet remains active until the final confirmation.");
+                pages.showLoading("Preparing a new wallet", "Your current wallet remains active until the final confirmation.");
                 cryptoExecutor.execute(() -> {
                     try {
                         if (!sensitiveValid(token, s)) return;
@@ -2047,13 +1967,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         endReplacement(op);
                         runOnUiThread(() -> {
                             if (sensitiveValid(token, s))
-                                showInfo("Could not prepare a wallet", "Your current wallet is unchanged. Lock and retry.", this::hideBackup);
+                                pages.showInfo("Could not prepare a wallet", "Your current wallet is unchanged. Lock and retry.", this::hideBackup);
                         });
                     }
                 });
             });
-            action(root, "Cancel · keep current wallet", false, this::hideBackup);
-            present(root, "replace-confirm");
+            pages.action(root, "Cancel · keep current wallet", false, this::hideBackup);
+            pages.present(root, "replace-confirm");
         });
     }
 
@@ -2063,7 +1983,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (candidate == null || !sensitiveValid(token, s) || !beginCommit(op)) return;
         ui.removeCallbacks(hideSeed);
         clearReceivingIdentity();
-        showLoading("Activating your new wallet", "Saving and checking the new identity. This step can no longer be cancelled.");
+        pages.showLoading("Activating your new wallet", "Saving and checking the new identity. This step can no longer be cancelled.");
         cryptoExecutor.execute(() -> {
             try {
                 synchronized (stateLock) {
@@ -2114,7 +2034,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         final int s = session.get();
         final VaultKeyStore store = vault;
         clearReceivingIdentity();
-        showLoading("Opening your wallet", "Checking the saved identity before displaying an address…");
+        pages.showLoading("Opening your wallet", "Checking the saved identity before displaying an address…");
         cryptoExecutor.execute(() -> {
             try {
                 if (s != session.get() || !unlocked || pin.eraseOutstanding()) return;
@@ -2174,17 +2094,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         lock();
                         return;
                     }
-                    LinearLayout root = page("WALLET UNAVAILABLE", "Your address is hidden", "The stored identity could not be verified. Do not replace or reset the wallet to fix this error.");
-                    card(root, "Next step", "Lock and retry. If the problem continues, preserve this device and use your written backup with a compatible recovery tool.");
-                    action(root, "Lock & retry", true, this::lock);
-                    present(root, "wallet-error");
+                    LinearLayout root = pages.page("WALLET UNAVAILABLE", "Your address is hidden", "The stored identity could not be verified. Do not replace or reset the wallet to fix this error.");
+                    pages.card(root, "Next step", "Lock and retry. If the problem continues, preserve this device and use your written backup with a compatible recovery tool.");
+                    pages.action(root, "Lock & retry", true, this::lock);
+                    pages.present(root, "wallet-error");
                 });
             }
         });
     }
 
     private Bitmap qrFor(String address) {
-        Bitmap qr = VaultTheme.qrBitmap(address, dp(232), dp(12));
+        Bitmap qr = VaultTheme.qrBitmap(address, pages.dp(232), pages.dp(12));
         if (qr == null) throw new IllegalStateException("QR could not be generated");
         return qr;
     }
@@ -2319,7 +2239,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     }
                     // The ACTIVE account, plus which one it is (1-based number, standard/passphrase)
                     // so the companion can label its pairing. No label, no fingerprint, no passphrase.
-                    source.send(json("id", id, "status", "ok", "address", credentials.getAddress(),
+                    source.send(Pages.json("id", id, "status", "ok", "address", credentials.getAddress(),
                             "account", account.accountNumber(), "wallet", account.walletKind()));
                 }
             } catch (Exception e) { sendError(source, id, e.getMessage()); }
@@ -2367,7 +2287,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 RequestRefusal refusal = (RequestRefusal) e;
                 runOnUiThread(() -> {
                     if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
-                    showInfo(refusal.title, refusal.getMessage(), this::showHome);
+                    pages.showInfo(refusal.title, refusal.getMessage(), this::showHome);
                     Haptics.reject(getWindow().getDecorView());
                 });
             }
@@ -2471,16 +2391,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         TransactionReview review = approval.review;
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details,
                 approval.hostSimulation != null ? approval.hostSimulation.rows : null);
-        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
+        LinearLayout root = pages.renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
                 review.summary, review.details, "technical details");
         if (approval.hostSimulation != null) {
             // The Mac's claim, in its own box BELOW the phone's own review; display only, never signed.
             SimulationCheck.Result sim = approval.hostSimulation;
             LinearLayout box = VaultTheme.box(this);
             box.addView(VaultTheme.bodyText(this, sim.title, 13, sim.contradicts ? VaultTheme.DANGER_INK : VaultTheme.FAINT));
-            box.addView(VaultTheme.rule(this, dp(8), dp(10)));
-            for (MessageReview.Row row : sim.rows) box.addView(detail(row));
-            root.addView(box, matchWrap(dp(16)));
+            box.addView(VaultTheme.rule(this, pages.dp(8), pages.dp(10)));
+            for (MessageReview.Row row : sim.rows) box.addView(pages.detail(row));
+            root.addView(box, Pages.matchWrap(pages.dp(16)));
         }
         addDecisionControls(root, source, decision, s, SignSpec.withCredentials(approval.request.id, review.reviewPrompt,
                 review.signLabel, dangers, approval::signIfIdentityUnchanged,
@@ -2490,7 +2410,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     safety().record(approval.reviewedAddress(), review.parties, System.currentTimeMillis());
                     receiptParties = review.parties;
                 }));
-        present(root, "approval");
+        pages.present(root, "approval");
     }
 
     /**
@@ -2579,62 +2499,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
     }
 
-    /** Kicker of a screenshot build's reviews, in place of the review's own. */
-    static final String DEV_KICKER = "DEVELOPMENT · TEST ASSETS ONLY";
-
-    private static String kicker(String reviewKicker) { return DevTools.SCREENSHOTS ? DEV_KICKER : reviewKicker; }
-
-    /**
-     * The top of every signing review (EVM transaction, message, Bitcoin PSBT), in reading order:
-     * the danger summary, the signing account (EVM only; null for Bitcoin), every summary row, and
-     * the details behind a Show/Hide toggle. Keeps the screen on while the review is up.
-     */
-    private LinearLayout renderReview(String reviewKicker, String title, String subtitle, List<MessageReview.Row> dangers,
-                                      SigningAccount signingAs, List<MessageReview.Row> summary,
-                                      List<MessageReview.Row> details, String detailsWhat) {
-        keepScreenOn(true);
-        LinearLayout root = page(kicker(reviewKicker), title, subtitle);
-        addDangerSummary(root, dangers);
-        if (signingAs != null) root.addView(detail("Signing with", signingAs.signingWith()));
-        for (MessageReview.Row row : summary) root.addView(detail(row));
-        addDetailsToggle(root, details, detailsWhat);
-        return root;
-    }
-
-    /** The review's secondary rows behind a Show/Hide button; open from the start if one is a DANGER. */
-    private void addDetailsToggle(LinearLayout root, List<MessageReview.Row> rows, String what) {
-        LinearLayout raw = new LinearLayout(this);
-        raw.setOrientation(LinearLayout.VERTICAL);
-        for (MessageReview.Row row : rows) raw.addView(detail(row));
-        boolean open = !ReviewStyle.dangers(rows).isEmpty(); // a DANGER is never folded away
-        raw.setVisibility(open ? View.VISIBLE : View.GONE);
-        TextView details = VaultTheme.pixelButton(this, (open ? "Hide " : "Show ") + what, false);
-        hardenTouch(details);
-        details.setOnClickListener(v -> {
-            boolean visible = raw.getVisibility() == View.VISIBLE;
-            raw.setVisibility(visible ? View.GONE : View.VISIBLE);
-            details.setText((visible ? "Show " : "Hide ") + what);
-        });
-        root.addView(details, matchWrap(dp(8)));
-        root.addView(raw);
-    }
-
-    /** Set on a page's root before {@link #present}: called once the end of the page has been on screen. */
-    private interface ScrollEndWatcher { void reachedEnd(); }
-
-    /** Wires a {@link ScrollEndWatcher} tag on the page root to its ScrollView (scrolls and layouts). */
-    private void watchScrollEnd(ScrollView scroll, LinearLayout root) {
-        if (!(root.getTag() instanceof ScrollEndWatcher)) return;
-        ScrollEndWatcher watcher = (ScrollEndWatcher) root.getTag();
-        Runnable check = () -> {
-            if (scroll.getHeight() == 0) return;
-            if (ApprovalGate.atEnd(root.getHeight(), scroll.getScrollY(), scroll.getHeight(), dp(24))) watcher.reachedEnd();
-        };
-        scroll.setOnScrollChangeListener((v, x, y, ox, oy) -> check.run());
-        root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> check.run());
-        scroll.post(check);
-    }
-
     /**
      * The acknowledgement checkbox, Sign and Reject for one request, shared by the transaction,
      * message and Bitcoin reviews: one decision, check → sign → send as one step under stateLock.
@@ -2651,30 +2515,30 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             VaultTheme.size(dangerAck, VaultTheme.BODY_SIZE);
             dangerAck.setTextColor(VaultTheme.DANGER_INK);
             dangerAck.setButtonTintList(ColorStateList.valueOf(VaultTheme.DANGER_INK));
-            dangerAck.setMinHeight(dp(56));
-            dangerAck.setPadding(dp(4), dp(18), dp(4), dp(18));
-            hardenTouch(dangerAck);
-            root.addView(dangerAck, matchWrap(dp(12)));
+            dangerAck.setMinHeight(pages.dp(56));
+            dangerAck.setPadding(pages.dp(4), pages.dp(18), pages.dp(4), pages.dp(18));
+            Pages.hardenTouch(dangerAck);
+            root.addView(dangerAck, Pages.matchWrap(pages.dp(12)));
         }
         CheckBox reviewed = new CheckBox(this);
         reviewed.setText(spec.prompt);
         VaultTheme.size(reviewed, VaultTheme.BODY_SIZE);
         reviewed.setTextColor(VaultTheme.INK);
-        reviewed.setMinHeight(dp(56));
-        reviewed.setPadding(dp(4), dp(18), dp(4), dp(18));
-        hardenTouch(reviewed);
-        root.addView(reviewed, matchWrap(dp(gate.dangerRequired ? 4 : 12)));
+        reviewed.setMinHeight(pages.dp(56));
+        reviewed.setPadding(pages.dp(4), pages.dp(18), pages.dp(4), pages.dp(18));
+        Pages.hardenTouch(reviewed);
+        root.addView(reviewed, Pages.matchWrap(pages.dp(gate.dangerRequired ? 4 : 12)));
         TextView readToEnd = VaultTheme.bodyText(this, "Approve unlocks once you have scrolled to the end of this review.", 13, VaultTheme.FAINT);
-        root.addView(readToEnd, matchWrap(dp(4)));
+        root.addView(readToEnd, Pages.matchWrap(pages.dp(4)));
         TextView sign = VaultTheme.pixelButton(this, spec.signText, true);
         TextView reject = VaultTheme.pixelButton(this, "Reject request", false);
-        hardenTouch(sign);
-        hardenTouch(reject);
+        Pages.hardenTouch(sign);
+        Pages.hardenTouch(reject);
         sign.setEnabled(false);
         Runnable refresh = () -> sign.setEnabled(gate.mayApprove() && decision.state() == ApprovalDecision.State.REVIEW);
         reviewed.setOnCheckedChangeListener((v, checked) -> { gate.setReviewed(checked); refresh.run(); });
         if (dangerAck != null) dangerAck.setOnCheckedChangeListener((v, checked) -> { gate.setDangerAcknowledged(checked); refresh.run(); });
-        root.setTag((ScrollEndWatcher) () -> {
+        root.setTag((Pages.ScrollEndWatcher) () -> {
             if (gate.hasReachedEnd()) return;
             gate.reachedEnd();
             readToEnd.setVisibility(View.GONE);
@@ -2684,7 +2548,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         reject.setOnClickListener(v -> {
             if (!decision.reject()) return;
             Haptics.reject(v);
-            source.send(json("id", spec.requestId, "status", "rejected"));
+            source.send(Pages.json("id", spec.requestId, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Request rejected · no signature created";
             showReceipt("Request rejected", "No signature was created for this request.", null, null, spec.transaction);
@@ -2765,14 +2629,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             withSeedKey(spec.seedWhy, work, () -> {
                 synchronized (stateLock) { if (approvalDecision != decision) return; }
                 decision.cancel();
-                source.send(json("id", spec.requestId, "status", "rejected"));
+                source.send(Pages.json("id", spec.requestId, "status", "rejected"));
                 finishApproval(decision);
                 statusMessage = "Not signed · PIN not confirmed";
                 showReceipt("Not signed", "The PIN was not confirmed, so nothing was signed.", null, null, spec.transaction);
             });
         });
-        root.addView(sign, matchWrap(dp(8)));
-        root.addView(reject, matchWrap(dp(10)));
+        root.addView(sign, Pages.matchWrap(pages.dp(8)));
+        root.addView(reject, Pages.matchWrap(pages.dp(10)));
     }
 
     /** Review for personal_sign / eth_signTypedData_v4, rendered from the parsed request only. */
@@ -2781,13 +2645,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.SHOW_REVIEW)) return;
         MessageReview review = approval.review;
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
-        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
+        LinearLayout root = pages.renderReview(review.kicker, review.title, review.subtitle, dangers, approval.signingAs,
                 review.summary, review.details, "details");
         addDecisionControls(root, source, decision, s, SignSpec.withCredentials(approval.request.id, review.reviewPrompt,
                 review.signLabel, dangers, approval::signIfIdentityUnchanged,
                 "The signature was queued for USB. Anyone who receives it can use it as shown on the review; unplugging cannot revoke it.",
                 "Signed digest", "digest", false, null));
-        present(root, "message-approval");
+        pages.present(root, "message-approval");
     }
 
     private void showReceipt(String title, String message, String hash) {
@@ -2795,101 +2659,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     private void showReceipt(String title, String message, String label, String value, boolean transaction) {
-        LinearLayout root = page("REQUEST OUTCOME", title, message);
-        if (value != null && !value.isEmpty()) card(root, label, value);
-        if (transaction) card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
-        else card(root, "Where it goes", "This offline phone cannot see how the host or website uses the signature.");
+        LinearLayout root = pages.page("REQUEST OUTCOME", title, message);
+        if (value != null && !value.isEmpty()) pages.card(root, label, value);
+        if (transaction) pages.card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
+        else pages.card(root, "Where it goes", "This offline phone cannot see how the host or website uses the signature.");
         List<TransactionReview.Party> save = receiptParties;
         receiptParties = null;
         if (save != null && !save.isEmpty()) safetyScreens().addSaveActions(root, save);
-        action(root, "Back to Wallet", true, this::showHome);
-        action(root, "Lock now", false, this::lock);
-        present(root, "receipt");
-    }
-
-    private View detail(String label, String value) {
-        return detail(new MessageReview.Row(label, value));
-    }
-
-    /**
-     * One review row. DANGER: red, stop glyph, "DANGER · TOPIC", on a red-outlined panel. WARNING:
-     * amber, "!" glyph, "CHECK · TOPIC". Whole EVM addresses in the text are shown in groups of
-     * four ("0x51dd 9Afd …"), so a line only wraps between groups.
-     */
-    private View detail(MessageReview.Row r) {
-        String label = r.label, value = r.value;
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.VERTICAL);
-        ReviewStyle.Level level = ReviewStyle.level(r);
-        boolean amber = BtcPsbtReview.TEST_NETWORK.equals(label);
-        int ink = level == ReviewStyle.Level.DANGER ? VaultTheme.DANGER_INK
-                : level == ReviewStyle.Level.CHECK ? VaultTheme.WARNING_INK : amber ? VaultTheme.AMBER : 0;
-        TextView labelView = VaultTheme.bodyText(this, ReviewStyle.heading(r), 13, ink != 0 ? ink : VaultTheme.FAINT);
-        String shown = ReviewStyle.displayValue(label, value);
-        TextView valueView = VaultTheme.monoText(this, shown, amber ? VaultTheme.BODY_SIZE + 2 : VaultTheme.BODY_SIZE, ink != 0 ? ink : VaultTheme.INK);
-        if (!shown.equals(value)) keepGroupsWhole(valueView);
-        valueView.setTextIsSelectable(false);
-        valueView.setPadding(0, dp(6), 0, dp(15));
-        if (level != ReviewStyle.Level.NONE) {
-            labelView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            LinearLayout heading = new LinearLayout(this);
-            heading.setOrientation(LinearLayout.HORIZONTAL);
-            heading.setGravity(Gravity.CENTER_VERTICAL);
-            LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-            glp.rightMargin = dp(8);
-            heading.addView(VaultTheme.levelGlyph(this, level), glp);
-            heading.addView(labelView, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-            row.addView(heading);
-        } else {
-            row.addView(labelView);
-        }
-        row.addView(valueView);
-        SafetyScreens.style(this, row, label, valueView, value);
-        return row;
-    }
-
-    /** Grouped addresses: break lines only at the spaces between groups (no hyphenation inside one). */
-    private static void keepGroupsWhole(TextView t) {
-        t.setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE);
-        t.setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE);
-    }
-
-    /**
-     * Top of a review with DANGER rows: "N dangers below — read before signing" and each one's
-     * topic, on the same red-outlined panel the rows use.
-     */
-    private void addDangerSummary(LinearLayout root, List<MessageReview.Row> dangers) {
-        if (dangers.isEmpty()) return;
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        GradientDrawable bg = new GradientDrawable();
-        bg.setColor(0x33FF5A5A);
-        bg.setStroke(dp(2), VaultTheme.DANGER_INK);
-        bg.setCornerRadius(dp(6));
-        panel.setBackground(bg);
-        panel.setPadding(dp(12), dp(12), dp(12), dp(12));
-        LinearLayout heading = new LinearLayout(this);
-        heading.setOrientation(LinearLayout.HORIZONTAL);
-        heading.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        glp.rightMargin = dp(10);
-        heading.addView(VaultTheme.levelGlyph(this, ReviewStyle.Level.DANGER), glp);
-        TextView title = VaultTheme.bodyText(this, ReviewStyle.dangerSummary(dangers.size()), VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
-        panel.addView(heading);
-        StringBuilder topics = new StringBuilder();
-        for (MessageReview.Row d : dangers) {
-            String t = ReviewStyle.topic(d);
-            if (topics.length() > 0) topics.append('\n');
-            topics.append("• ").append(t != null ? t : ReviewStyle.shortenEvm(ReviewStyle.firstSentence(d.value)));
-        }
-        TextView list = VaultTheme.bodyText(this, topics.toString(), 13, VaultTheme.DANGER_INK);
-        list.setPadding(0, dp(8), 0, 0);
-        panel.addView(list);
-        root.addView(panel, matchWrap(dp(4)));
+        pages.action(root, "Back to Wallet", true, this::showHome);
+        pages.action(root, "Lock now", false, this::lock);
+        pages.present(root, "receipt");
     }
 
     // ------------------------------------------------------------------ Bitcoin
@@ -2973,9 +2752,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         runOnUiThread(() -> {
             if (s != session.get() || !unlocked || source != transport || sensitive.active() || approvalDecision != null) return;
             if (e instanceof RequestRefusal) {
-                showInfo(((RequestRefusal) e).title, e.getMessage(), this::showHome);
+                pages.showInfo(((RequestRefusal) e).title, e.getMessage(), this::showHome);
                 Haptics.reject(getWindow().getDecorView());
-            } else if ("loading".equals(screenName)) {
+            } else if ("loading".equals(pages.screen())) {
                 showHome();
             }
         });
@@ -2997,7 +2776,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         runOnUiThread(() -> {
             if (!owns(source, s, decision, RequestOwnership.BTC_UNDECIDED)) { finishApproval(decision); return; }
-            showLoading("Opening your Bitcoin accounts", "Deriving your " + network.label + " accounts from your recovery phrase…");
+            pages.showLoading("Opening your Bitcoin accounts", "Deriving your " + network.label + " accounts from your recovery phrase…");
             withSeedKey("Confirm your PIN to open your Bitcoin accounts", () -> {
                 try {
                     cryptoExecutor.execute(() -> {
@@ -3035,7 +2814,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             }, () -> {
                 synchronized (stateLock) { if (approvalDecision != decision) return; }
                 decision.cancel();
-                source.send(json("id", id, "status", "rejected"));
+                source.send(Pages.json("id", id, "status", "rejected"));
                 finishApproval(decision);
                 statusMessage = "Bitcoin request declined · PIN not confirmed";
                 showHome();
@@ -3062,7 +2841,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         runOnUiThread(() -> {
             if (s != session.get() || !unlocked) return;
             statusMessage = r.network.label + " " + BtcWallet.accountLabel(r.type, r.account) + " sent to the host (watch-only, shared before)";
-            if ("loading".equals(screenName) && approvalDecision == null) showHome();
+            if ("loading".equals(pages.screen()) && approvalDecision == null) showHome();
             else if (statusView != null) statusView.setText(statusMessage);
         });
     }
@@ -3070,20 +2849,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showBtcShare(AccessoryTransport source, BtcRequest r, BtcWallet wallet, ApprovalDecision decision, int s) {
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         keepScreenOn(true);
-        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
+        LinearLayout root = pages.page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
                 "Share Bitcoin account with the Mac?",
                 "The connected computer asks for this account's watch-only key, to show your balance and prepare transactions.");
-        root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
-        root.addView(detail("Account", BtcWallet.accountLabel(r.type, r.account) + "\n" + wallet.accountPathString(r.type, r.account)));
-        root.addView(detail("Wallet fingerprint", wallet.fingerprintHex()));
-        root.addView(detail("What the Mac will see", "Every address, balance and payment of this account, past and future, "
+        root.addView(pages.detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
+        root.addView(pages.detail("Account", BtcWallet.accountLabel(r.type, r.account) + "\n" + wallet.accountPathString(r.type, r.account)));
+        root.addView(pages.detail("Wallet fingerprint", wallet.fingerprintHex()));
+        root.addView(pages.detail("What the Mac will see", "Every address, balance and payment of this account, past and future, "
                 + "becomes visible to the Mac and to any software on it. It cannot spend: every payment still needs your approval on this phone."));
-        root.addView(detail("Asked once", "If you share, the phone remembers it for this account and network and answers "
+        root.addView(pages.detail("Asked once", "If you share, the phone remembers it for this account and network and answers "
                 + "this request without asking again."));
         TextView share = VaultTheme.pixelButton(this, "Share with the Mac", true);
         TextView decline = VaultTheme.pixelButton(this, "Don't share", false);
-        hardenTouch(share);
-        hardenTouch(decline);
+        Pages.hardenTouch(share);
+        Pages.hardenTouch(decline);
         share.setOnClickListener(v -> {
             JSONObject reply;
             try {
@@ -3103,20 +2882,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             Haptics.confirm(v);
             finishApproval(decision);
             statusMessage = "Bitcoin account shared (watch-only)";
-            showInfo("Account shared", BtcWallet.accountLabel(r.type, r.account) + " on " + r.network.label
+            pages.showInfo("Account shared", BtcWallet.accountLabel(r.type, r.account) + " on " + r.network.label
                     + " is now visible to the Mac (watch-only). It cannot spend without this phone.", this::showHome);
         });
         decline.setOnClickListener(v -> {
             if (!decision.reject()) return;
             Haptics.reject(v);
-            source.send(json("id", r.id, "status", "rejected"));
+            source.send(Pages.json("id", r.id, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Bitcoin account not shared";
             showHome();
         });
-        root.addView(share, matchWrap(dp(16)));
-        root.addView(decline, matchWrap(dp(10)));
-        present(root, "btc-share");
+        root.addView(share, Pages.matchWrap(pages.dp(16)));
+        root.addView(decline, Pages.matchWrap(pages.dp(10)));
+        pages.present(root, "btc-share");
     }
 
     /**
@@ -3127,15 +2906,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void showBtcSharing() {
         List<String> keys;
         synchronized (stateLock) { keys = walletId != null ? btcSharing().keys() : Collections.emptyList(); }
-        LinearLayout root = page("SECURITY / PRIVACY", "Bitcoin sharing",
+        LinearLayout root = pages.page("SECURITY / PRIVACY", "Bitcoin sharing",
                 "Bitcoin accounts whose watch-only key the Mac receives without asking. Stop sharing to make the phone ask again.");
         if (keys.isEmpty()) {
-            card(root, "Nothing shared", "No Bitcoin account is shared. The phone asks before the Mac can see any account.");
+            pages.card(root, "Nothing shared", "No Bitcoin account is shared. The phone asks before the Mac can see any account.");
         } else {
-            card(root, "Already received", "Stopping does not erase what the Mac already received: it can still watch those addresses. "
+            pages.card(root, "Already received", "Stopping does not erase what the Mac already received: it can still watch those addresses. "
                     + "It only stops new requests from being answered silently.");
             for (String key : keys) {
-                action(root, "Stop sharing · " + BtcSharing.label(key), false, () -> {
+                pages.action(root, "Stop sharing · " + BtcSharing.label(key), false, () -> {
                     synchronized (stateLock) {
                         if (walletId == null) return;
                         BtcSharing sharing = btcSharing();
@@ -3146,7 +2925,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     showBtcSharing();
                 });
             }
-            if (keys.size() > 1) action(root, "Stop sharing all", false, () -> {
+            if (keys.size() > 1) pages.action(root, "Stop sharing all", false, () -> {
                 synchronized (stateLock) {
                     if (walletId == null) return;
                     BtcSharing sharing = btcSharing();
@@ -3157,8 +2936,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 showBtcSharing();
             });
         }
-        action(root, "Back to Security", false, this::showSecurity);
-        present(root, "btc-sharing");
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "btc-sharing");
     }
 
     /** btcShowAddress: the address big, for comparison with the Mac; answered only after Done. */
@@ -3166,22 +2945,22 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                                 ApprovalDecision decision, int s) {
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         keepScreenOn(true);
-        LinearLayout root = page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
+        LinearLayout root = pages.page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · ADDRESS" : "BITCOIN · RECEIVE ADDRESS",
                 "Compare with your Mac", "Check that your Mac shows exactly this address, every group. Only this phone's screen is trusted.");
-        root.addView(detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
+        root.addView(pages.detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
         LinearLayout box = VaultTheme.box(this);
         TextView big = VaultTheme.monoText(this, BtcScript.grouped(address, 4), 24, VaultTheme.INK);
         big.setTextIsSelectable(false);
         box.addView(big);
-        root.addView(box, matchWrap(dp(12)));
-        root.addView(detail("Account", BtcWallet.accountLabel(r.type, r.account)));
-        root.addView(detail("Path", wallet.addressPathString(r.type, r.account, r.change, r.index)
+        root.addView(box, Pages.matchWrap(pages.dp(12)));
+        root.addView(pages.detail("Account", BtcWallet.accountLabel(r.type, r.account)));
+        root.addView(pages.detail("Path", wallet.addressPathString(r.type, r.account, r.change, r.index)
                 + (r.change == 0 ? " (receiving address " : " (change address ") + r.index + ")"));
-        root.addView(detail("If anything differs", "Tap Cancel and do not use the address shown on the Mac."));
+        root.addView(pages.detail("If anything differs", "Tap Cancel and do not use the address shown on the Mac."));
         TextView done = VaultTheme.pixelButton(this, "Done: it matches", true);
         TextView cancel = VaultTheme.pixelButton(this, "Cancel", false);
-        hardenTouch(done);
-        hardenTouch(cancel);
+        Pages.hardenTouch(done);
+        Pages.hardenTouch(cancel);
         done.setOnClickListener(v -> {
             JSONObject reply;
             try {
@@ -3203,21 +2982,21 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         cancel.setOnClickListener(v -> {
             if (!decision.reject()) return;
             Haptics.reject(v);
-            source.send(json("id", r.id, "status", "rejected"));
+            source.send(Pages.json("id", r.id, "status", "rejected"));
             finishApproval(decision);
             statusMessage = "Bitcoin address not confirmed";
             showHome();
         });
-        root.addView(done, matchWrap(dp(16)));
-        root.addView(cancel, matchWrap(dp(10)));
-        present(root, "btc-address");
+        root.addView(done, Pages.matchWrap(pages.dp(16)));
+        root.addView(cancel, Pages.matchWrap(pages.dp(10)));
+        pages.present(root, "btc-address");
     }
 
     /** btcSignPsbt review, rendered from the BtcPsbtReview built once in handleBitcoin. */
     private void showBtcApproval(AccessoryTransport source, BtcRequest r, BtcPsbtReview review, ApprovalDecision decision, int s) {
         if (abandonUnlessOwned(source, s, decision, RequestOwnership.BTC_SHOW)) return;
         List<MessageReview.Row> dangers = ReviewStyle.dangers(review.summary, review.details);
-        LinearLayout root = renderReview(review.kicker, review.title, review.subtitle, dangers, null,
+        LinearLayout root = pages.renderReview(review.kicker, review.title, review.subtitle, dangers, null,
                 review.summary, review.details, "technical details");
         final String txid = BtcCrypto.hex(BtcCrypto.reversed(review.psbt.tx.txid()));
         addDecisionControls(root, source, decision, s, SignSpec.withSeed(r.id, review.reviewPrompt, review.signLabel, dangers,
@@ -3236,7 +3015,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     safety().record(review.walletKey, review.parties, System.currentTimeMillis());
                     receiptParties = review.parties;
                 }));
-        present(root, "btc-approval");
+        pages.present(root, "btc-approval");
     }
 
     // ------------------------------------------------------------------ accounts + passphrase wallet
@@ -3286,20 +3065,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void showAccounts() {
         if (!accountScreensReady()) return;
-        if (!backupVerified) { showInfo("Check your backup first", "Accounts open after the backup spot-check, like receiving and signing.", this::showHome); return; }
+        if (!backupVerified) { pages.showInfo("Check your backup first", "Accounts open after the backup spot-check, like receiving and signing.", this::showHome); return; }
         accountScreens().showAccounts();
     }
 
     private void showPassphraseWallet() {
         if (!accountScreensReady()) return;
-        if (!backupVerified) { showInfo("Check your backup first", "A passphrase wallet opens after the backup spot-check of your 24 words.", this::showHome); return; }
+        if (!backupVerified) { pages.showInfo("Check your backup first", "A passphrase wallet opens after the backup spot-check of your 24 words.", this::showHome); return; }
         accountScreens().showPassphraseIntro();
     }
 
     /** Derive {@code index} of the open wallet (adding it to the list when {@code add}) and make it the signing account. */
     private void activateAccount(int index, boolean add) {
         if (!accountScreensReady() || !backupVerified) return;
-        if (requestPending.get()) { showInfo("Finish the request first", "Approve or reject the request on screen before switching accounts.", this::showHome); return; }
+        if (requestPending.get()) { pages.showInfo("Finish the request first", "Approve or reject the request on screen before switching accounts.", this::showHome); return; }
         withSeedKey("Confirm your PIN to switch account", () -> deriveAndActivate(index, add, false));
     }
 
@@ -3310,7 +3089,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         synchronized (stateLock) { book = currentBook(); fingerprint = passphraseFingerprint; }
         if (book == null || !unlocked) return;
         final String name = book.get(index) != null ? book.get(index).name() : AccountBook.defaultName(index);
-        showLoading(add ? "Adding " + name : "Switching to " + name, "Deriving its address from your recovery phrase…");
+        pages.showLoading(add ? "Adding " + name : "Switching to " + name, "Deriving its address from your recovery phrase…");
         cryptoExecutor.execute(() -> {
             try {
                 String pass;
@@ -3361,7 +3140,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         return;
                     }
                     Log.w(TAG, "account switch failed: " + chain(e));
-                    showInfo("Account not switched", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                    pages.showInfo("Account not switched", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
         });
@@ -3376,7 +3155,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         final int s = session.get();
         if (!passphraseEntry || chars == null || chars.length == 0 || SeedVault.passphraseProblem(CharBuffer.wrap(chars)) != null) return;
         final String pass = new String(chars); // short-lived; web3j derives from a String
-        showLoading("Opening passphrase wallet", "Deriving its fingerprint and first address…");
+        pages.showLoading("Opening passphrase wallet", "Deriving its fingerprint and first address…");
         cryptoExecutor.execute(() -> {
             try {
                 if (s != session.get() || !unlocked) return;
@@ -3392,7 +3171,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         return;
                     }
                     Log.w(TAG, "passphrase preview failed: " + chain(e));
-                    showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. Lock and retry.", this::showHome);
+                    pages.showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. Lock and retry.", this::showHome);
                 });
             }
         });
@@ -3414,7 +3193,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (pendingPassphrase == null || !unlocked) return;
             pass = new String(pendingPassphrase); // short-lived; web3j derives from a String
         }
-        showLoading("Opening passphrase wallet", "Deriving Account 1…");
+        pages.showLoading("Opening passphrase wallet", "Deriving Account 1…");
         cryptoExecutor.execute(() -> {
             try {
                 if (s != session.get() || !unlocked) return;
@@ -3453,7 +3232,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     synchronized (stateLock) { if (pendingPassphrase != null) Arrays.fill(pendingPassphrase, '\0'); pendingPassphrase = null; }
                     endPassphraseEntry();
                     Log.w(TAG, "passphrase wallet open failed: " + chain(e));
-                    showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                    pages.showInfo("Passphrase wallet not opened", "Your current wallet is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
         });
@@ -3469,7 +3248,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         final int s = session.get();
         final AccountBook book = standardBook;
         if (book == null || passphraseBook == null) { showHome(); return; }
-        showLoading("Closing passphrase wallet", "Returning to the standard wallet…");
+        pages.showLoading("Closing passphrase wallet", "Returning to the standard wallet…");
         cryptoExecutor.execute(() -> {
             try {
                 if (s != session.get() || !unlocked) return;
@@ -3500,7 +3279,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                         confirmDevicePin("Confirm your PIN to return to the standard wallet", () -> closePassphraseWorker(true), this::showHome);
                         return;
                     }
-                    showInfo("Still in the passphrase wallet", "Locking the phone always closes it. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
+                    pages.showInfo("Still in the passphrase wallet", "Locking the phone always closes it. " + (e.getMessage() == null ? "" : e.getMessage()), this::showHome);
                 });
             }
         });
@@ -3511,14 +3290,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             final MainActivity activity = this;
             accountScreens = new AccountScreens(new AccountScreens.Host() {
                 @Override public Context context() { return activity; }
-                @Override public LinearLayout page(String eyebrow, String title, String description) { return activity.page(eyebrow, title, description); }
-                @Override public void present(LinearLayout root, String screen) { activity.present(root, screen); }
-                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { activity.action(parent, label, primary, run); }
-                @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
+                @Override public LinearLayout page(String eyebrow, String title, String description) { return pages.page(eyebrow, title, description); }
+                @Override public void present(LinearLayout root, String screen) { pages.present(root, screen); }
+                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { pages.action(parent, label, primary, run); }
+                @Override public void card(LinearLayout parent, String label, String value) { pages.card(parent, label, value); }
                 @Override public boolean ready() { return accountScreensReady() && backupVerified; }
                 @Override public void showHome() { endPassphraseEntry(); activity.showHome(); }
-                @Override public void harden(View view) { hardenTouch(view); }
-                @Override public int dp(int value) { return activity.dp(value); }
+                @Override public void harden(View view) { Pages.hardenTouch(view); }
+                @Override public int dp(int value) { return pages.dp(value); }
                 @Override public AccountBook book() { return currentBook(); }
                 @Override public String passphraseFingerprint() { return passphraseFingerprint; }
                 @Override public SigningAccount active() { return activeAccount; }
@@ -3576,22 +3355,22 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             final MainActivity activity = this;
             safetyScreens = new SafetyScreens(new SafetyScreens.Host() {
                 @Override public Context context() { return activity; }
-                @Override public LinearLayout page(String eyebrow, String title, String description) { return activity.page(eyebrow, title, description); }
-                @Override public void present(LinearLayout root, String screen) { activity.present(root, screen); }
-                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { activity.action(parent, label, primary, run); }
-                @Override public void card(LinearLayout parent, String label, String value) { activity.card(parent, label, value); }
+                @Override public LinearLayout page(String eyebrow, String title, String description) { return pages.page(eyebrow, title, description); }
+                @Override public void present(LinearLayout root, String screen) { pages.present(root, screen); }
+                @Override public void action(LinearLayout parent, String label, boolean primary, Runnable run) { pages.action(parent, label, primary, run); }
+                @Override public void card(LinearLayout parent, String label, String value) { pages.card(parent, label, value); }
                 @Override public boolean ready() { return menuAvailable(); }
                 @Override public void showMenu() { activity.showMenu(); }
                 @Override public void showHome() { activity.showHome(); }
-                @Override public void harden(View view) { hardenTouch(view); }
-                @Override public int dp(int value) { return activity.dp(value); }
+                @Override public void harden(View view) { Pages.hardenTouch(view); }
+                @Override public int dp(int value) { return pages.dp(value); }
             }, safety().book);
         }
         return safetyScreens;
     }
 
     private void sendError(AccessoryTransport source, String id, String message) {
-        if (source != null) source.send(json("id", id, "status", "error", "error", message));
+        if (source != null) source.send(Pages.json("id", id, "status", "error", "error", message));
         final int s = session.get();
         runOnUiThread(() -> {
             if (s == session.get() && unlocked && source == transport) {
@@ -3640,47 +3419,4 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         super.onDestroy();
     }
 
-    private TextView text(String value, float size, int color) {
-        TextView view = new TextView(this);
-        view.setText(value);
-        VaultTheme.size(view, size);
-        view.setTextColor(color);
-        view.setLineSpacing(0, 1.12f);
-        return view;
-    }
-
-    private static void hardenTouch(View view) {
-        view.setFilterTouchesWhenObscured(true);
-        view.setOnTouchListener((ignored, event) -> (event.getFlags()
-                & (MotionEvent.FLAG_WINDOW_IS_OBSCURED
-                | MotionEvent.FLAG_WINDOW_IS_PARTIALLY_OBSCURED)) != 0);
-    }
-
-    private LinearLayout.LayoutParams matchWrap(int topMargin) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-        params.topMargin = topMargin;
-        return params;
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    /** Home receive address: "0x51dd 9Afd 5f32 …" in two lines of five groups (the QR stays ungrouped). */
-    private String formatAddress(String address) {
-        return ReviewStyle.groupEvmTwoLines(address);
-    }
-
-    private JSONObject json(Object... pairs) {
-        JSONObject object = new JSONObject();
-        try {
-            for (int index = 0; index < pairs.length; index += 2) {
-                object.put((String) pairs[index], pairs[index + 1]);
-            }
-            return object;
-        } catch (Exception impossible) {
-            throw new IllegalStateException(impossible);
-        }
-    }
 }
