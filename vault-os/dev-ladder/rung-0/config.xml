@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="config_fixedFunctionDeviceOwner" translatable="false"></string> <!-- empty in rung 0: no automatic device-owner provisioning, to boot the bare product first -->
-</resources>
