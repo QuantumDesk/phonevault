@@ -1,4 +1,4 @@
-// Device check (attestation) views: the header badge, the pairing card and Settings → Device.
+// Genuine check (attestation) views: the header badge, the pairing card and Settings → Device.
 // The verdict itself is computed in Rust (src-tauri/src/attest); this only shows it.
 
 import type { Attestation } from "./api";
@@ -35,7 +35,7 @@ function reasonList(a: Attestation): HTMLElement | null {
 export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   if (!c.report) {
     return h("section", { class: "card att-card att-pending" },
-      h("p", { class: "kicker" }, "Device check"),
+      h("p", { class: "kicker" }, "Genuine check"),
       c.checking ? h("p", { class: "row gap" }, h("i", { class: "mini-spin" }), "Checking that this phone is genuine Phone Vault hardware and firmware…")
         : h("p", { class: "muted" }, c.error ? `Not checked yet: ${c.error}` : "Not checked yet."),
       !c.checking ? h("div", { class: "row gap" }, h("button", { onclick: recheck }, icon("refresh", 15), "Check now")) : null,
@@ -44,10 +44,10 @@ export function verdictCard(c: DeviceCheck, recheck: () => void): HTMLElement {
   const a = c.report;
   const { label, cls } = verdictLabel(a);
   return h("section", { class: `card att-card ${cls}` },
-    h("p", { class: "kicker" }, icon("shield", 13), " Device check · ", label),
+    h("p", { class: "kicker" }, icon("shield", 13), " Genuine check · ", label),
     h("h3", null, a.headline),
     reasonList(a),
-    a.verdict === "genuine" ? h("p", { class: "muted small" }, "Google's attestation proves the keys are in the Titan M, the app is Phone Vault's, and the phone booted locked Phone Vault firmware.") : null,
+    a.verdict === "genuine" ? h("p", { class: "muted small" }, "Google's hardware check proves the keys are in the security chip, the app is Phone Vault's, and the phone booted locked Phone Vault firmware.") : null,
     a.verdict === "development" ? h("p", { class: "muted small" }, "Fine for testing with throwaway funds. A modified OS on an unlocked phone could fake everything above the security chip.") : null,
     a.verdict === "fail" ? h("p", { class: "small" }, "Pairing and sending are blocked for this phone. Don't use it for funds; get a phone from a trusted source or reflash it yourself.") : null,
   );
@@ -88,22 +88,34 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
   } else {
     const input = h("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", placeholder: DEV_CONFIRMATION, "aria-label": "Confirmation phrase" }) as HTMLInputElement;
     const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => change(true, input.value) }, "Turn on") as HTMLButtonElement;
-    input.addEventListener("input", () => { turnOn.disabled = devForm.busy || input.value.trim() !== DEV_CONFIRMATION; });
+    const hint = h("p", { class: "field-msg", "aria-live": "polite" });
+    // The phrase must match exactly (Rust checks the same); only say why it doesn't yet.
+    input.addEventListener("input", () => {
+      const v = input.value.trim();
+      const ok = v === DEV_CONFIRMATION;
+      turnOn.disabled = devForm.busy || !ok;
+      hint.textContent = !v || ok || (DEV_CONFIRMATION.startsWith(v) && v.length < DEV_CONFIRMATION.length) ? ""
+        : v.toUpperCase() === DEV_CONFIRMATION || DEV_CONFIRMATION.startsWith(v.toUpperCase()) ? "Type it in capital letters, exactly as shown."
+        : `That doesn't match yet. Type ${DEV_CONFIRMATION} exactly.`;
+      hint.className = hint.textContent ? "field-msg warn" : "field-msg";
+    });
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !turnOn.disabled) { e.preventDefault(); turnOn.click(); } });
     devControls = [
       h("div", { class: "callout danger-border" },
         h("strong", null, "Only for a phone you flashed yourself"),
         h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
         h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),
       input,
+      hint,
       devForm.error ? h("p", { class: "inline-error" }, icon("alert", 15), devForm.error) : null,
       h("div", { class: "row gap" }, turnOn, h("button", { onclick: () => { devForm.open = false; devForm.error = null; rerender(); } }, "Cancel")),
     ];
   }
-  const level = (l: string | undefined) => l === "StrongBox" ? "StrongBox (Titan M)" : l === "TrustedEnvironment" ? "TEE (not the Titan M)" : l ?? "—";
+  const level = (l: string | undefined) => l === "StrongBox" ? "StrongBox (security chip)" : l === "TrustedEnvironment" ? "TEE (not the security chip)" : l ?? "—";
   return h("section", { class: "set", id: "device-section" },
     h("h4", null, "DEVICE"),
-    a ? h("div", { class: "set-row" }, h("span", null, "Device check"), h("span", { class: `att-badge ${verdictLabel(a).cls}` }, icon("shield", 13), verdictLabel(a).label))
-      : h("div", { class: "set-row" }, h("span", null, "Device check"), h("span", { class: "muted" }, c.checking ? "Checking…" : phonePresent ? "Not checked yet" : "No phone on USB")),
+    a ? h("div", { class: "set-row" }, h("span", null, "Genuine check"), h("span", { class: `att-badge ${verdictLabel(a).cls}` }, icon("shield", 13), verdictLabel(a).label))
+      : h("div", { class: "set-row" }, h("span", null, "Genuine check"), h("span", { class: "muted" }, c.checking ? "Checking…" : phonePresent ? "Not checked yet" : "No phone on USB")),
     a ? h("p", { class: "small" }, a.headline) : null,
     a ? reasonList(a) : null,
     c.error && !c.checking ? h("p", { class: "muted small" }, c.error) : null,
@@ -117,7 +129,7 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
       row("App", d.app_package ? `${d.app_package}${d.app_version !== null ? ` (version ${d.app_version})` : ""}` : null),
       row("App signer", d.app_signer ? h("span", null, d.app_signer_kind === "release" ? "Release key · " : d.app_signer_kind === "development" ? "Development key · " : "Unknown key · ", h("span", { class: "mono" }, short(d.app_signer))) : null, d.app_signer ?? ""),
       row("Key storage", level(d.attestation_security_level)),
-      row("Attestation", `v${d.attestation_version} · ${d.provisioning} · ${d.chain_length} certificates`),
+      row("Certificates", `v${d.attestation_version} · ${d.provisioning} · ${d.chain_length} certificates`),
       row("Root", d.root),
       row("Revocation", d.revocation),
     ) : null,
