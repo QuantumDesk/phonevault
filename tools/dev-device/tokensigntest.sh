@@ -48,6 +48,7 @@ run_case() {
   sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
   [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
+  qa_shots "token-$name"
   local seen=0
   for _ in 1 2 3 4 5 6; do uidump | grep -qF "$must" && { seen=1; break; }; scroll_down; sleep 0.6; done
   [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null || true; die "$name: review lacks '$must': $(texts 14)"; }

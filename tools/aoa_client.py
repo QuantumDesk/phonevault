@@ -623,11 +623,17 @@ def _request_for(args):
         if args.typed_file:
             with open(args.typed_file, encoding="utf-8") as handle:
                 typed = handle.read().strip()
-            return {"id": request_id, "method": "eth_signTypedData_v4",
-                    "chainId": args.chain_id, "typedData": typed}
+            request = {"id": request_id, "method": "eth_signTypedData_v4",
+                       "chainId": args.chain_id, "typedData": typed}
+            if args.origin:
+                request["origin"] = args.origin
+            return request
         message = bytes.fromhex(args.hex[2:]) if args.hex else args.text.encode("utf-8")
-        return {"id": request_id, "method": "personal_sign",
-                "chainId": args.chain_id, "message": "0x" + message.hex()}
+        request = {"id": request_id, "method": "personal_sign",
+                   "chainId": args.chain_id, "message": "0x" + message.hex()}
+        if args.origin:
+            request["origin"] = args.origin
+        return request
     request = {
         "id": request_id,
         "method": "signEip1559",
@@ -689,6 +695,8 @@ def main():
         help="0x digest the signature must cover (required for --typed-file: this client has no "
              "EIP-712 encoder; personal_sign digests are computed here)")
     message.add_argument("--expect-address", default=None)
+    message.add_argument("--origin", default=None,
+                         help="Site origin as the companion reports it (https://host[:port]); shown on the phone, never verified by it")
     message.add_argument("--from", dest="sender", default=None,
                          help="Name the signing account in the request (the phone refuses another one)")
     attest = subparsers.add_parser(

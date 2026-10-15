@@ -66,6 +66,7 @@ review() {
   local found=0 f seen
   for _ in $(seq 1 25); do sleep 2; kill -0 $pid 2>/dev/null || break; has_text "$title" && { found=1; break; }; done
   [[ $found -eq 1 ]] || { kill $pid 2>/dev/null || true; tail -3 "$OUT.$name"; die "$name: review '$title' never appeared: $(texts)"; }
+  qa_shots "safety-$name"
   for f in "$@"; do
     seen=0
     for _ in 1 2 3 4 5 6 7 8; do uidump | grep -qF "$f" && { seen=1; break; }; scroll_down; sleep 0.6; done

@@ -114,6 +114,18 @@ tap_text() {
 }
 scroll_down() { "$A" shell input swipe 720 2300 720 700 350 </dev/null; }
 scroll_top()  { "$A" shell input swipe 720 700 720 2300 350 </dev/null; sleep 0.5; "$A" shell input swipe 720 700 720 2300 350 </dev/null; }
+# Optional review screenshots for visual QA: with PV_QA_SHOTS set to a directory, save the
+# current screen and each page below it as <name>-<n>.png (dev builds allow screenshots).
+qa_shots() {
+  [[ -n "${PV_QA_SHOTS:-}" ]] || return 0
+  mkdir -p "$PV_QA_SHOTS"; local n
+  for n in 1 2 3 4 5 6; do
+    "$A" exec-out screencap -p > "$PV_QA_SHOTS/$1-$n.png"
+    has_text "Reject request" && [[ $n -gt 1 ]] && break
+    scroll_down; sleep 0.8
+  done
+  scroll_top
+}
 
 # Bounds of the first visible UNticked checkbox (empty when none is visible).
 unticked_box() {

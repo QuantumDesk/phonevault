@@ -101,6 +101,7 @@ for kind in wpkh tr; do
   "$PY" "$TOOL" make --descriptor-json "$WORK/$kind.json" --out "$WORK/$kind.psbt" >/dev/null
   start_client "sign-$kind" btc-sign --network testnet --psbt "$WORK/$kind.psbt" --out "$WORK/$kind.signed"
   wait_screen "Send 0.00060000 tBTC"
+  qa_shots "btc-$kind"
   expect_below "CHANGE BACK TO YOUR WALLET"
   expect_below "NETWORK FEE"
   approve_review
