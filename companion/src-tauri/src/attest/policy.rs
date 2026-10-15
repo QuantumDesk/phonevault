@@ -226,7 +226,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
             .push("The certificate chain is a StrongBox chain, but the key claims a different security level.".into());
     } else if level == SecurityLevel::TrustedEnvironment {
         cautions.push(
-            "The key is held by the phone's TEE, not the Titan M security chip (StrongBox was unavailable).".into(),
+            "The key is held by the phone's main processor, not the security chip (the chip was unavailable).".into(),
         );
     }
     if hw.origin != Some(keydesc::ORIGIN_GENERATED) {
@@ -336,7 +336,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     } else {
         (
             Verdict::Genuine,
-            "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M".into(),
+            "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the security chip".into(),
         )
     };
     Assessment { verdict, headline, problems, cautions, notes, details: Some(d) }

@@ -95,7 +95,7 @@ pub(super) fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str
     }
     let call = call_info(&draft.data, draft.value);
     match call.kind {
-        "contract_call" => notes.push(note("danger", "This calls a contract. Your phone currently signs only plain transfers and token transfer/approve calls, so it will refuse this.")),
+        "contract_call" => notes.push(note("danger", "This calls a contract. Your phone signs only calls it can explain (transfers, token and NFT approvals, Uniswap swaps) and refuses anything else.")),
         "token_approve" if call.amount.as_deref() == Some("unlimited") => notes.push(note("danger", "Unlimited approval: the spender can move all of this token, now and later.")),
         "token_approve" => notes.push(note("warn", "Token approval: the spender can move up to this amount of the token.")),
         _ => {}

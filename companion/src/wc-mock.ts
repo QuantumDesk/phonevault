@@ -187,7 +187,7 @@ export async function mockInvoke<T>(cmd: string, a: Record<string, unknown> = {}
             : approve ? { kind: "token_approve", selector: "0x095ea7b3", data_bytes: 68, party: "0x000000000022D473030F116dDEE9F6B43aC78BA3", amount: "unlimited", phone_supported: true }
             : { kind: "contract_call", selector: data.slice(0, 10), data_bytes: (data.length - 2) / 2, party: null, amount: null, phone_supported: false };
           const notes = approve ? [{ level: "danger", text: "Unlimited approval: the spender can move all of this token, now and later." }]
-            : call.kind === "contract_call" ? [{ level: "danger", text: "This calls a contract. Your phone currently signs only plain transfers and token transfer/approve calls, so it will refuse this." }] : [];
+            : call.kind === "contract_call" ? [{ level: "danger", text: "This calls a contract. Your phone signs only calls it can explain (transfers, token and NFT approvals, Uniswap swaps) and refuses anything else." }] : [];
           return { kind: "transaction", chain_id: chain, call, notes, quote: {
             chain_id: hex(chain), nonce: "0x4", max_priority_fee_per_gas: "0xf4240", max_fee_per_gas: "0xc3500", gas_limit: data === "0x" ? "0x5208" : "0x1d4c0",
             to: tx.to.toLowerCase(), value: hex(value), data, amount_eth: eth(value), max_fee_eth: eth(fee), total_eth: eth(value + fee), balance_eth: "0.04213377", network: NAMES[chain] ?? "Base",

@@ -1,5 +1,5 @@
 //! Device attestation: is the phone on USB genuine Phone Vault firmware running the genuine
-//! Phone Vault app, with its keys in the Titan M? (vault-os/docs/device-attestation.md)
+//! Phone Vault app, with its keys in the security chip (Titan M)? (vault-os/docs/device-attestation.md)
 //!
 //! Protocol (one USB exchange, same framing as every other request):
 //!

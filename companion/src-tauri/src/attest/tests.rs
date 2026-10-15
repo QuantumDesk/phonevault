@@ -421,7 +421,7 @@ fn tee_attestation_is_never_genuine() {
     let a =
         evaluate(&info, &policy_for(&info, true), SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), true);
     assert_eq!(a.verdict, Verdict::Development, "{a:?}");
-    assert!(a.cautions.iter().any(|c| c.contains("TEE")));
+    assert!(a.cautions.iter().any(|c| c.contains("not the security chip")));
     // and claiming StrongBox for a TEE chain fails
     let a = evaluate(&info, &policy_for(&info, true), SecurityLevel::StrongBox, &challenge, &unchecked(), false);
     assert_eq!(a.verdict, Verdict::Fail);
