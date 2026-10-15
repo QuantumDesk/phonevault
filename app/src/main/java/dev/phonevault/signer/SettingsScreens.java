@@ -57,7 +57,7 @@ final class SettingsScreens {
                 : "Not checked yet. Receiving and signing stay paused until it is.");
         pages.action(root, "Check my backup", !host.backupVerified(), () -> backup.startBackupAccess(true));
         pages.action(root, "Show recovery phrase", false, backup::confirmRevealBackup);
-        pages.card(root, "Passphrase (optional)", "Your 24 words back up every account of the standard wallet. A passphrase wallet ALSO needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
+        pages.card(root, "Passphrase (optional)", "Your recovery phrase backs up every account of the standard wallet. A passphrase wallet also needs its passphrase, which is not part of this backup and is never saved on the phone: keep it written down separately.");
         pages.action(root, "Passphrase wallet", false, host::showPassphraseWallet);
         pages.action(root, "Show as SeedQR", false, backup::confirmRevealSeedQr);
         pages.action(root, "Backup reminder · " + BackupReminder.label(host.backupReminder().intervalDays()), false, backup::showBackupReminderSettings);
@@ -125,25 +125,28 @@ final class SettingsScreens {
     }
 
     void showIntegrity() {
-        LinearLayout root = pages.page("SECURITY / DEVICE", "Know what is verified", "These are local observations, not independent attestation.");
+        LinearLayout root = pages.page("SECURITY / DEVICE", "Know what is verified",
+                "These are this phone's own observations. The genuine check in Phone Vault Companion verifies the phone independently.");
         pages.card(root, "App build", BuildConfig.VERSION_NAME + " · " + (DevTools.SCREENSHOTS ? "development capture enabled" : "release capture disabled"));
         pages.card(root, "Platform", Build.MANUFACTURER + " " + Build.MODEL + "\nAndroid " + Build.VERSION.RELEASE + "\nReported patch: " + Build.VERSION.SECURITY_PATCH);
         pages.card(root, "Device policy", host.appliancePolicyActive() ? "Appliance policy active" : "Development environment · appliance policy not established");
         pages.card(root, "Key boundary", BuildConfig.VAULT_REQUIRE_SECURE_HARDWARE
-                ? "StrongBox wrapping is required when loading. EVM signing runs in Android memory."
-                : "Development build permits software wrapping. EVM signing runs in Android memory.");
+                ? "Keys are sealed in the security chip; loading refuses anything else. EVM signing runs in Android memory."
+                : "Keys are sealed in the security chip when it is available; this development build also allows a software key. "
+                        + "EVM signing runs in Android memory.");
         pages.card(root, "Verified boot", "Not independently verified by this screen. Complete the release, relock, and external verification procedure.");
         SigningAccount shownAccount = host.activeAccount();
         pages.card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
                 : shownAccount.path() + (shownAccount.passphrase ? " · passphrase wallet " + shownAccount.fingerprint : " · no passphrase"));
         pages.card(root, "PIN protection", host.credentialMode()
-                ? "Checked by the security chip (Titan M), which slows repeated guesses · "
-                        + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs reset the phone · the seed key works only for "
-                        + SystemCredential.AUTH_WINDOW_SECONDS + " s after a correct PIN"
-                : "App PIN gate · 10 failed attempts erase the wallet. PIN-derived encryption is planned.");
-        String entropy = activity.getPreferences(Context.MODE_PRIVATE).getString("entropy_report", null);
-        pages.card(root, "Entropy at wallet creation", entropy != null ? entropy
-                : "Not recorded (this wallet was created or restored before source reporting existed, or restored from words).");
+                ? "Held by the security chip, which slows repeated guesses · "
+                        + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs erase the phone · the key that unlocks your "
+                        + "recovery phrase works only for " + SystemCredential.AUTH_WINDOW_SECONDS + " s after a correct PIN"
+                : "Checked by this app, not by the security chip (this phone could not hand the PIN to it) · "
+                        + VaultPin.MAX_ATTEMPTS + " wrong PINs erase the wallet.");
+        String entropy = EntropySource.plainReport(activity.getPreferences(Context.MODE_PRIVATE).getString("entropy_report", null));
+        pages.card(root, "Randomness at wallet creation", entropy != null ? entropy
+                : "Not recorded (this wallet was created or restored before source reporting existed, or restored from a recovery phrase).");
         Intent battery = activity.registerReceiver(null, new IntentFilter(Intent.ACTION_BATTERY_CHANGED));
         if (battery != null) {
             int level = battery.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
@@ -172,15 +175,13 @@ final class SettingsScreens {
     void showFeatures() {
         LinearLayout root = pages.page("PRODUCT ROADMAP", "Coming next", "What is planned. Nothing here can be enabled in this build.");
         String[][] items = {
-            {"Change PIN", "A fresh PIN challenge and atomic PIN-derived rewrapping must land together. The current six-digit PIN remains in effect until then."},
-            {"Account discovery", "Finding used accounts automatically and watch-only export. Accounts and passphrase wallets themselves are in ☰ → Accounts and ☰ → Passphrase wallet."},
-            {"Desktop companion", "Pairing and independently verified signing on macOS, Windows, and Linux. The current host tool is the Python USB client."},
-            {"Browser wallets", "MetaMask and other integrations need a supported adapter. This build does not impersonate Ledger or Trezor."},
-            {"Typed-data signing", "Permission-aware EIP-712 review for permits, orders, and authentication. Unsupported signing requests remain refused."},
-            {"Verified token details", "Authenticated token identity and decimals. Current token calls show unverified raw arguments."},
+            {"Linux and Windows versions of Phone Vault Companion", "Phone Vault Companion runs on macOS today. Signed Linux and Windows versions follow the signed, notarized macOS release."},
+            {"Updatable token list", "A signed token list that can be updated without a new app release, and token names and decimals in permit message reviews. Today the list changes only with an app update."},
+            {"Ethereum account discovery", "Finding the accounts you have already used automatically, and sharing a watch-only view with other wallets. Today you add accounts yourself in ☰ → Accounts."},
+            {"Change PIN", "Changing the PIN on the phone. Until then the PIN you chose at setup stays in effect."},
             {"Signed updates", "A verified release chain, rollback protection, and recovery from interrupted updates."},
-            {"Advanced recovery", "Multisig, optional stateless use, and additional backup formats after core recovery is proven."},
-            {"Passkeys", "A future hardware-backed authenticator with its own transport and recovery review."}
+            {"Advanced recovery", "Multisig, optional stateless use, and Shamir (SLIP-39) backups after core recovery is proven."},
+            {"Passkeys", "A future authenticator whose keys stay in the security chip, with its own transport and recovery review."}
         };
         for (String[] item : items) pages.action(root, item[0] + " · planned", false,
                 () -> showPlanned(item[0], item[1]));

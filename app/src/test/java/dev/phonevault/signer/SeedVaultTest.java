@@ -180,4 +180,15 @@ public class SeedVaultTest {
         for (int i = 0; i < good.length; i++) good[i] = (byte) ((i * 131 + 17) & 0xFF);
         assertNull("varied output should pass startup tests", HealthTests.startup(good));
     }
+
+    @Test
+    public void entropyReportShowsPlainSourceNames() {
+        String stored = "✓ kernel-getrandom · passed health tests\n✗ titan-m-strongbox · not used: short StrongBox output\n"
+                + "✓ cpu-jitter · passed health tests\n✓ your dice rolls";
+        assertEquals("✓ Android kernel random generator · passed health tests\n"
+                + "✗ Security chip random generator · not used: short StrongBox output\n"
+                + "✓ CPU timing jitter · passed health tests\n✓ your dice rolls", EntropySource.plainReport(stored));
+        assertNull(EntropySource.plainReport(null));
+        assertEquals("some-new-source", EntropySource.plainName("some-new-source"));
+    }
 }
