@@ -98,7 +98,7 @@ fn path(owner: &str) -> Result<PathBuf, String> {
 
 /// The account the Mac shows (pairing::load).
 fn active_owner() -> Result<String, String> {
-    pairing::load()?.ok_or_else(|| "not paired yet".to_string())
+    pairing::load()?.ok_or_else(|| pairing::NOT_PAIRED.to_string())
 }
 
 pub fn now() -> u64 {
@@ -349,7 +349,7 @@ pub(crate) async fn history_mark(hash: String, status: String, block: Option<u12
 #[tauri::command]
 pub(crate) async fn history_reconcile(rpc_url: String) -> CmdResult<Vec<Entry>> {
     blocking(move || {
-        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let owner = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
         reconcile(&rpc, chain, &owner)?;

@@ -70,9 +70,8 @@ pub fn normalize_tx(params: &Value, paired: &str, chain: u64) -> Result<TxDraft,
                 ));
             }
         }
-        None => {
-            notes.push(note("info", "The dApp did not name the sending account; your paired phone's address is used."))
-        }
+        None => notes
+            .push(note("info", "The site did not name the sending account, so your paired phone's address is used.")),
     }
     if let Some(v) = field("chainId") {
         let c = dapp_quantity(v, "chainId")?;
@@ -143,7 +142,7 @@ pub fn normalize_tx(params: &Value, paired: &str, chain: u64) -> Result<TxDraft,
         dapp_quantity(field("gasPrice").unwrap(), "gasPrice")?;
         notes.push(note(
             "info",
-            "The dApp suggested a legacy gas price; fees are quoted from your node instead (EIP-1559).",
+            "The site suggested an old-style gas price. Fees are quoted from your node instead (EIP-1559).",
         ));
     }
     let nonce = field("nonce").map(|v| dapp_quantity(v, "nonce")).transpose()?;
@@ -366,7 +365,7 @@ pub fn route(
             let (typed_data, summary) = typed_data_params(params, paired)?;
             let mut notes = vec![];
             match summary.domain_chain {
-                Some(c) if c != chain => notes.push(note("danger", format!("The data names chain {c} ({}), but the dApp is connected on {}.", chain_name(c), chain_name(chain)))),
+                Some(c) if c != chain => notes.push(note("danger", format!("The data names chain {c} ({}), but the site is connected on {}.", chain_name(c), chain_name(chain)))),
                 None => notes.push(note("warn", "The data does not name a chain, so it could be valid on any network.")),
                 _ => {}
             }
@@ -381,7 +380,7 @@ pub fn route(
             Ok(Prepared::SwitchChain { chain_id: id, name: chain_name(id), in_session: session_chains.contains(&id) })
         }
         "eth_sign" => Err(rpc_err(UNSUPPORTED_METHOD, "eth_sign is refused: it signs an opaque hash that nobody can review. Use personal_sign or eth_signTypedData_v4.")),
-        "eth_signTransaction" => Err(rpc_err(UNSUPPORTED_METHOD, "eth_signTransaction is refused: this wallet only returns transactions it broadcast itself. Use eth_sendTransaction.")),
+        "eth_signTransaction" => Err(rpc_err(UNSUPPORTED_METHOD, "eth_signTransaction is refused: this wallet only returns transactions it sent to the network itself. Use eth_sendTransaction.")),
         "eth_sendTransaction" => Err(rpc_err(INTERNAL, "eth_sendTransaction needs a node")), // handled by prepare_tx
         m => Err(rpc_err(UNSUPPORTED_METHOD, format!("{m} is not supported by Phone Vault"))),
     }

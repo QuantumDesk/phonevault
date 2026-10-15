@@ -128,14 +128,14 @@ pub struct Evidence<'a> {
     pub revocation: &'a revocation::Status,
 }
 
-pub const UNLOCKED_HEADLINE: &str = "Development firmware: bootloader unlocked — not safe for real funds";
+pub const UNLOCKED_HEADLINE: &str = "Development firmware: bootloader unlocked, not safe for real funds";
 pub const UNLOCKED_PROBLEM: &str = "The phone's bootloader is unlocked, so its software can be replaced without anyone noticing. Accept it only for a phone you flashed yourself: Settings → Device → Developer mode.";
 
 pub fn fail(problem: impl Into<String>) -> Assessment {
     let p = problem.into();
     Assessment {
         verdict: Verdict::Fail,
-        headline: "Not genuine: this phone failed the device check".into(),
+        headline: "Not genuine: this phone failed the genuine check".into(),
         problems: vec![p],
         cautions: vec![],
         notes: vec![],
@@ -179,7 +179,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     // freshness: the certificate must answer THIS challenge
     if kd.challenge != ev.challenge {
         problems.push(
-            "The attestation answers a different challenge than the one this Mac sent (replayed or substituted)."
+            "The genuine-check answer is for a different challenge than the one this Mac sent (replayed or substituted)."
                 .into(),
         );
     }
@@ -193,8 +193,10 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                 d.revocation = format!("Not revoked (Google status list of {as_of})");
             } else {
                 d.revocation = "REVOKED".into();
-                problems
-                    .push(format!("Google has revoked an attestation certificate in this chain: {}.", hits.join(", ")));
+                problems.push(format!(
+                    "Google has revoked a certificate in this phone's genuine-check chain: {}.",
+                    hits.join(", ")
+                ));
             }
         }
         revocation::Status::Unknown(why) => {
@@ -206,44 +208,46 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     // where the key lives
     let level = kd.attestation_security_level;
     if level == SecurityLevel::Software || kd.keymint_security_level == SecurityLevel::Software {
-        problems.push("The key is attested by software, not by secure hardware.".into());
+        problems.push("The key is held by software, not by secure hardware.".into());
     } else if level != kd.keymint_security_level {
-        problems.push("The attestation reports two different security levels.".into());
+        problems.push("The genuine-check answer reports two different security levels.".into());
     } else if ev.phone_level != level {
         problems.push(format!(
-            "The phone said its key is in {}, but the attestation says {}.",
+            "The phone said its key is in {}, but its genuine-check answer says {}.",
             ev.phone_level.name(),
             level.name()
         ));
     } else if level == SecurityLevel::StrongBox && !ev.chain.chain_names_strongbox {
-        problems.push("The attestation claims StrongBox, but its certificate chain is not a StrongBox chain.".into());
+        problems.push(
+            "The genuine-check answer claims StrongBox, but its certificate chain is not a StrongBox chain.".into(),
+        );
     } else if level != SecurityLevel::StrongBox && ev.chain.chain_names_strongbox {
         problems
             .push("The certificate chain is a StrongBox chain, but the key claims a different security level.".into());
     } else if level == SecurityLevel::TrustedEnvironment {
         cautions.push(
-            "The key was attested by the phone's TEE, not the Titan M security chip (StrongBox was unavailable)."
-                .into(),
+            "The key is held by the phone's TEE, not the Titan M security chip (StrongBox was unavailable).".into(),
         );
     }
     if hw.origin != Some(keydesc::ORIGIN_GENERATED) {
-        problems.push("The attested key was not generated inside the secure hardware.".into());
+        problems.push("The key in the genuine check was not generated inside the secure hardware.".into());
     }
     if ev.chain.leaf_p256_point.is_none() {
-        problems.push("The attested key is not a P-256 key.".into());
+        problems.push("The key in the genuine check is not a P-256 key.".into());
     } else if !ev.binding_ok {
-        problems.push("The phone's statement of its wallet address is not signed by the attested key.".into());
+        problems
+            .push("The phone's statement of its wallet address is not signed by the key in the genuine check.".into());
     }
 
     // which app holds the key
     match &sw.app_id {
-        None => problems.push("The attestation does not name the app that holds the key.".into()),
+        None => problems.push("The genuine-check answer does not name the app that holds the key.".into()),
         Some(app) => {
             d.app_package = Some(app.packages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>().join(", "));
             d.app_version = app.packages.first().map(|p| p.version);
             if app.packages.len() != 1 || app.packages[0].name != policy.package {
                 problems.push(format!(
-                    "The attested key belongs to {}, not the Phone Vault app ({}).",
+                    "The key in the genuine check belongs to {}, not the Phone Vault app ({}).",
                     d.app_package.as_deref().filter(|s| !s.is_empty()).unwrap_or("no package"),
                     policy.package
                 ));
@@ -274,7 +278,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
 
     // what booted
     match &hw.root_of_trust {
-        None => problems.push("The attestation has no hardware root of trust (boot state).".into()),
+        None => problems.push("The genuine-check answer has no hardware root of trust (boot state).".into()),
         Some(rot) => {
             let key_known = policy.avb_keys.contains(&rot.verified_boot_key);
             d.device_locked = Some(rot.device_locked);
@@ -291,7 +295,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                 (_, BootState::Failed) => problems.push("Verified boot reports FAILED (red).".into()),
                 (true, BootState::Verified) | (true, BootState::SelfSigned) if key_known => {
                     match hw.os_patch_level {
-                        None => problems.push("The attestation has no OS patch level.".into()),
+                        None => problems.push("The genuine-check answer has no OS patch level.".into()),
                         Some(p) if keydesc::patch_month(p) < policy.min_os_patch_level => problems.push(format!(
                             "The firmware's security patch level {} is older than the oldest this Mac accepts ({}).",
                             keydesc::patch_level_text(p), keydesc::patch_level_text(policy.min_os_patch_level))),
@@ -322,12 +326,12 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     }
 
     let (verdict, headline) = if !problems.is_empty() {
-        (Verdict::Fail, "Not genuine: this phone failed the device check".to_string())
+        (Verdict::Fail, "Not genuine: this phone failed the genuine check".to_string())
     } else if !cautions.is_empty() {
         let unlocked = cautions.iter().any(|c| c == UNLOCKED_HEADLINE);
         (
             Verdict::Development,
-            if unlocked { UNLOCKED_HEADLINE.into() } else { "Development device — not safe for real funds".into() },
+            if unlocked { UNLOCKED_HEADLINE.into() } else { "Development device: not safe for real funds".into() },
         )
     } else {
         (

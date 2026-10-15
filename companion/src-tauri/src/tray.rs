@@ -86,7 +86,7 @@ fn copy_address(app: &AppHandle) {
     let body = if ok {
         format!("Receive address copied: {addr}. Compare it with your phone before sharing it for a large amount.")
     } else {
-        "Couldn't copy the address. Open Phone Vault → Receive.".into()
+        "Couldn't copy the address. Open Phone Vault Companion → Receive.".into()
     };
     let _ = app.notification().builder().title("Phone Vault").body(body).show();
 }
@@ -95,9 +95,9 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let balance = MenuItem::with_id(app, "balance", "Balance: …", false, None::<&str>)?;
     let btc = MenuItem::with_id(app, "btc", "Bitcoin: not set up", false, None::<&str>)?;
     let address = MenuItem::with_id(app, "address", "Not paired", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "Open Phone Vault", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Phone Vault Companion", true, None::<&str>)?;
     let copy = MenuItem::with_id(app, "copy", "Copy receive address", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Phone Vault", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Phone Vault Companion", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[

@@ -62,7 +62,7 @@ pub(crate) async fn sign_start(
     let store = state.verified.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let _guard = guard;
-        let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", "not paired yet", false))?;
+        let pinned = pairing::load().map_err(|e| fail("not_paired", e.0, false))?.ok_or_else(|| fail("not_paired", pairing::NOT_PAIRED, false))?;
         let _turn = flow.take_turn()?;
         // The phone must have passed the device check in this connection (runs it if not yet).
         crate::attest::require_ok(&pinned).map_err(|m| match send_flow::gate_failure(m) {
@@ -140,7 +140,7 @@ pub(crate) async fn broadcast_verified(
         let key = hash.to_ascii_lowercase();
         let (raw, chain_id, value_wei, max_fee_wei, nonce, token, params, replaces) = {
             let map = store.lock().map_err(|_| "state poisoned".to_string())?;
-            let tx = map.get(&key).ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
+            let tx = map.get(&key).ok_or("This transaction was not verified in this session, so it was not sent to the network. Start the send again.")?;
             (tx.raw.clone(), tx.chain_id, tx.value_wei, tx.max_fee_wei, tx.nonce, tx.token.clone(), tx.params.clone(), tx.replaces.clone())
         };
         let rpc = eth::Rpc::new(&rpc_url)?;
@@ -197,7 +197,7 @@ pub struct MaxAmount {
 #[tauri::command]
 pub(crate) async fn max_sendable(rpc_url: String, to: Option<String>) -> CmdResult<MaxAmount> {
     blocking(move || {
-        let from = pairing::load()?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
         let balance = rpc.balance(&from)?;

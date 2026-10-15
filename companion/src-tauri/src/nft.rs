@@ -186,7 +186,7 @@ fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)>
 }
 
 fn connect(rpc_url: &str) -> Result<(eth::Rpc, u64, String, u128), String> {
-    let owner = pairing::load()?.ok_or("not paired yet")?;
+    let owner = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
     let rpc = eth::Rpc::new(rpc_url)?;
     let chain = u64::try_from(rpc.chain_id()?).map_err(|_| "chain id out of range")?;
     let block = rpc.block_number()?;
@@ -196,7 +196,7 @@ fn connect(rpc_url: &str) -> Result<(eth::Rpc, u64, String, u128), String> {
 #[tauri::command]
 pub(crate) async fn nft_list(chain_id: u64) -> CmdResult<Vec<Nft>> {
     blocking(move || {
-        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let owner = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         Ok(load(&owner).into_iter().filter(|n| n.chain_id == chain_id).collect())
     })
     .await

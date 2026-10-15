@@ -265,7 +265,7 @@ pub fn verify(ders: &[Vec<u8>], roots: &[TrustedRoot], now: i64) -> Result<Chain
     let leaf_validity = certs[0].validity();
     if leaf_validity.not_after.timestamp() < now {
         notes.push(format!(
-            "The attested key's certificate says it expired on {} (set from the phone's clock; not enforced)",
+            "The key's certificate says it expired on {} (set from the phone's clock; not enforced)",
             day_text(leaf_validity.not_after.timestamp())
         ));
     }

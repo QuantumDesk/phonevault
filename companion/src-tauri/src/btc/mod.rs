@@ -753,7 +753,7 @@ pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: Str
         let built = QUOTES.lock().map_err(|_| fail("internal", "state poisoned", false))?.get(&quote_id).cloned()
             .ok_or_else(|| fail("internal", "this quote expired; review the send again", false))?;
         let _turn = flow.take_turn()?;
-        // Unlike the ETH flow, "a device check is already running" stays `connect` here.
+        // Unlike the ETH flow, "a genuine check is already running" stays `connect` here.
         crate::attest::require_genuine().map_err(send_flow::gate_failure)?;
         flow.check_cancelled()?;
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "btcSignPsbt", "network": built.account.net.wire(), "psbt": verify::psbt_base64(&built.psbt)});
@@ -790,7 +790,7 @@ pub(crate) async fn btc_broadcast(txid: String) -> CmdResult<String> {
         let (built, v) = lock(&VERIFIED)?
             .get(&txid)
             .cloned()
-            .ok_or("this transaction was not verified in this session, so it will not be broadcast")?;
+            .ok_or("This transaction was not verified in this session, so it was not sent to the network. Start the send again.")?;
         let id = built.account.id();
         let (_, _, server) = load_account(&id)?;
         let c = client(built.account.net, server.as_deref())?;
@@ -883,7 +883,7 @@ pub struct Export {
 fn export_for(s: &store::StoredAccount, a: &Account) -> Export {
     let path = format!("m/{}", a.path()).replace('\'', "h");
     let text = format!(
-        "Phone Vault — watch-only Bitcoin wallet\n{}\n\nNetwork: {}\nScript type: {} ({})\nMaster fingerprint: {}\nDerivation: {}\nAccount xpub: {}\n\nOutput descriptor (Sparrow: File → New Wallet → Import → Output Descriptor):\n{}\n\nReceive: {}\nChange:  {}\n\nThis file holds no private key. Anyone with it can see this account's addresses, balance and history.\n",
+        "Phone Vault: watch-only Bitcoin wallet\n{}\n\nNetwork: {}\nScript type: {} ({})\nMaster fingerprint: {}\nDerivation: {}\nAccount xpub: {}\n\nOutput descriptor (Sparrow: File → New Wallet → Import → Output Descriptor):\n{}\n\nReceive: {}\nChange:  {}\n\nThis file holds no private key. Anyone with it can see this account's addresses, balance and history.\n",
         s.label, a.net.name(), a.kind.name(), if a.kind == Kind::P2tr { "BIP-86" } else { "BIP-84" }, a.fingerprint, path, a.xpub, a.descriptor(), a.chain_descriptor(0), a.chain_descriptor(1));
     Export {
         descriptor: a.descriptor(),

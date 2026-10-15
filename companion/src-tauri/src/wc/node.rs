@@ -48,7 +48,7 @@ pub(super) fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str
     let pending = rpc.nonce(paired).map_err(node)?;
     let nonce = match draft.nonce {
         Some(n) if n != pending => {
-            notes.push(note("warn", format!("The dApp set nonce {n}; your next nonce is {pending}. A different nonce can replace or wait behind another transaction.")));
+            notes.push(note("warn", format!("The site set nonce {n}, but your next nonce is {pending}. A different nonce can replace or wait behind another transaction.")));
             n
         }
         Some(n) => n,
@@ -56,7 +56,7 @@ pub(super) fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str
     };
     let (priority, max_fee) = match (draft.max_priority, draft.max_fee) {
         (Some(p), Some(f)) => {
-            notes.push(note("info", "Fees as suggested by the dApp."));
+            notes.push(note("info", "Fees as suggested by the site."));
             (p, f)
         }
         (p, f) => {
@@ -127,5 +127,5 @@ pub(super) fn prepare_tx(rpc_url: &str, chain: u64, params: &Value, paired: &str
 pub(super) fn paired_or_err() -> Result<String, RpcError> {
     pairing::load()
         .map_err(|e| rpc_err(UNAUTHORIZED, e.0))?
-        .ok_or_else(|| rpc_err(UNAUTHORIZED, "this wallet is not paired with a phone"))
+        .ok_or_else(|| rpc_err(UNAUTHORIZED, "This wallet isn't paired with a phone yet."))
 }

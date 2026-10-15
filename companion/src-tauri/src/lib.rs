@@ -245,7 +245,7 @@ struct Wallet {
 #[tauri::command]
 async fn wallet(rpc_url: String) -> CmdResult<Wallet> {
     blocking(move || {
-        let address = pairing::load()?.ok_or("not paired yet")?;
+        let address = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let balance = rpc.balance(&address)?;
         Ok(Wallet {
@@ -294,7 +294,7 @@ fn network_name(chain: u128) -> String {
 #[tauri::command]
 async fn quote(rpc_url: String, to: String, amount_eth: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load()?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         // If the recipient is written with mixed case, it must be a valid EIP-55 checksum (typo guard).
         let to_l = verify::recipient(&to)?;
         let value = eth::parse_eth(&amount_eth)?;

@@ -46,7 +46,7 @@ pub enum AoaError {
     #[error("{}", USB_BUSY)]
     Busy,
     #[error(
-        "the phone did not answer within {0} s (locked, or its USB session ended — unplug and reconnect the cable)"
+        "the phone did not answer within {0} s (locked, or its USB session ended). Unlock it, or unplug and reconnect the cable"
     )]
     Timeout(u64),
 }
@@ -288,7 +288,7 @@ impl Session {
             match self.handle.write_bulk(self.ep_out, &payload, Duration::from_secs(5)) {
                 Ok(_) => break,
                 Err(rusb::Error::Timeout) if Instant::now() < write_deadline => continue,
-                Err(rusb::Error::Timeout) => return Err(proto("the phone is not reading USB — wake it, unlock it, and retry; if it still fails unplug and reconnect the cable")),
+                Err(rusb::Error::Timeout) => return Err(proto("the phone is not reading USB. Wake it, unlock it and try again; if it still fails, unplug and reconnect the cable")),
                 Err(other) => return Err(AoaError::Usb(other)),
             }
         }
