@@ -1,11 +1,11 @@
-// The settings drawer: phone and paired accounts, device check, backup card, network and node,
+// The settings drawer: phone and paired accounts, genuine check, backup card, network and node,
 // notifications, incoming-transfer scan status, appearance, WalletConnect, browser extension,
 // tools and about.
 
 import { api, appVersion, notify, errText, isTauri } from "./api";
 import { deviceSection } from "./attestation";
 import { NETWORKS, type Network } from "./networks";
-import { h, icon, short, blockRange, copy } from "./ui";
+import { h, icon, short, blockRange, copy, focusBack } from "./ui";
 import { wcSettingsSection } from "./wc-view";
 import { extSettingsSection } from "./extension";
 import { backupCardSection } from "./backup-card";
@@ -40,8 +40,19 @@ export function initSettings(h0: SettingsHost) {
 
 // ------------------------------------------------------------------ settings drawer
 
-export function openDrawer() { state.drawerOpen = true; renderDrawer(); document.body.classList.add("drawer-open"); drawer.setAttribute("aria-hidden", "false"); (drawer.querySelector("button") as HTMLElement | null)?.focus(); }
-export function closeDrawer() { state.drawerOpen = false; document.body.classList.remove("drawer-open"); drawer.setAttribute("aria-hidden", "true"); }
+/** Where focus was when the drawer opened (the gear, a badge…); it goes back there on close. */
+let returnFocus: HTMLElement | null = null;
+export function openDrawer() {
+  if (!state.drawerOpen) returnFocus = document.activeElement instanceof HTMLElement && !drawer.contains(document.activeElement) ? document.activeElement : null;
+  state.drawerOpen = true; renderDrawer(); document.body.classList.add("drawer-open"); drawer.setAttribute("aria-hidden", "false"); (drawer.querySelector("button") as HTMLElement | null)?.focus();
+}
+export function closeDrawer() {
+  const had = state.drawerOpen && (drawer.contains(document.activeElement) || document.activeElement === document.body);
+  state.drawerOpen = false; document.body.classList.remove("drawer-open"); drawer.setAttribute("aria-hidden", "true");
+  if (had && returnFocus) focusBack(returnFocus);
+  else if (had) (document.activeElement as HTMLElement | null)?.blur();
+  returnFocus = null;
+}
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.drawerOpen) closeDrawer(); });
 
 /** Settings → Incoming transfers: how far back each node let the watcher search token transfers. */
@@ -101,7 +112,7 @@ export function renderDrawer() {
     h("div", { class: "drawer-head" }, h("h2", null, "Settings"), h("button", { class: "icon-btn", onclick: closeDrawer, "aria-label": "Close settings" }, icon("close", 20))),
     h("section", { class: "set" },
       h("h4", null, "PHONE"),
-      h("div", { class: "set-row" }, h("span", null, "USB"), h("span", { class: `chip ${phone}` }, h("i", { class: "dot" }), phone === "accessory" ? "Connected" : phone === "android" ? "On USB" : "Not connected")),
+      h("div", { class: "set-row" }, h("span", null, "USB"), h("span", { class: `chip ${phone}` }, h("i", { class: "dot" }), h("span", { class: "chip-label" }, phone === "accessory" ? "Connected" : phone === "android" ? "On USB" : "Not connected"))),
       paired ? accountsSettings() : h("div", { class: "set-row" }, h("span", null, "Paired address"), h("span", { class: "muted" }, "Not paired")),
       h("div", { class: "row gap" },
         h("button", { onclick: () => { closeDrawer(); state.pair = { s: "idle" }; host.go("pair"); } }, paired ? "Pair another account" : "Pair phone"),
@@ -134,7 +145,7 @@ export function renderDrawer() {
         h("button", { onclick: saveRpc }, "Save"),
         h("button", { class: "ghost", onclick: () => { rpcInput.value = n.rpc; saveRpc(); } }, "Use default"),
       ),
-      h("p", { class: "muted small" }, "The node supplies balance, nonce and fees, and relays what you broadcast. It can't change what the phone signs: every field is shown to you and on the phone first."),
+      h("p", { class: "muted small" }, "The node supplies balance, nonce and fees, and passes on what you send to the network. It can't change what the phone signs: every field is shown to you and on the phone first."),
     ),
     h("section", { class: "set" },
       h("h4", null, "NOTIFICATIONS"),
@@ -156,7 +167,7 @@ export function renderDrawer() {
     h("section", { class: "set about" },
       h("h4", null, "ABOUT"),
       h("div", { class: "set-row" }, h("span", null, "Phone Vault Companion"), h("span", { class: "mono muted" }, version || "…")),
-      h("p", { class: "muted small" }, "This Mac never sees a key. It quotes, relays, verifies and broadcasts. The phone decides."),
+      h("p", { class: "muted small" }, "This Mac never sees a key. It quotes, verifies and sends to the network. The phone decides."),
       h("p", { class: "muted small" }, "Prices from Coinbase, for display only. Bitcoin data from the Esplora server in Settings → Bitcoin. No analytics, no accounts."),
     ),
   ].filter((x): x is HTMLElement => !!x));

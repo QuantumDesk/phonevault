@@ -119,7 +119,7 @@ export const wcPhoneBusy = () => phoneBusy;
 
 const inFlight = (it: Item) => ["connecting", "on_phone", "verifying", "broadcasting"].includes(it.stage.s);
 export const sessionOf = (topic: string) => wc.sessions.find((s) => s.topic === topic);
-export const dappName = (topic: string) => sessionOf(topic)?.meta.name ?? "A dApp";
+export const dappName = (topic: string) => sessionOf(topic)?.meta.name ?? "A site";
 export const chainNum = (caip: string) => { const n = Number(caip.split(":")[1]); return Number.isFinite(n) ? n : 0; };
 export const hostOf = (url: string) => { try { return new URL(url).host; } catch { return url; } };
 const RELAY_CHECK_MS = 500;
@@ -146,7 +146,7 @@ const events: Events = {
     notice(`${dappName(it.req.topic)}: a ${it.req.method} request expired.`);
     sync();
   },
-  proposalExpired: (id) => { if (wc.proposal?.p.id === id) { wc.proposal = null; notice("The connection request expired. Start again from the dApp."); render(); } },
+  proposalExpired: (id) => { if (wc.proposal?.p.id === id) { wc.proposal = null; notice("The connection request expired. Start again from the site."); render(); } },
   sessionGone: (topic, why) => {
     const s = sessionOf(topic);
     for (const [id, it] of items) if (it.req.topic === topic && !inFlight(it)) items.delete(id);
@@ -261,7 +261,7 @@ export async function prepare(it: Item) {
       await answerError(it, err.code, err.message);
       items.delete(it.req.id);
       // "Blocked: <site> asked you to sign in to <domain>…" (a sign-in for another site) stands on its own
-      notice(err.message.startsWith("Blocked:") ? err.message : `Refused ${it.req.method} from ${session?.meta.name ?? "a dApp"}: ${err.message}`);
+      notice(err.message.startsWith("Blocked:") ? err.message : `Refused ${it.req.method} from ${session?.meta.name ?? "a site"}: ${err.message}`);
     }
   }
   render();
@@ -269,7 +269,7 @@ export async function prepare(it: Item) {
 
 async function answer(it: Item, result: unknown) {
   it.answered = true;
-  try { await wc.backend!.respond(it.req.topic, it.req.id, result); } catch (e) { notice(`Couldn't reply to the dApp: ${errText(e)}`); }
+  try { await wc.backend!.respond(it.req.topic, it.req.id, result); } catch (e) { notice(`Couldn't reply to the site: ${errText(e)}`); }
 }
 async function answerError(it: Item, code: number, message: string) {
   it.answered = true;
@@ -319,7 +319,7 @@ async function sendTransaction(it: Item, quote: Quote, chain: number) {
   } finally { it.ticket = null; }
   if (!wc.backend!.isPending(it.req.id)) {
     it.answered = true;
-    it.stage = { s: "failed", title: "The dApp stopped waiting", body: "Your phone signed it, but the dApp is no longer waiting for an answer, so it was not broadcast. Nothing was sent.", retry: false, tone: "warn" };
+    it.stage = { s: "failed", title: "The site stopped waiting", body: "Your phone signed it, but the site is no longer waiting for an answer. Nothing was sent to the network.", retry: false, tone: "warn" };
     return;
   }
   await broadcast(it, hash, chain);
@@ -333,7 +333,7 @@ export async function broadcast(it: Item, hash: string, chain: number) {
     if (!/already known|known transaction/i.test(m)) { it.stage = { s: "broadcast_failed", hash, message: m }; render(); return; }
   }
   await answer(it, hash);
-  it.stage = { s: "done", title: `Sent on ${netName(chain)}`, body: "Signed on your phone, verified on this Mac and broadcast. The dApp has the transaction hash.", hash, chain };
+  it.stage = { s: "done", title: `Sent on ${netName(chain)}`, body: "Signed on your phone, verified on this Mac and sent to the network. The site has the transaction hash.", hash, chain };
   wc.host.sent(chain);
 }
 
@@ -341,12 +341,12 @@ function txFailure(it: Item, err: SendError) {
   const x = explainSendError(err, { chain: "eth" });
   switch (err.kind) {
     case "busy": it.stage = { s: "review", error: "The phone is still finishing another request. Try again in a few seconds." }; return;
-    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", x.title, "No signature was created. The dApp was told you declined.", "neutral");
+    case "rejected": return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", x.title, "No signature was created. The site was told you declined.", "neutral");
     case "cancelled": return finalFail(it, USER_REJECTED, "User cancelled the request.", x.title, x.body, "neutral");
-    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", x.title, "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was broadcast.", "danger", err.message);
+    case "verify": return finalFail(it, INTERNAL, "The signature failed verification and was discarded.", x.title, "What came back does not match this request, or was not signed by your paired phone. It was thrown away and nothing was sent to the network.", "danger", err.message);
     case "phone_error": return finalFail(it, INTERNAL, `The phone refused the request: ${err.message}`, x.title, x.body, "warn", err.message);
-    case "not_paired": return finalFail(it, 4100, "The wallet is not paired.", x.title, x.body, "warn");
-    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, x.title, `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the dApp was told.`, "warn");
+    case "not_paired": return finalFail(it, 4100, "Phone Vault Companion isn't paired with a phone yet.", x.title, x.body, "warn");
+    case "reverts": return finalFail(it, INTERNAL, `The transaction would revert: ${err.message}`, x.title, `Simulated on your node, this transaction fails (${err.message}). It was not sent to your phone, and the site was told.`, "warn");
   }
   // anything else can be tried again, or rejected here
   it.stage = { s: "failed", title: x.title, body: x.body, detail: err.message, retry: true, tone: x.danger ? "danger" : "warn" };
@@ -360,15 +360,15 @@ async function signMessage(it: Item, prep: Extract<Prepared, { kind: "personal_s
       : await call<{ signature: string }>("sign_typed_data", { typedData: prep.typed_data, chainId: prep.chain_id, origin: trustedOrigin(it.req.verify) });
     if (!wc.backend!.isPending(it.req.id)) {
       it.answered = true;
-      it.stage = { s: "failed", title: "The dApp stopped waiting", body: "Your phone signed it, but the dApp is no longer waiting, so the signature was not sent anywhere.", retry: false, tone: "warn" };
+      it.stage = { s: "failed", title: "The site stopped waiting", body: "Your phone signed it, but the site is no longer waiting, so the signature was not sent anywhere.", retry: false, tone: "warn" };
       return;
     }
     await answer(it, r.signature);
-    it.stage = { s: "done", title: "Signed", body: "Signed on your phone; this Mac recomputed the digest and checked the signer before sending the signature to the dApp." };
+    it.stage = { s: "done", title: "Signed", body: "Signed on your phone; this Mac recomputed the digest and checked the signer before sending the signature to the site." };
   } catch (e) {
     const m = errText(e);
     if (m.startsWith("Blocked:")) return finalFail(it, 4100, m, "Blocked: sign-in for another site", m, "danger");
-    if (/rejected on the phone/i.test(m)) return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The dApp was told you declined.", "neutral");
+    if (/rejected on the phone/i.test(m)) return finalFail(it, USER_REJECTED, "User rejected the request on the phone.", "Rejected on the phone", "No signature was created. The site was told you declined.", "neutral");
     if (/^phone error:/i.test(m)) return finalFail(it, INTERNAL, `The phone refused the request: ${m.replace(/^phone error:\s*/i, "")}`, "The phone refused the request", explainPlain(m.replace(/^phone error:\s*/i, "")), "warn");
     if (/no Android device|held by another program|did not answer|not reading USB|re-enumerate|USB|timed out/i.test(m))
       { it.stage = { s: "failed", title: "The phone didn't answer", body: "Nothing was signed. Plug the phone in, unlock it, and try again, or reject the request.", detail: m, retry: true, tone: "warn" }; return; }
@@ -428,7 +428,7 @@ async function openProposal(p: ProposalIn) {
 export async function approveProposal() {
   if (!wc.proposal || !wc.backend) return;
   const pr = wc.proposal;
-  if (!wc.host.paired()) { pr.error = "Pair your phone first: the dApp is given the paired phone's address."; render(); return; }
+  if (!wc.host.paired()) { pr.error = "Pair your phone first: the site is given the paired phone's address."; render(); return; }
   pr.busy = true; pr.error = null; render();
   try {
     const namespaces = await call<unknown>("wc_session_namespaces", { required: pr.p.required, optional: pr.p.optional, selected: [...pr.selected] });
@@ -450,8 +450,8 @@ export async function pair() {
   if (!wc.connect || !wc.backend) return;
   const uri = wc.connect.uri.trim();
   if (!uri.startsWith("wc:")) { wc.connect.error = "A WalletConnect link starts with wc:"; render(); return; }
-  if (/@1\b/.test(uri)) { wc.connect.error = "That is an old WalletConnect v1 link. The dApp needs WalletConnect v2."; render(); return; }
-  if (!/@2\b/.test(uri) || !/symKey=/.test(uri)) { wc.connect.error = "That doesn't look like a complete WalletConnect v2 link. Copy it again from the dApp."; render(); return; }
+  if (/@1\b/.test(uri)) { wc.connect.error = "That is an old WalletConnect v1 link. The site needs WalletConnect v2."; render(); return; }
+  if (!/@2\b/.test(uri) || !/symKey=/.test(uri)) { wc.connect.error = "That doesn't look like a complete WalletConnect v2 link. Copy it again from the site."; render(); return; }
   wc.connect.busy = true; wc.connect.error = null; render();
   try {
     const b = wc.backend;
@@ -467,7 +467,7 @@ export async function pair() {
     try { await Promise.race([b.pair(uri), relayDown]); } finally { clearInterval(poll); }
     if (wc.connect) { wc.connect.busy = false; wc.connect.waiting = true; render(); }
   } catch (e) {
-    if (wc.connect) { wc.connect.busy = false; wc.connect.error = /expired/i.test(errText(e)) ? "This link has expired or was already used. Get a new one from the dApp." : errText(e); render(); }
+    if (wc.connect) { wc.connect.busy = false; wc.connect.error = /expired/i.test(errText(e)) ? "This link has expired or was already used. Get a new one from the site." : errText(e); render(); }
   }
 }
 

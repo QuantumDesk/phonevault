@@ -53,7 +53,7 @@ export function verifyOf(ctx: AnyVerify): VerifyIn | null {
 }
 
 function meta(m: Partial<Meta> | undefined): Meta {
-  return { name: String(m?.name ?? "Unknown dApp").slice(0, 80), description: m?.description ? String(m.description).slice(0, 300) : undefined, url: String(m?.url ?? ""), icons: Array.isArray(m?.icons) ? m!.icons.map(String) : [] };
+  return { name: String(m?.name ?? "Unknown site").slice(0, 80), description: m?.description ? String(m.description).slice(0, 300) : undefined, url: String(m?.url ?? ""), icons: Array.isArray(m?.icons) ? m!.icons.map(String) : [] };
 }
 
 export async function createSdkBackend(projectId: string, ev: Events): Promise<Backend> {

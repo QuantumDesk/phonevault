@@ -106,8 +106,12 @@ export function fmtUsd(eth: string | number, price: number | null | undefined): 
   const v = Number(eth) * price;
   if (!Number.isFinite(v)) return null;
   if (v > 0 && v < 0.01) return "< $0.01";
+  // big numbers: compact ("$12.35M"), so a mistyped amount doesn't print float noise across the screen
+  if (v >= 1e15) return "> $999T";
+  if (v >= 1e6) return usdCompact.format(v);
   return usdFmt.format(v);
 }
+const usdCompact = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 2 });
 
 export function ago(unix: number): string {
   const s = Math.max(0, Date.now() / 1000 - unix);
@@ -119,6 +123,17 @@ export function ago(unix: number): string {
 }
 
 export const clock = (ms: number) => { const s = Math.floor(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+/** Put focus back on `el` after a dialog or drawer closes. Views re-render (the header every few
+ *  seconds), so when `el` was replaced, the control with the same label takes its place. */
+export function focusBack(el: HTMLElement | null) {
+  if (!el) return;
+  if (el.isConnected) { el.focus(); return; }
+  const key = (x: Element) => `${x.tagName}|${x.getAttribute("aria-label") ?? ""}|${x.textContent ?? ""}|${x.className}`;
+  const k = key(el);
+  const twin = [...document.querySelectorAll<HTMLElement>(el.tagName)].find((x) => key(x) === k);
+  twin?.focus();
+}
 
 let toastTimer = 0;
 export function toast(text: string) {
