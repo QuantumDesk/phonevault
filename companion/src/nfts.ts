@@ -6,6 +6,7 @@ import { api, errText, openExternal } from "./api";
 import type { Nft } from "./api";
 import { byId } from "./networks";
 import { h, icon, short, blockRange } from "./ui";
+import { explainNode } from "./errors";
 
 interface ChainView { nfts: Nft[]; scanned: boolean; scanning: boolean; error: string | null; window: string | null }
 const views = new Map<number, ChainView>();
@@ -93,8 +94,11 @@ export function nftSection(host: NftHost): HTMLElement {
       h("button", { class: "chip-btn", disabled: v.scanning, onclick: () => scan(chainId, host) }, v.scanning ? [h("i", { class: "mini-spin" }), "Searching…"] : [icon("refresh", 13), "Search again"]),
     ),
     held.length ? h("div", { class: "nft-grid" }, held.map((n) => card(n, host)))
-      : h("p", { class: "empty" }, v.scanning ? "Searching your node for ERC-721 transfers to this address…" : v.scanned ? "No NFTs found in the recent block window on this network." : "…"),
-    v.error ? h("p", { class: "muted small scan-note" }, icon("alert", 14), h("span", null, v.error.charAt(0).toUpperCase() + v.error.slice(1) + ".")) : null,
+      : v.scanning || !v.scanned ? h("p", { class: "empty row" }, h("i", { class: "mini-spin" }), v.scanning ? "Searching your node for ERC-721 transfers to this address…" : "Loading NFTs…")
+      // the node couldn't answer: say so rather than "none found" (the reason is below)
+      : v.error ? h("p", { class: "empty" }, `Your ${net.name} node couldn't search for NFTs, so none are listed. Add a collection by its contract below to check it directly.`)
+      : h("p", { class: "empty" }, "No NFTs found in the recent block window on this network."),
+    v.error ? h("p", { class: "muted small scan-note" }, icon("alert", 14), h("span", null, explainNode(v.error).replace(/([^.])$/, "$1."))) : null,
     h("p", { class: "muted small" }, `Found from ERC-721 transfers to this address${v.window ? ` in ${v.window}` : " in a recent block window"} on your ${net.name} node, then checked with ownerOf. Older NFTs, ERC-1155 items and NFTs from contracts that don't emit standard events may be missing: add a collection by its contract.`),
     h("div", { class: "field" }, add, msg),
   );

@@ -8,6 +8,8 @@
 //   ?wc=noid       as if no project ID was set
 //   ?wcverify=VALID|UNKNOWN|INVALID|SCAM   the Verify API result for the mock dApp
 //   ?wctx=native|approve|swap              the eth_sendTransaction the mock dApp sends
+//   ?wcsiwe=<domain>                       the domain the mock sign-in message names (default app.uniswap.org;
+//                                          another one is blocked like wc/commands.rs sign_in_gate does)
 
 import type { Backend, Events, ProposalIn, RequestIn, SessionIn, Validation } from "./wc-backend";
 
@@ -66,7 +68,8 @@ export function createMockBackend(ev: Events): Backend {
   const burst = (topic: string) => {
     push(topic, "eth_chainId", []);
     push(topic, "eth_sendTransaction", [sampleTx()]);
-    push(topic, "personal_sign", ["0x" + Array.from(new TextEncoder().encode("app.uniswap.org wants you to sign in with your Ethereum account:\n" + ADDRESS + "\n\nSign in to Uniswap.\n\nURI: https://app.uniswap.org\nVersion: 1\nChain ID: 8453\nNonce: 8f3a1c2b\nIssued At: 2026-09-27T10:00:00Z")).map((b) => b.toString(16).padStart(2, "0")).join(""), ADDRESS]);
+    const siwe = params.get("wcsiwe") ?? "app.uniswap.org";
+    push(topic, "personal_sign", ["0x" + Array.from(new TextEncoder().encode(`${siwe} wants you to sign in with your Ethereum account:\n` + ADDRESS + `\n\nSign in to Uniswap.\n\nURI: https://${siwe}\nVersion: 1\nChain ID: 8453\nNonce: 8f3a1c2b\nIssued At: 2026-09-27T10:00:00Z`)).map((b) => b.toString(16).padStart(2, "0")).join(""), ADDRESS]);
     push(topic, "eth_signTypedData_v4", [ADDRESS, PERMIT2]);
     push(topic, "eth_sign", [ADDRESS, "0x" + "ab".repeat(32)]);
     ev.changed();
@@ -144,7 +147,7 @@ export async function mockInvoke<T>(cmd: string, a: Record<string, unknown> = {}
         case "eth_chainId": return { kind: "answer", result: hex(chain) } as T;
         case "eth_accounts": case "eth_requestAccounts": return { kind: "answer", result: [ADDRESS] } as T;
         case "eth_sign": throw fail(4200, "eth_sign is refused: it signs an opaque hash that nobody can review. Use personal_sign or eth_signTypedData_v4.");
-        case "eth_signTransaction": throw fail(4200, "eth_signTransaction is refused: this wallet only returns transactions it broadcast itself. Use eth_sendTransaction.");
+        case "eth_signTransaction": throw fail(4200, "eth_signTransaction is refused: this wallet only returns transactions it sent to the network itself. Use eth_sendTransaction.");
         case "wallet_switchEthereumChain": {
           const id = parseInt(String((p[0] as { chainId: string }).chainId), 16);
           if (!ALLOWED.includes(id)) throw fail(4902, `Unrecognized chain ${id}: your phone has no reviewed profile for it`);
@@ -155,7 +158,17 @@ export async function mockInvoke<T>(cmd: string, a: Record<string, unknown> = {}
           const bytes = m.startsWith("0x") ? new Uint8Array((m.slice(2).match(/../g) ?? []).map((x) => parseInt(x, 16))) : new TextEncoder().encode(m);
           let text: string | null = null;
           try { text = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { /* binary */ }
-          return { kind: "personal_sign", chain_id: chain, message_hex: m, text, notes: text ? [] : [{ level: "danger", text: "This is not readable text. Sign only if you know exactly what it is." }] } as T;
+          const notes: { level: string; text: string }[] = text ? [] : [{ level: "danger", text: "This is not readable text. Sign only if you know exactly what it is." }];
+          // Sign-In with Ethereum, like wc/commands.rs sign_in_gate (simplified: host names only)
+          const domain = text ? /^(\S+) wants you to sign in with your Ethereum account:/.exec(text)?.[1] ?? null : null;
+          if (domain) {
+            const origin = typeof a.origin === "string" ? a.origin : null;
+            const site = origin ? origin.replace(/^[a-z]+:\/\//i, "") : null;
+            if (!site) notes.unshift({ level: "danger", text: `This signs you in to ${domain}, but which site is asking could not be verified. Sign only if you opened ${domain} yourself.` });
+            else if (site.toLowerCase() !== domain.toLowerCase()) throw fail(4100, `Blocked: ${site} asked you to sign in to ${domain}. Phone Vault refuses sign-in messages for a different site than the one asking.`);
+            else notes.push({ level: "info", text: `Signs you in to ${domain}, the site that is asking.` });
+          }
+          return { kind: "personal_sign", chain_id: chain, message_hex: m, text, notes } as T;
         }
         case "eth_signTypedData_v4": {
           const td = JSON.parse(String(p[1]));

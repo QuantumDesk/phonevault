@@ -37,7 +37,7 @@ function statusBadge(e: HistoryEntry, all: HistoryEntry[]) {
     case "confirmed": return h("span", { class: "badge ok" }, e.replacement_kind === "cancel" ? "Cancelled it" : "Confirmed");
     case "dropped": {
       const winner = all.find((x) => x !== e && sameGroup(x, e) && (x.status === "confirmed" || x.status === "failed"));
-      return h("span", { class: "badge dropped", title: winner?.hash ? `Replaced by ${winner.hash}` : "Another transaction with the same nonce was included instead" },
+      return h("span", { class: "badge dropped", title: winner?.hash ? `Replaced by ${winner.hash}` : "A transaction that replaces it was included instead" },
         winner ? (winner.replacement_kind === "cancel" && winner.replaces?.toLowerCase() === e.hash?.toLowerCase() ? "Cancelled" : "Replaced") : "Dropped");
     }
     default: return null;
@@ -81,8 +81,8 @@ function row(e: HistoryEntry, all: HistoryEntry[], host: ActivityHost) {
   return h("li", { class: "act-stuck" }, main,
     h("div", { class: "act-actions" },
       h("span", { class: "muted small grow" }, stuck ? "Still pending. You can pay a higher fee, or cancel it." : "Waiting to be included…"),
-      e.tx && e.replacement_kind !== "cancel" ? h("button", { class: "chip-btn", onclick: () => host.replace(e, "speedup"), title: "Send the same transaction again with the same nonce and a higher fee. Your phone reviews it." }, icon("up", 13), "Speed up") : null,
-      h("button", { class: "chip-btn", onclick: () => host.replace(e, "cancel"), title: "Send 0 to yourself with the same nonce and a higher fee, so the original can never be included. Your phone reviews it." }, icon("x", 13), e.replacement_kind === "cancel" ? "Cancel faster" : "Cancel"),
+      e.tx && e.replacement_kind !== "cancel" ? h("button", { class: "chip-btn", onclick: () => host.replace(e, "speedup"), title: "Send the same transaction again with a higher fee; it replaces the original transaction. Your phone reviews it." }, icon("up", 13), "Speed up") : null,
+      h("button", { class: "chip-btn", onclick: () => host.replace(e, "cancel"), title: "Send 0 to yourself with a higher fee; it replaces the original transaction, so the original can never be included. Your phone reviews it." }, icon("x", 13), e.replacement_kind === "cancel" ? "Cancel faster" : "Cancel"),
     ));
 }
 

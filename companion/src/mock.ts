@@ -14,6 +14,7 @@
 // public nodes. The stuck transaction stays pending, so Speed up / Cancel can be walked through.
 
 import type { Attestation, AttestationDetails, HistoryEntry, Stage, Quote, TxParams, Nft } from "./api";
+import { checksumAddress } from "./checksum";
 
 const params = new URLSearchParams(location.search);
 const ADDRESS = "0x7A3B9C1d2e4F5061728394a5b6c7d8E9F0a1b2C3";
@@ -23,6 +24,8 @@ const ADDRESS_NEW = "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC";
 /** The address the mock phone is on (its active account). */
 const PHONE_ADDRESS = ({ "2": ADDRESS2, pp: ADDRESS_PP, new: ADDRESS_NEW } as Record<string, string>)[params.get("phoneacct") ?? ""] ?? ADDRESS;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** The Rust messages the preview repeats (pairing.rs NOT_PAIRED, send.rs). */
+const NOT_PAIRED = "Your phone isn't paired with this Mac yet. Pair it first, then try again.";
 const BAL: Record<number, string> = { 8453: "0.04213377", 1: "0.1284", 10: "0.0", 42161: "0.0031", 137: "12.5", 11155111: "1.9" };
 const RPC_CHAIN: Record<string, number> = {
   "https://mainnet.base.org": 8453, "https://ethereum-rpc.publicnode.com": 1, "https://optimism-rpc.publicnode.com": 10,
@@ -50,20 +53,20 @@ function mockAttestation(kind: string, allowDev: boolean): Attestation {
   const now = Math.floor(Date.now() / 1000);
   const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: PHONE_ADDRESS, checked_at: now, dev_mode: allowDev, ...a });
   switch (kind) {
-    case "genuine": return r({ verdict: "genuine", headline: "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the Titan M",
+    case "genuine": return r({ verdict: "genuine", headline: "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the security chip",
       details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4e", verified_boot_key_known: true,
         app_signer: "7a1e3c5b9d2f4e6a8c0b1d3f5e7a9c2b4d6f8e0a1c3e5b7d9f2a4c6e8b0d1f3a", app_signer_kind: "release" } });
-    case "fail": return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check",
+    case "fail": return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check",
       problems: ["The phone boots firmware signed by a key that is not Phone Vault's (verified boot key 9c2e41d07a3b55e8…)."],
       details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "9c2e41d07a3b55e8f1d2c3b4a5968778695a4b3c2d1e0f1a2b3c4d5e6f708192", app_signer_kind: "development" } });
-    case "oldapp": return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check", address: null, details: null,
-      problems: ["The phone did not attest (Request fields do not match schema; missing=[nonce, …]). A Phone Vault app without device attestation cannot prove it is genuine; update the app."] });
+    case "oldapp": return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check", address: null, details: null,
+      problems: ["The phone did not answer the genuine check (Request fields do not match schema; missing=[nonce, …]). A Phone Vault app this old cannot prove it is genuine; update the app on the phone."] });
     default:
-      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the device check",
+      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check",
         problems: ["The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone."],
-        cautions: ["Development firmware: bootloader unlocked — not safe for real funds"] });
-      return r({ verdict: "development", headline: "Development firmware: bootloader unlocked — not safe for real funds",
-        cautions: ["Development firmware: bootloader unlocked — not safe for real funds", "The Phone Vault app is signed with the development key (Developer mode is on on this Mac)."] });
+        cautions: ["Development firmware: bootloader unlocked, not safe for real funds"] });
+      return r({ verdict: "development", headline: "Development firmware: bootloader unlocked, not safe for real funds",
+        cautions: ["Development firmware: bootloader unlocked, not safe for real funds", "The Phone Vault app is signed with the development key (Developer mode is on on this Mac)."] });
   }
 }
 
@@ -91,6 +94,12 @@ export function createMock(): Mock {
   const phone = params.get("phone") ?? "accessory";
   const outcome = params.get("outcome") ?? "approve";
   let cancelled = false;
+  /** Wakes the one pending phone wait early (sign_cancel); one timer, so background tabs don't stretch it. */
+  let wake: (() => void) | null = null;
+  const phoneWait = (ms: number) => new Promise<void>((done) => {
+    const t = setTimeout(() => { wake = null; done(); }, ms);
+    wake = () => { clearTimeout(t); wake = null; done(); };
+  });
   const listeners = new Set<(t: string, s: Stage) => void>();
   const emit = (t: string, s: Stage) => listeners.forEach((l) => l(t, s));
   const events = new Map<string, Set<(p: unknown) => void>>();
@@ -174,7 +183,7 @@ export function createMock(): Mock {
       case "open_backup_card": return undefined as T;
       case "wallet": {
         await sleep(300 + Math.random() * 500);
-        if (!paired) throw "not paired yet";
+        if (!paired) throw NOT_PAIRED;
         const c = chainOf(a.rpcUrl); const eth = BAL[c] ?? "0";
         return { address: activeAcct()?.address ?? ADDRESS, balance_wei: toWei(eth), balance_eth: eth, chain_id: c, block: 20511298 } as T;
       }
@@ -185,7 +194,7 @@ export function createMock(): Mock {
         if (!s.startsWith("0x")) return { ok: false, checksum: null, error: "An address starts with 0x" } as T;
         if (!/^0x[0-9a-fA-F]{40}$/.test(s)) return { ok: false, checksum: null, error: "An address is 0x followed by 40 hex characters" } as T;
         if (/[A-F]/.test(s) && /[a-f]/.test(s) && s.endsWith("0")) return { ok: false, checksum: null, error: "Checksum mismatch: one character is probably wrong" } as T;
-        return { ok: true, checksum: s, error: null } as T;
+        return { ok: true, checksum: checksumAddress(s), error: null } as T;
       }
       case "quote": {
         await sleep(700);
@@ -218,11 +227,11 @@ export function createMock(): Mock {
         const t = String(a.ticket); cancelled = false;
         const q = a.quote as { to: string; amount_eth: string; chain_id: string };
         // ?phonebusy=1: the phone is answering another request first (queued, not an error)
-        if (params.get("phonebusy")) { await sleep(50); emit(t, "waiting"); for (let i = 0; i < 60; i++) { await sleep(100); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: false }; } }
+        if (params.get("phonebusy")) { await sleep(50); emit(t, "waiting"); await phoneWait(6000); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: false }; }
         emit(t, "connecting"); await sleep(900);
         if (outcome === "nophone") throw { kind: "no_phone", message: "no Android device on USB", delivered: false };
         emit(t, "delivered");
-        for (let i = 0; i < 40; i++) { await sleep(100); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: true }; }
+        await phoneWait(4000); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: true };
         if (outcome === "reject") throw { kind: "rejected", message: "rejected on the phone", delivered: true };
         if (outcome === "timeout") throw { kind: "timeout", message: "the phone did not answer within 300 s", delivered: true };
         if (outcome === "verify") throw { kind: "verify", message: "signed transaction differs from the request in: value", delivered: true };
@@ -231,10 +240,10 @@ export function createMock(): Mock {
         pending = { hash, to: q.to, amount: q.amount_eth, chain: parseInt(q.chain_id, 16), polls: 0, quote: a.quote as Quote };
         return { hash, signer: activeAcct()?.address ?? ADDRESS } as T;
       }
-      case "sign_cancel": cancelled = true; return undefined as T;
+      case "sign_cancel": cancelled = true; wake?.(); return undefined as T;
       // signing.rs: personal_sign / eth_signTypedData_v4 (the Sign a message screen and dApp requests)
       case "sign_message": case "sign_typed_data": {
-        if (!paired) throw "not paired yet";
+        if (!paired) throw NOT_PAIRED;
         if (![1, 11155111, 8453, 10, 42161, 137].includes(Number(a.chainId))) throw `the phone has no reviewed profile for chain ${a.chainId}`;
         if (cmd === "sign_message") {
           const m = String(a.message ?? "");
@@ -252,7 +261,7 @@ export function createMock(): Mock {
       case "broadcast_verified": {
         await sleep(800);
         if (outcome === "broadcastfail") throw "node error for eth_sendRawTransaction: replacement transaction underpriced";
-        if (!pending || pending.hash !== a.hash) throw "this transaction was not verified in this session, so it will not be broadcast";
+        if (!pending || pending.hash !== a.hash) throw "This transaction was not verified in this session, so it was not sent to the network. Start the send again.";
         const q = pending.quote;
         history = [base({ kind: "out", hash: pending.hash, chain_id: pending.chain, counterparty: q.token ? q.token.recipient : pending.to, amount_eth: pending.amount, fee_max_eth: q.max_fee_eth, nonce: parseInt(q.nonce, 16),
           time: Math.floor(Date.now() / 1000), status: "pending", token_symbol: q.token?.symbol ?? null, token_amount: q.token?.amount ?? null,
@@ -379,7 +388,7 @@ export function createMock(): Mock {
         emit(t, "connecting"); await sleep(900);
         if (outcome === "nophone") throw { kind: "no_phone", message: "no Android device on USB", delivered: false };
         emit(t, "delivered");
-        for (let i = 0; i < 40; i++) { await sleep(100); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: true }; }
+        await phoneWait(4000); if (cancelled) throw { kind: "cancelled", message: "cancelled on this Mac", delivered: true };
         if (outcome === "reject") throw { kind: "rejected", message: "rejected on the phone", delivered: true };
         if (outcome === "verify") throw { kind: "verify", message: "the phone returned a different transaction (output 1 amount (so the fee too) changed)", delivered: true };
         emit(t, "verifying"); await sleep(500);
@@ -389,11 +398,11 @@ export function createMock(): Mock {
           checks: ["Same transaction as reviewed: 1 input, 2 outputs, recipient and amount unchanged", "Fee exactly 857 sat (inputs − outputs, amounts from this Mac's records)",
             "Every input signed by this wallet's key for that address (ECDSA, SIGHASH_ALL)", "Each input verified by Bitcoin Core's script interpreter (libbitcoinconsensus)"] } as T;
       }
-      case "btc_sign_cancel": cancelled = true; return undefined as T;
+      case "btc_sign_cancel": cancelled = true; wake?.(); return undefined as T;
       case "btc_broadcast": {
         await sleep(700);
         if (outcome === "broadcastfail") throw "HTTP 400: sendrawtransaction RPC error: {\"code\":-26,\"message\":\"min relay fee not met, 141 < 282\"}";
-        if (!btcSigned || btcSigned.txid !== a.txid) throw "this transaction was not verified in this session, so it will not be broadcast";
+        if (!btcSigned || btcSigned.txid !== a.txid) throw "This transaction was not verified in this session, so it was not sent to the network. Start the send again.";
         btcConfirmed -= 250_857;
         btcHistory.unshift({ txid: btcSigned.txid, net_sats: -250_857, fee_sats: 857, status: "pending", confirmations: 0, time: Math.floor(Date.now() / 1000), counterparty: "bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq", can_bump: true, sent_here: true, explorer: `https://mempool.space/tx/${btcSigned.txid}` });
         return btcSigned.txid as T;

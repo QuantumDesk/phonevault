@@ -128,8 +128,8 @@ function genuineStep(host: SetupHost) {
   const c = host.device();
   const r: Attestation | null = c.report;
   const legend = h("div", { class: "compare-legend" },
-    h("div", { class: "ok" }, h("strong", null, "Genuine"), "Locked Phone Vault firmware, the release-signed app, keys in the Titan M chip. Ready for real funds."),
-    h("div", { class: "dev" }, h("strong", null, "Development"), "A phone someone flashed for testing (bootloader unlocked or development-signed app). Fine for small test amounts only."));
+    h("div", { class: "ok" }, h("strong", null, "Genuine"), "Locked Phone Vault firmware, the release-signed app, keys in the security chip. Passes every check."),
+    h("div", { class: "dev" }, h("strong", null, "Development"), "A phone someone flashed for testing (bootloader unlocked or development-signed app). Test amounts only."));
   const body: (Node | null)[] = [];
   if (!r) {
     body.push(h("p", { class: "muted" }, c.checking ? "The phone is proving, with a fresh challenge from this Mac, that its keys are in secure hardware and it runs Phone Vault firmware and app. Unlock the phone if it asks." : c.error ? c.error : "Waiting for the phone…"));
@@ -141,14 +141,14 @@ function genuineStep(host: SetupHost) {
       h("div", { class: "callout danger-border" },
         h("strong", null, "Stop here: don't put funds on this phone"),
         h("span", null, "It could not prove it is Phone Vault hardware running Phone Vault's firmware and app, so a modified phone could show you one thing and sign another."),
-        h("span", null, "If someone sold you this phone already set up, don't use it. Flash it yourself from phonevault.org, then plug it in again.")),
+        h("span", null, "If someone sold you this phone already set up, don't use it. Flash it yourself, then plug it in again.")),
       h("div", { class: "actions" }, h("button", { class: "big", onclick: host.recheck, disabled: c.checking }, icon("refresh", 18), c.checking ? "Checking…" : "Check again")),
     );
   } else {
     body.push(
       h("h3", null, r.verdict === "genuine" ? "Genuine Phone Vault" : "Development phone"),
-      h("p", { class: "muted" }, r.verdict === "genuine" ? "Google's attestation proves the keys are in the Titan M, the app is Phone Vault's, and the phone booted locked Phone Vault firmware."
-        : "It passed as a development phone. Use it only with amounts you can afford to lose: an unlocked phone's software above the security chip could be modified."),
+      h("p", { class: "muted" }, r.verdict === "genuine" ? "Google's hardware check proves the keys are in the security chip, the app is Phone Vault's, and the phone booted locked Phone Vault firmware."
+        : "It passed as a development phone. Test amounts only: an unlocked phone's software above the security chip could be modified."),
       legend,
       h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => go(host, 2) }, "Continue")),
     );
@@ -231,11 +231,11 @@ function sendStep(host: SetupHost) {
     h("div", { class: "pair-hero" }, padlock(5)),
     h("p", { class: "kicker" }, "Step 5 of 5 · First send (optional)"),
     h("h3", null, "Send a little back"),
-    h("p", { class: "muted" }, back ? `Send a small amount back to ${short(back)} to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Broadcast.`
-      : "Send a small amount to an address you control to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Broadcast."),
+    h("p", { class: "muted" }, back ? `Send a small amount back to ${short(back)} to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Send to network.`
+      : "Send a small amount to an address you control to see the whole path: this Mac quotes it, your phone shows it and you approve there, this Mac checks the signature, then you press Send to network."),
     h("dl", { class: "facts" },
       h("div", { class: "fact" }, h("dt", null, "On the phone"), h("dd", null, "Check the amount, recipient, network and fee, then Approve & sign")),
-      h("div", { class: "fact" }, h("dt", null, "On this Mac"), h("dd", null, "Nothing is sent until you press Broadcast"))),
+      h("div", { class: "fact" }, h("dt", null, "On this Mac"), h("dd", null, "Nothing is sent until you press Send to network"))),
     h("div", { class: "actions" },
       h("button", { class: "big primary", onclick: () => host.finish({ sendTo: back }) }, icon("up", 18), "Start a send"),
       h("button", { class: "big", onclick: () => go(host, 5) }, "Skip")),

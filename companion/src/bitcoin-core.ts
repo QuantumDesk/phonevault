@@ -3,7 +3,7 @@
 // both read (the host hooks and which Bitcoin screen is showing).
 
 import { call } from "./api";
-import { fmtInt, usdFmt } from "./ui";
+import { fmtInt, fmtUsd } from "./ui";
 
 export type BtcNet = "bitcoin" | "testnet" | "signet";
 export const BTC_NETS: { id: BtcNet; name: string; unit: string; test: boolean }[] = [
@@ -82,9 +82,7 @@ export function fmtBtc(sats: number, trim = true): string {
 export const fmtSats = (n: number) => `${fmtInt(Math.abs(n))} sat`;
 export function usd(sats: number, price: number | null, test: boolean): string | null {
   if (price === null || test) return null;
-  const v = (Math.abs(sats) / 1e8) * price;
-  if (v > 0 && v < 0.01) return "< $0.01";
-  return usdFmt.format(v);
+  return fmtUsd(Math.abs(sats) / 1e8, price);
 }
 /** bc1q xxxx xxxx … in groups of four, for comparing by eye. */
 export const groupedBtc = (a: string) => a.match(/.{1,4}/g)?.join(" ") ?? a;

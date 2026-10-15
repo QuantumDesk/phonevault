@@ -5,11 +5,13 @@
 import { call, openExternal, isTauri, REVIEW_LIMIT_MS } from "./api";
 import type { Quote } from "./api";
 import { byId, netName } from "./networks";
-import { h, icon, short, shortHash, grouped, fmtAmount, copy, fact } from "./ui";
+import { h, icon, short, shortHash, grouped, fmtAmount, copy, fact, focusBack } from "./ui";
 import type { VerifyIn } from "./wc-backend";
 import { isExtTopic } from "./extension";
 import { clockLine, updateClocks, cancelButton } from "./send-flow";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
+import { checksumAddress } from "./checksum";
+import { tokenAt } from "./tokens";
 import { wc, startWalletConnect, type WcHost, type Item, type Note, INTERNAL, PROJECT_ID_RE, saveProjectId, notices, shown, sessionOf, dappName, chainNum, hostOf,
   start, prepare, approve, reject, cancel, closeItem, finalFail, broadcast, approveProposal, rejectProposal, pair, disconnect, openConnect } from "./walletconnect";
 
@@ -22,8 +24,8 @@ function linkIcon(size = 18): SVGSVGElement {
 }
 
 
-/** dApp icons come through Rust (nft.rs `dapp_icon`: https only, image types, 256 KiB) as data:
- *  URLs; the page's CSP loads no remote images, so the dApp's server never sees this app fetch it.
+/** Site icons come through Rust (nft.rs `dapp_icon`: https only, image types, 256 KiB) as data:
+ *  URLs; the page's CSP loads no remote images, so the site's server never sees this app fetch it.
  *  url → data URL ("" = none), or the request in flight. */
 const iconCache = new Map<string, string | Promise<string>>();
 
@@ -67,9 +69,10 @@ function dappHeader(meta: { name: string; url: string; icons: string[] }, v: Ver
   );
 }
 function verifyWarning(meta: { url: string }, v: VerifyIn | null) {
-  if (v?.source === "browser") return v.local ? verifyBadge(v, meta.url) : null;
-  return v?.validation === "VALID" && !v.isScam ? null : verifyBadge(v, meta.url);
+  return risky(v) ? verifyBadge(v, meta.url) : null;
 }
+/** Who is asking is not confirmed (unverified, mismatch, threat, a local page): Reject becomes the primary button. */
+const risky = (v: VerifyIn | null) => v?.source === "browser" ? !!v.local : !(v?.validation === "VALID" && !v.isScam);
 
 function notesList(notes: Note[]) {
   if (!notes.length) return null;
@@ -80,16 +83,36 @@ function notesList(notes: Note[]) {
 
 let layer: HTMLElement | null = null;
 let clockTimer = 0;
+/** Where focus was before the cards opened; it goes back there when they close. */
+let returnFocus: HTMLElement | null = null;
 
 function render() {
   wc.host?.changed();
   const content = wc.proposal ? proposalCard() : wc.connect ? connectCard() : shown().length && !wc.requestsHidden ? requestsCard() : null;
-  if (!content) { layer?.remove(); layer = null; return; }
+  if (!content) {
+    if (layer) {
+      const had = layer.contains(document.activeElement);
+      layer.remove(); layer = null;
+      if ((had || document.activeElement === document.body)) focusBack(returnFocus);
+      returnFocus = null;
+    }
+    return;
+  }
+  const opening = !layer;
   if (!layer) {
+    returnFocus = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null;
     layer = h("div", { class: "modal-scrim wc-layer fade" });
     document.body.append(layer);
   }
+  // re-renders replace the card: keep focus on the same control (same label), else on the dialog
+  const was = layer.contains(document.activeElement) ? document.activeElement as HTMLElement : null;
+  const key = was ? `${was.tagName}|${was.textContent}` : null;
   layer.replaceChildren(content);
+  if (opening || was) {
+    const same = key ? [...layer.querySelectorAll<HTMLElement>("button, input, summary, select")].find((el) => `${el.tagName}|${el.textContent}` === key && !(el as HTMLButtonElement).disabled) : null;
+    const dialog = layer.querySelector<HTMLElement>("[role=dialog]");
+    queueMicrotask(() => { if (layer && !layer.contains(document.activeElement)) (same ?? dialog)?.focus({ preventScroll: true }); });
+  }
   clearInterval(clockTimer);
   if (layer.querySelector(".clock")) clockTimer = window.setInterval(updateClocks, 1000);
 }
@@ -97,7 +120,7 @@ function render() {
 function connectCard() {
   const c = wc.connect!;
   if (wc.engine.s !== "ready") {
-    return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
+    return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true", tabindex: "-1", "aria-label": "WalletConnect" },
       h("p", { class: "kicker" }, "WalletConnect"),
       h("h3", null, wc.engine.s === "starting" ? "Starting WalletConnect…" : wc.engine.s === "error" ? "WalletConnect didn't start" : "Add a project ID first"),
       wc.engine.s === "error" ? h("p", { class: "inline-error" }, icon("alert", 15), wc.engine.message) : null,
@@ -112,16 +135,16 @@ function connectCard() {
   input.addEventListener("keydown", (e) => { if ((e as KeyboardEvent).key === "Enter") pair(); });
   queueMicrotask(() => { if (!c.busy && !c.waiting) input.focus(); });
   const paste = async () => {
-    try { const t = (await navigator.clipboard.readText()).trim(); c.uri = t; input.value = t; c.error = null; if (t.startsWith("wc:")) pair(); else { c.error = "The clipboard doesn't hold a wc: link. In the dApp choose WalletConnect, then “Copy link”."; render(); } }
+    try { const t = (await navigator.clipboard.readText()).trim(); c.uri = t; input.value = t; c.error = null; if (t.startsWith("wc:")) pair(); else { c.error = "The clipboard doesn't hold a wc: link. On the site, choose WalletConnect, then “Copy link”."; render(); } }
     catch { c.error = "Couldn't read the clipboard. Paste into the field with ⌘V."; render(); }
   };
-  return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true" },
-    h("p", { class: "kicker" }, "Connect a dApp"),
+  return h("section", { class: "card modal wc-modal", role: "dialog", "aria-modal": "true", tabindex: "-1", "aria-label": "Connect a site" },
+    h("p", { class: "kicker" }, "Connect a site"),
     h("h3", null, "Paste the WalletConnect link"),
-    h("p", { class: "muted small" }, "In the dApp, choose WalletConnect, then “Copy link” under the QR code. The dApp will see your address and can ask for signatures; each one still needs your phone."),
+    h("p", { class: "muted small" }, "On the site, choose WalletConnect, then “Copy link” under the QR code. The site will see your address and can ask for signatures; each one still needs your phone."),
     h("label", { class: "field" }, input),
     c.error ? h("p", { class: "inline-error" }, icon("alert", 15), c.error) : null,
-    c.waiting ? h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Waiting for the dApp to ask for a connection…") : null,
+    c.waiting ? h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Waiting for the site to ask for a connection…") : null,
     h("div", { class: "actions" },
       go,
       h("button", { class: "big", onclick: () => { wc.connect = null; render(); } }, "Cancel")));
@@ -140,7 +163,7 @@ function proposalCard() {
       c.required ? h("span", { class: "tag" }, "required") : null, c.supported ? null : h("span", { class: "muted small" }, "not on your phone"));
   }) : [h("p", { class: "muted small row" }, h("i", { class: "mini-spin" }), "Checking what it asks for…")];
   const approveOk = !!plan && !plan.blocker && pr.selected.size > 0 && !!paired && !pr.busy;
-  return h("section", { class: `card modal wc-modal${danger ? " danger-card" : ""}`, role: "dialog", "aria-modal": "true" },
+  return h("section", { class: `card modal wc-modal${danger ? " danger-card" : ""}`, role: "dialog", "aria-modal": "true", tabindex: "-1", "aria-label": "Connection request" },
     h("p", { class: `kicker${danger ? " danger" : ""}` }, verify?.source === "browser" ? "Browser connection request" : "Connection request"),
     dappHeader(meta, verify),
     verifyWarning(meta, verify),
@@ -149,7 +172,7 @@ function proposalCard() {
     h("div", { class: "wc-chains" }, chainRows),
     plan ? h("div", { class: "wc-sub" }, "Asks to use") : null,
     plan ? h("div", { class: "wc-methods" }, plan.methods.map((m) => h("span", { class: `wc-method${plan.refused_methods.includes(m) ? " refused" : ""}`, title: plan.refused_methods.includes(m) ? "Always refused by this wallet" : "" }, m))) : null,
-    plan?.refused_methods.length ? h("p", { class: "muted small" }, "Struck-through methods are always refused, with an error to the dApp.") : null,
+    plan?.refused_methods.length ? h("p", { class: "muted small" }, "Struck-through methods are always refused, with an error to the site.") : null,
     h("dl", { class: "facts wc-facts" }, fact("Account", paired ? h("span", { class: "mono" }, short(paired)) : h("span", { class: "muted" }, "not paired")), fact("Signing", "Every request is shown here first, then reviewed and approved on your phone.")),
     plan?.blocker ? h("p", { class: "inline-error" }, icon("alert", 15), `Can't connect: ${plan.blocker}`) : null,
     pr.error ? h("p", { class: "inline-error" }, icon("alert", 15), pr.error) : null,
@@ -162,7 +185,7 @@ function requestsCard() {
   const list = shown();
   const head = list[0];
   const rest = list.slice(1);
-  return h("section", { class: "card modal wc-modal wc-req", role: "dialog", "aria-modal": "true" },
+  return h("section", { class: "card modal wc-modal wc-req", role: "dialog", "aria-modal": "true", tabindex: "-1", "aria-label": "Request from a site" },
     itemView(head),
     rest.length ? h("div", { class: "wc-queue" },
       h("div", { class: "wc-sub" }, `Waiting (${rest.length})`),
@@ -179,7 +202,7 @@ function methodLabel(m: string) {
 
 function itemView(it: Item): Node {
   const s = sessionOf(it.req.topic);
-  const meta = s?.meta ?? { name: "Unknown dApp", url: "", icons: [] };
+  const meta = s?.meta ?? { name: "Unknown site", url: "", icons: [] };
   const v = it.req.verify;
   const prep = it.prep;
   const chain = chainNum(it.req.chainId);
@@ -193,14 +216,15 @@ function itemView(it: Item): Node {
     case "review": {
       const err = it.stage.error;
       const approveLabel = prep?.kind === "switch_chain" ? `Switch to ${prep.name}` : "Send to phone";
+      const doubt = risky(v);
       return h("div", { class: "wc-item" }, head, reviewBody(it, chain),
         err ? h("p", { class: "inline-error" }, icon("alert", 15), err) : null,
         prep?.kind !== "switch_chain" ? h("p", { class: "note" }, "Your phone shows this again in full. Approve there only if it matches. Reject here and nothing reaches the phone.") : null,
         h("div", { class: "actions" },
           // a transaction's send button follows its simulation: blocked on a revert, "Send anyway" when it couldn't run
-          prep?.kind === "transaction" ? gatedSendButton(txSimulation(prep.quote, chain), approveLabel, () => approve(it))
-            : h("button", { class: "big primary", onclick: () => approve(it) }, prep?.kind === "switch_chain" ? null : icon("phone", 18), approveLabel),
-          h("button", { class: "big", onclick: () => reject(it) }, "Reject")), later);
+          prep?.kind === "transaction" ? gatedSendButton(txSimulation(prep.quote, chain), approveLabel, () => approve(it), doubt ? "big" : "big primary")
+            : h("button", { class: `big${doubt ? "" : " primary"}`, onclick: () => approve(it) }, prep?.kind === "switch_chain" ? null : icon("phone", 18), approveLabel),
+          h("button", { class: `big${doubt ? " primary" : ""}`, onclick: () => reject(it) }, "Reject")), later);
     }
     case "connecting":
       return h("div", { class: "wc-item" }, head, statusLine("Reaching your phone…", "Opening the USB connection. The request is not on the phone yet."),
@@ -212,18 +236,24 @@ function itemView(it: Item): Node {
         h("h3", null, "Review on your phone"),
         h("p", { class: "muted" }, prep?.kind === "transaction" ? "The request is on your phone. Unlock it, check the details, and approve or reject." : "Sent to your phone. Unlock it, read the review, and approve or reject."),
         clockLine(it.stage.t0, REVIEW_LIMIT_MS),
-        prep?.kind === "transaction" ? h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it))) : null);
+        prep?.kind === "transaction" ? h("div", { class: "actions" }, cancelButton(it.cancelling, () => cancel(it)))
+          // sign_message / sign_typed_data have no cancel on this Mac: the phone is the place to stop it
+          : h("p", { class: "muted small" }, `Your phone waits up to ${REVIEW_LIMIT_MS / 60_000}:00 for you. To cancel, tap Reject on the phone: a signature request can’t be cancelled from this Mac.`));
     case "verifying":
       return h("div", { class: "wc-item" }, head, statusLine("Checking the signature…", "Decoding what the phone returned and comparing every field with this request."));
     case "broadcasting":
-      return h("div", { class: "wc-item" }, head, statusLine(`Broadcasting to ${netName(chain)}…`, "Signed and verified. Sending it through your node."));
+      return h("div", { class: "wc-item" }, head, statusLine(`Sending to ${netName(chain)}…`, "Signed and verified. Sending it to the network through your node."));
     case "broadcast_failed": {
       const st = it.stage;
+      // an underpriced fee can't be fixed by sending the same signature again: quote it afresh
+      const lowFee = /underpriced|fee too low/i.test(st.message);
       return h("div", { class: "wc-item" }, head,
-        h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "Signed and verified, but the node didn't accept it. "), h("code", { class: "mono small" }, st.message))),
+        h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "Signed and verified, but the node didn't accept it. "),
+          lowFee ? "The fee is below what the network accepts right now. Get a fresh quote and approve it on your phone again. " : null, h("code", { class: "mono small" }, st.message))),
         h("div", { class: "actions" },
-          h("button", { class: "big primary", onclick: () => broadcast(it, st.hash, chain) }, icon("refresh", 18), "Retry broadcast"),
-          h("button", { class: "big", onclick: () => { finalFail(it, INTERNAL, `The node refused the transaction: ${st.message}`, "Not sent", "The signed transaction was discarded. Nothing was broadcast.", "neutral"); render(); } }, "Give up")));
+          lowFee ? h("button", { class: "big primary", onclick: () => { it.prep = null; void prepare(it); } }, icon("refresh", 18), "Get a fresh quote")
+            : h("button", { class: "big primary", onclick: () => broadcast(it, st.hash, chain) }, icon("refresh", 18), "Try sending again"),
+          h("button", { class: "big", onclick: () => { finalFail(it, INTERNAL, `The node refused the transaction: ${st.message}`, "Not sent", "The signed transaction was discarded. Nothing was sent to the network.", "neutral"); render(); } }, "Give up")));
     }
     case "done": {
       const st = it.stage;
@@ -264,9 +294,9 @@ function reviewBody(it: Item, chain: number): Node[] {
       return [
         h("div", { class: "hero-amount" }, h("span", { class: "wc-what" }, what), h("span", { class: "muted small" }, `on ${netName(chain)}`)),
         h("dl", { class: "facts" },
-          fact(c.kind === "transfer" ? "To" : "Contract", h("span", { class: "mono break" }, grouped(q.to))),
+          fact(c.kind === "transfer" ? "To" : "Contract", h("span", { class: "mono break" }, grouped(checksumAddress(q.to)))),
           c.kind !== "transfer" && q.value !== "0x0" ? fact("Also sends", `${fmtAmount(q.amount_eth, 8)} ${n.symbol}`) : null,
-          c.party ? fact(c.kind === "token_approve" ? "Spender" : "Recipient", h("span", { class: "mono break" }, grouped(c.party))) : null,
+          c.party ? fact(c.kind === "token_approve" ? "Spender" : "Recipient", h("span", { class: "mono break" }, grouped(checksumAddress(c.party)))) : null,
           c.amount ? fact("Amount (raw)", h("span", { class: `mono${c.amount === "unlimited" ? " wc-danger-text" : ""}` }, c.amount === "unlimited" ? "UNLIMITED" : c.amount)) : null,
           c.kind === "contract_call" ? fact("Data", h("span", { class: "mono" }, `${c.selector ?? ""} · ${c.data_bytes} bytes`)) : null,
           fact("Network fee", `at most ${fmtAmount(q.max_fee_eth, 8)} ${n.symbol}`),
@@ -286,45 +316,102 @@ function reviewBody(it: Item, chain: number): Node[] {
       ].filter(Boolean) as Node[];
     case "typed_data": {
       const s = prep.summary;
+      const p = permitOf(prep.typed_data, s.domain_chain ?? chain, s.verifying_contract);
       return [
         h("p", { class: "wc-what" }, `Sign ${s.primary_type || "typed data"}`),
         h("dl", { class: "facts" },
+          p?.spender ? fact("Spender", h("span", { class: "mono break" }, grouped(checksumAddress(p.spender)))) : null,
+          ...(p?.grants ?? []).map((g) => fact(p!.grants.length > 1 ? `Amount · ${g.label}` : "Amount", g.unlimited ? h("span", { class: "mono wc-danger-text" }, "UNLIMITED") : h("span", { class: "mono" }, g.text))),
+          p?.expires ? fact("Expires", p.expires) : null,
+          p?.deadline ? fact("Signature valid until", p.deadline) : null,
           fact("Domain", [s.domain_name, s.domain_version ? `v${s.domain_version}` : null].filter(Boolean).join(" ") || "—"),
           fact("Chain", s.domain_chain === null ? "not named" : netName(s.domain_chain)),
-          s.verifying_contract ? fact("Contract", h("span", { class: "mono break" }, grouped(s.verifying_contract))) : null,
+          s.verifying_contract ? fact("Contract", h("span", { class: "mono break" }, grouped(checksumAddress(s.verifying_contract)))) : null,
         ),
         notesList(prep.notes),
         h("details", { class: "detail" }, h("summary", null, "Full data"), h("pre", { class: "wc-msg" }, prettyJson(prep.typed_data))),
       ].filter(Boolean) as Node[];
     }
     case "switch_chain":
-      return [h("p", { class: "wc-what" }, `Switch to ${prep.name}`), h("p", { class: "muted" }, prep.in_session ? "The dApp is already connected on this network; it asks to make it the active one." : `Adds ${prep.name} to this connection with the same account. Your phone has a reviewed profile for it.`)];
+      return [h("p", { class: "wc-what" }, `Switch to ${prep.name}`), h("p", { class: "muted" }, prep.in_session ? "The site is already connected on this network; it asks to make it the active one." : `Adds ${prep.name} to this connection with the same account. Your phone has a reviewed profile for it.`)];
     default:
       return [];
   }
 }
 
-/** The dApp transaction simulated on the user's node for its chain (simulation.ts). */
+/** The site's transaction simulated on the user's node for its chain (simulation.ts). */
 function txSimulation(q: Quote, chain: number) { return simulationFor(wc.host.rpcFor(chain), q, render); }
 
 function prettyJson(t: string) { try { return JSON.stringify(JSON.parse(t), null, 2); } catch { return t; } }
 
+/** What a permit-style signature grants (EIP-2612 Permit, Permit2 PermitSingle / PermitBatch /
+ *  PermitTransferFrom, and the same field names elsewhere), read from the typed data for the
+ *  summary. Display only: the phone decodes and shows the data itself. */
+interface Grant { label: string; text: string; unlimited: boolean }
+function permitOf(typedData: string, chain: number, verifying: string | null): { spender: string | null; grants: Grant[]; expires: string | null; deadline: string | null } | null {
+  let m: Record<string, unknown>;
+  try { m = (JSON.parse(typedData) as { message?: Record<string, unknown> }).message ?? {}; } catch { return null; }
+  if (!m || typeof m !== "object") return null;
+  const str = (x: unknown) => (typeof x === "string" || typeof x === "number" || typeof x === "bigint" ? String(x) : null);
+  const big = (x: unknown) => { const t = str(x); try { return t !== null && /^(0x[0-9a-f]+|\d+)$/i.test(t) ? BigInt(t) : null; } catch { return null; } };
+  const grant = (token: string | null, amount: unknown): Grant | null => {
+    const v = big(amount); if (v === null) return null;
+    const info = token ? tokenAt(chain, token) : undefined;
+    const label = info?.symbol ?? (token ? `${token.slice(0, 6)}…${token.slice(-4)}` : "token");
+    if (v >= (1n << 160n) - 1n) return { label, text: "UNLIMITED", unlimited: true };
+    const text = info ? `${units(v, info.decimals)} ${info.symbol}` : `${v.toString()} (raw units${token ? ` of ${checksumAddress(token)}` : ""})`;
+    return { label, text, unlimited: false };
+  };
+  const when = (x: unknown) => {
+    const v = big(x); if (v === null) return null;
+    if (v === 0n) return "0 (no time given)";
+    if (v >= 32503680000n) return "never (no practical limit)"; // year 3000 or later
+    return new Date(Number(v) * 1000).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+  const grants: Grant[] = [];
+  let expires: string | null = null;
+  const details = m.details;
+  const permitted = m.permitted;
+  for (const d of Array.isArray(details) ? details : details && typeof details === "object" ? [details] : []) {
+    const r = d as Record<string, unknown>;
+    const g = grant(str(r.token), r.amount); if (g) grants.push(g);
+    expires ??= when(r.expiration);
+  }
+  for (const d of Array.isArray(permitted) ? permitted : permitted && typeof permitted === "object" ? [permitted] : []) {
+    const r = d as Record<string, unknown>;
+    const g = grant(str(r.token), r.amount); if (g) grants.push(g);
+  }
+  // EIP-2612: the token is the verifying contract
+  if (!grants.length && (m.value !== undefined || m.amount !== undefined)) { const g = grant(verifying, m.value ?? m.amount); if (g) grants.push(g); }
+  const spender = str(m.spender);
+  const deadline = when(m.sigDeadline ?? m.deadline ?? m.expiry);
+  if (!spender && !grants.length) return null;
+  return { spender, grants, expires: expires ?? (m.expiration !== undefined ? when(m.expiration) : null), deadline };
+}
+
+/** A base-unit integer as a decimal string with `decimals` places, trailing zeros trimmed. */
+function units(v: bigint, decimals: number): string {
+  const s = v.toString().padStart(decimals + 1, "0");
+  const whole = s.slice(0, s.length - decimals), frac = s.slice(s.length - decimals).replace(/0+$/, "");
+  return frac ? `${whole}.${frac}` : whole;
+}
+
 // ------------------------------------------------------------------ main view + settings hooks
 
-/** Subtle line under the account card: connected dApps and waiting requests. */
+/** Subtle line under the account card: connected sites and waiting requests. */
 export function wcHomeSlot(): HTMLElement {
   const waiting = shown().length;
   if (!wc.sessions.length && !waiting) {
     return h("div", { class: "wc-slot quiet" },
-      h("span", { class: "muted small row" }, linkIcon(15), "No dApps connected"),
-      h("button", { class: "chip-btn", onclick: openConnect }, "Connect a dApp"));
+      h("span", { class: "muted small row" }, linkIcon(15), "No sites connected"),
+      h("button", { class: "chip-btn", onclick: openConnect }, "Connect a site"));
   }
   const names = wc.sessions.map((s) => s.meta.name);
   return h("div", { class: `wc-slot${waiting ? " busy" : ""}` },
     h("span", { class: "wc-dot" }),
     h("span", { class: "grow small" }, names.length ? `Connected to ${names.slice(0, 2).join(", ")}${names.length > 2 ? ` +${names.length - 2}` : ""}` : "WalletConnect"),
     waiting ? h("button", { class: "chip-btn primary", onclick: () => { wc.requestsHidden = false; render(); } }, `${waiting} request${waiting > 1 ? "s" : ""} waiting`) : null,
-    h("button", { class: "chip-btn", onclick: openConnect, title: "Connect another dApp" }, "Connect"));
+    h("button", { class: "chip-btn", onclick: openConnect, title: "Connect another site" }, "Connect"));
 }
 
 export function wcSettingsSection(): HTMLElement {
@@ -345,7 +432,7 @@ export function wcSettingsSection(): HTMLElement {
     : wc.engine.s === "starting" ? ["android", "Starting…"] : wc.engine.s === "error" ? ["danger", "Didn't start"] : ["none", "Off"];
   return h("section", { class: "set" },
     h("h4", null, "WALLETCONNECT"),
-    h("div", { class: "set-row" }, h("span", null, "Status"), h("span", { class: `chip ${status[0]}` }, h("i", { class: "dot" }), status[1])),
+    h("div", { class: "set-row" }, h("span", null, "Status"), h("span", { class: `chip ${status[0]}` }, h("i", { class: "dot" }), h("span", { class: "chip-label" }, status[1]))),
     wc.engine.s === "error" ? h("p", { class: "inline-error" }, icon("alert", 15), wc.engine.message) : null,
     relayErr && !wc.backend?.online() ? h("p", { class: "inline-error" }, icon("alert", 15), relayErr) : null,
     h("label", { class: "field" }, h("span", { class: "field-label" }, "Project ID"), input, msg),
@@ -353,7 +440,7 @@ export function wcSettingsSection(): HTMLElement {
       h("button", { onclick: save }, "Save"),
       h("button", { class: "ghost", onclick: () => openExternal("https://cloud.reown.com") }, "Get a project ID", icon("external", 14))),
     !wc.projectId ? h("p", { class: "muted small" }, "WalletConnect is off until you add a project ID. Create a free project at cloud.reown.com and paste its ID here. It is stored only on this Mac; WalletConnect's relay sees it with each connection.") : null,
-    h("div", { class: "set-row" }, h("span", null, "Connected dApps"), h("button", { class: "chip-btn", onclick: openConnect }, "Connect a dApp")),
+    h("div", { class: "set-row" }, h("span", null, "Connected sites"), h("button", { class: "chip-btn", onclick: openConnect }, "Connect a site")),
     wcOnly().length ? h("ul", { class: "wc-sessions" }, wcOnly().map((s) => h("li", null,
       dappIcon(s.meta.icons[0], 28),
       h("div", { class: "grow" },
