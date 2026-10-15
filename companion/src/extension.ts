@@ -163,7 +163,7 @@ export function extSettingsSection(): HTMLElement {
   const sites = st?.sites ?? [];
   return h("section", { class: "set" },
     h("h4", null, "BROWSER EXTENSION"),
-    h("div", { class: "set-row" }, h("span", null, "Status"), h("span", { class: `chip ${chip[0]}` }, h("i", { class: "dot" }), chip[1])),
+    h("div", { class: "set-row" }, h("span", null, "Status"), h("span", { class: `chip ${chip[0]}` }, h("i", { class: "dot" }), h("span", { class: "chip-label" }, chip[1]))),
     st?.error ? h("p", { class: "inline-error" }, icon("alert", 15), st.error) : null,
     h("p", { class: "muted small" }, "Lets sites in Chrome, Brave or Edge use Phone Vault directly (it appears in their wallet list). Every connection and every signature shows here first and is approved on your phone."),
     h("div", { class: "set-row" }, h("span", null, "Browser connection"),

@@ -7,7 +7,8 @@ import { byId, type Network } from "./networks";
 import { h, icon, padlock, short, shortHash, grouped, fmtAmount, fmtUsd, fmtInt, copy, capitalize, fact, statusCard, topbar } from "./ui";
 import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { tokensOn, tokenAt, tokenBalanceOf, fmtExact, validTokenAmount, quoteAmount } from "./tokens";
-import { explainSendError, asSendError } from "./errors";
+import { explainSendError, asSendError, explainNode } from "./errors";
+import { checksumAddress } from "./checksum";
 import { simulationFor, resimulate, simPanel, gatedSendButton } from "./simulation";
 import { renderPhoneNotice, refreshCachedDevice } from "./identity";
 import { state, balances, price, rpcFor, net, activeLabel, type View } from "./state";
@@ -156,7 +157,7 @@ function flowBody(): Node {
       return form;
     }
     case "replacing":
-      return statusCard(flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for the same nonce.`, [], [], "connecting");
+      return statusCard(flow.kind === "cancel" ? "Preparing the cancel…" : "Preparing the speed-up…", `Checking that ${shortHash(flow.hash)} is still pending and quoting a higher fee for a transaction that replaces the original.`, [], [], "connecting");
     case "prep_failed":
       return h("section", { class: "card result" },
         h("div", { class: "result-ic neutral" }, icon("x", 28)),
@@ -188,7 +189,7 @@ function flowBody(): Node {
         simPanel(sim, () => { resimulate(rpcFor(n.id), quote, rerenderReview(quote)); host.render(); }),
         n.l2 ? h("p", { class: "note" }, `${n.name} also charges a small L1 data fee that neither this Mac nor the phone can bound in advance. It is usually a fraction of a cent.`) : null,
         quote.token ? h("p", { class: "note" }, `Your phone names the token from its own built-in list: it should read "Send ${fmtExact(quote.token.amount)} ${quote.token.symbol} to" this recipient. If it says "Unknown token contract", reject it there.`) : null,
-        h("p", { class: "note" }, "Your phone shows these same details. Approve there only if they match. Nothing reaches the network until you press Broadcast afterwards."),
+        h("p", { class: "note" }, "Your phone shows these same details. Approve there only if they match. Nothing reaches the network until you press Send to network afterwards."),
         h("div", { class: "actions" },
           gatedSendButton(sim, "Send to phone", () => sendToPhone(quote)),
           h("button", { class: "big", onclick: () => setFlow({ s: "form" }) }, "Edit"),
@@ -196,7 +197,7 @@ function flowBody(): Node {
       );
     }
     case "connecting":
-      if (flow.waiting) return statusCard("Waiting for your phone…", "Your phone is answering another request (a device check or a dApp request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
+      if (flow.waiting) return statusCard("Waiting for your phone…", "Your phone is answering another request (a genuine check or a site's request). Your transaction goes to it as soon as that one finishes. Nothing has been sent yet.",
         [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
       return statusCard("Reaching your phone…", "Opening the USB connection and switching the phone to vault mode. The request is not on the phone yet.",
         [clockLine(flow.t0, null)], [cancelButton(flow.cancelling, cancelSign)], "connecting");
@@ -234,9 +235,10 @@ function flowBody(): Node {
     case "signed": case "broadcasting": case "broadcast_failed": {
       const signed = flow.signed; const quote = flow.quote;
       const sending = flow.s === "broadcasting";
+      const bx = flow.s === "broadcast_failed" ? { ...explainBroadcast(flow.message), message: flow.message } : null;
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        quote.replaces ? h("p", { class: "kicker" }, `Replacement for tx ${shortHash(quote.replaces.hash)}`) : null,
+        quote.replaces ? replacesKicker(quote.replaces.hash) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" },
           h("li", null, icon("check", 14), quote.token ? "Token contract, amount, recipient, fee and nonce match what you entered (decoded from the signed bytes)" : "Amount, recipient, fee and nonce match what you entered"),
@@ -248,11 +250,14 @@ function flowBody(): Node {
           fact("To", h("span", { class: "mono" }, short(checksumOf(quote.token ? quote.token.recipient : quote.to)))),
           fact("Hash", h("button", { class: "link mono", onclick: () => copy(signed.hash, "Hash") }, shortHash(signed.hash))),
         ),
-        flow.s === "broadcast_failed" ? h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "The node didn't accept it. "), explainBroadcast(flow.message), h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, flow.message)))) : null,
-        h("p", { class: "note" }, `Not on the network yet. Broadcast sends it to ${n.name} through ${hostOf(rpcFor(n.id))}.`),
+        bx ? h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "The node didn't accept it. "), bx.text, h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, bx.message)))) : null,
+        h("p", { class: "note" }, bx?.requote ? "Nothing was sent to the network. This signature is for the old fee, so it can't be used." : `Not on the network yet. Send to network hands it to ${n.name} through ${hostOf(rpcFor(n.id))}.`),
         h("div", { class: "actions" },
-          h("button", { class: "big primary", disabled: sending, onclick: () => doBroadcast(quote, signed) }, sending ? [h("i", { class: "mini-spin" }), "Broadcasting…"] : [icon("up", 18), flow.s === "broadcast_failed" ? "Retry broadcast" : `Broadcast to ${n.name}`]),
-          h("button", { class: "big", disabled: sending, onclick: () => { activeTicket = null; setFlow({ s: "form" }); } }, "Discard"),
+          // when the advice is a fresh quote, that is the primary action (sending this one again fails the same way)
+          bx?.requote
+            ? h("button", { class: "big primary", onclick: () => requote(quote) }, icon("refresh", 18), "Get a fresh quote")
+            : h("button", { class: "big primary", disabled: sending, onclick: () => doBroadcast(quote, signed) }, sending ? [h("i", { class: "mini-spin" }), "Sending…"] : [icon("up", 18), bx ? "Try sending again" : `Send to ${n.name}`]),
+          h("button", { class: "big", disabled: sending, onclick: () => { activeTicket = null; if (quote.replaces) host.go("home"); else setFlow({ s: "form" }); } }, "Discard"),
         ),
       );
     }
@@ -285,7 +290,7 @@ function flowBody(): Node {
       return h("section", { class: `card result ${flow.ok ? "" : "danger-card"}` },
         h("div", { class: `result-ic ${flow.ok ? "ok big" : "bad"}` }, icon(flow.ok ? "check" : "alert", 32)),
         h("h3", null, flow.ok ? "Confirmed" : "Included, but it failed"),
-        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${fmtInt(flow.block)}.` : `The network ran it in block ${fmtInt(flow.block)} and it reverted. The amount was not sent, but the fee was paid.`),
+        h("p", { class: "muted" }, flow.ok ? `${quoteAmount(flow.quote, `${fmtAmount(flow.quote.amount_eth, 8)} ${n.symbol}`)} sent on ${n.name}, in block ${fmtInt(flow.block)}.` : `The network ran it in block ${fmtInt(flow.block)} and it failed. The amount was not sent, but the fee was paid.`),
         hashLinks(flow.hash),
         h("div", { class: "actions" },
           h("button", { class: "big primary", onclick: () => host.go("home") }, "Done"),
@@ -336,11 +341,11 @@ function replacementReview(quote: Quote) {
   const usd = (eth: string) => fmtUsd(eth, price(n));
   const sim = reviewSimulation(quote);
   return h("section", { class: "card replace-card" },
-    h("p", { class: "kicker" }, `Replacement for tx ${shortHash(r.hash)}`),
+    replacesKicker(r.hash),
     h("h3", null, cancel ? "Cancel this transaction" : "Speed up this transaction"),
     h("p", { class: "muted" }, cancel
-      ? "This sends 0 to your own address with the same nonce and a higher fee. If it is included first, the original can never be included. You pay only the network fee."
-      : "This sends the same transaction again with the same nonce and a higher fee, so the network picks it up sooner. Only one of the two can ever be included."),
+      ? "This sends 0 to your own address with a higher fee, and it replaces the original transaction: if it is included first, the original can never be included. You pay only the network fee."
+      : "This sends the same transaction again with a higher fee, and it replaces the original transaction, so the network picks it up sooner. Only one of the two can ever be included."),
     h("dl", { class: "facts" },
       fact("Replaces", h("button", { class: "link mono", title: r.hash, onclick: () => openExternal(`${n.explorer}/tx/${r.hash}`) }, shortHash(r.hash), icon("external", 13))),
       cancel ? fact("Sends", h("span", null, `0 ${n.symbol} to yourself `, h("span", { class: "mono muted" }, short(checksumOf(quote.to)))))
@@ -365,10 +370,14 @@ function replacementReview(quote: Quote) {
 const rerenderReview = (quote: Quote) => () => { if (state.view === "send" && flow.s === "review" && flow.quote === quote) host.render(); };
 function reviewSimulation(quote: Quote) { return simulationFor(rpcFor(flowNet.id), quote, rerenderReview(quote)); }
 
-let toChecksum: string | null = null;
+/** An address from a quote (lower case) in EIP-55 mixed case, for display. */
 function checksumOf(lower: string) {
   if (state.status?.paired_checksum && state.status.paired_checksum.toLowerCase() === lower.toLowerCase()) return state.status.paired_checksum;
-  return toChecksum && toChecksum.toLowerCase() === lower ? toChecksum : lower;
+  return checksumAddress(lower);
+}
+/** "Replaces 0x3c7e…" above a replacement: the kicker style is upper case, the hash must not be. */
+function replacesKicker(hash: string) {
+  return h("p", { class: "kicker" }, "Replacement for ", h("span", { class: "kicker-hash mono" }, shortHash(hash)));
 }
 function hostOf(url: string) { try { return new URL(url).host; } catch { return url; } }
 function hashLinks(hash: string) {
@@ -389,8 +398,8 @@ async function checkAddr() {
     const c = await api.checkAddress(v);
     if (seq !== addrSeq) return;
     addrOk = c.ok;
-    toChecksum = c.checksum;
-    if (!c.ok) { r.toMsg.textContent = v.length < 42 && /^0x[0-9a-fA-F]*$/.test(v) ? "" : c.error ?? "Not a valid address"; r.toMsg.className = "field-msg bad"; }
+    if (!c.ok && v.length < 42 && /^(0x?)?[0-9a-fA-F]*$/.test(v)) { r.toMsg.textContent = `Address incomplete: ${v.length} of 42 characters`; r.toMsg.className = "field-msg"; }
+    else if (!c.ok) { r.toMsg.textContent = c.error ?? "Not a valid address"; r.toMsg.className = "field-msg bad"; }
     else if (v.toLowerCase() === state.status?.paired?.toLowerCase()) { r.toMsg.textContent = "This is your own address."; r.toMsg.className = "field-msg warn"; }
     else if (v === v.toLowerCase() || v.slice(2) === v.slice(2).toUpperCase()) { r.toMsg.textContent = "Valid, but without a checksum: compare it carefully with the source."; r.toMsg.className = "field-msg warn"; }
     else { r.toMsg.replaceChildren(icon("check", 13), " Checksum OK"); r.toMsg.className = "field-msg ok"; }
@@ -401,9 +410,32 @@ async function checkAddr() {
 export function updateFormBalance() {
   const r = formRefs; if (!r) return;
   const tok = draftToken();
-  if (tok) { const tb = tokenBalanceOf(flowNet.id, tok.address); r.avail.textContent = tb?.amount ? `Available ${fmtExact(tb.amount)} ${tok.symbol}` : ""; return; }
+  if (tok) { const tb = tokenBalanceOf(flowNet.id, tok.address); r.avail.textContent = tb?.amount ? `Available ${fmtExact(tb.amount)} ${tok.symbol}` : ""; }
+  else { const b = balances.get(flowNet.id); r.avail.textContent = b ? `Available ${fmtAmount(b.eth, 8)} ${flowNet.symbol}` : ""; }
+  updateFormExtras();
+}
+
+/** A plain decimal amount in base units (wei, token units), or null. Display checks only. */
+function toUnits(amount: string, decimals: number): bigint | null {
+  const m = /^(\d*)\.?(\d*)$/.exec(amount.trim());
+  if (!m || (!m[1] && !m[2]) || m[2].length > decimals) return null;
+  return BigInt(m[1] || "0") * 10n ** BigInt(decimals) + BigInt((m[2] + "0".repeat(decimals)).slice(0, decimals) || "0");
+}
+
+/** Why the amount can't be sent from the loaded balance (checked as you type), or null. */
+function overBalance(amt: string): string | null {
+  const tok = draftToken();
+  if (tok) {
+    const tb = tokenBalanceOf(flowNet.id, tok.address);
+    const want = toUnits(amt, tok.decimals);
+    if (!tb?.raw || !tb.amount || want === null) return null;
+    return want > BigInt(tb.raw) ? `More than you hold: ${fmtExact(tb.amount)} ${tok.symbol} available` : null;
+  }
   const b = balances.get(flowNet.id);
-  r.avail.textContent = b ? `Available ${fmtAmount(b.eth, 8)} ${flowNet.symbol}` : "";
+  const want = toUnits(amt, 18);
+  if (!b || want === null) return null;
+  // the fee is checked by the quote (it can change before then); Max leaves room for it
+  return want > b.wei ? `More than your balance: ${fmtAmount(b.eth, 8)} ${flowNet.symbol} available` : null;
 }
 
 function updateFormExtras() {
@@ -412,10 +444,14 @@ function updateFormExtras() {
   const amt = draft.amount.trim();
   const tok = draftToken();
   const tv = tok ? validTokenAmount(amt, tok.decimals) : null;
-  const amtValid = tv ? tv.ok : /^\d*\.?\d{0,18}$/.test(amt) && Number(amt) > 0;
-  if (tv) r.amtFiat.textContent = tv.msg;
+  const amtFormatOk = tv ? tv.ok : /^\d*\.?\d{0,18}$/.test(amt) && Number(amt) > 0;
+  const over = amtFormatOk ? overBalance(amt) : null;
+  const amtValid = amtFormatOk && !over;
+  if (over) r.amtFiat.textContent = over;
+  else if (tv) r.amtFiat.textContent = tv.msg;
   else r.amtFiat.textContent = amtValid ? (fmtUsd(amt, price(n)) ? `≈ ${fmtUsd(amt, price(n))}` : "") : amt && !/^\d*\.?\d*$/.test(amt) ? "Use digits and one dot, like 0.05" : amt && /\.\d{19,}/.test(amt) ? "At most 18 decimals" : "";
-  r.amtFiat.className = amt && !amtValid && (tv ? !!tv.msg : Number(amt) !== 0) ? "field-msg bad" : "field-msg";
+  r.amtFiat.className = over || (amt && !amtValid && (tv ? !!tv.msg : Number(amt) !== 0)) ? "field-msg bad" : "field-msg";
+  r.go.title = over ?? "";
   if (fee) {
     const tu = fmtUsd(fee.typical_fee_eth, price(n)); const mu = fmtUsd(fee.max_fee_eth, price(n));
     r.feeLine.replaceChildren(
@@ -443,7 +479,7 @@ async function getQuote() {
     if (parseInt(quote.chain_id, 16) !== n.id) throw `the node answered for chain ${parseInt(quote.chain_id, 16)}, not ${n.name}`;
     setFlow({ s: "review", quote });
   } catch (e) {
-    formError = capitalize(errText(e));
+    formError = explainNode(errText(e));
     if (flow.s === "quoting") setFlow({ s: "form" });
   }
 }
@@ -493,12 +529,26 @@ onProgress((ticket, stage) => {
   else if (stage === "verifying" && flow.s === "on_phone") setFlow({ s: "verifying", quote: flow.quote, ticket });
 });
 
-function explainBroadcast(m: string): string {
-  if (/insufficient funds/i.test(m)) return "The balance is too low for the amount plus fee. ";
-  if (/nonce too low|already known/i.test(m)) return "It, or another transaction with the same nonce, is already on the network. Check Activity or the explorer. ";
-  if (/underpriced|fee too low/i.test(m)) return "The fee is below what the network accepts right now. Discard and send again for a fresh quote. ";
-  if (/unreachable|timed out|non-JSON/i.test(m)) return "The node couldn't be reached. Retry, or pick another node in Settings. ";
-  return "";
+/** Why the node refused a signed transaction, and whether only a fresh quote (new fee) can help. */
+function explainBroadcast(m: string): { text: string; requote: boolean } {
+  if (/insufficient funds/i.test(m)) return { text: "The balance is too low for the amount plus fee. ", requote: false };
+  if (/nonce too low|already known/i.test(m)) return { text: "It, or a transaction that replaces it, is already on the network. Check Activity or the explorer. ", requote: false };
+  if (/underpriced|fee too low/i.test(m)) return { text: "The fee is below what the network accepts right now. Get a fresh quote and approve it on your phone again. ", requote: true };
+  if (/unreachable|timed out|non-JSON/i.test(m)) return { text: "Your node didn't answer. Try sending again, or choose another node in Settings → Network. ", requote: false };
+  return { text: "", requote: false };
+}
+
+/** Throw away this signature and quote the same send (or speed-up / cancel) again with today's fees. */
+function requote(quote: Quote) {
+  activeTicket = null;
+  const r = quote.replaces;
+  if (r) {
+    const e = state.history.find((x) => x.hash?.toLowerCase() === r.hash.toLowerCase());
+    if (e) { void startReplacement(e, r.kind); return; }
+    host.go("home"); return;
+  }
+  setFlow({ s: "form" });
+  void getQuote();
 }
 
 async function doBroadcast(quote: Quote, signed: Signed) {

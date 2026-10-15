@@ -2,7 +2,7 @@
 // Phone Vault Companion UI. One main view (account, balances, Send, Receive, activity), a send
 // stepper driven only by real command results and `send-progress` events, and a settings drawer.
 // This file is the composition root: the shell, home, receive, pairing and boot live here; the send
-// flow (send.ts), phone identity + device check (identity.ts) and the settings drawer (settings.ts)
+// flow (send.ts), phone identity + genuine check (identity.ts) and the settings drawer (settings.ts)
 // get what they need from it through their *Host interfaces, and share state through state.ts.
 
 import { api, onEvent, errText, isTauri } from "./api";
@@ -17,9 +17,9 @@ import { mountWalletConnect, wcHomeSlot } from "./wc-view";
 import { activitySection, type ActivityHost } from "./activity";
 import { nftSection, resetNfts, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
-import { explainPlain } from "./errors";
+import { explainPlain, explainNode } from "./errors";
 import { setSimulationAccount } from "./simulation";
-import { btcInit, btcMain, btcGoHome, btcBusy, activeBtc, btcBalanceSats, refreshBtc, reloadAccounts, BTC_NETS, btcNet, fmtBtc, type BtcNet } from "./bitcoin";
+import { btcInit, btcMain, btcGoHome, btcOnReceive, btcOpenReceive, btcBusy, activeBtc, btcBalanceSats, refreshBtc, reloadAccounts, BTC_NETS, btcNet, fmtBtc, type BtcNet } from "./bitcoin";
 import { state, prefs, savePrefs, rpcFor, net, applyTheme, pushWatchConfig, balances, balErrors, prices, price, activeLabel, pairedAccounts, type View, type HomeTab } from "./state";
 import { initIdentity, identifyPhone, classifyPhone, renderPhoneNotice, readAddress, openDeviceSettings } from "./identity";
 import { initSend, sendView, startSend, startSendTo, startReplacement, updateFormBalance, sendStage, sendNet } from "./send";
@@ -142,8 +142,8 @@ function renderHeader() {
     : state.identity.s === "different" || state.identity.s === "other" ? () => { if (state.identity.s === "different" || state.identity.s === "other") state.identity.dismissed = false; renderPhoneNotice(); } : undefined;
   header.replaceChildren(...[
     h("button", { class: "brand", onclick: () => go("home"), title: "Home" }, padlock(2), h("span", null, "PHONE VAULT")),
-    retry ? h("button", { class: `chip ${cls}`, title, onclick: retry }, h("i", { class: "dot" }), label)
-      : h("span", { class: `chip ${cls}`, title }, h("i", { class: "dot" }), label),
+    retry ? h("button", { class: `chip ${cls}`, title, onclick: retry }, h("i", { class: "dot" }), h("span", { class: "chip-label" }, label))
+      : h("span", { class: `chip ${cls}`, title }, h("i", { class: "dot" }), h("span", { class: "chip-label" }, label)),
     phone !== "none" ? attBadge(state.device, openDeviceSettings) : null,
     h("button", { class: "icon-btn", onclick: () => openDrawer(), "aria-label": "Settings", title: "Settings" }, icon("gear", 20)),
   ].filter((x): x is HTMLElement => !!x));
@@ -191,8 +191,16 @@ function networkSelect(onChange?: () => void, cls = "net-chip") {
     NETWORKS.map((n) => h("option", { value: n.id, selected: !prefs.btc && n.id === prefs.chainId }, n.testnet ? `${n.name} (testnet)` : n.name)),
     btcNets().map((b) => h("option", { value: `btc:${b.id}`, selected: prefs.btc === b.id }, b.test ? `${b.name} (test)` : b.name)));
   sel.addEventListener("change", () => {
-    if (sel.value.startsWith("btc:")) { selectBtc(sel.value.slice(4) as BtcNet); onChange ? onChange() : render(); return; }
-    prefs.btc = null; prefs.chainId = Number(sel.value); savePrefs(); refreshBalance(net()); onChange ? onChange() : render();
+    // On a Receive screen, another network opens that network's Receive screen (Bitcoin's own, or the EVM one).
+    const receiving = !onChange && (state.view === "receive" || (state.view === "home" && !!prefs.btc && btcOnReceive()));
+    if (sel.value.startsWith("btc:")) {
+      selectBtc(sel.value.slice(4) as BtcNet);
+      if (receiving) { state.view = "home"; btcOpenReceive(); }
+    } else {
+      prefs.btc = null; prefs.chainId = Number(sel.value); savePrefs(); refreshBalance(net());
+      if (receiving) { btcGoHome(); state.view = "receive"; }
+    }
+    onChange ? onChange() : render();
   });
   if (prefs.btc) return h("label", { class: cls }, h("i", { class: `net-dot nbtc-${prefs.btc}` }), h("span", null, btcNet(prefs.btc).name), icon("chevron", 14), sel);
   return h("label", { class: cls }, h("i", { class: `net-dot n${net().id}` }), h("span", null, net().name), icon("chevron", 14), sel);
@@ -206,7 +214,7 @@ function homeView() {
   const usd = b ? fmtUsd(b.eth, price(n)) : null;
   return h("div", { class: "stack fade" },
     state.device.report && state.device.report.verdict !== "genuine" ? h("button", { class: `att-banner ${state.device.report.verdict === "fail" ? "att-fail" : "att-dev"}`, onclick: openDeviceSettings },
-      icon(state.device.report.verdict === "fail" ? "alert" : "shield", 16), h("span", { class: "grow" }, state.device.report.verdict === "fail" ? "This phone failed the device check. Sending is blocked." : state.device.report.headline), h("span", { class: "small" }, "Details")) : null,
+      icon(state.device.report.verdict === "fail" ? "alert" : "shield", 16), h("span", { class: "grow" }, state.device.report.verdict === "fail" ? "This phone failed the genuine check. Sending is blocked." : state.device.report.headline), h("span", { class: "small" }, "Details")) : null,
     h("section", { class: "card account" },
       h("div", { class: "row between" },
         accountSelect(),
@@ -217,7 +225,7 @@ function homeView() {
         b ? h("span", { class: "amount" }, fmtAmount(b.eth), h("span", { class: "unit" }, n.symbol)) : err ? null : h("span", { class: "amount skeleton" }, "0.0000"),
         usd ? h("span", { class: "fiat" }, usd) : null,
       ),
-      err ? h("p", { class: "inline-error" }, icon("alert", 15), `Balance unavailable: ${err}`) : null,
+      err ? h("p", { class: "inline-error" }, icon("alert", 15), `Balance unavailable. ${explainNode(err)}`) : null,
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: () => startSend() }, icon("up", 20), "Send"),
         h("button", { class: "big", onclick: () => go("receive") }, icon("down", 20), "Receive"),
@@ -409,7 +417,7 @@ function pairView() {
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
           try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null }); state.pair = { s: "idle" }; await refreshStatus(); state.phoneAddress = address; state.identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); go("home"); } catch (e) { state.pair = { s: "idle", error: errText(e) }; render(); }
-        }, disabled: !attOk, title: attOk ? "" : state.device.checking ? "Waiting for the device check" : "The device check must pass first" }, icon("check", 18), state.device.checking ? "Checking phone…" : "It matches"),
+        }, disabled: !attOk, title: attOk ? "" : state.device.checking ? "Waiting for the genuine check" : "The genuine check must pass first" }, icon("check", 18), state.device.checking ? "Checking phone…" : "It matches"),
         h("button", { class: "big", onclick: () => { state.pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),
     ), verdictCard(state.device, () => identifyPhone()));
@@ -473,7 +481,7 @@ render();
 mountWalletConnect({
   paired: () => state.status?.paired_checksum ?? null,
   rpcFor,
-  phoneBlocked: () => state.device.report?.verdict === "fail" ? "This phone failed the device check (Settings → Device). Signing is blocked."
+  phoneBlocked: () => state.device.report?.verdict === "fail" ? "This phone failed the genuine check (Settings → Device). Signing is blocked."
     : state.identity.s === "different" ? "The phone on USB is using an account this Mac hasn't paired. Pair it first (Settings → Phone)."
     : state.identity.s === "other" ? `The phone is using ${state.identity.label}, but this Mac shows ${activeLabel()}. Switch accounts on the phone or in Settings → Phone.`
     : state.identifying ? "Checking which wallet the phone holds. Try again in a moment."
@@ -493,7 +501,7 @@ mountWalletConnect({
     renderNow: () => { if (state.view === "home") render(); },
     topbar: (title, back) => topbar(title, back),
     networkSelect: () => networkSelect(),
-    phoneBlocked: () => state.device.report?.verdict === "fail" ? "This phone failed the device check (Settings → Device). Signing is blocked." : null,
+    phoneBlocked: () => state.device.report?.verdict === "fail" ? "This phone failed the genuine check (Settings → Device). Signing is blocked." : null,
     phoneBusy: () => (state.view === "send" && ["connecting", "on_phone", "verifying"].includes(sendStage())) || wcPhoneBusy() || state.identifying,
   });
   render();

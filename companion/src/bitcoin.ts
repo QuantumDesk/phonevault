@@ -57,6 +57,10 @@ export async function refreshBtc(id: string, full = false) {
 /** Back to the Bitcoin home screen (the header's brand button). */
 export function btcGoHome() { if (!btcSendBusy()) { btcState.sub = "home"; } }
 export const btcBusy = () => btcSendBusy();
+/** The Bitcoin Receive screen is the one shown (for the network picker on it). */
+export const btcOnReceive = () => btcState.sub === "receive";
+/** Open the Bitcoin Receive screen (picked from another network's Receive screen). */
+export function btcOpenReceive() { if (!btcSendBusy()) { recv = { s: "idle" }; btcState.sub = "receive"; } }
 
 /** Total of the shown mainnet account (for the Balances list and the USD total). */
 export function btcBalanceSats(n: BtcNet): number | null {
@@ -159,13 +163,13 @@ function historySection(a: BtcAccount, w: BtcWallet | null) {
 
 // ------------------------------------------------------------------ receive + verify on phone
 
-type Recv = { s: "idle" } | { s: "asking"; index: number } | { s: "match"; index: number } | { s: "mismatch"; index: number; shown: string } | { s: "error"; message: string };
+type Recv = { s: "idle" } | { s: "asking"; index: number; after?: string } | { s: "match"; index: number } | { s: "mismatch"; index: number; shown: string } | { s: "error"; message: string };
 let recv: Recv = { s: "idle" };
 
 async function verifyOnPhone(a: BtcAccount, index: number) {
   const blocked = btcState.host.phoneBlocked();
   if (blocked) { recv = { s: "error", message: blocked }; btcState.host.renderNow(); return; }
-  recv = { s: "asking", index }; btcState.host.renderNow();
+  recv = { s: "asking", index, after: recv.s === "mismatch" && recv.index === index ? recv.shown : undefined }; btcState.host.renderNow();
   try {
     const r = await btcApi.showAddress(a.id, 0, index);
     recv = r.matches ? { s: "match", index } : { s: "mismatch", index, shown: r.address };
@@ -181,11 +185,31 @@ function receiveView(a: BtcAccount) {
   const addr = w.receive_address;
   const idx = w.receive_index;
   const verified = w.receive_verified || (recv.s === "match" && recv.index === idx);
+  // The phone showed another address: nothing here may be shared (no QR, no Copy), only what to do next.
+  const mismatch = recv.s === "mismatch" && recv.index === idx ? recv.shown : recv.s === "asking" && recv.index === idx ? recv.after : undefined;
+  if (mismatch) {
+    const shown = mismatch;
+    const asking = recv.s === "asking";
+    return h("div", { class: "stack fade" },
+      btcState.host.topbar("Receive bitcoin", () => go("home")),
+      h("section", { class: "card danger-card" },
+        h("div", { class: "row between" }, h("p", { class: "kicker danger" }, "Don't use this address"), btcState.host.networkSelect()),
+        h("h3", null, "Your phone shows a different address"),
+        h("p", null, "This Mac and your phone disagree about this account's next receive address, so the address this Mac computed is hidden. Don't share or pay to either one until they match."),
+        h("dl", { class: "facts" }, fact("Phone showed", h("span", { class: "mono break" }, groupedBtc(shown)))),
+        h("ol", { class: "steps" },
+          h("li", null, "Check the phone is on the same Bitcoin account (and passphrase wallet, if you use one) as this Mac shows."),
+          h("li", null, "Use another USB cable and port, then verify again."),
+          h("li", null, "Still different? Something between this Mac and the phone is changing data. Stop and don't receive to this account here; use the address on the phone's screen only once you know why.")),
+        h("div", { class: "actions" },
+          h("button", { class: "big primary", disabled: asking, onclick: () => verifyOnPhone(a, idx) }, asking ? h("i", { class: "mini-spin" }) : icon("phone", 18), asking ? "Look at your phone…" : "Verify on phone again"),
+          h("button", { class: "big", onclick: () => { recv = { s: "idle" }; go("home"); } }, "Close")),
+      ),
+    );
+  }
   const qr = h("div", { class: "qr", html: qrSvg(`bitcoin:${addr.toUpperCase()}`, { dark: "#060608", light: "#ffffff", label: `QR code for ${addr}` }) });
   const verifyBox =
     recv.s === "asking" && recv.index === idx ? h("div", { class: "callout" }, h("strong", null, "Look at your phone"), h("span", null, "It shows this address. Compare every group of four characters with the one above."))
-    : recv.s === "mismatch" && recv.index === idx ? h("div", { class: "callout danger-card" }, h("strong", null, "The phone shows a different address. Don't use this one."),
-        h("span", { class: "mono" }, groupedBtc(recv.shown)), h("span", null, "Something between this Mac and the phone changed data, or the account doesn't match. Use the address on the phone's screen only after you understand why."))
     : verified ? h("div", { class: "callout accent" }, h("strong", { class: "ok-line" }, icon("check", 15), "Your phone showed this same address"), h("span", null, `Derived on the phone from your key: m/${a.path.slice(2)}/0/${idx}. Safe to share.`))
     : recv.s === "error" ? h("p", { class: "inline-error" }, icon("alert", 15), recv.message) : null;
   return h("div", { class: "stack fade" },

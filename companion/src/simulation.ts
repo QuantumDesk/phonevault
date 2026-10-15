@@ -60,7 +60,7 @@ function gate(st: SimState): Gate {
 export function gatedSendButton(st: SimState, label: string, onSend: () => void, extraClass = "big primary"): HTMLButtonElement {
   const g = gate(st);
   if (g.busy) return h("button", { class: extraClass, disabled: true }, h("i", { class: "mini-spin" }), "Simulating…");
-  if (!g.allow) return h("button", { class: extraClass, disabled: true, title: "This transaction would revert; it is not sent to the phone" }, icon("x", 16), "Blocked: it would revert");
+  if (!g.allow) return h("button", { class: extraClass, disabled: true, title: "This transaction would fail; it is not sent to the phone" }, icon("x", 16), "Blocked: this transaction would fail");
   return h("button", { class: g.anyway ? "big warn-btn" : extraClass, onclick: onSend }, icon("phone", 18), g.anyway ? "Send anyway" : label);
 }
 
@@ -92,14 +92,14 @@ export function simPanel(st: SimState, retry: () => void): HTMLElement {
         h("p", { class: "muted small" }, `Simulated with ${where}. These are your node's numbers; ${r.for_phone ? "your phone shows them as this Mac's claim, unverified, and checks them against its own decoding." : "your phone reviews the transaction on its own."}`));
     case "reverts":
       return h("div", { class: "sim-box bad", role: "alert" },
-        h("p", { class: "sim-head" }, icon("alert", 15), "Reverts: ", h("span", { class: "sim-reason" }, r.reason ?? "no reason given")),
+        h("p", { class: "sim-head" }, icon("alert", 15), "This transaction would fail: ", h("span", { class: "sim-reason" }, r.reason ?? "no reason given")),
         h("p", { class: "small" }, "This transaction would fail on-chain, and a failed transaction still costs its fee. It was not sent to your phone, and it can't be sent as it is."),
         h("p", { class: "muted small" }, `Simulated with ${where}.`),
         h("button", { class: "link small", onclick: retry }, icon("refresh", 13), "Simulate again"));
     case "no_changes":
       return h("div", { class: "sim-box" },
         h("p", { class: "sim-head" }, icon("check", 15), "Balance changes unavailable on this node"),
-        h("p", { class: "small" }, `It does not revert (eth_call${r.gas_used ? `, about ${fmtInt(Number(r.gas_used))} gas` : ""}).`),
+        h("p", { class: "small" }, `It would not fail (eth_call${r.gas_used ? `, about ${fmtInt(Number(r.gas_used))} gas` : ""}).`),
         r.note ? h("p", { class: "muted small" }, r.note) : null,
         h("p", { class: "muted small" }, "A node that supports eth_simulateV1 shows the balance changes too (Settings → Nodes)."));
     default:

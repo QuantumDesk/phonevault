@@ -111,11 +111,16 @@ function flowBody(a: BtcAccount): Node {
       const goBtn = h("button", { class: "big primary wide", type: "submit", disabled: true }, quoting ? [h("i", { class: "mini-spin" }), "Building the transaction…"] : "Review");
       const sync = () => {
         const btc = amountBtc();
+        // the fee is checked by the quote; the amount alone can't be more than the balance
+        const held = w ? w.confirmed_sats + w.unconfirmed_sats : null;
+        const over = !draft.max && !!btc && held !== null && btcToSats(btc)! > held;
         if (draft.max) amtMsg.textContent = "Everything this account holds, minus the fee. No change output.";
+        else if (over) amtMsg.textContent = `More than this account holds: ${fmtBtc(held!)} ${n.unit} available`;
         else if (btc) { const s = btcToSats(btc)!; amtMsg.textContent = [draft.unit !== "BTC" ? `${btc} ${n.unit}` : null, draft.unit !== "sats" ? fmtSats(s) : null, draft.unit !== "USD" ? $(s) : null].filter(Boolean).join(" · "); }
         else amtMsg.textContent = draft.amount ? (draft.unit === "USD" && !btcState.host.price() ? "No USD price right now" : "Not a valid amount") : "";
-        amtMsg.className = `field-msg${draft.amount && !btc && !draft.max ? " bad" : ""}`;
-        goBtn.disabled = quoting || !(addr?.ok && (draft.max || btc) && rateOf());
+        amtMsg.className = `field-msg${(draft.amount && !btc && !draft.max) || over ? " bad" : ""}`;
+        goBtn.disabled = quoting || over || !(addr?.ok && (draft.max || btc) && rateOf());
+        goBtn.title = over ? amtMsg.textContent ?? "" : "";
       };
       const check = async () => {
         const v = draft.to.trim(); addr = null;
@@ -125,7 +130,8 @@ function flowBody(a: BtcAccount): Node {
           const r = await btcApi.checkAddress(a.id, v);
           if (seq !== addrSeq) return;
           addr = r;
-          if (!r.ok) { toMsg.textContent = v.length < 14 ? "" : r.error ?? "Not a valid address"; toMsg.className = "field-msg bad"; }
+          if (!r.ok && incomplete(v)) { toMsg.textContent = "Address incomplete: keep typing or paste the whole address"; toMsg.className = "field-msg"; }
+          else if (!r.ok) { toMsg.textContent = r.error ?? "Not a valid address"; toMsg.className = "field-msg bad"; }
           else if (r.own) { toMsg.textContent = "This is one of your own addresses (this account). The coins would stay with you, minus the fee."; toMsg.className = "field-msg warn"; }
           else { toMsg.replaceChildren(icon("check", 13), ` Valid ${n.name} address${r.kind ? ` · ${r.kind}` : ""} · checksum OK`); toMsg.className = "field-msg ok"; }
         } catch { addr = null; }
@@ -199,9 +205,10 @@ function flowBody(a: BtcAccount): Node {
     case "signed": case "broadcasting": case "broadcast_failed": {
       const s = flow.signed; const q = flow.q;
       const sending = flow.s === "broadcasting";
+      const bx = flow.s === "broadcast_failed" ? { ...explainBroadcast(flow.message), message: flow.message } : null;
       return h("section", { class: "card result" },
         h("div", { class: "result-ic ok" }, icon("check", 28)),
-        q.replaces ? h("p", { class: "kicker" }, `Replaces ${short(q.replaces)}`) : null,
+        q.replaces ? h("p", { class: "kicker" }, "Replaces ", h("span", { class: "kicker-hash mono" }, short(q.replaces))) : null,
         h("h3", null, "Signed and verified"),
         h("ul", { class: "verified" }, s.checks.map((c) => h("li", null, icon("check", 14), c))),
         h("dl", { class: "facts" },
@@ -210,10 +217,13 @@ function flowBody(a: BtcAccount): Node {
           fact("Fee", `${fmtSats(s.fee_sats)} · ${s.rate} sat/vB · ${s.vsize} vB`),
           fact("Transaction ID", h("button", { class: "link mono", onclick: () => copy(s.txid, "Transaction ID") }, short(s.txid))),
         ),
-        flow.s === "broadcast_failed" ? h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "The server didn't accept it. "), explainBroadcast(flow.message), h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, flow.message)))) : null,
-        h("p", { class: "note" }, `Not on the network yet. Broadcast sends it through ${w?.server ?? "your server"}.`),
+        bx ? h("div", { class: "inline-error block" }, icon("alert", 15), h("span", null, h("strong", null, "The server didn't accept it. "), bx.text, h("details", { class: "detail" }, h("summary", null, "Details"), h("code", null, bx.message)))) : null,
+        h("p", { class: "note" }, bx?.requote ? "Nothing was sent to the network. This signature is for the old fee, so it can't be used." : `Not on the network yet. Send to network hands it to ${w?.server ?? "your server"}.`),
         h("div", { class: "actions" },
-          h("button", { class: "big primary", disabled: sending, onclick: () => doBroadcast(a, q, s) }, sending ? [h("i", { class: "mini-spin" }), "Broadcasting…"] : [icon("up", 18), flow.s === "broadcast_failed" ? "Retry broadcast" : `Broadcast to ${n.name}`]),
+          // when the advice is a higher fee, that is the primary action (sending this one again fails the same way)
+          bx?.requote
+            ? h("button", { class: "big primary", onclick: () => refee(a, q) }, icon("refresh", 18), "Choose a higher fee")
+            : h("button", { class: "big primary", disabled: sending, onclick: () => doBroadcast(a, q, s) }, sending ? [h("i", { class: "mini-spin" }), "Sending…"] : [icon("up", 18), bx ? "Try sending again" : `Send to ${n.name}`]),
           h("button", { class: "big", disabled: sending, onclick: () => { activeTicket = null; flow = { s: "form" }; go("home"); } }, "Discard"),
         ));
     }
@@ -222,7 +232,7 @@ function flowBody(a: BtcAccount): Node {
       const conf = flow.confs;
       return h("section", { class: "card result" },
         conf > 0 ? h("div", { class: "result-ic ok big" }, icon("check", 32)) : h("div", { class: "result-ic pending" }, h("i", { class: "spinner" })),
-        h("h3", null, conf > 0 ? `Confirmed · ${conf} confirmation${conf === 1 ? "" : "s"}` : `Broadcast to ${n.name}`),
+        h("h3", null, conf > 0 ? `Confirmed · ${conf} confirmation${conf === 1 ? "" : "s"}` : `Sent to ${n.name}`),
         h("p", { class: "muted" }, conf > 0 ? `${fmtBtc(s.amount_sats)} ${n.unit} sent. Most services wait for 1–6 confirmations.` : "Waiting for the first confirmation (about 10 minutes on average, longer at a low fee). You can close this; Activity keeps track."),
         conf > 0 ? null : clockLine(flow.t0, null),
         h("div", { class: "hash-box" },
@@ -240,7 +250,7 @@ function review(a: BtcAccount, q: BtcQuote) {
   const change = q.outputs.find((o) => o.change);
   const big = q.fee_sats > q.amount_sats * 0.1 && q.fee_sats > 5_000;
   return h("section", { class: "card" },
-    h("p", { class: "kicker" }, q.replaces ? `Replacement for ${short(q.replaces)} · higher fee` : "Check, then send to your phone"),
+    h("p", { class: "kicker" }, q.replaces ? ["Replacement for ", h("span", { class: "kicker-hash mono" }, short(q.replaces)), " · higher fee"] : "Check, then send to your phone"),
     h("div", { class: "hero-amount" }, h("span", { class: "amount" }, fmtBtc(q.amount_sats), h("span", { class: "unit" }, n.unit)), $(q.amount_sats) ? h("span", { class: "fiat" }, $(q.amount_sats)) : null),
     h("dl", { class: "facts" },
       fact("To", h("span", { class: "mono break" }, groupedBtc(q.recipient))),
@@ -255,7 +265,7 @@ function review(a: BtcAccount, q: BtcQuote) {
     q.own_recipient ? h("p", { class: "inline-error" }, icon("alert", 15), "The recipient is one of your own addresses: this only moves coins inside your wallet and pays a fee.") : null,
     q.unconfirmed_inputs ? h("p", { class: "note" }, "This spends coins that are not confirmed yet. If the transaction that created them is replaced, this one becomes invalid.") : null,
     big ? h("p", { class: "inline-error" }, icon("alert", 15), `The fee is more than 10% of the amount. Check the fee rate (${q.rate} sat/vB).`) : null,
-    h("p", { class: "note" }, "Your phone shows the address, amount, fee and change, and checks the change belongs to your key. Approve there only if they match. After signing, this Mac re-checks every signature and the exact amounts before anything can be broadcast."),
+    h("p", { class: "note" }, "Your phone shows the address, amount, fee and change, and checks the change belongs to your key. Approve there only if they match. After signing, this Mac re-checks every signature and the exact amounts before anything can be sent to the network."),
     h("div", { class: "actions" },
       h("button", { class: "big primary", onclick: () => sendToPhone(q) }, icon("phone", 18), "Send to phone"),
       h("button", { class: "big", onclick: () => { if (q.replaces) { flow = { s: "form" }; go("home"); } else setFlow({ s: "form" }); } }, q.replaces ? "Not now" : "Edit"),
@@ -329,11 +339,32 @@ async function doBroadcast(a: BtcAccount, q: BtcQuote, s: Signed) {
   } catch (e) { setFlow({ s: "broadcast_failed", q, signed: s, message: errText(e) }); }
 }
 
-function explainBroadcast(m: string): string {
-  if (/insufficient fee|min relay fee|mempool min fee/i.test(m)) return "The fee is below what the network accepts right now. Discard and send again with a higher fee. ";
-  if (/missingorspent|bad-txns-inputs-missingorspent|conflict/i.test(m)) return "Its coins were already spent by another transaction. Refresh and check Activity. ";
-  if (/unreachable|timed out/i.test(m)) return "The server couldn't be reached. Retry, or set another server in Settings → Bitcoin. ";
-  return "";
+/** Why the server refused a signed transaction, and whether only a new fee can help. */
+function explainBroadcast(m: string): { text: string; requote: boolean } {
+  if (/insufficient fee|min relay fee|mempool min fee/i.test(m)) return { text: "The fee is below what the network accepts right now. Choose a higher fee and approve it on your phone again. ", requote: true };
+  if (/missingorspent|bad-txns-inputs-missingorspent|conflict/i.test(m)) return { text: "Its coins were already spent by another transaction. Refresh and check Activity. ", requote: false };
+  if (/unreachable|timed out/i.test(m)) return { text: "The server couldn't be reached. Try sending again, or set another server in Settings → Bitcoin. ", requote: false };
+  return { text: "", requote: false };
+}
+
+/** Throw away this signature: back to the form (fee picker), or a fresh speed-up quote. */
+function refee(a: BtcAccount, q: BtcQuote) {
+  activeTicket = null;
+  if (q.replaces) {
+    const e = wallets.get(a.id)?.history.find((x) => x.txid === q.replaces);
+    if (e) { void startBump(a, e); return; }
+    flow = { s: "form" }; go("home"); return;
+  }
+  if (draft.fee !== "custom") draft.fee = "fast";
+  setFlow({ s: "form" });
+}
+
+/** A Bitcoin address still being typed (or pasted in part): too short for its kind yet. */
+function incomplete(v: string): boolean {
+  const t = v.replace(/^bitcoin:/i, "");
+  if (/^(b|bc|t|tb|bcrt)$/i.test(t)) return true;
+  if (/^(bc|tb|bcrt)1[02-9ac-hj-np-z]*$/i.test(t)) return /^(bc|tb|bcrt)1p/i.test(t) ? t.length < 62 : t.length < 42;
+  return /^[123mn][1-9A-HJ-NP-Za-km-z]*$/.test(t) && t.length < 26;
 }
 
 /** The send form itself (not a later step) is on screen. */

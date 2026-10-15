@@ -1,8 +1,8 @@
-// Pieces shared by the Ethereum (main.ts) and Bitcoin (bitcoin.ts) send flows and dApp requests:
+// Pieces shared by the Ethereum (main.ts) and Bitcoin (bitcoin.ts) send flows and site requests:
 // the progress stepper, the waiting clock and the Cancel button. Each flow keeps its own states.
 import { h, icon, clock } from "./ui";
 
-const STEPS = ["Details", "Phone", "Broadcast", "Confirmed"];
+const STEPS = ["Details", "Phone", "Send to network", "Confirmed"];
 
 /** `at`: the current step (0-3); `done`: it is finished (confirmed); `bad`: it failed. */
 export function stepper(at: number, done: boolean, bad: boolean) {

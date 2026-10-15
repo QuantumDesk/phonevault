@@ -67,7 +67,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .brand .lock { color: var(--accent); }
 .preview-badge { position: fixed; left: 12px; bottom: 12px; z-index: 40; background: var(--bg); white-space: nowrap; font: 7.5px/1 var(--pixel); letter-spacing: 0.06em; color: var(--warn); border: 1px dashed currentColor; padding: 5px 6px; border-radius: 6px; }
 .chip { min-width: 0; overflow: hidden; text-overflow: ellipsis; display: inline-flex; align-items: center; gap: 7px; height: 28px; padding: 0 11px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--muted); font-size: 12px; white-space: nowrap; }
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+.chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); flex: none; }
+/* the label shrinks with an ellipsis (text-overflow needs a block-level box, not the flex container) */
+.chip .chip-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chip.accessory { color: var(--ink); border-color: var(--accent-line); }
 .chip.accessory .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
 .chip.android .dot { background: var(--warn); }
@@ -86,6 +88,8 @@ main { max-width: 580px; margin: 0 auto; padding: 18px 16px 48px; }
 .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; box-shadow: var(--shadow); }
 .kicker { font: 8.5px/1.6 var(--pixel); letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
 .kicker.danger { color: var(--danger); }
+/* a hash inside a kicker keeps its case (hex is unreadable upper-cased) */
+.kicker .kicker-hash { text-transform: none; font: 11px/1.4 var(--mono, ui-monospace, monospace); letter-spacing: 0; }
 .section { display: grid; gap: 8px; }
 .section-title { text-transform: uppercase; font: 8.5px/1.6 var(--pixel); letter-spacing: 0.08em; color: var(--muted); padding: 6px 4px 0; font-weight: 400; }
 .boot { display: grid; place-items: center; min-height: 50vh; }
@@ -290,6 +294,11 @@ textarea { font-size: 13px; line-height: 1.5; resize: vertical; }
   .chip { padding: 0 9px; }
   .fact { grid-template-columns: 100px 1fr; }
   .fiat-col { display: none; }
+}
+/* very narrow: the padlock alone stands for the name, so the phone chip keeps room for its label */
+@media (max-width: 400px) {
+  .top { gap: 8px; padding: 12px; }
+  .brand span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 1ms !important; transition-duration: 1ms !important; }
