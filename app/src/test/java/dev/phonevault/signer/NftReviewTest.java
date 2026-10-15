@@ -126,7 +126,7 @@ public final class NftReviewTest {
         TransactionReview approve = review(UNKNOWN_NFT, Erc20ReviewTest.approve(OPERATOR, BigInteger.valueOf(77)));
         assertTrue(SwapReviewTest.has(approve, "WARNING", "Two possible meanings"));
         assertTrue(SwapReviewTest.has(approve, "WARNING", "lets " + OPERATOR + " take NFT #77"));
-        assertEquals("77 base units (raw uint256; symbol and decimals unknown)", value(approve, "Allowance"));
+        assertEquals("77 base units (raw amount; token unknown)", value(approve, "Allowance"));
         TransactionReview move = review(UNKNOWN_NFT, Erc20ReviewTest.transferFrom(ME, BOB, BigInteger.valueOf(77)));
         assertTrue(SwapReviewTest.has(move, "WARNING", "moves NFT #77"));
         // a listed ERC-20 is never read as an NFT

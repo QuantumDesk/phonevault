@@ -70,6 +70,14 @@ public final class SwapReviewTest {
         return null;
     }
 
+    /**
+     * The full one-line headline ("You give … · You get … · Recipient: … · Expires …"): the start
+     * of the lock-screen summary. The review's own Summary row is the shorter "Swap X for Y".
+     */
+    static String headline(TransactionReview r) {
+        return r.lockedSummary.replaceFirst(" · [^·]*\\. Unlock to review every field before anything is signed\\.$", "");
+    }
+
     static boolean has(TransactionReview r, String label, String fragment) {
         for (MessageReview.Row row : r.summary) if (row.label.equals(label) && row.value.contains(fragment)) return true;
         return false;
@@ -102,7 +110,10 @@ public final class SwapReviewTest {
                 Calldata.unwrap(MSG_SENDER, new BigInteger("31200000000000000"))), BigInteger.valueOf(DEADLINE));
         TransactionReview r = review("0x1", UR_ETH, "0x0", data);
         assertEquals("You give 100 USDC · You get at least 0.0312 ETH · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC",
-                value(r, "Summary"));
+                headline(r));
+        // the on-screen Summary is one short line; the rows below carry recipient and expiry
+        assertEquals("Swap 100 USDC for at least 0.0312 ETH", value(r, "Summary"));
+        assertEquals(SwapReview.THIS_WALLET, value(r, "Recipient"));
         assertEquals("Swap USDC → ETH", r.title);
         assertEquals("Swap on Uniswap (Universal Router 2.0)", value(r, "Action"));
         assertEquals("100 USDC", value(r, "You give"));
@@ -138,7 +149,7 @@ public final class SwapReviewTest {
         assertTrue(value(r, "Fee").contains(Keys.toChecksumAddress(FEE_COLLECTOR)));
         // what is left after the 0.25% portion is still a guaranteed minimum
         assertEquals("0.031122 ETH", value(r, "You get at least"));
-        assertTrue(value(r, "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(headline(r).contains("Recipient: this wallet ✓"));
 
         String high = Calldata.execute(cmds(0x00, 0x06, 0x0c), Arrays.asList(
                 Calldata.v3Swap(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
@@ -147,7 +158,7 @@ public final class SwapReviewTest {
         TransactionReview three = review("0x1", UR_ETH, "0x0", high);
         assertTrue(has(three, "WARNING", "more than 1%"));
         assertEquals("exactly 3% is still a (high) fee", 0, count(three, "DANGER"));
-        assertTrue(value(three, "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(headline(three).contains("Recipient: this wallet ✓"));
     }
 
     @Test public void feeAboveThreePercentIsAnOtherAddressDanger() throws Exception {
@@ -160,7 +171,7 @@ public final class SwapReviewTest {
                     Calldata.v3Swap21(ADDRESS_THIS, BigInteger.valueOf(100).multiply(E6), min, Calldata.v3Path(USDC, 500, WETH), true),
                     fee, Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
             TransactionReview r = review("0x1", UR21_ETH, "0x0", data);
-            assertTrue(Integer.toHexString(command), value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+            assertTrue(Integer.toHexString(command), headline(r).contains("Recipient: OTHER ADDRESS ✗"));
             assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 3.01% of the WETH output"));
             assertTrue(has(r, "DANGER", "more than 3%"));
             assertNull("not shown as an ordinary fee", value(r, "Fee"));
@@ -191,7 +202,8 @@ public final class SwapReviewTest {
                 Calldata.v3Swap(OTHER, BigInteger.valueOf(100).multiply(E6), E18, Calldata.v3Path(USDC, 500, WETH), true)),
                 BigInteger.valueOf(DEADLINE));
         TransactionReview r = review("0x1", UR_ETH, "0x0", data);
-        assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertTrue(headline(r).contains("Recipient: OTHER ADDRESS ✗"));
+        assertEquals("Swap 100 USDC · to another address", value(r, "Summary"));
         assertTrue(value(r, "DANGER").startsWith("OTHER ADDRESS ✗ at least 1 WETH goes to " + Keys.toChecksumAddress(OTHER)));
         assertEquals("Swap to OTHER ADDRESS", r.title);
         assertEquals("Swap to other address & sign", r.signLabel);
@@ -201,7 +213,7 @@ public final class SwapReviewTest {
         String self = Calldata.execute(cmds(0x00), Collections.singletonList(
                 Calldata.v3Swap(KEY.getAddress(), BigInteger.valueOf(100).multiply(E6), E18, Calldata.v3Path(USDC, 500, WETH), true)),
                 BigInteger.valueOf(DEADLINE));
-        assertTrue(value(review("0x1", UR_ETH, "0x0", self), "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(headline(review("0x1", UR_ETH, "0x0", self)).contains("Recipient: this wallet ✓"));
     }
 
     @Test public void ethInputIsWrappedAndAccounted() throws Exception {
@@ -210,7 +222,7 @@ public final class SwapReviewTest {
                 Calldata.v3Swap(MSG_SENDER, CONTRACT_BALANCE, BigInteger.valueOf(2500).multiply(E6), Calldata.v3Path(WETH, 500, USDC), false)),
                 BigInteger.valueOf(DEADLINE));
         TransactionReview r = review("0x1", UR_ETH, "0xde0b6b3a7640000", data);
-        assertEquals("You give 1 ETH · You get at least 2,500 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", value(r, "Summary"));
+        assertEquals("You give 1 ETH · You get at least 2,500 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", headline(r));
         assertEquals("1 ETH (used by the swap)", value(r, "Native value sent"));
         assertNull("no Permit2 when only ETH is paid", value(r, "Paid through"));
     }
@@ -238,7 +250,7 @@ public final class SwapReviewTest {
                 Calldata.unwrap(MSG_SENDER, BigInteger.ZERO)), BigInteger.valueOf(DEADLINE));
         TransactionReview r = review("0x1", UR_ETH, "0xb1a2bc2ec50000", data);
         assertEquals("100 USDC", value(r, "You get exactly"));
-        assertTrue(value(r, "Summary").startsWith("You give at most 0.05 ETH · You get 100 USDC · Recipient: this wallet ✓"));
+        assertTrue(headline(r).startsWith("You give at most 0.05 ETH · You get 100 USDC · Recipient: this wallet ✓"));
         assertTrue(value(r, "Unused input").contains("ETH the swap does not need comes back"));
         assertEquals(0, count(r, "DANGER"));
     }
@@ -249,8 +261,8 @@ public final class SwapReviewTest {
                 Calldata.v2Swap(MSG_SENDER, BigInteger.valueOf(50).multiply(E6), BigInteger.TEN.pow(16), Arrays.asList(USDC, WETH), true)),
                 BigInteger.valueOf(DEADLINE));
         TransactionReview r = review("0x1", UR_ETH, "0x0", data);
-        assertEquals("You give 50 USDC · You get at least 0.01 WETH · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", value(r, "Summary"));
-        assertTrue(has(r, "WARNING", "may spend UNLIMITED USDC from this wallet with NO expiry"));
+        assertEquals("You give 50 USDC · You get at least 0.01 WETH · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", headline(r));
+        assertTrue(has(r, "WARNING", "may spend UNLIMITED USDC from this wallet with no expiry"));
         // a permit naming another spender is refused
         String evil = Calldata.execute(cmds(0x0a, 0x08), Arrays.asList(
                 Calldata.permit2Permit(USDC, UniversalRouter.UINT160_MAX, 0, 0, OTHER, DEADLINE),
@@ -280,7 +292,7 @@ public final class SwapReviewTest {
         String data = Calldata.execute(cmds(0x00), Collections.singletonList(
                 Calldata.v3Swap(MSG_SENDER, E6, BigInteger.ONE, Calldata.v3Path(USDC, 500, WETH), true)), null);
         TransactionReview r = review("0x1", UR_ETH, "0x0", data);
-        assertTrue(value(r, "Summary").endsWith("· No deadline"));
+        assertTrue(headline(r).endsWith("· No deadline"));
         assertTrue(has(r, "WARNING", "No deadline"));
     }
 
@@ -293,7 +305,7 @@ public final class SwapReviewTest {
                 Calldata.currencyAmount(ETH, in),
                 Calldata.currencyAmount(USDC, BigInteger.ZERO));
         TransactionReview r = review("0x1", UR_ETH, "0x6f05b59d3b20000", Calldata.execute(cmds(0x10), Collections.singletonList(v4), BigInteger.valueOf(DEADLINE)));
-        assertEquals("You give 0.5 ETH · You get at least 1,200 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", value(r, "Summary"));
+        assertEquals("You give 0.5 ETH · You get at least 1,200 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", headline(r));
         assertEquals(0, count(r, "WARNING"));
 
         // the same on a 2.1 router with the 2.1 struct (minHopPriceX36)
@@ -302,7 +314,7 @@ public final class SwapReviewTest {
                 Calldata.currencyAmount(ETH, in),
                 Calldata.currencyAmount(USDC, BigInteger.ZERO));
         TransactionReview r21 = review("0x1", UR21_ETH, "0x6f05b59d3b20000", Calldata.execute(cmds(0x10), Collections.singletonList(v421), BigInteger.valueOf(DEADLINE)));
-        assertEquals(value(r, "Summary"), value(r21, "Summary"));
+        assertEquals(headline(r), headline(r21));
         // a 2.0-shaped struct sent to a 2.1 router is not what that router reads: refused
         assertTrue(refused("0x1", UR21_ETH, "0x6f05b59d3b20000", Calldata.execute(cmds(0x10), Collections.singletonList(v4), BigInteger.valueOf(DEADLINE)))
                 .startsWith(SwapPlan.CANNOT_EXPLAIN));
@@ -402,7 +414,7 @@ public final class SwapReviewTest {
                 Calldata.exactInputSingle(WETH, USDC, 500, MSG_SENDER, E18, BigInteger.valueOf(2400).multiply(E6)),
                 "0x12210e8a");
         TransactionReview r = review("0x1", SR02_ETH, "0xde0b6b3a7640000", data);
-        assertEquals("You give 1 ETH · You get at least 2,400 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", value(r, "Summary"));
+        assertEquals("You give 1 ETH · You get at least 2,400 USDC · Recipient: this wallet ✓ · Expires 2026-10-11 14:32 UTC", headline(r));
         assertEquals("Swap on Uniswap (SwapRouter02)", value(r, "Action"));
         // an unsupported inner call is refused
         String bad = Calldata.multicall(BigInteger.valueOf(DEADLINE),
@@ -532,7 +544,7 @@ public final class SwapReviewTest {
             assertTrue(name + ": " + r.text(), has(r, "DANGER", "No minimum"));
             assertTrue(name, has(r, "You get at least", name.contains("swept") ? "0 WETH" : "0 ETH"));
             assertTrue(name, has(r, "You get at least", "1,200 DAI"));
-            assertTrue(name + ": " + value(r, "Summary"), value(r, "Summary").contains("You give 0.5 ETH + 1,000 USDC"));
+            assertTrue(name + ": " + headline(r), headline(r).contains("You give 0.5 ETH + 1,000 USDC"));
         }
         // the honest exact-output refund (only the unused part of the ETH sent) is still a refund
         String honest = Calldata.execute(cmds(0x0b, 0x01, 0x0c), Arrays.asList(
@@ -569,7 +581,7 @@ public final class SwapReviewTest {
         JSONObject five = synthetic("ur-five-percent-fee");
         TransactionReview r = TransactionReview.build(Eip1559Request.parse(request(five.getString("chainId"), five.getString("to"),
                 five.getString("value"), five.getString("data"))), five.getString("from"), TokenListTest.bundled());
-        assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertTrue(headline(r).contains("Recipient: OTHER ADDRESS ✗"));
         assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 5% of the WETH output"));
         JSONObject zero = synthetic("ur-fee-to-zero-address");
         assertTrue(refused(zero.getString("chainId"), zero.getString("to"), zero.getString("value"), zero.getString("data"))
@@ -590,7 +602,7 @@ public final class SwapReviewTest {
             } else {
                 TransactionReview r = review("0x1", UR_ETH, "0x6f05b59d3b20000", data);
                 assertTrue(has(r, "DANGER", "OTHER ADDRESS ✗ 4% of the USDC output"));
-                assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+                assertTrue(headline(r).contains("Recipient: OTHER ADDRESS ✗"));
             }
         }
     }
@@ -619,7 +631,7 @@ public final class SwapReviewTest {
             assertEquals(Eip1559Request.Kind.SWAP, r.kind);
             // reviewed as the wallet that actually sent it (recipient checks are relative to the signer)
             TransactionReview review = TransactionReview.build(r, v.getString("from"), TokenListTest.bundled());
-            String summary = value(review, "Summary");
+            String summary = headline(review);
             for (String fragment : expect) assertTrue(v.getString("tx") + ": " + summary, summary.contains(fragment));
             accepted++;
         }
@@ -713,7 +725,7 @@ public final class SwapReviewTest {
         TransactionReview r = syntheticReview("audit-split-fees-under-three-percent");
         assertTrue(r.text(), has(r, "DANGER", "OTHER ADDRESS ✗ 14 separate fees together take 34.71% of the WETH output"));
         assertEquals(r.text(), 15, count(r, "DANGER")); // the total, plus each portion as an OTHER ADDRESS payout
-        assertTrue(value(r, "Summary"), value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertTrue(headline(r), headline(r).contains("Recipient: OTHER ADDRESS ✗"));
         assertEquals("Swap to other address & sign", r.signLabel);
         assertEquals("Swap to OTHER ADDRESS", r.title);
         assertEquals(r.text(), 0, count(r, "WARNING"));
@@ -735,7 +747,7 @@ public final class SwapReviewTest {
         assertTrue(r.text(), has(r, "WARNING", "2 separate fees together take 1.99% of the WETH output"));
         assertEquals(r.text(), 1, count(r, "WARNING"));
         assertEquals(2, count(r, "Fee"));
-        assertTrue(value(r, "Summary").contains("Recipient: this wallet ✓"));
+        assertTrue(headline(r).contains("Recipient: this wallet ✓"));
         assertTrue(r.parties.isEmpty());
     }
 
@@ -758,7 +770,7 @@ public final class SwapReviewTest {
         TransactionReview r = review("0x1", UR_ETH, "0x6f05b59d3b20000",
                 Calldata.execute(cmds(0x10), Collections.singletonList(v4), BigInteger.valueOf(DEADLINE)));
         assertTrue(r.text(), has(r, "DANGER", "OTHER ADDRESS ✗ 12 separate fees together take 30.61% of the USDC output"));
-        assertTrue(value(r, "Summary").contains("Recipient: OTHER ADDRESS ✗"));
+        assertTrue(headline(r).contains("Recipient: OTHER ADDRESS ✗"));
         assertEquals("Swap to other address & sign", r.signLabel);
         assertEquals(2, r.parties.size());
         // 1200 × 0.97^12 ≈ 832.9 USDC left of a 1200 USDC minimum

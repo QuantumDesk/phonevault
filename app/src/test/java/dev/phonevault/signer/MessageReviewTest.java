@@ -38,6 +38,8 @@ public final class MessageReviewTest {
         MessageReview r = typedReview("eip2612-permit-unlimited", "0x1", COW);
         assertEquals(MessageReview.Category.PERMIT, r.category);
         assertEquals("Review token permission", r.title);
+        assertEquals("Token spending permission", r.summaryValue("Action"));
+        assertEquals("EIP-2612 Permit", r.detailValue("Standard"));
         assertEquals("0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D", r.summaryValue("Spender"));
         assertTrue(r.summaryValue("Amount").startsWith("UNLIMITED"));
         assertTrue(r.summaryValue("Token (contract)").startsWith("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"));
@@ -45,14 +47,14 @@ public final class MessageReviewTest {
         assertEquals("2026-01-01 00:00:00 UTC (1767225600)", r.summaryValue("Signature valid until"));
         assertTrue(r.warns("token allowance"));
         assertFalse(r.warns("owner is not this wallet"));
-        assertFalse(r.warns("your host is on"));
+        assertFalse(r.warns("your Mac is on"));
         assertEquals("Approve permission & sign", r.signLabel);
     }
 
     @Test public void permitForAnotherOwnerAndAnotherChainIsFlagged() throws Exception {
         MessageReview r = typedReview("eip2612-permit-unlimited", "0x2105", OTHER);
         assertTrue(r.warns("owner is not this wallet"));
-        assertTrue(r.warns("Ethereum Mainnet (chain ID 1), but your host is on Base (chain ID 8453)"));
+        assertTrue(r.warns("Ethereum Mainnet (chain ID 1), but your Mac is on Base (chain ID 8453)"));
         // The chain mismatch is a DANGER row, directly after the action.
         assertEquals(MessageReview.DANGER, r.summary.get(1).label);
     }
@@ -78,8 +80,8 @@ public final class MessageReviewTest {
         assertEquals(MessageReview.Category.PERMIT2, r.category);
         assertEquals("0x3fC91A3afd70395Cd496C647d5a6CC9D4B2b7FAD", r.summaryValue("Spender"));
         assertEquals("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", r.summaryValue("Token"));
-        assertTrue(r.summaryValue("Amount").startsWith("UNLIMITED (maximum uint160)"));
-        assertEquals("NEVER (maximum uint48)", r.summaryValue("Allowance expires"));
+        assertTrue(r.summaryValue("Amount").startsWith("UNLIMITED (maximum possible amount)"));
+        assertEquals("Never (no expiry)", r.summaryValue("Allowance expires"));
         assertEquals("2026-01-01 00:00:00 UTC (1767225600)", r.summaryValue("Signature valid until"));
         assertFalse(r.warns("canonical Permit2"));
     }
@@ -117,7 +119,7 @@ public final class MessageReviewTest {
         assertEquals(MessageReview.Category.ORDER, r.category);
         assertTrue(r.warns("This signs an order"));
         assertTrue(r.subtitle.startsWith("This signs an order"));
-        assertEquals("1 item(s) — see Details", r.summaryValue("You offer"));
+        assertEquals("1 item(s): see Details", r.summaryValue("You offer"));
         assertFalse(r.warns("offerer is not this wallet"));
         assertTrue(typedReview("seaport-like-order", "0x1", OTHER).warns("offerer is not this wallet"));
     }
@@ -144,7 +146,7 @@ public final class MessageReviewTest {
                 "message.i8 · int8: -128",
                 "message.i256 · int256: -57896044618658097711785492504343953926634992332820282019728792003956564819968",
                 "message.u8 · uint8: 255",
-                "message.u256 · uint256: 115792089237316195423570985008687907853269984665640564039457584007913129639935 (maximum uint256)",
+                "message.u256 · uint256: 115792089237316195423570985008687907853269984665640564039457584007913129639935 (maximum possible value)",
                 "message.u160hex · uint160: 65280",
                 "message.b1 · bytes1: 0x7f",
                 "message.dyn · bytes: 0xdeadbeef",
@@ -161,7 +163,7 @@ public final class MessageReviewTest {
             assertTrue("missing " + expected, details.contains(expected));
         }
         assertTrue(r.warns("maximum-value number"));
-        assertFalse(r.warns("your host is on"));
+        assertFalse(r.warns("your Mac is on"));
     }
 
     @Test public void domainWithoutChainIdIsWarned() throws Exception {
@@ -207,11 +209,11 @@ public final class MessageReviewTest {
         assertEquals("2026-09-28T12:00:00Z", r.summaryValue("Expires"));
         assertEquals("https://example.com/my-web2-claim.json", r.summaryValue("Resource 2"));
         assertFalse(r.warns("NOT this wallet"));
-        assertFalse(r.warns("differs from the website"));
+        assertFalse(r.warns("differs from the site the message names"));
 
         MessageReview other = personalReview(siwe, "0x2105", OTHER);
         assertTrue(other.warns("NOT this wallet"));
-        assertTrue(other.warns("names chain 1 but your host is on Base"));
+        assertTrue(other.warns("names chain 1 but your Mac is on Base"));
     }
 
     @Test public void siweVariantsParseOrAreFlagged() throws Exception {
@@ -226,16 +228,16 @@ public final class MessageReviewTest {
         assertEquals("42", s.requestId);
         MessageReview r = personalReview(base.getBytes(StandardCharsets.UTF_8), "0x1", COW);
         assertEquals(MessageReview.Category.SIGN_IN, r.category);
-        assertTrue(r.warns("URI host (evil.example.net) differs"));
+        assertTrue(r.warns("site in the URI (evil.example.net) differs"));
 
         String broken = base.replace("Nonce: abcdefgh12\n", "");
         MessageReview b = personalReview(broken.getBytes(StandardCharsets.UTF_8), "0x1", COW);
         assertEquals(MessageReview.Category.MESSAGE, b.category);
-        assertTrue(b.warns("does not follow EIP-4361"));
+        assertTrue(b.warns("is not a valid sign-in message"));
         assertTrue(personalReview(base.replace("Version: 1", "Version: 2").getBytes(StandardCharsets.UTF_8), "0x1", COW)
-                .warns("does not follow EIP-4361"));
+                .warns("is not a valid sign-in message"));
         assertTrue(personalReview(base.replace("app.example.org wants", "trusted.com@evil.io wants").getBytes(StandardCharsets.UTF_8), "0x1", COW)
-                .warns("does not follow EIP-4361"));
+                .warns("is not a valid sign-in message"));
     }
 
     private static String siweFor(String domain, String uri) {
@@ -270,12 +272,12 @@ public final class MessageReviewTest {
         MessageReview plain = personalReview(siweFor("App.Example.org:8443", "https://app.example.org:8443/").getBytes(StandardCharsets.UTF_8), "0x1", COW);
         assertEquals("app.example.org:8443", plain.summaryValue("Website (as claimed)"));
         assertFalse(plain.warns("lookalike"));
-        assertFalse(plain.warns("differs from the website"));
+        assertFalse(plain.warns("differs from the site the message names"));
         // a name with no valid ASCII form is a malformed sign-in
         StringBuilder longLabel = new StringBuilder("é");
         while (longLabel.length() < 70) longLabel.append('a');
         assertTrue(personalReview(siweFor(longLabel + ".org", "https://x.org/").getBytes(StandardCharsets.UTF_8), "0x1", COW)
-                .warns("does not follow EIP-4361"));
+                .warns("is not a valid sign-in message"));
     }
 
     @Test public void signingAddressRowNamesTheActualAccount() throws Exception {
@@ -283,18 +285,20 @@ public final class MessageReviewTest {
         String addr = key.getAddress();
         MessageRequest req = MessageRequest.parse(MessageRequestTest.personal(Numeric.toHexString("hi".getBytes(StandardCharsets.UTF_8))));
         String checksummed = org.web3j.crypto.Keys.toChecksumAddress(addr);
-        assertEquals(checksummed, new MessageApprovalSession(req, key).review.summaryValue("Signing address"));
-        assertNull(new MessageApprovalSession(req, key).review.summaryValue("Signing address · Account 1"));
+        assertEquals(checksummed, new MessageApprovalSession(req, key).review.detailValue("Signing address"));
+        assertNull(new MessageApprovalSession(req, key).review.detailValue("Signing address · Account 1"));
         SigningAccount second = new SigningAccount(1, "Account 2", false, "73c5da0a", addr);
-        assertEquals(checksummed, new MessageApprovalSession(req, key, second).review.summaryValue("Signing address · Account 2"));
+        assertEquals(checksummed, new MessageApprovalSession(req, key, second).review.detailValue("Signing address · Account 2"));
+        // shown once: the review's top ("Signing with") names it; the row is under the details
+        assertNull(new MessageApprovalSession(req, key, second).review.summaryValue("Signing address · Account 2"));
         SigningAccount passphrase = new SigningAccount(0, "Account 1", true, "1a2b3c4d", addr);
         assertEquals(checksummed, new MessageApprovalSession(req, key, passphrase).review
-                .summaryValue("Signing address · Account 1 (passphrase wallet)"));
+                .detailValue("Signing address · Account 1 (passphrase wallet)"));
         // typed data and sign-in use the same row
         MessageRequest typed = MessageRequest.parse(MessageRequestTest.typed(MessageSigningVectorsTest.vector("permit2-single", "typedData")));
-        assertEquals(checksummed, new MessageApprovalSession(typed, key, second).review.summaryValue("Signing address · Account 2"));
+        assertEquals(checksummed, new MessageApprovalSession(typed, key, second).review.detailValue("Signing address · Account 2"));
         MessageRequest siwe = MessageRequest.parse(MessageRequestTest.personal(MessageSigningVectorsTest.vector("personal-siwe", "message")));
-        assertEquals(checksummed, new MessageApprovalSession(siwe, key, second).review.summaryValue("Signing address · Account 2"));
+        assertEquals(checksummed, new MessageApprovalSession(siwe, key, second).review.detailValue("Signing address · Account 2"));
         try {
             new MessageApprovalSession(req, key, new SigningAccount(1, "Account 2", false, "73c5da0a", OTHER));
             org.junit.Assert.fail("review built for a different account than the key");
@@ -316,6 +320,17 @@ public final class MessageReviewTest {
         assertEquals("app.uniswap.org\nReported by your Mac (browser or WalletConnect). This phone can't verify it.",
                 same.summaryValue(MessageReview.ORIGIN_LABEL));
         assertFalse(same.warns("phishing"));
+        // with an origin the CHECK says the Mac named the site; without one, that the phone cannot see it
+        assertTrue(same.warns("Your Mac reported the site above; this phone can't verify it. Only sign if you opened this site yourself."));
+        assertFalse(same.warns("cannot see which site asked"));
+        MessageReview noOrigin = withOrigin(siweFor("app.uniswap.org", "https://app.uniswap.org/"), null);
+        assertTrue(noOrigin.warns("This phone cannot see which site asked. Only sign if you opened app.uniswap.org yourself"));
+        assertFalse(noOrigin.warns("Your Mac reported the site"));
+        for (MessageReview.Row r : same.summary) {
+            if (r.value.startsWith("Your Mac reported")) assertEquals("CHECK · WEBSITE", ReviewStyle.heading(r));
+        }
+        assertEquals("Sign in", same.summaryValue("Action"));
+        assertEquals("Sign-In with Ethereum (EIP-4361)", same.detailValue("Standard"));
         assertFalse(withOrigin(siweFor("localhost:3000", "http://localhost:3000/"), "http://localhost:3000").warns("phishing"));
         // sign-in for another site than the one that asked: DANGER
         MessageReview phish = withOrigin(siweFor("app.uniswap.org", "https://app.uniswap.org/"), "https://uniswap-airdrop.io");

@@ -47,8 +47,8 @@ final class NftReview {
                 title = "Permission for EVERY NFT";
                 action = "Let " + party + " move EVERY NFT in " + collection + ", now and in future";
                 rows.add(row("Action", action));
-                rows.add(row(DANGER, "Lets " + party + " move EVERY NFT in this collection, now and in future — including NFTs "
-                        + "this wallet receives later — without asking again, until you revoke it. Scammers ask for exactly "
+                rows.add(row(DANGER, "Lets " + party + " move EVERY NFT in this collection, now and in future, including NFTs "
+                        + "this wallet receives later, without asking again, until you revoke it. Scammers ask for exactly "
                         + "this. Approve only a marketplace or app you trust completely."));
                 rows.add(row("Operator (gets permission)", party));
                 if (safety != null) rows.addAll(safety.rows(signer, call.party, RecipientHistory.Role.APPROVE));
@@ -105,7 +105,7 @@ final class NftReview {
                     + "an NFT collection. An NFT call to it is unexpected."));
         }
         rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addCommon(rows, details, r, signer, fromLabel);
         TransactionReview.addMaximumFee(rows, r);
 
         details.add(0, row("Function", call.function.signature + " · selector 0x" + call.function.selector));
@@ -165,7 +165,7 @@ final class NftReview {
         rows.add(row("Collection", collectionLabel(r.chainId, r.to)));
         rows.add(row("Collection contract", Keys.toChecksumAddress(r.to)));
         rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addCommon(rows, details, r, signer, fromLabel);
         TransactionReview.addMaximumFee(rows, r);
         details.add(row("Function", call.function.signature + " · selector 0x" + call.function.selector + " (ERC-721 meaning: this contract is a listed NFT collection)"));
         TransactionReview.addFeeDetails(details, r);

@@ -112,6 +112,11 @@ public final class Erc20ReviewTest {
         TransactionReview r2 = new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, second).review;
         assertEquals(checksummed, value(r2, "From · Account 2"));
         assertNull(value(r2, "From · Account 1"));
+        // shown once on screen: the review's top says "Signing with"; the From row is in the technical details
+        for (MessageReview.Row row : r2.summary) assertFalse(row.label, row.label.startsWith("From"));
+        boolean inDetails = false;
+        for (MessageReview.Row row : r2.details) inDetails |= row.label.equals("From · Account 2");
+        assertTrue(inDetails);
         SigningAccount passphrase = new SigningAccount(0, "Account 1", true, "1a2b3c4d", KEY.getAddress());
         TransactionReview rp = new ApprovalSession(transfer, KEY, TokenListTest.bundled(), null, passphrase).review;
         assertEquals(checksummed, value(rp, "From · Account 1 (passphrase wallet)"));
@@ -245,7 +250,7 @@ public final class Erc20ReviewTest {
         TransactionReview r = review("0x1", UNKNOWN, transfer(BOB, BigInteger.valueOf(50_000_000)));
         assertEquals("Unknown token transfer", r.title);
         assertEquals("Send 50,000,000 base units of unknown token contract " + UNKNOWN + " to " + BOB, value(r, "Action"));
-        assertEquals("50,000,000 base units (raw uint256; symbol and decimals unknown)", value(r, "Amount"));
+        assertEquals("50,000,000 base units (raw amount; token unknown)", value(r, "Amount"));
         assertEquals(UNKNOWN, value(r, "Unknown token contract"));
         assertTrue(value(r, "WARNING").startsWith("Unknown token contract " + UNKNOWN));
         assertTrue(value(r, "WARNING").contains("can't be verified"));
@@ -277,17 +282,21 @@ public final class Erc20ReviewTest {
         assertNull(r.token);
         assertTrue(r.text().contains("failed its integrity check"));
         assertTrue(r.text().contains("hash mismatch"));
-        assertEquals("50,000,000 base units (raw uint256; symbol and decimals unknown)", value(r, "Amount"));
+        assertEquals("50,000,000 base units (raw amount; token unknown)", value(r, "Amount"));
     }
 
     @Test public void nativeTransferReviewIsUnchanged() throws Exception {
         TransactionReview r = new ApprovalSession(Eip1559Request.parse(request("0xaa36a7", BOB, "0x")
                 .put("value", "0xde0b6b3a7640000")), KEY, TokenListTest.bundled()).review;
         assertEquals("Review transfer", r.title);
-        assertEquals("Native token transfer", value(r, "Action"));
+        assertEquals("Send ETH", value(r, "Action"));
         assertEquals("1 ETH", value(r, "Send"));
         assertEquals(BOB, value(r, "Recipient"));
         assertEquals("None", value(r, "Contract data"));
+        // the native coin by name: POL on Polygon
+        TransactionReview pol = new ApprovalSession(Eip1559Request.parse(request("0x89", BOB, "0x")
+                .put("value", "0xde0b6b3a7640000")), KEY, TokenListTest.bundled()).review;
+        assertEquals("Send POL", value(pol, "Action"));
     }
 
     // ------------------------------------------------------------------ strict calldata

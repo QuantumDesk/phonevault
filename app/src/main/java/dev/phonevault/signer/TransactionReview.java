@@ -19,7 +19,7 @@ final class TransactionReview {
     static final String DANGER = MessageReview.DANGER;
     static final String WARNING = MessageReview.WARNING;
     static final String KICKER = "TRANSACTION REVIEW";
-    static final String SUBTITLE = "Compare these details with your intended action. This phone is the approval screen.";
+    static final String SUBTITLE = "Check this matches what you meant to do. Only this screen can be trusted.";
 
     final String kicker;
     final String title;
@@ -106,7 +106,7 @@ final class TransactionReview {
             } else {
                 rows.add(row("Contract check", "The offline phone can't tell whether this address is a wallet or a contract."));
             }
-            addCommon(rows, r, signer, fromRow);
+            addCommon(rows, details, r, signer, fromRow);
             addMaximumFee(rows, r);
             addFeeDetails(details, r);
             details.add(row("Contract data", "None"));
@@ -171,7 +171,7 @@ final class TransactionReview {
         String amountTitle = call.function == Erc20Call.Function.INCREASE_ALLOWANCE ? "Allowance increase"
                 : call.function.grantsAllowance() ? "Allowance" : "Amount";
         String amountValue = call.unlimited() ? "UNLIMITED" + (token == null ? " (raw value ≥ 2^255)" : " " + token.symbol)
-                : token != null ? amount : amount + " (raw uint256; symbol and decimals unknown)";
+                : token != null ? amount : amount + " (raw amount; token unknown)";
         rows.add(row(amountTitle, amountValue));
 
         // parties
@@ -206,7 +206,7 @@ final class TransactionReview {
         // native value: the parser refuses nonzero value on token calls; shown anyway so the screen
         // states it, and flagged if that rule ever changes.
         if (r.value.signum() == 0) rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        else rows.add(row(WARNING, "This token call ALSO sends " + r.valueEth() + " to the contract."));
+        else rows.add(row(WARNING, "This token call also sends " + r.valueEth() + " to the contract."));
 
         // what can go wrong, in words
         String danger = callWarning(call, token, party, signer, amount, assetName);
@@ -218,7 +218,7 @@ final class TransactionReview {
             rows.add(row(WARNING, "The recipient is the token contract itself. Tokens sent there are usually lost."));
         }
 
-        addCommon(rows, r, signer, fromRow);
+        addCommon(rows, details, r, signer, fromRow);
         addMaximumFee(rows, r);
 
         details.add(row("Function", call.function.signature + " · selector 0x" + call.function.selector));
@@ -288,9 +288,15 @@ final class TransactionReview {
         return account == null ? "From" : "From · " + account.headline();
     }
 
-    static void addCommon(List<MessageReview.Row> rows, Eip1559Request r, String signer, String fromLabel) {
+    /**
+     * The network row, and the signer row in the technical details: the review's top already
+     * shows the signing account in full ("Signing with", Pages#renderReview), so the summary does
+     * not repeat it, but the From row stays available under the details.
+     */
+    static void addCommon(List<MessageReview.Row> rows, List<MessageReview.Row> details, Eip1559Request r, String signer,
+                          String fromLabel) {
         rows.add(row("Network", r.networkLabel()));
-        if (signer != null) rows.add(row(fromLabel == null ? "From" : fromLabel, Keys.toChecksumAddress(signer)));
+        if (signer != null) details.add(0, row(fromLabel == null ? "From" : fromLabel, Keys.toChecksumAddress(signer)));
     }
 
     // ------------------------------------------------------------------ fee alarm
@@ -327,12 +333,12 @@ final class TransactionReview {
         if (max.compareTo(cap) > 0) {
             return row(DANGER, "The maximum fee is " + fee + ", far more than a normal fee on "
                     + r.networkLabel().replaceFirst(" \\(chain ID .*\\)$", "") + " (this phone warns above "
-                    + coins(cap) + " " + r.nativeSymbol() + "). The host chose the gas limit and fee per gas; "
+                    + coins(cap) + " " + r.nativeSymbol() + "). Your Mac chose the gas limit and fee per gas; "
                     + "do not sign unless you meant to pay this much.");
         }
         if (r.value.signum() > 0 && max.compareTo(r.value) > 0 && max.compareTo(feeComparisonFloor(r.chainId)) > 0) {
             return row(DANGER, "The maximum fee (" + fee + ") is more than the " + r.valueEth()
-                    + " being sent. Check the gas settings on your host; do not sign unless you meant to pay this much.");
+                    + " being sent. Check the gas settings on your Mac; do not sign unless you meant to pay this much.");
         }
         return null;
     }
