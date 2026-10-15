@@ -102,8 +102,8 @@ final class ReviewStyle {
         if (word(v, "fee") || v.contains("fee rate")) return "FEE";
         if (v.contains("sign-in") || v.contains("eip-4361")) return "SIGN-IN";
         if (v.contains("not this wallet") || v.contains("signs in as")) return "WRONG ACCOUNT";
-        if (v.contains("which website") || v.contains("uri host")) return "WEBSITE";
-        if (v.contains("your host is on") || word(v, "chain") || word(v, "network")) return "NETWORK";
+        if (v.contains("which website") || v.contains("which site") || v.contains("uri host")) return "WEBSITE";
+        if (v.contains("your mac is on") || v.contains("your host is on") || word(v, "chain") || word(v, "network")) return "NETWORK";
         if (v.contains("permit2")) return "PERMIT2";
         if (v.contains("order that can transfer")) return "TRADE ORDER";
         if (v.contains("nft #")) return "NFT PERMISSION";
@@ -142,9 +142,30 @@ final class ReviewStyle {
         return out;
     }
 
-    /** "1 danger below — read before signing" / "3 dangers below — read before signing". */
+    /** "1 danger below: read before signing" / "3 dangers below: read before signing". */
     static String dangerSummary(int count) {
-        return count + (count == 1 ? " danger" : " dangers") + " below — read before signing";
+        return count + (count == 1 ? " danger" : " dangers") + " below: read before signing";
+    }
+
+    /**
+     * The summary panel's list: each danger topic once, in first-seen order, with "×N" when it
+     * repeats ("LOOK-ALIKE ADDRESS ×2"). A danger without a recognisable topic is listed by its
+     * first sentence (addresses shortened), repeats counted the same way.
+     */
+    static List<String> dangerTopics(List<MessageReview.Row> dangers) {
+        java.util.LinkedHashMap<String, Integer> counts = new java.util.LinkedHashMap<>();
+        if (dangers != null) {
+            for (MessageReview.Row d : dangers) {
+                String t = topic(d);
+                if (t == null) t = shortenEvm(firstSentence(d.value));
+                counts.merge(t, 1, Integer::sum);
+            }
+        }
+        List<String> out = new ArrayList<>();
+        for (java.util.Map.Entry<String, Integer> e : counts.entrySet()) {
+            out.add(e.getValue() > 1 ? e.getKey() + " ×" + e.getValue() : e.getKey());
+        }
+        return out;
     }
 
     /**

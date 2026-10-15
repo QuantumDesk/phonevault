@@ -42,7 +42,7 @@ public final class ReviewStyleTest {
         assertEquals("DANGER · UNREADABLE DATA", ReviewStyle.heading(row(MessageReview.DANGER,
                 "Unreadable data: these bytes are not plain text. They could be the hash of a transaction or permission.")));
         assertEquals("DANGER · NETWORK", ReviewStyle.heading(row(MessageReview.DANGER,
-                "The message is for Base, but your host is on Ethereum. Do not sign unless you meant to act on that network.")));
+                "The message is for Base, but your Mac is on Ethereum. Do not sign unless you meant to act on that network.")));
         assertEquals("DANGER · ALL YOUR NFTS", ReviewStyle.heading(row(MessageReview.DANGER,
                 "Lets 0x33 move EVERY NFT in this collection, now and in future")));
         assertEquals("CHECK · UNKNOWN TOKEN", ReviewStyle.heading(row(MessageReview.WARNING,
@@ -79,7 +79,7 @@ public final class ReviewStyleTest {
         List<MessageReview.Row> dangers = ReviewStyle.dangers(r.summary, r.details);
         assertEquals(1, dangers.size());
         assertEquals("DANGER · UNLIMITED PERMISSION", ReviewStyle.heading(dangers.get(0)));
-        assertEquals("1 danger below — read before signing", ReviewStyle.dangerSummary(dangers.size()));
+        assertEquals("1 danger below: read before signing", ReviewStyle.dangerSummary(dangers.size()));
         assertEquals("I understand: UNLIMITED allowance: 0x3333…3333 will be able to take ALL of this wallet's USDC, "
                 + "now and in the future, until you revoke it.", ReviewStyle.dangerAcknowledgement(dangers));
     }
@@ -91,10 +91,23 @@ public final class ReviewStyleTest {
                 null,
                 Collections.singletonList(row(MessageReview.DANGER, "The Mac's simulation does not match.")));
         assertEquals(2, d.size());
-        assertEquals("2 dangers below — read before signing", ReviewStyle.dangerSummary(2));
+        assertEquals("2 dangers below: read before signing", ReviewStyle.dangerSummary(2));
         assertEquals("I understand: No minimum: you may get nothing back. (and 1 more danger shown above)",
                 ReviewStyle.dangerAcknowledgement(d));
         assertNull(ReviewStyle.dangerAcknowledgement(Collections.emptyList()));
+    }
+
+    @Test public void summaryListsEachTopicOnceWithItsCount() {
+        List<MessageReview.Row> d = ReviewStyle.dangers(Arrays.asList(
+                row(MessageReview.DANGER, "Looks like 0x1111…1111, but it is a DIFFERENT address."),
+                row(MessageReview.DANGER, "No minimum: you may get nothing back."),
+                row(MessageReview.DANGER, "Looks like 0x2222…2222, but it is a DIFFERENT address."),
+                row(MessageReview.DANGER, "Something this phone has no topic for. More words.")));
+        assertEquals(4, d.size());
+        assertEquals("4 dangers below: read before signing", ReviewStyle.dangerSummary(d.size()));
+        assertEquals(Arrays.asList("LOOK-ALIKE ADDRESS ×2", "NO MINIMUM", "Something this phone has no topic for."),
+                ReviewStyle.dangerTopics(d));
+        assertEquals(Collections.emptyList(), ReviewStyle.dangerTopics(Collections.emptyList()));
     }
 
     @Test public void firstSentenceKeepsDecimalsAndShortAddresses() {
