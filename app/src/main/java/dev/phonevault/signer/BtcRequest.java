@@ -118,10 +118,10 @@ final class BtcRequest {
         BtcRequest r = parse(json);
         switch (r.kind) {
             case GET_ACCOUNT:
-                return "The connected host asks to see your " + r.network.label + " " + BtcWallet.accountLabel(r.type, r.account)
+                return "Your Mac asks to see your " + r.network.label + " " + BtcWallet.accountLabel(r.type, r.account)
                         + " (watch-only). Unlock to continue.";
             case SHOW_ADDRESS:
-                return "The connected host asks the phone to show a " + r.network.label + " receiving address. Unlock to continue.";
+                return "Your Mac asks the phone to show a " + r.network.label + " receiving address. Unlock to continue.";
             default:
                 return BtcPsbtReview.lockedSummary(r.psbt, r.network);
         }

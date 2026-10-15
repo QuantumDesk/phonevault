@@ -6,7 +6,7 @@
 #   3. a poisoned look-alike     → DANGER "Looks like … but it is a DIFFERENT address" + chunk grid; reject
 #   4. setApprovalForAll(op,true) on an unknown collection → "Permission for EVERY NFT"; reject
 #   5. a real Universal Router swap (mainnet tx 0x65b058dd…, from swap-vectors.json) →
-#      "You get at least 227.107032 USDC · Recipient: this wallet ✓"; reject
+#      Summary "Swap … for at least 227.107032 USDC", Recipient "This wallet ✓"; reject
 #   6. an unknown contract call  → refused by the phone with no review ("Contract call refused")
 #   7. personal_sign of an EIP-7702 authorization tuple → refused ("Delegation refused")
 #   8. ☰ → Address book → Alice → Delete → the book is empty again
@@ -134,7 +134,7 @@ reject nft
 
 echo "== 5. real Universal Router swap"
 start_request swap sign-test --chain-id 0x1 --gas-limit 0x493e0 --to "$SWAP_TO" --data "$SWAP_DATA"
-review swap "Swap" "You get at least 227.107032 USDC" "Recipient: this wallet ✓"
+review swap "Swap" "for at least 227.107032 USDC" "This wallet ✓"
 reject swap
 
 echo "== 6. unknown contract call"

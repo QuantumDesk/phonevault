@@ -268,7 +268,7 @@ final class Eip1559Request {
             return "Not a total fee cap. This network may also charge L1 data and operator fees that this offline phone cannot independently bound.";
         if (chainId == 42161)
             return "This is the transaction gas bound. L1 posting charges and network-specific accounting cannot be independently checked offline.";
-        return "Execution gas bound only. Verify network-specific charges with your host; this phone has no live network state.";
+        return "Execution gas bound only. Verify network-specific charges on your Mac; this phone has no live network state.";
     }
 
     String displayedRecipientLabel() {
@@ -291,7 +291,7 @@ final class Eip1559Request {
     }
 
     String transactionTypeLabel() {
-        if (kind == Kind.NATIVE_TRANSFER) return "Native token transfer";
+        if (kind == Kind.NATIVE_TRANSFER) return "Send " + nativeSymbol(); // "Send ETH", "Send POL"
         if (kind == Kind.TOKEN_TRANSFER) return "Token transfer (interface unverified)";
         if (kind == Kind.TOKEN_TRANSFER_FROM) return "Token transferFrom (interface unverified)";
         if (kind == Kind.TOKEN_INCREASE_ALLOWANCE) return "Token allowance increase (interface unverified)";

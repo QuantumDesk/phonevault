@@ -36,7 +36,7 @@ import java.util.Set;
  */
 final class SimulationCheck {
     static final String BOX_TITLE = "THE MAC'S SIMULATION · NOT VERIFIED BY THIS PHONE";
-    static final String MISMATCH = "The Mac's simulation does not match what this transaction does — trust the phone's review above.";
+    static final String MISMATCH = "The Mac's simulation does not match what this transaction does: trust the phone's review above.";
     static final BigInteger ROUNDING = BigInteger.valueOf(2);
 
     /** The rendered box: title, rows (DANGER/WARNING labels render red), and the verdict. */

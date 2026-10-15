@@ -73,14 +73,14 @@ final class BackupReminder {
         return edit.putInt(KEY_LAST_DAY, day(nowMillis)).remove(KEY_SNOOZE_UNTIL);
     }
 
-    /** Card headline, e.g. "It's been 3 months — check your backup (2 minutes)". */
+    /** Card headline, e.g. "It's been 3 months: check your backup (2 minutes)". */
     String headline(long nowMillis) {
         int days = Math.max(0, day(nowMillis) - lastCheckDay());
         String since = days >= 60 ? (days / 30) + " months"
                 : days >= 28 ? "a month"
                 : days >= 14 ? (days / 7) + " weeks"
                 : days + (days == 1 ? " day" : " days");
-        return "It's been " + since + " — check your backup (2 minutes)";
+        return "It's been " + since + ": check your backup (2 minutes)";
     }
 
     /** Settings label for an interval. */

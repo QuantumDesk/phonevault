@@ -80,7 +80,7 @@ final class SetupScreens {
         int rolls = diceRolls.length();
         int bits = (int) Math.floor(rolls * 2.585);
         LinearLayout root = pages.page("SET UP · ADVANCED", "Add your own randomness",
-                "Roll a real die and tap each result. Your rolls are hashed together with the phone's two hardware entropy sources, so the wallet never depends on the phone's randomness alone. The rolls are not displayed and are discarded after the wallet is created.");
+                "Roll a real die and tap each result. Your rolls are hashed together with the phone's three sources of randomness (the Android kernel random generator, the security chip's random generator and CPU timing jitter), so the wallet never depends on the phone's randomness alone. The rolls are not displayed and are discarded after the wallet is created.");
         pages.card(root, "Rolls so far", rolls + " of " + DICE_FULL + " · about " + Math.min(bits, 256) + " of 256 bits"
                 + (rolls >= DICE_FULL ? " · full strength" : ""));
         LinearLayout row = new LinearLayout(activity);
@@ -147,7 +147,9 @@ final class SetupScreens {
             } catch (Exception e) {
                 activity.runOnUiThread(() -> {
                     if (s != host.session() || !host.unlocked()) return;
-                    pages.showInfo("Could not create a wallet", "Nothing was saved. " + e.getMessage(), this::showFirstRunChoice);
+                    android.util.Log.w("Vault", "wallet creation failed: " + e);
+                    pages.showInfo("Could not create a wallet", "Nothing was saved. Try again; if it fails again, "
+                            + "restart the phone (hold the power button, then Restart) and set up the wallet again.", this::showFirstRunChoice);
                 });
             }
         });
@@ -163,7 +165,7 @@ final class SetupScreens {
     void confirmRestoreOver() {
         if (!host.walletLoaded() || !host.hasCredentials()) return;
         LinearLayout root = pages.page("SECURITY / RESTORE", "Restore a different wallet?",
-                "You will type a 24-word recovery phrase on this phone. The wallet it produces REPLACES the current one on this device. Nothing changes until you confirm the address it shows.");
+                "You will type a 24-word recovery phrase on this phone. The wallet it produces replaces the current one on this phone. Nothing changes until you confirm the address it shows.");
         String walletId = host.walletId();
         pages.card(root, "Current Account 1", Keys.toChecksumAddress(walletId != null ? walletId : host.walletAddress()));
         pages.card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
@@ -365,8 +367,8 @@ final class SetupScreens {
                     if (replacing && !host.replacement().markPrepared(restoreOverOp)) { host.hideBackup(); return; }
                     LinearLayout root = pages.page(replacing ? "REPLACE BY RESTORE · CONFIRM" : "RESTORE · CONFIRM",
                             replacing ? "Replace with this wallet?" : "Is this your wallet?",
-                            replacing ? "This is the address your phrase produces. Confirming REPLACES the current wallet on this phone. If the address is not the one you expect, a word or its order is wrong — nothing has been saved yet."
-                                      : "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong — nothing has been saved yet.");
+                            replacing ? "This is the address your phrase produces. Confirming replaces the current wallet on this phone. If the address is not the one you expect, a word or its order is wrong: nothing has been saved yet."
+                                      : "This is the address your phrase produces. Compare it with the wallet you're restoring. If it doesn't match, a word or its order is wrong: nothing has been saved yet.");
                     pages.card(root, replacing ? "New Account 1" : "Account 1", Keys.toChecksumAddress(address));
                     String current = host.walletAddress();
                     if (replacing && current != null) pages.card(root, "Replaces current", Keys.toChecksumAddress(current));

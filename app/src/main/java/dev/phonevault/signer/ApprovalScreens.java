@@ -129,7 +129,7 @@ final class ApprovalScreens {
         }
         addDecisionControls(root, source, decision, s, SignSpec.withCredentials(approval.request.id, review.reviewPrompt,
                 review.signLabel, dangers, approval::signIfIdentityUnchanged,
-                "The response was queued for USB. Check your host for receipt and broadcast status. Unplugging cannot revoke a signature already received.",
+                "The response was queued for USB. Check on your Mac that it arrived and was sent to the network. Unplugging cannot revoke a signature already received.",
                 "Transaction hash", "transactionHash", true, () -> {
                     // A signature exists: count its counterparties in this phone's history and offer to name them.
                     host.safety().record(approval.reviewedAddress(), review.parties, System.currentTimeMillis());
@@ -254,9 +254,9 @@ final class ApprovalScreens {
                                     : "Signing did not complete. No signature left the phone.", null, null, spec.transaction);
                             return;
                         }
-                        showReceipt("Check the host", spec.transaction
-                                ? "Signing or delivery did not complete normally. A signature may have reached the host. Check before creating another transaction."
-                                : "Signing or delivery did not complete normally. A signature may have reached the host. Check before signing again.",
+                        showReceipt("Check your Mac", spec.transaction
+                                ? "Signing or delivery did not complete normally. A signature may have reached your Mac. Check there before creating another transaction."
+                                : "Signing or delivery did not complete normally. A signature may have reached your Mac. Check there before signing again.",
                                 null, null, spec.transaction);
                     });
                 }
@@ -300,8 +300,8 @@ final class ApprovalScreens {
     void showReceipt(String title, String message, String label, String value, boolean transaction) {
         LinearLayout root = pages.page("REQUEST OUTCOME", title, message);
         if (value != null && !value.isEmpty()) pages.card(root, label, value);
-        if (transaction) pages.card(root, "Network status", "This offline phone cannot confirm broadcast, inclusion, or settlement.");
-        else pages.card(root, "Where it goes", "This offline phone cannot see how the host or website uses the signature.");
+        if (transaction) pages.card(root, "Network status", "This offline phone cannot see whether it was sent to the network or confirmed.");
+        else pages.card(root, "Where it goes", "This offline phone cannot see how your Mac or the site uses the signature.");
         List<TransactionReview.Party> save = receiptParties;
         receiptParties = null;
         if (save != null && !save.isEmpty()) host.addSaveActions(root, save);

@@ -21,7 +21,7 @@ import java.util.function.Supplier;
  */
 public final class RequestRouterTest {
     private static final String UNDECODABLE =
-            "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
+            "Your Mac sent a request this phone cannot decode. It will be refused after you unlock.";
     private static final Supplier<TokenList> NO_TOKENS = () -> TokenList.unavailable("test");
 
     private static JSONObject tx() throws Exception {
@@ -32,13 +32,13 @@ public final class RequestRouterTest {
 
     @Test public void lockedGateDescribesHeldRequests() throws Exception {
         JSONObject getAddress = new JSONObject().put("id", "a-1").put("method", "getAddress");
-        assertEquals("The connected host asks for your receiving address. Unlock to continue.",
+        assertEquals("Your Mac asks for your receiving address. Unlock to continue.",
                 RequestRouter.lockedSummary(getAddress, NO_TOKENS));
         assertEquals("exact schema even for display", UNDECODABLE,
                 RequestRouter.lockedSummary(new JSONObject(getAddress.toString()).put("chainId", "0x1"), NO_TOKENS));
 
         JSONObject attest = new JSONObject().put("id", "a-2").put("method", "attest").put("challenge", "ab".repeat(32));
-        assertEquals("The connected host asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.",
+        assertEquals("Your Mac asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.",
                 RequestRouter.lockedSummary(attest, NO_TOKENS));
         assertEquals(UNDECODABLE, RequestRouter.lockedSummary(attest.put("challenge", "zz"), NO_TOKENS));
 

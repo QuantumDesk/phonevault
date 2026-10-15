@@ -148,7 +148,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final BroadcastReceiver batteryReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context context, Intent intent) { onBattery(readBattery(intent)); }
     };
-    private String statusMessage = "USB disconnected · connect a host when ready";
+    private String statusMessage = "USB disconnected · connect your Mac when ready";
     private int activeSensitive = -1;
     private Runnable afterReauth;
     private char[][] pinSetupEntries;
@@ -325,11 +325,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 Context.DEVICE_POLICY_SERVICE);
         boolean managed = policy.isDeviceOwnerApp(getPackageName());
         if (ApplianceProvisioning.applianceImage() && !managed) {
-            deactivate("FATAL POLICY ERROR: Phone Vault is not device owner");
+            deactivate("Phone Vault is not this phone's device owner, so it cannot lock the phone down.");
             return;
         }
         if (managed && !enterVaultMode(policy)) {
-            deactivate("FATAL POLICY ERROR: lock-task policy could not be enforced");
+            deactivate("The kiosk (lock-task) policy could not be enforced.");
             return;
         }
         if (adbRefused()) {
@@ -374,14 +374,14 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (creating) {
             subtitle = SystemCredential.willBind(this)
                     ? "Choose a " + VaultPin.PIN_LENGTH + "-digit PIN. The phone's security chip checks it. "
-                            + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong tries reset the whole phone."
+                            + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs erase the phone."
                     : "Choose a " + VaultPin.PIN_LENGTH + "-digit PIN. It unlocks this vault. "
                             + VaultPin.MAX_ATTEMPTS + " wrong attempts erase the wallet.";
         } else if (sealed) {
             subtitle = "Attempt limit reached but the wallet could not be verifiably erased. "
                     + "The vault stays sealed. Enter any PIN to retry the erase.";
         } else {
-            subtitle = "Enter your six-digit PIN." + (pendingUsb != null ? " USB host is waiting." : "");
+            subtitle = "Enter your six-digit PIN." + (pendingUsb != null ? " Your Mac is waiting." : "");
         }
         if (gateNotice != null) { subtitle = gateNotice + "\n\n" + subtitle; gateNotice = null; }
         final int s = session.get(); // PIN operations are bound to this gate's session
@@ -391,7 +391,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
         // A request that arrived while locked (or a connected host) is shown on the gate too.
         synchronized (stateLock) { if (heldRequest.summary() != null) pinScreen.setPending("INCOMING REQUEST", heldRequest.summary()); }
-        if (transport != null && !creating && !sealed) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
+        if (transport != null && !creating && !sealed) pinScreen.setSubtitle("Enter your six-digit PIN. Your Mac is connected; its request will appear here.");
         updatePinPolicy(pinScreen);
         pages.setScreen("pin");
         setContentView(pinScreen.view());
@@ -430,7 +430,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = pages.page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
         synchronized (stateLock) { if (heldRequest.summary() != null) pages.card(root, "Incoming request", heldRequest.summary()); }
-        if (transport != null) pages.card(root, "USB", "A host is connected. Its request stays unanswered until you unlock and review it.");
+        if (transport != null) pages.card(root, "USB", "Your Mac is connected. Its request stays unanswered until you unlock and review it.");
         TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
         Pages.hardenTouch(unlockButton);
         unlockButton.setOnClickListener(v -> credentialGate.promptUnlock(s));
@@ -536,26 +536,27 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                             break;
                         case WRONG:
                             pinScreen.setSubtitle("Enter your six-digit PIN.");
-                            pinScreen.showError("wrong pin · " + result.attemptsRemaining
+                            pinScreen.showError("Wrong PIN · " + result.attemptsRemaining
                                     + (result.attemptsRemaining == 1 ? " attempt left" : " attempts left"));
                             updatePinPolicy(pinScreen);
                             break;
                         case WIPED:
-                            gateNotice = "VAULT ERASED: too many wrong attempts. The wallet and PIN were destroyed. Set a new PIN to create a new wallet.";
+                            gateNotice = "Wallet erased: too many wrong PINs. The wallet and PIN were destroyed. Set a new PIN, then create or restore a wallet.";
                             showPinGate(null);
                             break;
                         case ERASE_FAILED:
                         default:
                             // Fail closed: PIN kept, no key load possible, only the erase retries.
                             showPinGate(null);
-                            pinScreen.showError("erase failed · vault sealed");
+                            pinScreen.showError("Erase not confirmed · enter any PIN to retry");
                             break;
                     }
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
                     if (s != session.get() || pinScreen == null) return;
-                    pinScreen.showError("pin error: " + e.getMessage());
+                    Log.w(TAG, "pin check failed: " + e);
+                    pinScreen.showError("PIN check failed. Try again.");
                 });
             }
         });
@@ -728,7 +729,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void deactivate(String reason) {
         deactivate("DEVICE NOT READY", "Policy check failed", reason, "Signing is disabled",
-                "Have the image provisioning checked. No wallet identity is displayed.", "policy-error");
+                "Phone Vault could not take control of this phone as an appliance. Restart the phone; if this screen comes back, "
+                        + "flash the Phone Vault image again by following the setup guide. No wallet identity is displayed.", "policy-error");
     }
 
     /**
@@ -879,8 +881,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         statusView.setPadding(pages.dp(2), pages.dp(20), 0, pages.dp(4));
         root.addView(statusView);
         pages.action(root, "Lock now", false, this::lock);
-        pages.card(root, DevTools.SCREENSHOTS ? "Development appliance" : "Prototype",
-                "Test assets only. Hardware release verification is still pending.");
+        pages.card(root, "Development · test assets only",
+                "Hardware release verification is still pending.");
         pages.present(root, "wallet");
     }
 
@@ -897,7 +899,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void beginSensitive(String purpose, Runnable afterPin) {
         if (!walletLoaded || credentials == null || !unlocked) return;
         if (transport != null || requestPending.get()) {
-            pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug the host before opening wallet security.", settings::showSecurity);
+            pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug your Mac before opening wallet security.", settings::showSecurity);
             return;
         }
         int token;
@@ -967,7 +969,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void updatePinPolicy(PinScreen gate) {
         gate.setBattery(battery);
         int remaining = pin.attemptsRemaining();
-        gate.setPolicy((DevTools.SCREENSHOTS ? Pages.DEV_KICKER + "\n" : "PROTOTYPE · TEST ASSETS ONLY\n")
+        gate.setPolicy(Pages.DEV_KICKER + "\n"
                 + (SystemCredential.willBind(this) && !pin.isSet()
                         ? "Your PIN will be held by the security chip."
                         : remaining + " attempts remaining. " + VaultPin.MAX_ATTEMPTS + " failed attempts erase the wallet."));
@@ -1085,11 +1087,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 opened.start();
                 pendingUsb = null;
                 keepScreenOn(true);
-                if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. A USB host is connected; its request will appear here.");
+                if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. Your Mac is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
                 pendingUsb = intent; // fall back to replaying the attach after unlock
-                if (pinScreen != null) pinScreen.setSubtitle("Enter PIN to unlock.  USB host is waiting.");
+                if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. Your Mac is waiting.");
             }
             return;
         }
@@ -1097,7 +1099,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // Sensitive screens, incomplete backup, and USB are mutually exclusive. Park the host
             // until the replacement completes or is cancelled (then replayed from there).
             pendingUsb = intent;
-            statusMessage = "USB host waiting · finish wallet setup or security action";
+            statusMessage = "Your Mac is waiting · finish wallet setup or the security step first";
             if (statusView != null) statusView.setText(statusMessage);
             return;
         }
@@ -1111,7 +1113,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         boolean replacedRequest = approvalDecision != null;
         cancelApproval();
-        if (replacedRequest) approvals.showReceipt("USB session changed", "The previous request ended. If you tapped Sign, check the host for a possible signature before retrying.", null);
+        if (replacedRequest) approvals.showReceipt("USB session changed", "The previous request ended. If you tapped Approve & sign, check your Mac for a possible signature before retrying.", null);
         try {
             AccessoryTransport opened = AccessoryTransport.open(
                     (UsbManager) getSystemService(USB_SERVICE), accessory, this);
@@ -1121,7 +1123,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (statusView != null) statusView.setText(statusMessage);
         } catch (Exception exception) {
             transport = null;
-            statusMessage = "USB connection failed · reconnect the host";
+            statusMessage = "USB connection failed · unplug and reconnect your Mac";
             if (statusView != null) statusView.setText(statusMessage);
         }
     }
@@ -1227,7 +1229,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void showPassphraseWallet() {
         if (!accountScreensReady()) return;
-        if (!backupVerified) { pages.showInfo("Check your backup first", "A passphrase wallet opens after the backup spot-check of your 24 words.", this::showHome); return; }
+        if (!backupVerified) { pages.showInfo("Check your backup first", "A passphrase wallet opens after the backup spot-check of your recovery phrase.", this::showHome); return; }
         accounts.showPassphraseIntro();
     }
 
@@ -1283,7 +1285,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             cancelApproval();
             setStatusActive(false);
             if (unlocked && hadApproval)
-                approvals.showReceipt("USB disconnected", "The request session ended. If you tapped Sign, delivery may be uncertain. Check the host before trying another transaction.", null);
+                approvals.showReceipt("USB disconnected", "The request session ended. If you tapped Approve & sign, delivery may be uncertain. Check your Mac before trying another transaction.", null);
         });
     }
 

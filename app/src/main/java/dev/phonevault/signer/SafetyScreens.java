@@ -51,7 +51,7 @@ final class SafetyScreens {
     void showList() {
         if (!host.ready()) return;
         LinearLayout root = host.page("MENU / ADDRESS BOOK", "Contacts",
-                "Names you give addresses on this phone. Reviews show them next to the full address; a connected computer can never set or change them.");
+                "Names you give addresses on this phone. Reviews show them next to the full address; your Mac can never set or change them.");
         if (book.problem() != null) host.card(root, "Address book unavailable", book.problem());
         List<AddressBook.Contact> contacts = book.list();
         if (contacts.isEmpty()) {

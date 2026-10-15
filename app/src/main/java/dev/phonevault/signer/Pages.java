@@ -247,6 +247,14 @@ final class Pages {
         }
         row.addView(valueView);
         SafetyScreens.style(activity, row, label, valueView, value);
+        if (level == ReviewStyle.Level.DANGER) {
+            // The red panel is the row's own background: keep it clear of the rows around it so
+            // the next label never touches its border. CHECK rows have no panel; their value's
+            // bottom padding separates them like any plain row.
+            LinearLayout.LayoutParams lp = matchWrap(dp(4));
+            lp.bottomMargin = dp(14);
+            row.setLayoutParams(lp);
+        }
         return row;
     }
 
@@ -257,8 +265,8 @@ final class Pages {
     }
 
     /**
-     * Top of a review with DANGER rows: "N dangers below — read before signing" and each one's
-     * topic, on the same red-outlined panel the rows use.
+     * Top of a review with DANGER rows: "N dangers below: read before signing" and each topic
+     * once ("×N" when repeated), on the same red-outlined panel the rows use.
      */
     private void addDangerSummary(LinearLayout root, List<MessageReview.Row> dangers) {
         if (dangers.isEmpty()) return;
@@ -282,15 +290,16 @@ final class Pages {
         heading.addView(title, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
         panel.addView(heading);
         StringBuilder topics = new StringBuilder();
-        for (MessageReview.Row d : dangers) {
-            String t = ReviewStyle.topic(d);
+        for (String t : ReviewStyle.dangerTopics(dangers)) {
             if (topics.length() > 0) topics.append('\n');
-            topics.append("• ").append(t != null ? t : ReviewStyle.shortenEvm(ReviewStyle.firstSentence(d.value)));
+            topics.append("• ").append(t);
         }
         TextView list = VaultTheme.bodyText(activity, topics.toString(), 13, VaultTheme.DANGER_INK);
         list.setPadding(0, dp(8), 0, 0);
         panel.addView(list);
-        root.addView(panel, matchWrap(dp(4)));
+        LinearLayout.LayoutParams lp = matchWrap(dp(4));
+        lp.bottomMargin = dp(16); // the next row's label must not touch the panel's border
+        root.addView(panel, lp);
     }
 
     /** Refuse touches while another window covers this one (tapjacking). */

@@ -246,7 +246,7 @@ final class BackupScreens {
             pages.showInfo("Backup hidden", message, host::showHome);
             return;
         }
-        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · any touch restarts the timer · 8 minute session limit");
+        if (seedTimer != null) seedTimer.setText("Hides in " + ((remaining + 999) / 1000) + "s · any touch restarts the timer · 8-minute session limit");
         ui.postDelayed(hideSeed, 1000);
     }
 

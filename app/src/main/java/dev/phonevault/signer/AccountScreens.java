@@ -113,7 +113,7 @@ final class AccountScreens {
         String fingerprint = passphraseFingerprint();
         LinearLayout root = host.page(fingerprint == null ? "ACCOUNTS" : "ACCOUNTS · PASSPHRASE WALLET",
                 fingerprint == null ? "Your accounts" : "Passphrase wallet accounts",
-                "Each account is its own address from the same recovery phrase (m/44'/60'/0'/0/n). The active account receives, answers the computer and signs.");
+                "Each account is its own address from the same recovery phrase (m/44'/60'/0'/0/n). The active account receives, answers your Mac and signs.");
         if (fingerprint != null) host.card(root, "Passphrase wallet · fingerprint " + fingerprint,
                 "This list is not saved on the phone. It starts at Account 1 each time you open the passphrase wallet; add accounts again to reach them (same addresses every time).");
         SigningAccount active = host.active();
@@ -215,12 +215,12 @@ final class AccountScreens {
         host.entryActive(false);
         String open = passphraseFingerprint();
         LinearLayout root = host.page("PASSPHRASE WALLET", open == null ? "Open a passphrase wallet" : "Passphrase wallet is open",
-                "A passphrase (the \"25th word\") added to your 24 words opens a separate wallet with its own accounts.");
+                "A passphrase (the \"25th word\") added to your recovery phrase opens a separate wallet with its own accounts.");
         if (open != null) host.card(root, "Open now", "Fingerprint " + open + ". Forgotten when the phone locks.");
         host.card(root, "A wrong passphrase opens a different wallet",
                 "There is no \"wrong passphrase\" error, by design: every passphrase opens some wallet, and a typo opens an empty one. Recognise yours by its fingerprint and first address every time.");
         host.card(root, "Not part of your backup",
-                "Your 24 words alone do NOT restore a passphrase wallet. Write the passphrase down separately and exactly (capitals, spaces, symbols). If it is lost, so is everything in that wallet.");
+                "Your recovery phrase alone does not restore a passphrase wallet. Write the passphrase down separately and exactly (capitals, spaces, symbols). If it is lost, so is everything in that wallet.");
         host.card(root, "Never stored",
                 "The phone never saves the passphrase and never sends it over USB. It is cleared when the phone locks or restarts; type it again after every unlock.");
         host.action(root, open == null ? "Enter passphrase" : "Open a different passphrase", true, this::startPassphraseEntry);
@@ -243,7 +243,7 @@ final class AccountScreens {
         else if (reveal) shown = typed + "▌";
         else { char[] dots = new char[n]; Arrays.fill(dots, '•'); shown = new String(dots) + "▌"; }
         LinearLayout root = host.page("PASSPHRASE WALLET · " + n + (n == 1 ? " CHARACTER" : " CHARACTERS"), shown,
-                "Capitals, spaces and symbols all count. Typed here only; never stored, never sent to the computer.");
+                "Capitals, spaces and symbols all count. Typed here only; never stored, never sent to your Mac.");
         keyboard(root, SeedVault.MAX_PASSPHRASE_LENGTH, true, this::showPassphraseEntry);
         if (error != null) {
             TextView e = VaultTheme.bodyText(host.context(), error, VaultTheme.BODY_SIZE, VaultTheme.DANGER_INK);

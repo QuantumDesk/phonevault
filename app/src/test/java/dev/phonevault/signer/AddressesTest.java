@@ -78,7 +78,7 @@ public final class AddressesTest {
     /** The locked-screen summary of a native transfer: EIP-55 casing, 8 + 6. */
     @Test public void lockedTransferSummaryIsEightAndSix() throws Exception {
         TransactionReview r = SwapReviewTest.review("0x1", USDC_LOWER, "0xde0b6b3a7640000", "0x");
-        assertTrue(r.lockedSummary, r.lockedSummary.startsWith("Native token transfer · 1 ETH to 0xA0b869…06eB48 · "));
+        assertTrue(r.lockedSummary, r.lockedSummary.startsWith("Send ETH · 1 ETH to 0xA0b869…06eB48 · "));
     }
 
     /** The danger checkbox and blind-sign topics: case exactly as written, 6 + 4. */

@@ -70,7 +70,10 @@ final class SwapReview {
                 + " · Recipient: " + (otherRecipient ? "OTHER ADDRESS ✗" : receives.isEmpty() ? "—" : "this wallet ✓")
                 + (plan.deadline != null ? " · Expires " + shortTime(plan.deadline) : " · No deadline");
         rows.add(row("Action", "Swap on Uniswap (" + plan.router.version.label + ")"));
-        rows.add(row("Summary", headline));
+        // One line ("Swap 1,000 USDC for at least 0.41 WETH"); the rows below give every detail.
+        String gave = join(gives, names, ""), got = join(receives, names, "");
+        String swapLine = "Swap" + (gave.isEmpty() ? "" : " " + gave) + (got.isEmpty() ? "" : " for " + got);
+        rows.add(row("Summary", swapLine + (otherRecipient ? " · to another address" : "")));
         for (SwapPlan.Amount a : gives) rows.add(row("You give", amount(a, names)));
         for (SwapPlan.Amount a : refunds) {
             rows.add(row("Unused input", "Any " + names.symbolOrContract(a.asset) + " the swap does not need comes back to this wallet"));
@@ -162,7 +165,7 @@ final class SwapReview {
             rows.add(row(unlimited ? WARNING : "Permit2 permission", "Also activates a Permit2 allowance you signed earlier: the "
                     + plan.router.version.label + " may spend " + (unlimited ? "UNLIMITED " + names.symbolOrContract(p.token)
                     : names.amount(p.token, p.amount)) + " from this wallet "
-                    + (p.expiration.equals(UniversalRouter.UINT48_MAX) ? "with NO expiry" : "until " + MessageReview.timeLabel(p.expiration)) + "."));
+                    + (p.expiration.equals(UniversalRouter.UINT48_MAX) ? "with no expiry" : "until " + MessageReview.timeLabel(p.expiration)) + "."));
         }
         if (plan.usesPermit2) {
             rows.add(row("Paid through", "Permit2: the router pulls your tokens using the Permit2 allowance this wallet gave it."));
@@ -184,7 +187,7 @@ final class SwapReview {
                 + " (pinned in this phone)"));
         if (r.value.signum() > 0) rows.add(row("Native value sent", r.valueEth() + " (used by the swap)"));
         else rows.add(row("Native value sent", "0 " + r.nativeSymbol() + " (only the fee below)"));
-        TransactionReview.addCommon(rows, r, signer, fromLabel);
+        TransactionReview.addCommon(rows, details, r, signer, fromLabel);
         TransactionReview.addMaximumFee(rows, r);
 
         details.add(row("Function", plan.function + " · selector 0x" + r.data.substring(2, 10)));

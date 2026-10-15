@@ -218,7 +218,7 @@ final class BtcScreens {
         host.finishApproval(decision);
         activity.runOnUiThread(() -> {
             if (s != host.session() || !host.unlocked()) return;
-            String message = r.network.label + " " + BtcWallet.accountLabel(r.type, r.account) + " sent to the host (watch-only, shared before)";
+            String message = r.network.label + " " + BtcWallet.accountLabel(r.type, r.account) + " sent to your Mac (watch-only, shared before)";
             if ("loading".equals(pages.screen()) && host.approvalDecision() == null) {
                 host.setStatus(message);
                 host.showHome();
@@ -233,7 +233,7 @@ final class BtcScreens {
         host.keepScreenOn(true);
         LinearLayout root = pages.page(r.network.test() ? r.network.label.toUpperCase(Locale.ROOT) + " · SHARE ACCOUNT" : "BITCOIN · SHARE ACCOUNT",
                 "Share Bitcoin account with the Mac?",
-                "The connected computer asks for this account's watch-only key, to show your balance and prepare transactions.");
+                "Your Mac asks for this account's watch-only key, to show your balance and prepare transactions.");
         root.addView(pages.detail(r.network.test() ? BtcPsbtReview.TEST_NETWORK : "Network", r.network.label));
         root.addView(pages.detail("Account", BtcWallet.accountLabel(r.type, r.account) + "\n" + wallet.accountPathString(r.type, r.account)));
         root.addView(pages.detail("Wallet fingerprint", wallet.fingerprintHex()));
@@ -392,8 +392,8 @@ final class BtcScreens {
                     return BtcRequest.signedResponse(r.id, signed);
                 },
                 "Confirm your PIN to sign this Bitcoin transaction",
-                "The signed PSBT was queued for USB. Your Mac finalizes and broadcasts it; unplugging cannot revoke a signature already received.",
-                "Transaction ID (once broadcast)", response -> txid, true, () -> {
+                "The signed PSBT was queued for USB. Your Mac finalizes it and sends it to the network; unplugging cannot revoke a signature already received.",
+                "Transaction ID (once sent to the network)", response -> txid, true, () -> {
                     host.safety().record(review.walletKey, review.parties, System.currentTimeMillis());
                     approvals.offerToSave(review.parties);
                 }));

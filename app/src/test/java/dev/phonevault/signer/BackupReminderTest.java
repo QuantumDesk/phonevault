@@ -17,7 +17,7 @@ public class BackupReminderTest {
         assertFalse(reminder.due(T0));
         assertFalse(reminder.due(T0 + 89 * DAY));
         assertTrue(reminder.due(T0 + 90 * DAY));
-        assertEquals("It's been 3 months — check your backup (2 minutes)", reminder.headline(T0 + 90 * DAY));
+        assertEquals("It's been 3 months: check your backup (2 minutes)", reminder.headline(T0 + 90 * DAY));
     }
 
     @Test public void aSuccessfulBackupCheckRestartsTheInterval() {
@@ -52,11 +52,11 @@ public class BackupReminderTest {
         BackupReminder.markChecked(prefs.edit(), T0).commit();
         assertTrue(reminder.setIntervalDays(30));
         assertTrue(reminder.due(T0 + 30 * DAY));
-        assertEquals("It's been a month — check your backup (2 minutes)", reminder.headline(T0 + 30 * DAY));
+        assertEquals("It's been a month: check your backup (2 minutes)", reminder.headline(T0 + 30 * DAY));
         assertTrue(reminder.setIntervalDays(180));
         assertFalse(reminder.due(T0 + 179 * DAY));
         assertTrue(reminder.due(T0 + 180 * DAY));
-        assertEquals("It's been 6 months — check your backup (2 minutes)", reminder.headline(T0 + 180 * DAY));
+        assertEquals("It's been 6 months: check your backup (2 minutes)", reminder.headline(T0 + 180 * DAY));
         assertTrue(reminder.setIntervalDays(0));
         assertFalse(reminder.due(T0 + 5000 * DAY));
         try { reminder.setIntervalDays(45); fail(); } catch (IllegalArgumentException expected) { }

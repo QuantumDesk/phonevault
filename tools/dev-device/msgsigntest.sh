@@ -83,8 +83,8 @@ run_case mail "Review typed data" approve "Approve &amp; sign" "Ether Mail" -- \
   --typed-file "$WORK/mail.json" --expect-digest "$MAIL_DIGEST" --chain-id 0x1
 run_case permit2 "Review token allowance" approve "Approve permission &amp; sign" "UNLIMITED" -- \
   --typed-file "$WORK/permit2.json" --expect-digest "$PERMIT2_DIGEST" --chain-id 0x1
-# Chain mismatch: the same Permit2 message while the host says Base.
-run_case permit2-wrong-chain "Review token allowance" reject "" "but your host is on Base" -- \
+# Chain mismatch: the same Permit2 message while the Mac says Base.
+run_case permit2-wrong-chain "Review token allowance" reject "" "but your Mac is on Base" -- \
   --typed-file "$WORK/permit2.json" --expect-digest "$PERMIT2_DIGEST" --chain-id 0x2105
 
 kiosk_locked; no_crashes; unwake
