@@ -138,14 +138,14 @@ pub fn build_namespaces(required: &Value, optional: &Value, selected: &[u64], pa
             return Err(format!("your phone has no reviewed profile for chain {id}"));
         }
         if !plan.chains.iter().any(|c| c.id == id) {
-            return Err(format!("the dApp did not ask for chain {id}"));
+            return Err(format!("the site did not ask for chain {id}"));
         }
         if !chains.contains(&id) {
             chains.push(id);
         }
     }
     if let Some(missing) = plan.chains.iter().find(|c| c.required && !chains.contains(&c.id)) {
-        return Err(format!("the dApp requires {}; it must be included", missing.name));
+        return Err(format!("the site requires {}, so it must be included", missing.name));
     }
     let r = requested(required, optional);
     let mut methods: Vec<String> = SUPPORTED_METHODS.iter().map(ToString::to_string).collect();

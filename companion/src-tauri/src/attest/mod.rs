@@ -104,13 +104,13 @@ pub fn parse_response(request: &Value, response: &Value) -> Result<Answer, Strin
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
     keys.sort();
     if keys != ["address", "certificates", "id", "securityLevel", "signature", "status", "version"] {
-        return Err("the phone's attestation answer does not match the protocol".into());
+        return Err("the phone's genuine-check answer does not match the protocol".into());
     }
     if s("status") != Some("ok") {
         return Err("unexpected status".into());
     }
     if s("version") != Some("1") {
-        return Err("unsupported attestation version".into());
+        return Err("the phone's genuine-check answer uses an unsupported version".into());
     }
     let address = s("address").ok_or("address is not a string")?;
     if address.len() != 42
@@ -179,7 +179,7 @@ impl Report {
     }
     fn summary(&self) -> String {
         match self.assessment.problems.first() {
-            Some(p) => format!("{} — {p}", self.assessment.headline),
+            Some(p) => format!("{}. {p}", self.assessment.headline),
             None => self.assessment.headline.clone(),
         }
     }
@@ -218,13 +218,13 @@ pub fn assess(
         Err(e) => return Ok(report(policy::fail(format!("The phone's answer is malformed: {e}.")), None)),
         Ok(Answer::Refused(msg)) if transient(&msg) => return Err(format!("phone: {msg}")),
         Ok(Answer::Refused(msg)) => return Ok(report(policy::fail(format!(
-            "The phone did not attest ({msg}). A Phone Vault app without device attestation cannot prove it is genuine; update the app.")), None)),
+            "The phone did not answer the genuine check ({msg}). A Phone Vault app this old cannot prove it is genuine; update the app on the phone.")), None)),
         Ok(Answer::Attestation(a)) => a,
     };
     let chain = match chain::verify(&phone.certificates, roots, now) {
         Err(e) => {
             return Ok(report(
-                policy::fail(format!("The attestation certificate chain is not valid: {e}.")),
+                policy::fail(format!("The genuine-check certificate chain is not valid: {e}.")),
                 Some(&phone.address),
             ))
         }
@@ -289,7 +289,7 @@ pub fn run() -> Result<Report, String> {
     // Queue behind any other request on the phone (re-entrant when a send already holds the turn).
     let _turn = aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     if RUNNING.swap(true, Ordering::SeqCst) {
-        return Err("a device check is already running".into());
+        return Err("A genuine check is already running. Wait a few seconds, then try again.".into());
     }
     let _guard = RunGuard;
     let (epoch, allow_dev) = epoch_then_dev_mode(devmode::enabled)?;
@@ -373,13 +373,13 @@ pub fn require_genuine() -> Result<Report, String> {
 
 /// Gate for pairing: the address being pinned must come from a phone that passed just now.
 pub fn require_pairable(address: &str) -> Result<(), String> {
-    let report = cached().ok_or("Check the phone first: its device check has not run for this connection.")?;
+    let report = cached().ok_or("Check the phone first: its genuine check has not run for this connection.")?;
     if report.verdict() == Verdict::Fail {
         return Err(blocked(&report));
     }
     match &report.address {
         Some(a) if a.eq_ignore_ascii_case(address) => Ok(()),
-        _ => Err("This address is not the one the phone attested to.".into()),
+        _ => Err("This address is not the one the phone proved in its genuine check.".into()),
     }
 }
 

@@ -36,7 +36,7 @@ pub fn native_host_caller(args: &[String]) -> Option<String> {
 pub fn native_host_main(caller: String) -> i32 {
     let mut out = std::io::stdout();
     if !allowed_caller(&caller) {
-        let _ = write_frame(&mut out, br#"{"type":"hello","ok":false,"error":"wrong_extension","message":"This browser connection is installed for a different extension ID."}"#, MAX_OUT_FRAME);
+        let _ = write_frame(&mut out, br#"{"type":"hello","ok":false,"error":"wrong_extension","message":"This browser connection is installed for a different extension. In Phone Vault Companion: Settings \u2192 Browser extension \u2192 Install browser connection."}"#, MAX_OUT_FRAME);
         return 1;
     }
     let stream = socket_path().and_then(|p| UnixStream::connect(p).ok());

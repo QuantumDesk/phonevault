@@ -624,7 +624,7 @@ fn tx_of(q: &Quote, from: &str) -> Result<Tx, String> {
 pub(crate) async fn simulate(rpc_url: String, quote: Quote) -> CmdResult<Simulation> {
     blocking(move || {
         // Always the ACTIVE paired account: the one the phone will be asked to sign with (`from`).
-        let from = pairing::load()?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         let tx = tx_of(&quote, &from)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let node = node_label(&rpc_url);

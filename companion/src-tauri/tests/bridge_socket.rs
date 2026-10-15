@@ -108,7 +108,7 @@ fn node_url_with_api_key_does_not_leak_to_the_site() {
         }
     };
     let msg = answer["error"]["message"].as_str().unwrap_or_default().to_string();
-    assert!(msg.starts_with("node unreachable"), "the site is told the node failed: {msg}");
+    assert!(msg.starts_with("The network node is unreachable"), "the site is told the node failed: {msg}");
     assert!(
         !msg.contains("SECRET") && !msg.contains("127.0.0.1") && !msg.contains("https://"),
         "no part of the node URL reaches the site: {msg}"

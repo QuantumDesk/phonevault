@@ -241,7 +241,7 @@ pub struct TokenBalances {
 #[tauri::command]
 pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> {
     blocking(move || {
-        let owner = pairing::load()?.ok_or("not paired yet")?;
+        let owner = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         let rpc = eth::Rpc::new(&rpc_url)?;
         let chain = rpc.chain_id()?;
         let data = balance_of_calldata(&owner)?;
@@ -274,7 +274,7 @@ pub(crate) async fn token_balances(rpc_url: String) -> CmdResult<TokenBalances> 
 #[tauri::command]
 pub(crate) async fn token_quote(rpc_url: String, token: String, to: String, amount: String) -> CmdResult<Quote> {
     blocking(move || {
-        let from = pairing::load()?.ok_or("not paired yet")?;
+        let from = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
         // same recipient rules as `quote` (lib.rs)
         let recipient = verify::recipient(&to)?;
         let rpc = eth::Rpc::new(&rpc_url)?;

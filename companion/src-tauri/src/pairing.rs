@@ -34,6 +34,8 @@ const LEGACY_FILE: &str = "paired-signer.json";
 const VERSION: u32 = 2;
 pub const MAX_ACCOUNTS: usize = 64;
 pub const MAX_LABEL: usize = 40;
+/// Shown when a command needs a paired phone and none is paired yet.
+pub const NOT_PAIRED: &str = "Your phone isn't paired with this Mac yet. Pair it first, then try again.";
 
 /// One paired address.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -154,7 +156,10 @@ fn check_file(p: &Path) -> Result<Option<String>, PairingError> {
         return Err(err("pairing file is not a regular file"));
     }
     if meta.permissions().mode() & 0o077 != 0 {
-        return Err(err(format!("pairing file {} is readable by others — refusing to use it", p.display())));
+        return Err(err(format!(
+            "pairing file {} is readable by other users, so it was not used. Make it private (chmod 600) and try again",
+            p.display()
+        )));
     }
     fs::read_to_string(p).map(Some).map_err(|e| err(e.to_string()))
 }
@@ -398,7 +403,7 @@ mod tests {
     fn legacy_file_readable_by_others_is_refused_not_migrated() {
         let d = tmp();
         write_legacy(&d, A1, 0o644);
-        assert!(load_in(&d).unwrap_err().0.contains("readable by others"));
+        assert!(load_in(&d).unwrap_err().0.contains("readable by other users"));
         assert!(!d.join(FILE).exists());
     }
 

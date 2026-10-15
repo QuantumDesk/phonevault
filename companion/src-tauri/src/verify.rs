@@ -350,7 +350,7 @@ pub fn is_address(s: &str) -> bool {
 pub fn recipient(to: &str) -> Result<String, String> {
     let a = parse_address(to.trim(), Case::ChecksumIfMixed).map_err(|e| match e {
         AddressError::Shape => "recipient must be a 0x address with 40 hex characters",
-        AddressError::Checksum => "recipient address fails its checksum — one character is wrong",
+        AddressError::Checksum => "recipient address fails its checksum: one character is wrong",
     })?;
     if a.bytes().skip(2).all(|b| b == b'0') {
         return Err("refusing the zero address".into());
@@ -426,7 +426,7 @@ pub fn validate_signature(request: &Value, response: &Value, pinned_signer: &str
         ("data", signed.data == request["data"].as_str().unwrap_or("").to_ascii_lowercase()),
     ];
     if let Some((field, _)) = checks.iter().find(|(_, ok)| !ok) {
-        return Err(err(format!("signed {field} differs from the request — refusing to broadcast")));
+        return Err(err(format!("signed {field} differs from the request, so it was not sent to the network")));
     }
     let recomputed = format!("0x{}", hex::encode(keccak256(&signed.raw)));
     if recomputed != claimed_hash.to_ascii_lowercase() {
@@ -484,17 +484,19 @@ pub fn decode_erc20_transfer(data: &str) -> Result<(String, u128), VerifyError> 
 /// exactly transfer(recipient, amount). Runs after `validate_signature`, never instead of it.
 pub fn check_erc20_transfer(v: &Verified, contract: &str, recipient: &str, amount: u128) -> Result<(), VerifyError> {
     if v.to != contract.to_ascii_lowercase() {
-        return Err(err("signed transaction is not addressed to the token contract — refusing to broadcast"));
+        return Err(err(
+            "signed transaction is not addressed to the token contract, so it was not sent to the network",
+        ));
     }
     if v.value != 0 {
-        return Err(err("signed token transfer also sends ETH — refusing to broadcast"));
+        return Err(err("signed token transfer also sends ETH, so it was not sent to the network"));
     }
     let (to, amt) = decode_erc20_transfer(&v.data)?;
     if to != recipient.to_ascii_lowercase() {
-        return Err(err("signed token recipient differs from what you entered — refusing to broadcast"));
+        return Err(err("signed token recipient differs from what you entered, so it was not sent to the network"));
     }
     if amt != amount {
-        return Err(err("signed token amount differs from what you entered — refusing to broadcast"));
+        return Err(err("signed token amount differs from what you entered, so it was not sent to the network"));
     }
     Ok(())
 }

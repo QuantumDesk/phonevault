@@ -43,7 +43,7 @@ pub fn decide(method: &str, params: &Value, site: Option<&Site>, paired: Option<
     let unauthorized = || {
         Decision::Error(rpc(
             wc::UNAUTHORIZED,
-            "Not connected: ask for the account first (eth_requestAccounts) and approve it in Phone Vault.",
+            "Not connected: ask for the account first (eth_requestAccounts) and approve it in Phone Vault Companion.",
         ))
     };
     if !params.is_array() {
@@ -59,7 +59,7 @@ pub fn decide(method: &str, params: &Value, site: Option<&Site>, paired: Option<
         "eth_requestAccounts" => match (conn, paired) {
             (_, None) => Decision::Error(rpc(
                 wc::UNAUTHORIZED,
-                "Phone Vault is not paired with a phone yet. Pair it in the Phone Vault Companion app first.",
+                "Phone Vault Companion isn't paired with a phone yet. Pair it in the companion first, then try again.",
             )),
             (Some(_), Some(p)) => Decision::Answer(json!([verify::checksum(p)])),
             (None, Some(_)) => Decision::Connect,

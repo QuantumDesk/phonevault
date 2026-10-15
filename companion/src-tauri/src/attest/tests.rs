@@ -298,7 +298,7 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
     // the phone claims a different level than the chain
     fails(
         evaluate(&info, &good, SecurityLevel::TrustedEnvironment, &challenge, &unchecked(), false),
-        "the attestation says StrongBox",
+        "its genuine-check answer says StrongBox",
     );
     // revoked intermediate
     let mut revoked = HashMap::new();
@@ -341,7 +341,7 @@ fn every_fail_rule_fires_on_an_otherwise_genuine_attestation() {
         binding_ok: false,
         revocation: &unchecked(),
     };
-    fails(policy::evaluate(&good, &ev, false), "not signed by the attested key");
+    fails(policy::evaluate(&good, &ev, false), "not signed by the key in the genuine check");
     // StrongBox claimed, but the chain is not a StrongBox chain
     let mut forged = info.clone();
     forged.chain_names_strongbox = false;
@@ -747,7 +747,7 @@ mod synthetic {
         resp["address"] = json!("0xde709f2102306220921060314715629080e2fb77");
         let r = run(&b, &challenge, &resp, &test_policy(), std::slice::from_ref(&b.root));
         assert_eq!(r.verdict(), Verdict::Fail);
-        assert!(r.assessment.problems.iter().any(|p| p.contains("not signed by the attested key")));
+        assert!(r.assessment.problems.iter().any(|p| p.contains("not signed by the key in the genuine check")));
         // an old attestation replayed against a new challenge
         let resp = answer(&b, "t1", &challenge, ADDRESS, "StrongBox");
         let r = run(&b, &[0x43u8; 32], &resp, &test_policy(), std::slice::from_ref(&b.root));

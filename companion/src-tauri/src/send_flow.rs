@@ -120,7 +120,7 @@ impl Flow {
 }
 
 /// A device-check failure (the gate returns `String`) as the UI's kinds. The Bitcoin flow uses this
-/// as is; the ETH flow additionally maps "a device check is already running" to `busy`.
+/// as is; the ETH flow additionally maps "a genuine check is already running" to `busy`.
 pub fn gate_failure(m: String) -> SendError {
     if m.starts_with("attestation:") {
         fail("attestation", m.trim_start_matches("attestation:").trim().to_string(), false)
@@ -188,7 +188,7 @@ mod tests {
         assert_eq!(kind(aoa::NO_DEVICE), "no_phone");
         assert_eq!(kind(aoa::USB_BUSY), "usb_busy");
         assert_eq!(kind(&aoa::AoaError::Busy.to_string()), "usb_busy");
-        assert_eq!(kind("a device check is already running"), "connect");
+        assert_eq!(kind("a genuine check is already running"), "connect");
     }
 
     #[test]

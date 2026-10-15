@@ -116,7 +116,10 @@ pub fn check_file(p: &Path) -> Result<Option<String>, String> {
         return Err(format!("{} is not a regular file", p.display()));
     }
     if meta.permissions().mode() & 0o077 != 0 {
-        return Err(format!("{} is readable by others — refusing to use it", p.display()));
+        return Err(format!(
+            "{} is readable by other users, so it was not used. Make it private (chmod 600) and try again",
+            p.display()
+        ));
     }
     fs::read_to_string(p).map(Some).map_err(|e| e.to_string())
 }
@@ -399,7 +402,7 @@ mod tests {
         }
         fs::write(d.join(FILE), &good).unwrap();
         fs::set_permissions(d.join(FILE), fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(load_in(&d).unwrap_err().contains("readable by others"));
+        assert!(load_in(&d).unwrap_err().contains("readable by other users"));
     }
 
     #[test]

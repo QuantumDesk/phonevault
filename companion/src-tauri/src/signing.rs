@@ -34,7 +34,7 @@ fn chain_quantity(chain_id: u64) -> CmdResult<String> {
 }
 
 fn request_signature(request: Value) -> CmdResult<SignedMessage> {
-    let pinned = pairing::load()?.ok_or("not paired yet")?;
+    let pinned = pairing::load()?.ok_or(pairing::NOT_PAIRED)?;
     // Hold the phone from the device check through the signature (queued behind any other request).
     let _turn = crate::aoa::take_turn(|| {}, || false).map_err(|e| e.to_string())?;
     crate::attest::require_ok(&pinned)?;

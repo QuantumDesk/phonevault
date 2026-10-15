@@ -41,18 +41,21 @@ pub fn read_capped(r: impl std::io::Read, max: u64) -> Result<Vec<u8>, String> {
 
 /// Why a request to a node failed, WITHOUT the node URL: node URLs routinely carry the user's
 /// provider API key (Infura/Alchemy/QuickNode paths), and these messages reach the UI, connected
-/// sites (bridge.rs) and WalletConnect dApps (wc.rs). reqwest's own Display includes the URL.
+/// sites (bridge.rs) and WalletConnect sites (wc.rs). reqwest's own Display includes the URL.
+/// The UI's hints match "unreachable" and "timed out" (send.ts, bitcoin-send.ts).
 pub fn transport_error(e: &reqwest::Error) -> String {
     let what = if e.is_timeout() {
-        "timed out"
+        "it timed out"
     } else if e.is_connect() {
         "could not connect"
     } else if e.is_redirect() {
-        "redirect refused"
+        "it redirected elsewhere, which is refused"
     } else {
-        "request failed"
+        "the request failed"
     };
-    format!("node unreachable: {what}")
+    format!(
+        "The network node is unreachable ({what}). Check your internet connection, or choose another node in Settings."
+    )
 }
 
 /// HTTP client for nodes: bounded time, and no redirects (the node is the URL the user set, not
@@ -181,7 +184,7 @@ impl Rpc {
 
     pub fn send_raw(&self, raw_hex: &str) -> Result<String, EthError> {
         let v = self.call("eth_sendRawTransaction", json!([raw_hex]))?;
-        v.as_str().map(str::to_string).ok_or_else(|| err("broadcast returned no hash"))
+        v.as_str().map(str::to_string).ok_or_else(|| err("The node did not return a transaction hash, so it is unclear whether it was sent to the network. Check Activity before sending again."))
     }
 
     /// Transactions mined from `address` so far (the next nonce not yet in a block).
@@ -305,7 +308,7 @@ mod tests {
     fn node_errors_never_contain_the_node_url() {
         let rpc = Rpc::new("https://127.0.0.1:9/v3/SECRET-API-KEY-1234").unwrap();
         let e = rpc.chain_id().unwrap_err().0;
-        assert!(e.starts_with("node unreachable"), "{e}");
+        assert!(e.starts_with("The network node is unreachable"), "{e}");
         assert!(!e.contains("SECRET") && !e.contains("127.0.0.1"), "{e}");
     }
 
