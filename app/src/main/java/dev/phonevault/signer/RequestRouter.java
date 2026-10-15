@@ -39,6 +39,8 @@ final class RequestRouter {
 
     static final String NOT_READY = "Wallet is not ready: unlock and complete the backup check first";
     static final String CHOOSE_ACCOUNT = "Wallet is not ready: finish choosing the account on the phone, then try again";
+    /** The genuine check (USB "attest") is already running, or failed on this phone. */
+    static final String GENUINE_CHECK_FAILED = "The genuine check could not finish. Unplug, reconnect and try again.";
 
     private final Host host;
     private final Activity activity;
@@ -75,12 +77,12 @@ final class RequestRouter {
         try {
             if ("getAddress".equals(json.optString("method"))) {
                 Eip1559Request.requireExactFields(json, "id", "method");
-                return "The connected host asks for your receiving address. Unlock to continue.";
+                return "Your Mac asks for your receiving address. Unlock to continue.";
             } else if (AttestationProtocol.handles(json.optString("method"))) {
                 // Held like getAddress: the answer names the wallet address, and nothing
                 // leaves a locked phone (device-attestation.md, "Locked phone").
                 AttestationProtocol.parseChallenge(json);
-                return "The connected host asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.";
+                return "Your Mac asks this phone to prove it is genuine Phone Vault hardware and firmware. Unlock to continue.";
             } else if (MessageRequest.handles(json.optString("method"))) {
                 return MessageReview.lockedSummary(MessageRequest.parse(json));
             } else if (BtcRequest.handles(json.optString("method"))) {
@@ -90,7 +92,7 @@ final class RequestRouter {
             }
         } catch (Exception e) {
             return e instanceof RequestRefusal ? e.getMessage() + " It will be refused after you unlock."
-                    : "The connected host sent a request this phone cannot decode. It will be refused after you unlock.";
+                    : "Your Mac sent a request this phone cannot decode. It will be refused after you unlock.";
         }
     }
 
@@ -208,7 +210,7 @@ final class RequestRouter {
             id = json.getString("id");
         } catch (Exception e) { host.sendError(source, fallbackId, e.getMessage()); return; }
         if (!attestChallenges.firstUse(challenge)) { host.sendError(source, id, "This challenge was already answered"); return; }
-        if (!attesting.compareAndSet(false, true)) { host.sendError(source, id, "Another attestation is in progress"); return; }
+        if (!attesting.compareAndSet(false, true)) { host.sendError(source, id, GENUINE_CHECK_FAILED); return; }
         final String address;
         synchronized (stateLock) {
             Credentials key = host.signingKey();
@@ -229,7 +231,8 @@ final class RequestRouter {
                         source.send(reply);
                     }
                 } catch (Exception e) {
-                    host.sendError(source, id, "Attestation failed: " + e.getClass().getSimpleName());
+                    android.util.Log.w("Vault", "genuine check failed: " + e.getClass().getSimpleName());
+                    host.sendError(source, id, GENUINE_CHECK_FAILED);
                 } finally {
                     attesting.set(false);
                 }

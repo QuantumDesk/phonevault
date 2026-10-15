@@ -63,7 +63,7 @@ final class SeedRestore {
         }
         String mnemonic = String.join(" ", w);
         if (!MnemonicUtils.validateMnemonic(mnemonic)) {
-            throw new RestoreException("Recovery phrase checksum is invalid — re-check the words and their order");
+            throw new RestoreException("Recovery phrase checksum is invalid: re-check the words and their order");
         }
         return mnemonic;
     }

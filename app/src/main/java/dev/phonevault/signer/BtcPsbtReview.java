@@ -271,8 +271,8 @@ final class BtcPsbtReview {
         if (amounts != null) {
             for (SignInput in : ins) {
                 String conflict = amounts.conflict(tx.inputs.get(in.index).outpoint(), in.amount, in.script);
-                if (conflict != null) throw refuse("Input " + (in.index + 1) + " (" + conflict + "). A host that lies about coin "
-                        + "amounts can trick a wallet into paying a huge fee.");
+                if (conflict != null) throw refuse("Input " + (in.index + 1) + " (" + conflict + "). Wrong coin amounts from "
+                        + "your Mac can trick a wallet into paying a huge fee.");
             }
         }
 
@@ -427,7 +427,7 @@ final class BtcPsbtReview {
     private void render(AddressSafety safety, BtcWallet wallet) {
         List<MessageReview.Row> rows = summary;
         rows.add(row(network.test() ? TEST_NETWORK : "Network", network.test()
-                ? network.label + " — test coins with no value. Never use this for real bitcoin." : network.label));
+                ? network.label + ": test coins with no value. Never use this for real bitcoin." : network.label));
         // where the money comes from
         Map<String, long[]> from = new LinkedHashMap<>();
         for (SignInput in : inputs) {
