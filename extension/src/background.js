@@ -49,6 +49,13 @@ function updateBadge(tabId) {
   } catch { /* tab gone */ }
 }
 
+// Why the companion can't be reached, with what to do next. The browser's own words, if any,
+// are kept in parentheses for support.
+function unreachable(detail) {
+  const d = String(detail ?? "").trim().replace(/\.$/, "");
+  return `Phone Vault Companion couldn't be reached${d ? ` (the browser said: ${d})` : ""}. Open Phone Vault Companion on this Mac, then try again.`;
+}
+
 function connectNative() {
   if (native) return native;
   clearTimeout(idleTimer);
@@ -61,10 +68,10 @@ function connectNative() {
     if (native === port) native = null;
     if (nativeState !== "not_running") {
       if (/not found|forbidden|not allowed/i.test(err)) { nativeState = "not_installed"; nativeMessage = "The browser connection isn't installed. In Phone Vault Companion: Settings → Browser extension → Install browser connection."; }
-      else if (nativeState !== "connected" || err) { nativeState = "error"; nativeMessage = err || "Phone Vault Companion closed the connection."; }
+      else if (nativeState !== "connected" || err) { nativeState = "error"; nativeMessage = unreachable(err); }
       else { nativeState = "unknown"; nativeMessage = ""; }
     }
-    failAll(4900, nativeMessage || "Phone Vault Companion is not reachable.");
+    failAll(4900, nativeMessage || unreachable(""));
     for (const p of ports) { try { p.postMessage({ type: "event", name: "disconnect" }); } catch { /* gone */ } }
   });
   port.postMessage({ type: "hello", version: 1, extension: chrome.runtime.getManifest().version });
@@ -129,7 +136,7 @@ chrome.runtime.onConnect.addListener((port) => {
     const id = nextId++;
     pending.set(id, { port, pageId: m.id, tabId: s.tab.id });
     try { connectNative().postMessage({ type: "request", id, origin, method: m.method, params: m.params }); }
-    catch (e) { pending.delete(id); answer({ code: 4900, message: `Phone Vault Companion is not reachable: ${e?.message ?? e}` }); }
+    catch (e) { pending.delete(id); answer({ code: 4900, message: unreachable(e?.message ?? e) }); }
   });
 
   port.onDisconnect.addListener(() => {
@@ -171,7 +178,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true;
   }
   let n;
-  try { n = connectNative(); } catch (e) { sendResponse({ state: "error", message: String(e?.message ?? e), origin }); return false; }
+  try { n = connectNative(); } catch (e) { sendResponse({ state: "error", message: unreachable(e?.message ?? e), origin }); return false; }
   const id = nextId++;
   const timer = setTimeout(() => { pending.delete(id); sendResponse({ state: nativeState, message: nativeMessage, origin, site: null }); }, 1500);
   const waiting = Number.isSafeInteger(msg.tabId) ? waitingCount(msg.tabId) : 0;

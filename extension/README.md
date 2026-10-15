@@ -22,7 +22,7 @@ Chrome, Brave or Edge:
    companion only lets this ID start its bridge).
 
 Then, in Phone Vault Companion (run from `/Applications`): **Settings → Browser extension →
-Install browser connection**. Reload any open dApp tabs. The toolbar popup shows whether the
+Install browser connection**. Reload any open site tabs. The toolbar popup shows whether the
 companion is reachable and whether the current site is connected. A browser cannot start an app:
 when the companion isn't running the popup says how to open it; when it is, **Open Phone Vault
 Companion** asks it (native message `show_window`) to bring its window forward, highlighted while a

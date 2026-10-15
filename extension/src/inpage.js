@@ -98,7 +98,7 @@
     off(event, fn) { return provider.removeListener(event, fn); },
     removeAllListeners(event) { if (event) listeners.delete(event); else listeners.clear(); return provider; },
     isConnected() { return true; },
-    // Legacy: some older dApps call enable().
+    // Legacy: some older sites call enable().
     enable() { return request({ method: "eth_requestAccounts" }); },
     get chainId() { return chainId; },
     get selectedAddress() { return accounts[0] ?? null; },
@@ -106,7 +106,7 @@
   Object.freeze(provider);
   Object.defineProperty(window, "__phoneVaultProvider", { value: provider, enumerable: false });
 
-  // EIP-6963: announce now and whenever a dApp asks.
+  // EIP-6963: announce now and whenever a site asks.
   const announce = () => window.dispatchEvent(new CustomEvent("eip6963:announceProvider", { detail: Object.freeze({ info: INFO, provider }) }));
   window.addEventListener("eip6963:requestProvider", announce);
   announce();
