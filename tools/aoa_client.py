@@ -775,7 +775,7 @@ def main():
             print(
                 f"\nSigner address reported over USB: {address}\n"
                 f"Fingerprint: {address_fingerprint(address)}\n"
-                "Compare it with the SIGNING ADDRESS shown on the phone itself (the phone's "
+                "Compare it with the 'Signing with' address shown on the phone itself (the phone's "
                 "display is the trusted side; USB is not).",
                 file=sys.stderr,
             )
