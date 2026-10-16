@@ -2,7 +2,9 @@
 # Bitcoin round trips on a THROWAWAY dev phone (TESTNET only; nothing is broadcast, the coins
 # spent are fabricated): btcGetAccount (share screen, decline, remembered, revoked from
 # ☰ → Bitcoin sharing), btcShowAddress (compare screen), btcSignPsbt for P2WPKH and P2TR (review,
-# sign, reject, refuse a foreign coin).
+# sign, reject, refuse a foreign coin), and the migration types of a restored Ledger/Trezor phrase:
+# Nested SegWit (p2sh-p2wpkh, BIP-49, 2… on testnet) and Legacy (p2pkh, BIP-44, m…/n…): share,
+# show on the phone, sign, verify on the host.
 # Every approval is checked on the host with an implementation independent of the phone's Java
 # code (embit, tools/btc_psbt_tool.py): the signed PSBT may only gain a signature, and that
 # signature must verify for the input's key and the sighash computed on the host.
@@ -83,20 +85,51 @@ grep -q '"descriptor": "tr(\[[0-9a-f]\{8\}/86h/1h/0h\]tpub' "$OUT/account3.out" 
 pass "Taproot account shared"
 leave_outcome
 
-# ---- 2. show an address: compare the phone's screen with the answer
-step show
-start_client show btc-show --network testnet --type p2wpkh --account 1 --change 0 --index 0
-wait_screen "Compare with your Mac"
-SHOWN="$(uidump | grep -o 'text="tb1q[^"]*' | head -1 | sed 's/^text="//; s/&#10;//g; s/ //g' || true)"
-expect_below "m/84'/1'/0'/0/0 (receiving address 0)"
-tap_text "Done: it matches"; sleep 2
-finish_client show 0
-GOT="$(grep -o '"address": "[^"]*' "$OUT/show.out" | cut -c13- || true)"
-[[ -n "$SHOWN" && "$SHOWN" == "$GOT" ]] || die "phone showed '$SHOWN' but answered '$GOT'"
-pass "address shown on the phone == address answered ($GOT)"
+# ---- 1b. the migration types (restored Ledger/Trezor phrase): Nested SegWit and Legacy, account 1
+# share_older <name> <type> <purpose> <descriptor opening> <file kind> <label>
+share_older() {
+  step "$1"
+  echo "   btc-account ($6, account 1)"
+  start_client "$1" btc-account --network testnet --type "$2" --account 1
+  wait_screen "Share Bitcoin account with the Mac?"
+  expect_below "Account 1 · $6"
+  scroll_top
+  find_text "Share with the Mac" || die "no Share button: $(texts 10)"
+  tap_text "Share with the Mac"; sleep 2
+  finish_client "$1" 0
+  json_of "$OUT/$1.out" > "$WORK/$5.json"
+  grep -q '"path": "m/'"$3"''"'"'/1'"'"'/0'"'"'"' "$OUT/$1.out" || die "unexpected path: $(cat "$OUT/$1.out")"
+  grep -qF '"descriptor": "'"$4"'[' "$OUT/$1.out" || die "unexpected descriptor: $(cat "$OUT/$1.out")"
+  grep -qF '/1h/0h]tpub' "$OUT/$1.out" || die "not a tpub account key: $(cat "$OUT/$1.out")"
+  pass "$6 account shared (m/$3'/1'/0', ${4}…)"
+  leave_outcome
+}
+share_older account-nested p2sh-p2wpkh 49 "sh(wpkh(" shwpkh "Nested SegWit"
+share_older account-legacy p2pkh 44 "pkh(" pkh "Legacy"
 
-# ---- 3. sign: P2WPKH and P2TR, verified on the host with embit
-for kind in wpkh tr; do
+# ---- 2. show an address: compare the phone's screen with the answer
+# show_check <name> <type> <purpose> <address regex>
+show_check() {
+  step "$1"
+  start_client "$1" btc-show --network testnet --type "$2" --account 1 --change 0 --index 0
+  wait_screen "Compare with your Mac"
+  # every text on screen with its 4-character groups and line breaks removed
+  uidump | grep -o 'text="[^"]*' | sed 's/^text="//; s/&#10;//g; s/ //g' > "$WORK/$1.texts" || true
+  expect_below "m/$3'/1'/0'/0/0 (receiving address 0)"
+  tap_text "Done: it matches"; sleep 2
+  finish_client "$1" 0
+  GOT="$(grep -o '"address": "[^"]*' "$OUT/$1.out" | cut -c13- || true)"
+  [[ "$GOT" =~ $4 ]] || die "$2: answered '$GOT', not a $2 testnet address"
+  grep -qxF "$GOT" "$WORK/$1.texts" || die "$2: the phone did not show '$GOT' (saw: $(head -c 400 "$WORK/$1.texts"))"
+  pass "$2: address shown on the phone == address answered ($GOT)"
+  leave_outcome
+}
+show_check show p2wpkh 84 '^tb1q[a-z0-9]+$'
+show_check show-nested p2sh-p2wpkh 49 '^2[1-9A-HJ-NP-Za-km-z]{33,34}$'
+show_check show-legacy p2pkh 44 '^[mn][1-9A-HJ-NP-Za-km-z]{25,34}$'
+
+# ---- 3. sign: P2WPKH, P2TR, P2SH-P2WPKH and P2PKH, verified on the host with embit
+for kind in wpkh tr shwpkh pkh; do
   step "sign-$kind"
   "$PY" "$TOOL" make --descriptor-json "$WORK/$kind.json" --out "$WORK/$kind.psbt" >/dev/null
   start_client "sign-$kind" btc-sign --network testnet --psbt "$WORK/$kind.psbt" --out "$WORK/$kind.signed"
