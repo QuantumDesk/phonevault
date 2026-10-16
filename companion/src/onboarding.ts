@@ -25,7 +25,7 @@ export interface SetupHost {
   refreshBalance: (id: number) => void;
   history: () => HistoryEntry[];
   /** Leave setup: to the wallet, or into Send with a prefilled recipient. */
-  finish: (then: "home" | { sendTo: string | null }) => void;
+  finish: (then: "home" | "migrate" | { sendTo: string | null }) => void;
   rerender: () => void;
 }
 
@@ -255,6 +255,7 @@ function doneStep(host: SetupHost) {
       h("span", null, "Print a blank backup card and copy your 24 words onto it by hand from the phone (Security → Show recovery phrase). Two copies, separate places, never photographed. Settings → Backup has it later too."),
       backupCardPicker()),
     h("div", { class: "actions" }, h("button", { class: "big primary", onclick: () => host.finish("home") }, "Open my wallet")),
+    h("button", { class: "link", onclick: () => host.finish("migrate") }, "Moving from another wallet? Bring its funds over without its recovery phrase"),
   );
 }
 

@@ -42,6 +42,8 @@ pub mod bridge;
 mod btc;
 // Settings / setup: open the bundled blank backup card (no secrets on this Mac)
 mod backup_card;
+// "Move from another wallet": read-only scan of an old wallet's public addresses/xpubs
+mod migrate;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -440,7 +442,14 @@ pub fn run() {
             btc::btc_broadcast,
             btc::btc_tx_status,
             btc::btc_export,
-            btc::btc_save_export
+            btc::btc_save_export,
+            migrate::migrate_check,
+            migrate::migrate_session,
+            migrate::migrate_save,
+            migrate::migrate_forget,
+            migrate::migrate_destinations,
+            migrate::migrate_scan_evm,
+            migrate::migrate_scan_btc
         ])
         .setup(move |app| {
             // browser-extension bridge (native-messaging relay socket)

@@ -24,6 +24,7 @@ import { state, prefs, savePrefs, rpcFor, net, applyTheme, pushWatchConfig, bala
 import { initIdentity, identifyPhone, classifyPhone, renderPhoneNotice, readAddress, openDeviceSettings } from "./identity";
 import { initSend, sendView, startSend, startSendTo, startReplacement, updateFormBalance, sendStage, sendNet } from "./send";
 import { initSettings, drawer, openDrawer, closeDrawer, renderDrawer } from "./settings";
+import { initMigrate, migrateView, migrateHomeCard, openMigrate } from "./migrate";
 import "./extras.css";
 
 // Poll intervals (ms). The preview has no background watcher, so it polls balances itself.
@@ -165,7 +166,7 @@ function render() {
   if (!state.status) { main.replaceChildren(h("div", { class: "boot" }, h("div", { class: "spinner" }))); return; }
   // no pairing yet: the guided setup (it pairs as step 3)
   if (!state.status.paired && state.view !== "tool" && state.view !== "setup") { setupStart(setupHost); state.view = "setup"; }
-  const el = state.view === "home" && prefs.btc ? btcMain() : state.view === "home" ? homeView() : state.view === "send" ? sendView() : state.view === "receive" ? receiveView() : state.view === "pair" ? pairView() : state.view === "setup" ? setupView(setupHost) : toolView();
+  const el = state.view === "home" && prefs.btc ? btcMain() : state.view === "home" ? homeView() : state.view === "send" ? sendView() : state.view === "receive" ? receiveView() : state.view === "pair" ? pairView() : state.view === "setup" ? setupView(setupHost) : state.view === "migrate" ? migrateView() : toolView();
   // Background refreshes (balances, prices, watcher, the clock) redraw the same screen: don't replay
   // the entrance animation or jump the scroll position then — only animate a real screen change.
   const sameScreen = state.view === lastRendered;
@@ -232,9 +233,21 @@ function homeView() {
       ),
     ),
     wcHomeSlot(),
+    migrateHomeCard(walletEmpty()),
     homeTabs(),
     prefs.tab === "nfts" ? nftSection(nftHost) : prefs.tab === "activity" ? activitySection(activityHost) : assetsTab(n),
   );
+}
+
+/** Every mainnet balance and listed token loaded and zero, and no bitcoin: Home invites "Move from another wallet". */
+function walletEmpty(): boolean {
+  for (const x of NETWORKS) {
+    if (x.testnet) continue;
+    const b = balances.get(x.id); const t = tokenBalancesFor(x.id);
+    if (!b || b.wei !== 0n || (tokensOn(x.id).length && !t) || t?.some((y) => y.raw !== null && y.raw !== "0")) return false;
+  }
+  const sats = btcBalanceSats("bitcoin");
+  return !activeBtc("bitcoin") || sats === 0;
 }
 
 const accountBusy = () => state.view === "send" && sendStage() !== "form";
@@ -336,6 +349,7 @@ const setupHost: SetupHost = {
   finish: (then) => {
     prefs.setupDone = true; savePrefs();
     if (then === "home") go("home");
+    else if (then === "migrate") openMigrate();
     else startSendTo(then.sendTo ?? "");
   },
   rerender: () => { if (state.view === "setup") render(); },
@@ -473,7 +487,13 @@ function toolView() {
 
 initIdentity({ renderHeader, render, renderSoon, go, openDrawer, renderDrawer, selectAccount, accountBusy });
 initSend({ go, render, refreshHistory, refreshBalance });
-initSettings({ refreshStatus, renderHeader, render, go, refreshBalance, selectAccount, accountBusy, selectBtc, btcNets, restartSetup: () => { setupStart(setupHost); go("setup"); } });
+initSettings({ refreshStatus, renderHeader, render, go, refreshBalance, selectAccount, accountBusy, selectBtc, btcNets, restartSetup: () => { setupStart(setupHost); go("setup"); }, openMigrate: () => openMigrate() });
+initMigrate({
+  go, rpcFor,
+  rerender: () => { if (state.view === "migrate") renderSoon(); else if (state.view === "home") renderSoon(); },
+  phoneBlocked: () => state.device.report?.verdict === "fail" ? "This phone failed the genuine check (Settings → Device). Verifying addresses on it is blocked." : null,
+  phoneBusy: () => (state.view === "send" && ["connecting", "on_phone", "verifying"].includes(sendStage())) || wcPhoneBusy() || btcBusy() || state.identifying,
+});
 applyTheme();
 if (!isTauri) document.body.append(h("span", { class: "preview-badge", title: "Running in a browser without Tauri: all data is fake" }, "PREVIEW DATA"));
 renderHeader();
@@ -511,6 +531,7 @@ mountWalletConnect({
     const o = new URLSearchParams(location.search).get("open");
     if (o === "drawer") openDrawer(); else if (o === "pair") { state.pair = { s: "idle" }; go("pair"); }
     else if (o === "btc") { prefs.btc = "bitcoin"; await reloadAccounts(); render(); }
+    else if (o === "migrate") openMigrate();
     else if (o === "btcsettings") { prefs.btc = "bitcoin"; await reloadAccounts(); render(); openDrawer(); requestAnimationFrame(() => document.getElementById("btc-section")?.scrollIntoView({ block: "start" })); }
   }
   refreshHistory().then(pollPending);
