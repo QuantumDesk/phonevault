@@ -282,7 +282,7 @@ final class AccountScreens {
         LinearLayout root = host.page("ACCOUNTS / NUMBERING · CHECK", "Switch to " + next.label + " numbering?",
                 "These are your first accounts under " + next.label + " numbering. Compare them with the wallet you used before.");
         for (int i = 0; i < first.size(); i++) {
-            host.card(root, AccountBook.defaultName(i) + " · " + next.pathString(i) + (i == 0 ? " · same under both" : ""), Keys.toChecksumAddress(first.get(i)));
+            host.card(root, AccountBook.defaultName(i) + (i == 0 ? " · same under both" : ""), Keys.toChecksumAddress(first.get(i)) + "\n" + next.pathString(i));
         }
         host.card(root, "What changes", "Accounts 2 and later become the " + next.label + " addresses. The active account becomes "
                 + "the one you last used under " + next.label + " numbering (Account 1 the first time). Nothing moves on any network.");

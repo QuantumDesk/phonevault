@@ -193,7 +193,9 @@ relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input ke
 # Credential mode: the vault PIN is the device PIN and the system shows its own PIN prompt
 # (window "BiometricPrompt", secure: uiautomator cannot read it, so we key the PIN in blind).
 focus_window() { "$A" shell dumpsys window | grep -oE "mCurrentFocus=Window\{[^}]*\}" | head -1 | sed 's/.* u0 //; s/}//' || true; }
-system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]]; }
+# The system PIN prompt: its window is named BiometricPrompt on most builds; on some it is drawn
+# readable, with the title "Enter your PIN to unlock", and the focus name differs.
+system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]] || uidump | grep -q 'text="Enter your PIN to unlock'; }
 enter_system_pin() {
   local i; for i in $(seq 1 12); do system_prompt_up && break; sleep 1; done
   system_prompt_up || return 1
@@ -222,7 +224,8 @@ unlock_if_locked() {
 # (PIN gate, sensitive flows, approvals) are left alone; callers assert what they expect.
 # Right after an unlock the wallet is still loading ("Opening Phone Vault", no menu): give it a few s.
 open_menu() {
-  local b i; for i in 1 2 3 4 5; do b="$(bounds_of "☰")"; [[ -n "$b" ]] && break; sleep 1.5; done
+  system_prompt_up && { enter_system_pin || true; }
+  local b i; for i in 1 2 3 4 5; do b="$(bounds_of "☰")"; [[ -n "$b" ]] && break; [[ $i -eq 2 ]] && scroll_top; sleep 1.5; done
   [[ -n "$b" ]] || return 1; tap_bounds "$b"; sleep 1.2; has_text "Where to?"
 }
 go_section() { # go_section "Wallet" | "Security" | "Display &amp; auto-lock" | "Device information" | "Coming next"

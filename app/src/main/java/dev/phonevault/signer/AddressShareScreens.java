@@ -115,7 +115,7 @@ final class AddressShareScreens {
                 "Your Mac asks for the first " + (n == 1 ? "address" : n + " addresses") + " of your wallet, to find where your funds are.");
         root.addView(pages.detail("Account numbering", r.scheme.label + " · " + r.scheme.pathPattern()));
         for (int i = 0; i < n; i++) {
-            root.addView(pages.detail(AccountBook.defaultName(i) + " · " + r.scheme.pathString(i), addresses.get(i)));
+            root.addView(pages.detail(AccountBook.defaultName(i), addresses.get(i) + "\n" + r.scheme.pathString(i)));
         }
         root.addView(pages.detail("What your Mac will see", "These addresses, and their balances and history on any network. "
                 + "It cannot spend: every payment still needs your approval on this phone."));

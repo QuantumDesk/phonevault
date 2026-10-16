@@ -59,7 +59,7 @@ finish() { # finish <name> <button> <expected exit>
   pid=""
   [[ $rc -eq $want ]] || { tail -5 "$OUT.$name"; die "$name: client exit $rc, expected $want"; }
 }
-go_accounts() { go_section "Accounts" || die "menu did not open"; expect_screen "Your accounts"; }
+go_accounts() { go_section "Accounts" || die "menu did not open: $(texts 10)"; expect_screen "Your accounts"; }
 
 # set_numbering standard|ledger-live: ☰ → Accounts → Account numbering → switch if needed
 set_numbering() {
@@ -109,7 +109,7 @@ echo "== 2. share 5 Standard addresses"
 start_request std list-addresses --scheme standard --count 5 --expect-first "$A1"
 wait_share std
 expect_screen "Share 5 addresses with your Mac?"
-find_text "Account 2 · m/44&apos;/60&apos;/0&apos;/0/1" || find_text "Account 2 · m/44'/60'/0'/0/1" || die "std: Account 2 path not shown: $(texts 12)"
+uidump | grep -qF -e "m/44&apos;/60&apos;/0&apos;/0/1" -e "m/44'/60'/0'/0/1" || die "std: Account 2 path not shown: $(texts 12)"
 scroll_top
 finish std "Share with your Mac" 0
 grep -q '"status": "ok"' "$OUT.std" || { cat "$OUT.std"; die "std: not ok"; }
@@ -138,19 +138,19 @@ pass "5 Ledger Live addresses shared; Account 2 = $L1"
 
 echo "== 5. switch to Ledger Live numbering"
 set_numbering ledger-live
-grep -qF "m/44&apos;/60&apos;/1&apos;/0/0" <<<"$CHECK_SCREEN" || die "the check screen did not show Account 2's Ledger Live path"
+grep -qF -e "m/44&apos;/60&apos;/1&apos;/0/0" -e "m/44'/60'/1'/0/0" <<<"$CHECK_SCREEN" || die "the check screen did not show Account 2's Ledger Live path"
 tr -d ' ' <<<"$CHECK_SCREEN" | grep -qiF "${L1#0x}" || die "the check screen did not show Ledger Live Account 2 ($L1)"
 ask ll1 address
 [[ "$(field "$OUT.ll1" scheme)" == "ledger-live" && "$(field "$OUT.ll1" account)" == "1" ]] || { cat "$OUT.ll1"; die "getAddress does not report Ledger Live numbering"; }
 [[ "$(field "$OUT.ll1" address | tr 'A-F' 'a-f')" == "${A1,,}" ]] || die "Account 1 changed with the numbering"
-go_section "Device information" || die "menu did not open"
+go_section "Device information" || die "menu did not open: $(texts 10)"
 find_text "Ledger Live · m/44" || die "Device information does not show the numbering: $(texts 12)"
 go_home
 pass "Ledger Live numbering on; getAddress reports it; Account 1 unchanged"
 
 echo "== 6. Account 2 under Ledger Live"
 go_accounts
-if has_text "+ Add Account 2"; then tap_text "+ Add Account 2"; sleep 1; find_text "m/44&apos;/60&apos;/1&apos;/0/0" || die "Add Account 2 does not name the Ledger Live path"; tap_text "Add and switch"
+if has_text "+ Add Account 2"; then tap_text "+ Add Account 2"; sleep 1; uidump | grep -qF -e "m/44&apos;/60&apos;/1&apos;/0/0" -e "m/44'/60'/1'/0/0" || die "Add Account 2 does not name the Ledger Live path"; tap_text "Add and switch"
 else
   b="$(bounds_of '[● ]*Account 2 · [^"]*')"
   if [[ -z "$b" ]] && has_text "Hidden accounts ("; then tap_text 'Hidden accounts ([0-9]*)'; sleep 1.2; b="$(bounds_of 'Account 2 · [^"]*')"; fi

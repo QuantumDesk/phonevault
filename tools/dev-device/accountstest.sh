@@ -79,7 +79,7 @@ reject() {
   [[ $rc -eq 2 ]] && grep -q '"status": "rejected"' "$OUT.$name" || { tail -3 "$OUT.$name"; die "$name: expected a clean rejection (exit $rc)"; }
   tap_text "Back to Wallet" 2>/dev/null || true
 }
-go_accounts() { go_section "Accounts" || die "menu did not open"; expect_screen "Your accounts"; }
+go_accounts() { go_section "Accounts" || die "menu did not open: $(texts 10)"; expect_screen "Your accounts"; }
 # open_account2: the Account 2 page, wherever an earlier run left it (visible or hidden, any name)
 open_account2() {
   go_accounts
