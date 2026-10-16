@@ -711,3 +711,112 @@ mod tests {
         assert!(parse_sign_response(&req, &serde_json::json!({"id": "p2", "status": "approved", "psbt": "x"})).is_err());
     }
 }
+
+/// Adversarial audit (BIP-49 / BIP-44 support): proofs, not behaviour changes.
+#[cfg(test)]
+mod audit_btc2 {
+    use super::*;
+    use crate::btc::tx::{plan, tests::coin};
+    use crate::btc::wallet::{tests::account as test_account, Net};
+    use bitcoin::bip32::Xpriv;
+    use bitcoin::{Address, TxOut};
+    use std::str::FromStr;
+
+    fn built(kind: Kind) -> (Built, Xpriv) {
+        let (a, master) = test_account(Net::Bitcoin, kind, 1);
+        let coins = vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1), coin(&a.derive(0, 4).unwrap(), 30_000, 2)];
+        let to = Address::from_str("1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA").unwrap().assume_checked();
+        (plan(&a, coins, to, Some(100_000), a.derive(1, 7).unwrap(), 3_000, true).unwrap(), master)
+    }
+
+    /// n − s (big-endian, 32 bytes): the high-S twin of a low-S signature.
+    fn negate_s(compact: &[u8; 64]) -> [u8; 64] {
+        const N: [u8; 32] = [
+            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xba, 0xae,
+            0xdc, 0xe6, 0xaf, 0x48, 0xa0, 0x3b, 0xbf, 0xd2, 0x5e, 0x8c, 0xd0, 0x36, 0x41, 0x41,
+        ];
+        let mut out = *compact;
+        let mut borrow = 0i16;
+        for i in (0..32).rev() {
+            let d = N[i] as i16 - compact[32 + i] as i16 - borrow;
+            borrow = if d < 0 { 1 } else { 0 };
+            out[32 + i] = (d + if d < 0 { 256 } else { 0 }) as u8;
+        }
+        out
+    }
+
+    /// A phone returning the malleated (high-S) twin of its valid signature: libbitcoinconsensus
+    /// (no LOW_S flag) would accept it, but the Mac refuses it (libsecp256k1 verifies low-S only),
+    /// so a non-standard, txid-malleated Legacy / Nested transaction is never kept for broadcast.
+    #[test]
+    fn high_s_twin_of_a_valid_signature_is_refused() {
+        for kind in [Kind::P2pkh, Kind::P2shP2wpkh] {
+            let (b, key) = built(kind);
+            let mut s = b.psbt.clone();
+            s.sign(&key, &Secp256k1::new()).expect("signs");
+            assert!(verify_signed(&b, &psbt_base64(&s)).is_ok());
+            let (pk, sig) = s.inputs[0].partial_sigs.iter().next().map(|(k, v)| (*k, *v)).unwrap();
+            let high =
+                bitcoin::secp256k1::ecdsa::Signature::from_compact(&negate_s(&sig.signature.serialize_compact())).unwrap();
+            let mut norm = high;
+            norm.normalize_s();
+            assert_eq!(norm, sig.signature, "the twin normalizes back");
+            assert_ne!(high, sig.signature);
+            s.inputs[0].partial_sigs.insert(pk, ecdsa::Signature { signature: high, sighash_type: EcdsaSighashType::All });
+            let e = verify_signed(&b, &psbt_base64(&s)).unwrap_err();
+            assert!(e.contains("does not verify"), "{kind:?}: {e}");
+        }
+    }
+
+    /// The embit audit fixtures (app/src/test/resources/btc/audit-legacy-mixed.json; the phone
+    /// reproduces each signature byte for byte, BtcAuditNestedLegacyTest) pass Bitcoin Core's
+    /// interpreter: a Legacy input at index 2 of four mixed inputs, and a version-1 testnet
+    /// transaction with the Legacy input last.
+    #[test]
+    fn audit_fixtures_pass_consensus() {
+        let all: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../app/src/test/resources/btc/audit-legacy-mixed.json")).unwrap();
+        let mut n = 0;
+        for c in all["cases"].as_array().unwrap() {
+            let psbt =
+                Psbt::deserialize(&base64::engine::general_purpose::STANDARD.decode(c["psbt"].as_str().unwrap()).unwrap())
+                    .unwrap();
+            let tx: Transaction = consensus::encode::deserialize_hex(c["finalTx"].as_str().unwrap()).unwrap();
+            assert_eq!(tx.compute_txid().to_string(), c["txid"].as_str().unwrap());
+            let prevouts: Vec<TxOut> = psbt
+                .inputs
+                .iter()
+                .zip(&psbt.unsigned_tx.input)
+                .map(|(i, t)| match (&i.non_witness_utxo, &i.witness_utxo) {
+                    (Some(prev), _) => prev.output[t.previous_output.vout as usize].clone(),
+                    (None, Some(w)) => w.clone(),
+                    _ => panic!("no utxo"),
+                })
+                .collect();
+            consensus_check(&tx, &prevouts).unwrap_or_else(|e| panic!("{}: {e}", c["name"]));
+            n += 1;
+        }
+        assert_eq!(n, 2);
+    }
+
+    /// The migration scan derives exactly what a paired account (and so the phone) derives, on
+    /// every network and type, both chains, first and last account.
+    #[test]
+    fn migration_scan_matches_paired_accounts_on_every_network() {
+        use crate::migrate::btc_scan::{derive, kind_of};
+        use crate::migrate::source::BtcType;
+        for net in [Net::Bitcoin, Net::Testnet, Net::Signet] {
+            for t in [BtcType::Legacy, BtcType::Nested, BtcType::Native, BtcType::Taproot] {
+                for number in [1, 20] {
+                    let (a, _) = test_account(net, kind_of(t), number);
+                    for (chain, i) in [(0, 0), (1, 19), (0, 999)] {
+                        assert_eq!(
+                            derive(&a.xpub, t, net, chain, i).unwrap(),
+                            a.derive(chain, i).unwrap().address.to_string()
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
