@@ -235,6 +235,13 @@ def _check_private_file(path, status):
 
 def load_paired_signer(path):
     """The signer address pinned at pairing time, or None if this host has never paired."""
+    record = load_pairing(path)
+    return record["address"] if record else None
+
+
+def load_pairing(path):
+    """The pinned pairing as {"address", "account"} ("account": "1".."20" as the phone reported it
+    at pairing, None for an older pairing file that didn't record it), or None if never paired."""
     try:
         status = os.lstat(path)
     except FileNotFoundError:
@@ -255,20 +262,31 @@ def load_paired_signer(path):
     address = record.get("address") if isinstance(record, dict) else None
     if not isinstance(address, str) or not re.fullmatch(ADDRESS_PATTERN, address):
         raise ValueError(f"pairing file is malformed: {path}")
-    return address.lower()
+    account = record.get("account")
+    if account is not None and not _valid_account(account):
+        raise ValueError(f"pairing file is malformed: {path}")
+    return {"address": address.lower(), "account": account}
 
 
-def save_paired_signer(path, address):
+def _valid_account(account):
+    return isinstance(account, str) and re.fullmatch(r"[1-9][0-9]?", account) is not None and int(account) <= 20
+
+
+def save_paired_signer(path, address, account=None):
     """Write the pairing file privately and atomically: a fresh O_EXCL|O_NOFOLLOW temp file in
     the same directory, fchmod 0600 (so a pre-existing permissive file is REPLACED, never
     reused), fsync, then rename over the destination."""
     if not isinstance(address, str) or not re.fullmatch(ADDRESS_PATTERN, address):
         raise ValueError("refusing to pin an invalid signer address")
+    if account is not None and not _valid_account(account):
+        raise ValueError("refusing to pin an invalid account number")
     directory = os.path.dirname(path) or "."
     os.makedirs(directory, mode=0o700, exist_ok=True)
     if os.path.lexists(path) and os.path.islink(path):
         raise ValueError(f"refusing to write through a symlink: {path}")
     record = {"address": address.lower(), "pairedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
+    if account is not None:
+        record["account"] = account
     payload = (json.dumps(record, indent=2) + "\n").encode("utf-8")
     temp_path = os.path.join(directory, f".{os.path.basename(path)}.{os.getpid()}.tmp")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -457,6 +475,29 @@ def validate_list_addresses_response(request, response, expected_first=None):
     if expected_first is not None and addresses[0].lower() != expected_first.lower():
         raise ValueError("Account 1 differs from the paired address: this is not the paired wallet")
     return addresses
+
+
+def check_list_against_pairing(addresses, pairing):
+    """Compare a validated listAddresses answer with the pinned pairing ({"address", "account"}).
+    Account 1 is the same address under every numbering, so a pinned Account 1 must be listed
+    first (a different first address is another wallet: refused). A pinned Account 2+ (or a
+    pairing file that doesn't say which account) is a different address per numbering: it is
+    looked for in the list, and only a warning is returned when it isn't there (the genuine
+    wallet is not refused). Returns a warning string or None."""
+    if not pairing or not addresses:
+        return None
+    pinned = pairing["address"].lower()
+    listed = [a.lower() for a in addresses]
+    if pairing.get("account") == "1":
+        if listed[0] != pinned:
+            raise ValueError("Account 1 differs from the paired address: this is not the paired wallet")
+        return None
+    if pinned in listed:
+        return None
+    which = f"Account {pairing['account']}" if pairing.get("account") else "an account this pairing file doesn't number"
+    return (f"warning: the pinned signer ({which}) is not among these {len(listed)} addresses. It may be under the "
+            "other account numbering, or beyond the accounts listed; if it should be here, this may not be the paired "
+            "wallet. Check Account 1 on the phone's screen, or pass --expect-first.")
 
 
 def personal_message_digest(message):
@@ -760,7 +801,8 @@ def main():
     listing.add_argument("--scheme", choices=ADDRESS_SCHEMES, default="standard")
     listing.add_argument("--count", default="5", help="1..10")
     listing.add_argument("--expect-first", default=None,
-                         help="Account 1 must be this address (default: the pinned pairing, if any)")
+                         help="Account 1 must be this address (default: the pinned pairing when it is Account 1; "
+                              "a pinned Account 2+ is looked for in the list instead)")
     attest = subparsers.add_parser(
         "attest", help="Ask the phone to attest a fresh challenge (device check); saves the exchange")
     attest.add_argument("--challenge", default=None, help="lowercase hex, 16..64 bytes (default: 32 random bytes)")
@@ -823,7 +865,14 @@ def main():
                 expected_digest = bytes.fromhex(args.expect_digest[2:])
             validate_message_response(request, response, expected_digest, expected_signer)
         elif args.command == "list-addresses":
-            validate_list_addresses_response(request, response, args.expect_first or load_paired_signer(args.pairing_file))
+            if args.expect_first:
+                validate_list_addresses_response(request, response, args.expect_first)
+            else:
+                # the pinned signer is compared with the FIRST address only when it is Account 1
+                addresses = validate_list_addresses_response(request, response)
+                warning = check_list_against_pairing(addresses, load_pairing(args.pairing_file))
+                if warning:
+                    print(f"phone-vault: {warning}", file=sys.stderr)
         elif args.command == "attest":
             validate_attest_response(request, response, args.expect_address or load_paired_signer(args.pairing_file))
             if args.save:
@@ -849,7 +898,7 @@ def main():
             if answer != "yes":
                 print("phone-vault: not paired (address not confirmed on the phone)", file=sys.stderr)
                 return 3
-            save_paired_signer(args.pairing_file, address)
+            save_paired_signer(args.pairing_file, address, response.get("account"))
             print(f"phone-vault: paired signer pinned in {args.pairing_file}", file=sys.stderr)
     except Exception as exception:
         print(f"phone-vault: {exception}", file=sys.stderr)
