@@ -19,7 +19,16 @@ PKG=dev.phonevault.signer
 # shellcheck source=env.sh
 source "$(dirname "${BASH_SOURCE[0]}")/env.sh"
 
-die()  { echo "FAIL: $*" >&2; exit 1; }
+# Recovery-phrase words never reach a log. While a restore/backup flow is typing or checking words
+# (PV_SECRET_SCREEN=1, set by type_words / spot_check), every word of WORDS in a failure message is
+# masked; texts() withholds the text of any recovery-phrase screen (see SECRET_SCREEN_RE).
+die()  {
+  local msg="$*" w
+  if [[ "${PV_SECRET_SCREEN:-}" == "1" ]]; then
+    for w in ${WORDS[@]+"${WORDS[@]}"}; do [[ -n "$w" ]] && msg="${msg//"$w"/[word withheld]}"; done
+  fi
+  echo "FAIL: $msg" >&2; exit 1
+}
 pass() { echo "PASS: $*"; }
 
 # Every script that acts on the phone starts here: the phone must be a throwaway AND the only
@@ -90,7 +99,19 @@ wait_boot() { local i; for i in $(seq 1 "${1:-40}"); do "$A" get-state >/dev/nul
 # `|| true`: under pipefail, `uidump | grep -q` would otherwise fail whenever grep exits on the first
 # match before adb has written the whole dump (adb dies of SIGPIPE → 141 → "not on screen").
 uidump() { "$A" shell "rm -f /data/local/tmp/ui.xml; uiautomator dump /data/local/tmp/ui.xml" >/dev/null 2>&1; "$A" exec-out cat /data/local/tmp/ui.xml || true; }
-texts()  { uidump | grep -o 'text="[^"]\{1,70\}"' | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫a-z]$' | head -"${1:-6}" | tr '\n' '|' || true; }
+# Page kickers/titles of the screens that show (or take) recovery-phrase words: restore entry and
+# confirm, the phrase pages (incl. a not-yet-active replacement's), SeedQR, and the backup spot check.
+SECRET_SCREEN_RE='text="[^"]*(RESTORE|RECOVERY PHRASE|BACKUP CHECK|NEW WALLET · NOT ACTIVE|SEEDQR)'
+SECRET_SCREEN_PLACEHOLDER='[screen text withheld: recovery-phrase screen]'
+# The first $1 (default 6) texts on screen, for failure messages; a placeholder instead on any
+# recovery-phrase screen or while PV_SECRET_SCREEN=1.
+texts()  {
+  local dump
+  if [[ "${PV_SECRET_SCREEN:-}" == "1" ]]; then echo "$SECRET_SCREEN_PLACEHOLDER"; return 0; fi
+  dump="$(uidump)"
+  if grep -qE "$SECRET_SCREEN_RE" <<<"$dump"; then echo "$SECRET_SCREEN_PLACEHOLDER"; return 0; fi
+  grep -o 'text="[^"]\{1,70\}"' <<<"$dump" | sed 's/^text=//; s/"//g' | grep -vE '^[0-9⌫a-z]$' | head -"${1:-6}" | tr '\n' '|' || true
+}
 has_text() { uidump | grep -q "text=\"$1"; }
 expect_screen() { has_text "$1" || die "expected '$1' on screen, saw: $(texts)"; }
 expect_not()    { has_text "$1" && die "did not expect '$1' on screen: $(texts)"; return 0; }
@@ -250,7 +271,7 @@ ensure_account1() {
 
 # Answer the 3-word spot check ("Find word N") from WORDS, then confirm the account.
 spot_check() {
-  local i n
+  local i n PV_SECRET_SCREEN=1
   for i in 1 2 3; do
     n="$(uidump | grep -o 'Find word [0-9]*' | head -1 | awk '{print $3}' || true)"
     [[ -n "$n" ]] || die "no spot-check challenge on screen at round $i: $(texts)"
@@ -261,7 +282,7 @@ spot_check() {
 
 # Type every word of WORDS on the on-device restore keyboard (letters by live key bounds, word by text).
 type_words() {
-  declare -A K; local l x1 y1 x2 y2 w i
+  declare -A K; local l x1 y1 x2 y2 w i PV_SECRET_SCREEN=1
   while read -r l x1 y1 x2 y2; do K[$l]="$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"; done \
     < <(uidump | grep -o 'text="[a-z⌫]"[^>]*bounds="[^"]*"' | sed -E 's/text="(.)".*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]"/\1 \2 \3 \4 \5/')
   [[ ${#K[@]} -ge 26 ]] || die "restore keyboard not fully visible (${#K[@]} keys)"
