@@ -43,7 +43,7 @@ export function pushWatchConfig() { if (isTauri) api.watchConfigure(prefs.rpc, p
 // ------------------------------------------------------------------ shared state
 
 export type View = "home" | "send" | "receive" | "pair" | "tool" | "setup" | "migrate";
-export type PairState = { s: "idle"; error?: string } | { s: "reading" } | { s: "compare"; address: string; label?: string; account?: number | null; wallet?: string | null } | { s: "mismatch" };
+export type PairState = { s: "idle"; error?: string } | { s: "reading" } | { s: "compare"; address: string; label?: string; account?: number | null; wallet?: string | null; scheme?: string | null } | { s: "mismatch" };
 /** Where the phone on USB stands against this Mac's pairing (identity.ts). */
 export type Identity = { s: "unknown" } | { s: "checking" } | { s: "match" }
   | { s: "other"; address: string; label: string; dismissed: boolean }

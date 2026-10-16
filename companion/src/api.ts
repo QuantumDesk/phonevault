@@ -110,8 +110,9 @@ export async function call<T>(cmd: string, args?: Record<string, unknown>): Prom
 export const api = {
   status: () => call<Status>("device_status"),
   readAddress: () => call<PhoneAccount>("read_address"),
-  confirmPairing: (address: string, label?: string | null, account?: number | null, wallet?: string | null) =>
-    call<string>("confirm_pairing", { address, label: label ?? null, account: account ?? null, wallet: wallet ?? null }),
+  /** scheme: the account numbering the phone reported (names "Account 2 · Ledger Live" when no label is typed) */
+  confirmPairing: (address: string, label?: string | null, account?: number | null, wallet?: string | null, scheme?: string | null) =>
+    call<string>("confirm_pairing", { address, label: label ?? null, account: account ?? null, wallet: wallet ?? null, scheme: scheme ?? null }),
   /** Show (and pin new requests to) another paired account. */
   selectAccount: (address: string) => call<void>("select_account", { address }),
   renameAccount: (address: string, label: string) => call<void>("rename_account", { address, label }),

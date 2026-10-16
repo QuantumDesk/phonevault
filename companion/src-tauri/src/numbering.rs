@@ -475,7 +475,7 @@ mod tests {
     }
 }
 
-/// Adversarial audit proofs (account numbering / listAddresses). No production behaviour changes.
+/// Adversarial audit tests (account numbering / listAddresses).
 #[cfg(test)]
 mod audit_tests {
     use super::*;
@@ -531,15 +531,22 @@ mod audit_tests {
         assert!(check_pin(&s, &s, &p).is_ok());
     }
 
-    /// FINDING (low, cosmetic misattribution): when the user clears the "Name on this Mac" field,
-    /// pairing falls back to pairing::default_label, which has no notion of numbering: Ledger Live
-    /// Account 2 and Standard Account 2 (different addresses) are both stored as "Account 2".
+    /// When the user clears the "Name on this Mac" field, the default label still tells Ledger Live
+    /// Account 2 and Standard Account 2 (different addresses) apart; Account 1 is the same address.
     #[test]
-    fn finding_default_label_ignores_numbering() {
+    fn default_label_names_the_numbering() {
         let empty = pairing::Pairings { version: 2, active: None, accounts: vec![] };
-        // default_label has no scheme input at all; the phone's "account":"2" gives the same label
-        // whichever numbering produced the address.
-        assert_eq!(pairing::default_label(&empty, Some(2), Some("standard")), "Account 2");
+        let l = |n, w, s| pairing::default_label(&empty, Some(n), Some(w), s);
+        assert_eq!(l(2, "standard", Scheme::Standard), "Account 2");
+        assert_eq!(l(2, "standard", Scheme::LedgerLive), "Account 2 · Ledger Live");
+        assert_eq!(l(1, "standard", Scheme::LedgerLive), "Account 1");
+        assert_eq!(l(3, "passphrase", Scheme::LedgerLive), "Account 3 · passphrase · Ledger Live");
+        // and it is what a pairing without a typed name is stored as
+        let d = std::env::temp_dir().join(format!("pv-numbering-label-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&d).unwrap();
+        let p = pairing::add_numbered_in(&d, S0, Some(""), Some("standard"), Some(2), Scheme::LedgerLive).unwrap();
+        assert_eq!(p.find(&S0.to_ascii_lowercase()).unwrap().label, "Account 2 · Ledger Live");
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     /// Advice is computed only from Account 2+ funding as reported by the nodes; a hostile node that
