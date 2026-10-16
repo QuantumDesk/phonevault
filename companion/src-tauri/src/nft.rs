@@ -158,7 +158,7 @@ fn refresh(rpc: &eth::Rpc, chain: u64, owner: &str, candidates: Vec<(String, Str
 }
 
 /// ERC-721 Transfer logs (to, id indexed) → (contract, decimal token id).
-fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)> {
+pub(crate) fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for l in logs {
         let Some(t) = l.get("topics").and_then(Value::as_array) else { continue };

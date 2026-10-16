@@ -77,6 +77,13 @@ pub const COMMANDS: &[&str] = &[
     "btc_tx_status",
     "btc_export",
     "btc_save_export",
+    "migrate_check",
+    "migrate_session",
+    "migrate_save",
+    "migrate_forget",
+    "migrate_destinations",
+    "migrate_scan_evm",
+    "migrate_scan_btc",
 ];
 
 fn main() {

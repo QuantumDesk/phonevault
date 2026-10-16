@@ -78,4 +78,11 @@ permissions = [
   "allow-btc-tx-status",
   "allow-btc-export",
   "allow-btc-save-export",
+  "allow-migrate-check",
+  "allow-migrate-session",
+  "allow-migrate-save",
+  "allow-migrate-forget",
+  "allow-migrate-destinations",
+  "allow-migrate-scan-evm",
+  "allow-migrate-scan-btc",
 ]
