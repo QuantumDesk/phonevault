@@ -143,8 +143,8 @@ function privacyNote(): HTMLElement {
   const custom = NETWORKS.some((n) => host.rpcFor(n.id) !== n.rpc);
   const servers = st.btcServers ?? {};
   const btcCustom = Object.values(servers).map(hostOf);
-  const btc = btcCustom.length ? [...new Set(btcCustom)].join(", ") + (Object.keys(servers).length < 3 ? " (mempool.space on the other Bitcoin networks)" : "")
-    : st.btcServers ? "mempool.space (blockstream.info as a fallback)" : "your Esplora server";
+  const btc = btcCustom.length ? [...new Set(btcCustom)].join(", ") + (Object.keys(servers).length < 3 ? "; mempool.space on the other Bitcoin networks" : "")
+    : st.btcServers ? "mempool.space, with blockstream.info as a fallback" : "your Esplora server";
   const list = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
   return h("p", { class: "muted small mig-privacy" },
     h("strong", null, "Who sees these addresses: "),
