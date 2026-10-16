@@ -25,6 +25,17 @@ final class BtcScript {
         return s;
     }
 
+    /** OP_HASH160 &lt;20&gt; OP_EQUAL. */
+    static byte[] p2sh(byte[] hash20) {
+        if (hash20.length != 20) throw new IllegalArgumentException("hash must be 20 bytes");
+        byte[] s = new byte[23];
+        s[0] = (byte) 0xa9;
+        s[1] = 0x14;
+        System.arraycopy(hash20, 0, s, 2, 20);
+        s[22] = (byte) 0x87;
+        return s;
+    }
+
     static byte[] p2tr(byte[] xonly32) {
         if (xonly32.length != 32) throw new IllegalArgumentException("key must be 32 bytes");
         byte[] s = new byte[34];
@@ -34,8 +45,12 @@ final class BtcScript {
         return s;
     }
 
-    /** P2WPKH script code for BIP-143: OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG. */
+    /**
+     * OP_DUP OP_HASH160 &lt;20&gt; OP_EQUALVERIFY OP_CHECKSIG: a P2PKH output script, and the BIP-143
+     * script code for P2WPKH (native or nested in P2SH).
+     */
     static byte[] p2pkhScript(byte[] hash20) {
+        if (hash20.length != 20) throw new IllegalArgumentException("hash must be 20 bytes");
         byte[] s = new byte[25];
         s[0] = 0x76;
         s[1] = (byte) 0xa9;
@@ -79,6 +94,15 @@ final class BtcScript {
             i += n;
         }
         return true;
+    }
+
+    /** A single minimal data push of {@code data} (1…75 bytes: the length byte as the opcode). */
+    static byte[] push(byte[] data) {
+        if (data.length < 1 || data.length > 75) throw new IllegalArgumentException("push of 1-75 bytes only");
+        byte[] s = new byte[1 + data.length];
+        s[0] = (byte) data.length;
+        System.arraycopy(data, 0, s, 1, data.length);
+        return s;
     }
 
     /** Bytes of data carried by an OP_RETURN script (the script minus the opcode). */

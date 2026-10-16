@@ -33,9 +33,9 @@ final class BtcSharing {
             JSONObject json = new JSONObject(stored);
             if (json.getInt("v") != VERSION || !s.walletId.equals(json.getString("wallet"))) return s;
             JSONArray list = json.getJSONArray("shared");
-            for (int i = 0; i < list.length() && i < 3 * 2 * BtcWallet.ACCOUNTS; i++) {
+            for (int i = 0; i < list.length() && i < BtcNetwork.values().length * BtcWallet.Type.values().length * BtcWallet.ACCOUNTS; i++) {
                 String k = list.getString(i);
-                if (k.matches("(bitcoin|testnet|signet)/(p2wpkh|p2tr)/([1-9]|1[0-9]|20)")) s.shared.add(k);
+                if (k.matches("(bitcoin|testnet|signet)/(p2wpkh|p2tr|p2sh-p2wpkh|p2pkh)/([1-9]|1[0-9]|20)")) s.shared.add(k);
             }
         } catch (JSONException corrupt) {
             s.shared.clear();

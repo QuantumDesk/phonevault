@@ -203,37 +203,68 @@ public final class BtcPsbtTest {
             assertArrayEquals(req.psbt.tx.serializeLegacy(), out.tx.serializeLegacy());
 
             JSONArray sigs = f.getJSONArray("signatures");
-            List<byte[][]> witnesses = new ArrayList<>();
+            int n = out.tx.inputs.size();
+            byte[][][] witnesses = new byte[n][][];
+            byte[][] scriptSigs = new byte[n][];
             for (int k = 0; k < sigs.length(); k++) {
                 JSONObject s = sigs.getJSONObject(k);
-                List<Psbt.Entry> map = out.inputs.get(s.getInt("input"));
+                int index = s.getInt("input");
+                List<Psbt.Entry> map = out.inputs.get(index);
+                BtcWallet.Type type = r.inputs.get(index).type;
+                scriptSigs[index] = new byte[0];
                 if (s.getString("type").equals("partial_sig")) {
                     Psbt.Entry e = Psbt.find(map, Psbt.IN_PARTIAL_SIG);
                     assertNotNull(name, e);
                     assertEquals(s.getString("pubkey"), BtcCrypto.hex(e.keyData));
                     assertEquals(name + " ECDSA input " + k, s.getString("sig"), BtcCrypto.hex(e.value));
-                    witnesses.add(new byte[][] {e.value, e.keyData});
+                    if (type == BtcWallet.Type.P2PKH) {
+                        witnesses[index] = new byte[0][];
+                        scriptSigs[index] = concat(BtcScript.push(e.value), BtcScript.push(e.keyData));
+                    } else {
+                        witnesses[index] = new byte[][] {e.value, e.keyData};
+                        if (type == BtcWallet.Type.P2SH_P2WPKH) scriptSigs[index] = BtcScript.push(BtcWallet.redeemScript(e.keyData));
+                    }
                 } else {
                     Psbt.Entry e = Psbt.find(map, Psbt.IN_TAP_KEY_SIG);
                     assertNotNull(name, e);
                     assertEquals(name + " Schnorr input " + k, s.getString("sig"), BtcCrypto.hex(e.value));
-                    witnesses.add(new byte[][] {e.value});
+                    witnesses[index] = new byte[][] {e.value};
                 }
+                if (f.has("scriptSigs")) assertEquals(name, f.getJSONArray("scriptSigs").getString(index), BtcCrypto.hex(scriptSigs[index]));
             }
             // finalize like the host would and compare the whole network transaction
-            byte[] finalTx = finalize(out.tx, witnesses);
+            List<BtcTx.Input> signedIns = new ArrayList<>();
+            for (int i = 0; i < n; i++) {
+                BtcTx.Input in = out.tx.inputs.get(i);
+                signedIns.add(new BtcTx.Input(in.prevTxid, in.vout, scriptSigs[i], in.sequence));
+            }
+            BtcTx stripped = new BtcTx(out.tx.version, signedIns, new ArrayList<>(out.tx.outputs), out.tx.locktime, false);
+            byte[] finalTx = finalize(stripped, Arrays.asList(witnesses));
             assertEquals(name, f.getString("finalTx"), BtcCrypto.hex(finalTx));
-            assertEquals(name, f.getString("txid"), BtcCrypto.hex(BtcCrypto.reversed(out.tx.txid())));
+            assertEquals(name, f.getString("txid"), BtcCrypto.hex(BtcCrypto.reversed(stripped.txid())));
             // the size estimate is never below the real size, and at most 1 vB per ECDSA input above it
-            long actual = (3L * out.tx.serializeLegacy().length + finalTx.length + 3) / 4;
+            long actual = (3L * stripped.serializeLegacy().length + finalTx.length + 3) / 4;
             int ecdsa = 0;
-            for (BtcPsbtReview.SignInput in : r.inputs) if (in.type == BtcWallet.Type.P2WPKH) ecdsa++;
+            for (BtcPsbtReview.SignInput in : r.inputs) if (in.type.ecdsa()) ecdsa++;
             assertTrue(name + " vsize " + r.vsize + " vs " + actual, r.vsize >= actual && r.vsize <= actual + ecdsa);
         }
     }
 
-    /** SegWit serialization with the given witness stacks (all inputs SegWit). */
+    static byte[] concat(byte[] a, byte[] b) {
+        byte[] out = Arrays.copyOf(a, a.length + b.length);
+        System.arraycopy(b, 0, out, a.length, b.length);
+        return out;
+    }
+
+    /**
+     * Network serialization with the given scriptSigs (in {@code tx}) and witness stacks: SegWit
+     * serialization when any input has a witness (an input without one gets an empty stack),
+     * else the legacy one.
+     */
     static byte[] finalize(BtcTx tx, List<byte[][]> witnesses) {
+        boolean segwit = false;
+        for (byte[][] w : witnesses) if (w.length > 0) segwit = true;
+        if (!segwit) return tx.serializeLegacy();
         ByteArrayOutputStream o = new ByteArrayOutputStream();
         BtcTx.u32(o, tx.version);
         o.write(0); o.write(1);
@@ -278,7 +309,7 @@ public final class BtcPsbtTest {
         assertEquals("Send 0.01234567 BTC", r.title);
         assertEquals("BITCOIN TRANSACTION REVIEW", r.kicker);
         assertEquals("Bitcoin", value(r, "Network"));
-        assertEquals("0.01234567 BTC to\nbc1q 50rt rmj2 f8vl 9tem\n8qpf w36y lw5j g9j2 9e5z\na5", value(r, "Send"));
+        assertEquals("0.01234567 BTC to\nbc1q 50rt rmj2 f8vl 9tem\n8qpf w36y lw5j g9j2 9e5z\na5\nNative SegWit (P2WPKH) address", value(r, "Send"));
         assertEquals("0.00263000 BTC · bc1q8c6f…pcp6el · m/84'/0'/0'/1/0", value(r, "Change back to your wallet ✓"));
         String fee = value(r, "Network fee");
         assertTrue(fee, fee.startsWith("0.00002433 BTC (") && fee.endsWith(" sat/vB)"));
@@ -530,11 +561,11 @@ public final class BtcPsbtTest {
         // (a consistent previous transaction for that other script, so the coin data itself agrees)
         assertRefused(withCoin(p, 1, 500_000, BtcScript.p2wpkh(new byte[20]), true), BtcNetwork.BITCOIN, "script does not belong to that key");
 
-        // a legacy coin
-        Maps legacy = new Maps(p);
-        legacy.remove(legacy.in.get(1), Psbt.IN_WITNESS_UTXO);
-        legacy.in.get(1).add(Psbt.entry(Psbt.IN_WITNESS_UTXO, new byte[0], witnessUtxo(500_000, BtcScript.p2pkhScript(new byte[20]))));
-        assertRefused(legacy.parse(), BtcNetwork.BITCOIN, "Legacy (P2PKH) coin");
+        // a legacy coin named with the BIP-84 path of this wallet (BtcNestedAndLegacyTest covers BIP-44 coins)
+        assertRefused(withCoin(p, 1, 500_000, BtcScript.p2pkhScript(new byte[20]), true), BtcNetwork.BITCOIN,
+                "which does not fit its script type (Legacy)");
+        // a coin of a type the phone never signs
+        assertRefused(withCoin(p, 1, 500_000, Hex.bytes("0020" + "11".repeat(32)), true), BtcNetwork.BITCOIN, "SegWit script (P2WSH) coin");
     }
 
     @Test public void missingOrInconsistentUtxoDataIsRefused() throws Exception {
@@ -642,7 +673,11 @@ public final class BtcPsbtTest {
         // a P2SH output claiming to be this wallet's
         Maps sh = new Maps(psbt(fixture("p2wpkh-account-2-legacy-recipients")));
         sh.out.get(1).add(Psbt.entry(Psbt.OUT_BIP32_DERIVATION, changeKey, origin(fp, 84 | H, H, H, 1, 0)));
-        assertRefused(sh.parse(), BtcNetwork.BITCOIN, "claims to be this wallet's");
+        assertRefused(sh.parse(), BtcNetwork.BITCOIN, "which does not fit its script type (Nested SegWit)");
+        // a P2WSH output claiming to be this wallet's
+        Maps wsh = new Maps(psbt(fixture("p2wpkh-account-2-legacy-recipients")));
+        wsh.out.get(2).add(Psbt.entry(Psbt.OUT_BIP32_DERIVATION, changeKey, origin(fp, 84 | H, H, H, 1, 0)));
+        assertRefused(wsh.parse(), BtcNetwork.BITCOIN, "claims to be this wallet's");
         // change without its derivation is just a recipient (no ✓)
         Maps plain = new Maps(p);
         plain.out.get(1).clear();

@@ -10,12 +10,13 @@ import java.util.Base64;
  * strings; missing, unknown or duplicate fields are refused by {@link AccessoryTransport} and here):
  *
  * <pre>
- * {"id","method":"btcGetAccount","network":"bitcoin|testnet|signet","type":"p2wpkh|p2tr","account":"1".."20"}
+ * {"id","method":"btcGetAccount","network":"bitcoin|testnet|signet","type":"p2wpkh|p2tr|p2sh-p2wpkh|p2pkh","account":"1".."20"}
  *   → {"id","status":"ok","fingerprint":"73c5da0a","path":"m/84'/0'/0'","xpub":"xpub…|tpub…","descriptor":"wpkh([73c5da0a/84h/0h/0h]xpub…/&lt;0;1&gt;/*)#…"}
+ *     (p2tr: m/86'… tr(…); p2sh-p2wpkh: m/49'… sh(wpkh(…)); p2pkh: m/44'… pkh(…); always xpub/tpub, never ypub)
  * {"id","method":"btcShowAddress","network","type","account","change":"0|1","index":"0".."9999"}
- *   → {"id","status":"ok","address":"bc1…"}            (after the user compared it and tapped Done)
+ *   → {"id","status":"ok","address":"bc1…|3…|1…"}      (after the user compared it and tapped Done)
  * {"id","method":"btcSignPsbt","network","psbt":"&lt;base64 BIP-174 v0&gt;"}
- *   → {"id","status":"approved","psbt":"&lt;base64, partial_sigs / tap_key_sig added&gt;"}
+ *   → {"id","status":"approved","psbt":"&lt;base64, partial_sigs / tap_key_sig added, nothing finalized&gt;"}
  * </pre>
  * Declining answers {"id","status":"rejected"}; anything refused answers {"id","status":"error","error"}.
  * "account" is 1-based like getAddress's: account "1" is m/84'/0'/0'.

@@ -7,8 +7,9 @@ import java.util.List;
 
 /**
  * A Bitcoin transaction: strict parsing (canonical compact sizes, bounded counts, no trailing
- * bytes), the legacy serialization used for txids, and the two signature hashes the phone signs:
- * BIP-143 (SegWit v0) and BIP-341 (Taproot key path).
+ * bytes), the legacy serialization used for txids, and the three signature hashes the phone signs:
+ * the original (pre-SegWit) one for P2PKH, BIP-143 (SegWit v0, native or nested in P2SH) and
+ * BIP-341 (Taproot key path).
  */
 final class BtcTx {
     static final int MAX_IO = 100;          // the phone's own cap for a transaction it signs
@@ -201,6 +202,37 @@ final class BtcTx {
     /** txid in internal byte order. */
     byte[] txid() { return BtcCrypto.sha256d(serializeLegacy()); }
 
+    // ------------------------------------------------------------------ legacy (P2PKH)
+
+    /**
+     * The original signature hash (SignatureHash before SegWit) of input {@code index}, SIGHASH_ALL
+     * only: the transaction with every scriptSig emptied except this input's, which is set to
+     * {@code scriptCode} (for P2PKH: the spent output's script, which holds no OP_CODESEPARATOR),
+     * serialized without witness, followed by the hash type as 4 bytes, double SHA-256. It does NOT
+     * commit to any input's amount: the caller must prove the amounts some other way.
+     */
+    byte[] sighashLegacy(int index, byte[] scriptCode, int hashType) {
+        if (hashType != SIGHASH_ALL) throw new IllegalArgumentException("only SIGHASH_ALL is implemented for legacy inputs");
+        if (index < 0 || index >= inputs.size()) throw new IllegalArgumentException("input index out of range");
+        // Any other script code could hold OP_CODESEPARATOR (FindAndDelete semantics); a P2PKH script cannot.
+        if (BtcScript.kind(scriptCode) != BtcScript.Kind.P2PKH) throw new IllegalArgumentException("legacy script code must be P2PKH");
+        ByteArrayOutputStream m = new ByteArrayOutputStream();
+        u32(m, version);
+        compact(m, inputs.size());
+        for (int i = 0; i < inputs.size(); i++) {
+            Input in = inputs.get(i);
+            m.write(in.prevTxid, 0, 32);
+            u32(m, in.vout);
+            varBytes(m, i == index ? scriptCode : new byte[0]);
+            u32(m, in.sequence);
+        }
+        compact(m, outputs.size());
+        for (Output out : outputs) output(m, out);
+        u32(m, locktime);
+        u32(m, hashType & 0xffffffffL);
+        return BtcCrypto.sha256d(m.toByteArray());
+    }
+
     // ------------------------------------------------------------------ BIP-143 (SegWit v0)
 
     /**
@@ -328,6 +360,30 @@ final class BtcTx {
     long vsize(int[] witnessBytes) {
         long weight = 4L * baseSize() + 2;
         for (int w : witnessBytes) weight += w;
+        return (weight + 3) / 4;
+    }
+
+    /**
+     * Virtual size once signed, given each input's final scriptSig length (it replaces the empty
+     * one; every length used here stays below 0xfd, so its length prefix does not grow) and witness
+     * bytes (count prefix included; 0 for an input without witness). Without any witness the
+     * transaction is serialized without the SegWit marker and flag; with one, every input without
+     * witness still carries an empty stack (1 byte).
+     */
+    long vsize(int[] scriptSigBytes, int[] witnessBytes) {
+        if (scriptSigBytes.length != inputs.size() || witnessBytes.length != inputs.size()) throw new IllegalArgumentException("one entry per input");
+        long base = baseSize();
+        for (int s : scriptSigBytes) {
+            if (s < 0 || s >= 0xfd) throw new IllegalArgumentException("scriptSig length out of range");
+            base += s;
+        }
+        boolean segwit = false;
+        for (int w : witnessBytes) if (w > 0) segwit = true;
+        long weight = 4L * base;
+        if (segwit) {
+            weight += 2;
+            for (int w : witnessBytes) weight += w > 0 ? w : 1;
+        }
         return (weight + 3) / 4;
     }
 }

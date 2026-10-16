@@ -393,7 +393,15 @@ final class BtcScreens {
                 },
                 "Confirm your PIN to sign this Bitcoin transaction",
                 "The signed PSBT was queued for USB. Your Mac finalizes it and sends it to the network; unplugging cannot revoke a signature already received.",
-                "Transaction ID (once sent to the network)", response -> txid, true, () -> {
+                "Transaction ID (once sent to the network)", response -> {
+                    // Nested SegWit and Legacy inputs put their scriptSig (for Legacy: the signature) into the txid
+                    try {
+                        return BtcCrypto.hex(BtcCrypto.reversed(BtcPsbtSigner.finalTxid(review,
+                                java.util.Base64.getDecoder().decode(response.getString("psbt")))));
+                    } catch (Exception e) {
+                        return txid;
+                    }
+                }, true, () -> {
                     host.safety().record(review.walletKey, review.parties, System.currentTimeMillis());
                     approvals.offerToSave(review.parties);
                 }));

@@ -10,10 +10,15 @@ import java.util.Map;
 /**
  * Signs exactly the inputs a {@link BtcPsbtReview} listed, with keys derived from the BIP-39 seed
  * inside the seed-key window, and returns the PSBT with the signatures added (PSBT_IN_PARTIAL_SIG
- * for SegWit v0, PSBT_IN_TAP_KEY_SIG for Taproot). The host finalizes, verifies and broadcasts.
+ * for every ECDSA input, PSBT_IN_TAP_KEY_SIG for Taproot). Nothing is finalized: the host builds
+ * the scriptSig / witness, verifies and broadcasts.
  *
  * <ul>
- *   <li>P2WPKH: BIP-143 sighash (SIGHASH_ALL), ECDSA with RFC 6979 nonces, low-S, DER + 0x01.</li>
+ *   <li>P2WPKH and P2SH-P2WPKH (BIP-49): BIP-143 sighash (SIGHASH_ALL) with the P2PKH script code
+ *       of the key, ECDSA with RFC 6979 nonces, low-S, DER + 0x01. (The host's final scriptSig for
+ *       P2SH-P2WPKH is a push of the redeem script 0x0014 ‖ HASH160(key); the witness is sig, key.)</li>
+ *   <li>P2PKH (BIP-44): the original signature hash (SIGHASH_ALL; the spent output's script as the
+ *       script code, every other scriptSig empty), the same ECDSA. (Final scriptSig: sig, key.)</li>
  *   <li>P2TR key path: BIP-341 sighash (DEFAULT, or ALL when the PSBT asks for it), BIP-340 Schnorr
  *       with the BIP-86 tweak (no script tree) and fresh auxiliary randomness; 64 bytes (65 with ALL).</li>
  * </ul>
@@ -55,10 +60,16 @@ final class BtcPsbtSigner {
                 Bip32.Key key = Bip32.derive(account, in.change, in.addressIndex);
                 try {
                     if (!Arrays.equals(key.pub, in.pubkey)) throw new IllegalStateException("derived key differs from the reviewed key");
-                    if (in.type == BtcWallet.Type.P2WPKH) {
+                    if (in.type.ecdsa()) {
+                        if (!Arrays.equals(BtcWallet.scriptFor(in.type, key.pub), in.script)) {
+                            throw new IllegalStateException("derived key does not lock the reviewed coin");
+                        }
                         byte[] scriptCode = BtcScript.p2pkhScript(BtcCrypto.hash160(key.pub));
-                        byte[] digest = tx.sighashSegwitV0(in.index, scriptCode, in.amount, BtcTx.SIGHASH_ALL);
+                        byte[] digest = in.type == BtcWallet.Type.P2PKH
+                                ? tx.sighashLegacy(in.index, in.script, BtcTx.SIGHASH_ALL)
+                                : tx.sighashSegwitV0(in.index, scriptCode, in.amount, BtcTx.SIGHASH_ALL);
                         byte[] der = BtcCrypto.signEcdsa(key.privateKey(), digest);
+                        if (!BtcCrypto.verifyEcdsa(in.pubkey, digest, der)) throw new IllegalStateException("ECDSA signature does not verify against the reviewed key");
                         byte[] sig = Arrays.copyOf(der, der.length + 1);
                         sig[der.length] = (byte) BtcTx.SIGHASH_ALL;
                         additions.get(in.index).add(Psbt.entry(Psbt.IN_PARTIAL_SIG, key.pub, sig));
@@ -87,5 +98,37 @@ final class BtcPsbtSigner {
             for (Bip32.Key k : accountKeys.values()) k.destroy();
         }
         return review.psbt.serializeWith(additions);
+    }
+
+    /**
+     * The txid the transaction will have once the host finalizes {@code signed} (this signer's
+     * output for {@code review}): the unsigned transaction's for SegWit and Taproot inputs, but a
+     * Nested SegWit input's scriptSig (its redeem script) and a Legacy input's (its signature and
+     * key) are part of the txid.
+     */
+    static byte[] finalTxid(BtcPsbtReview review, byte[] signed) {
+        Psbt p = Psbt.parse(signed);
+        BtcTx tx = p.tx;
+        List<BtcTx.Input> ins = new ArrayList<>(tx.inputs);
+        for (BtcPsbtReview.SignInput in : review.inputs) {
+            BtcTx.Input old = ins.get(in.index);
+            byte[] scriptSig;
+            if (in.type == BtcWallet.Type.P2SH_P2WPKH) {
+                scriptSig = BtcScript.push(BtcWallet.redeemScript(in.pubkey));
+            } else if (in.type == BtcWallet.Type.P2PKH) {
+                byte[] sig = null;
+                for (Psbt.Entry e : Psbt.all(p.inputs.get(in.index), Psbt.IN_PARTIAL_SIG)) {
+                    if (Arrays.equals(e.keyData, in.pubkey)) sig = e.value;
+                }
+                if (sig == null) throw new IllegalStateException("legacy input " + in.index + " is not signed");
+                byte[] a = BtcScript.push(sig), b = BtcScript.push(in.pubkey);
+                scriptSig = Arrays.copyOf(a, a.length + b.length);
+                System.arraycopy(b, 0, scriptSig, a.length, b.length);
+            } else {
+                continue;
+            }
+            ins.set(in.index, new BtcTx.Input(old.prevTxid, old.vout, scriptSig, old.sequence));
+        }
+        return new BtcTx(tx.version, ins, new ArrayList<>(tx.outputs), tx.locktime, false).txid();
     }
 }
