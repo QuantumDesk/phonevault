@@ -1,7 +1,8 @@
 package dev.phonevault.signer;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
@@ -16,8 +17,7 @@ import java.util.Map;
 
 /**
  * Adversarial audit proofs for account numbering (AccountScheme / AccountBook) and USB
- * listAddresses. Each test documents what it proves; tests named "finding…" pin current behaviour
- * that the audit reports as a weakness (they pass today and should be flipped when fixed).
+ * listAddresses. Each test documents what it proves (the audit's findings are fixed and asserted as such).
  */
 public final class AccountNumberingAuditTest {
     private static final String ABOUT = TestKeys.ABANDON_12;
@@ -98,47 +98,126 @@ public final class AccountNumberingAuditTest {
     }
 
     /**
-     * FINDING (low, local-tamper only): a stored NON-active account's address is never re-derived.
-     * AccountBook.load trusts it, AccountScreens lists it as "Account 2", and ownAccountNames feeds it
-     * to AddressSafety, so a review of a send to that (foreign) address says "Your account: Account 2
-     * on this phone". The same holds for the parked list after a numbering switch.
+     * A stored NON-active account's address is re-derived before it is trusted. AccountBook.load
+     * returns an unverified book; unlock (MainActivity.loadKey) and a numbering switch run
+     * dropUnverified with the seed, which drops every listed account (both numberings) whose saved
+     * address the seed does not give, so the list never shows it and ownAccountNames never feeds it to
+     * AddressSafety: a send to that foreign address is not called "Your account". Genuine accounts
+     * keep their labels, and the dropped index can be opened again (with its real address).
      */
-    @Test public void findingNonActiveStoredAddressIsTrustedAsOwnAccount() throws Exception {
+    @Test public void nonActiveStoredAddressIsReDerivedAndDropped() throws Exception {
+        String std1 = STD[1].toLowerCase(java.util.Locale.ROOT);
         String stored = "{\"v\":2,\"wallet\":\"" + WALLET + "\",\"scheme\":\"standard\",\"active\":0,\"accounts\":["
-                + "{\"i\":0,\"a\":\"" + WALLET + "\"},{\"i\":1,\"a\":\"" + ATTACKER + "\"}],"
+                + "{\"i\":0,\"a\":\"" + WALLET + "\"},{\"i\":1,\"a\":\"" + ATTACKER + "\"},{\"i\":2,\"a\":\"" + STD[2] + "\",\"l\":\"Savings\"}],"
                 + "\"parked\":{\"scheme\":\"ledger-live\",\"active\":0,\"accounts\":[{\"i\":0,\"a\":\"" + WALLET + "\"},"
-                + "{\"i\":2,\"a\":\"" + ATTACKER.replace("deadbeef", "cafebabe") + "\"}]}}";
+                + "{\"i\":1,\"a\":\"" + LL[1] + "\"},{\"i\":2,\"a\":\"" + ATTACKER.replace("deadbeef", "cafebabe") + "\"}]}}";
         AccountBook book = AccountBook.load(stored, WALLET);
-        assertEquals(ATTACKER, book.get(1).address);              // not STD[1]
-        assertEquals(0, book.activeIndex());
-        // loadKey's only check (active account) passes: account 0 is genuine.
-        SeedVault.Derived d = SeedVault.deriveAccount(ABOUT, null, book.activeIndex(), book.scheme);
-        assertTrue(book.active().address.equalsIgnoreCase(d.credentials.getAddress()));
-        // What ownAccountNames builds from book.all():
+        assertFalse("a stored list is untrusted until checked", book.verified());
+        assertEquals(ATTACKER, book.get(1).address);
+
+        int dropped = SeedVault.withWallet(ABOUT, null, w -> book.dropUnverified(w::address));
+        assertEquals("the foreign Standard entry and the foreign parked Ledger Live entry", 2, dropped);
+        assertTrue(book.verified());
+        assertNull(book.get(1));
+        assertEquals("a genuine account keeps its label", "Savings", book.get(2).name());
+        assertEquals("the dropped index opens again", 1, book.nextIndex());
+        book.add(1, STD[1]);
+        assertEquals(std1, book.get(1).address);
+        assertEquals("listed by index", Arrays.asList(0, 1, 2), indexes(book));
+
+        // What ownAccountNames builds from the verified book: the foreign address is not "your account".
         Map<String, String> own = new java.util.LinkedHashMap<>();
         for (AccountBook.Account a : book.all()) own.put(a.address, a.name());
+        assertFalse(own.containsKey(ATTACKER));
         AddressSafety safety = new AddressSafety(null, null);
         safety.setOwnAccounts(own);
-        List<MessageReview.Row> rows = safety.rows(WALLET, ATTACKER, RecipientHistory.Role.SEND);
-        boolean namedOwn = false;
-        for (MessageReview.Row r : rows) if (AddressSafety.OWN_ACCOUNT.equals(r.label) && r.value.startsWith("Account 2")) namedOwn = true;
-        assertTrue("a foreign address is presented as the user's own Account 2", namedOwn);
-        // The parked Ledger Live list is equally unchecked and comes back on switch.
+        for (MessageReview.Row r : safety.rows(WALLET, ATTACKER, RecipientHistory.Role.SEND)) {
+            assertFalse("a foreign address is never named as your account", AddressSafety.OWN_ACCOUNT.equals(r.label));
+        }
+        // The parked Ledger Live list was checked too: switching brings back only genuine accounts.
         AccountBook ll = book.withScheme(AccountScheme.LEDGER_LIVE);
-        assertNotNull(ll.get(2));
-        assertTrue(!ll.get(2).address.equalsIgnoreCase(LL[2]));
+        assertTrue(ll.verified());
+        assertNull(ll.get(2));
+        assertTrue(ll.get(1).address.equalsIgnoreCase(LL[1]));
+        // Only a verified list names own accounts, and both the unlock and the switch re-derive the list.
+        String names = SourceGuard.definition("    Map<String, String> ownAccountNames() {");
+        assertTrue(names.contains("if (standard != null && !standard.verified()) standard = null;"));
+        assertTrue(names.contains("if (passphraseAccounts != null && !passphraseAccounts.verified()) passphraseAccounts = null;"));
+        assertTrue(SourceGuard.definition("    private void loadKey() {").contains("b.dropUnverified(w::address);"));
+        assertTrue(SourceGuard.definition("    private void switchNumberingWorker(AccountScheme next, boolean retried) {").contains("b.dropUnverified(w::address);"));
+    }
+
+    /** A tampered ACTIVE account is dropped too: Account 1 becomes active, the signing key is Account 1's. */
+    @Test public void tamperedActiveAccountFallsBackToAccount1() throws Exception {
+        String stored = "{\"v\":2,\"wallet\":\"" + WALLET + "\",\"scheme\":\"ledger-live\",\"active\":1,\"accounts\":["
+                + "{\"i\":0,\"a\":\"" + WALLET + "\"},{\"i\":1,\"a\":\"" + ATTACKER + "\"}]}";
+        AccountBook book = AccountBook.load(stored, WALLET);
+        SeedVault.Derived d = SeedVault.withWallet(ABOUT, null, w -> {
+            assertEquals(1, book.dropUnverified(w::address));
+            return w.account(book.activeIndex(), book.scheme);
+        });
+        assertEquals(0, book.activeIndex());
+        assertSame(AccountScheme.LEDGER_LIVE, book.scheme);
+        assertTrue(WALLET.equalsIgnoreCase(d.credentials.getAddress()));
+        book.select(0, d.credentials.getAddress());
+        // A list of another wallet is refused outright.
+        AccountBook other = AccountBook.fresh(STD[1]);
+        try { SeedVault.withWallet(ABOUT, null, w -> other.dropUnverified(w::address)); fail(); } catch (IllegalStateException expected) { }
+    }
+
+    /** The one-wallet derivation agrees with the per-account one (keys, identity, both numberings). */
+    @Test public void walletDerivationMatchesPerAccountDerivation() throws Exception {
+        for (String pass : new String[] {null, "TREZOR"}) {
+            SeedVault.withWallet(ABOUT, pass, w -> {
+                for (AccountScheme scheme : AccountScheme.values()) {
+                    for (int i : new int[] {0, 1, 7, SeedVault.MAX_ACCOUNT_INDEX}) {
+                        SeedVault.Derived one = SeedVault.deriveAccount(ABOUT, pass, i, scheme);
+                        SeedVault.Derived many = w.account(i, scheme);
+                        assertEquals(one.credentials.getEcKeyPair().getPrivateKey(), many.credentials.getEcKeyPair().getPrivateKey());
+                        assertEquals(one.account0Address, many.account0Address);
+                        assertEquals(one.fingerprint, many.fingerprint);
+                        assertEquals(i, many.index);
+                        assertEquals(one.credentials.getAddress().toLowerCase(java.util.Locale.ROOT), w.address(scheme, i));
+                    }
+                }
+                return null;
+            });
+        }
+        assertEquals(LL[2].toLowerCase(java.util.Locale.ROOT), SeedVault.withWallet(ABOUT, null, w -> w.address(AccountScheme.LEDGER_LIVE, 2)));
+    }
+
+    private static List<Integer> indexes(AccountBook book) {
+        List<Integer> out = new java.util.ArrayList<>();
+        for (AccountBook.Account a : book.all()) out.add(a.index);
+        return out;
     }
 
     /**
-     * FINDING (low, local-corruption only): a v2 book whose active list is unreadable falls back to a
-     * fresh STANDARD book even though the stored numbering is Ledger Live; storedScheme and load
-     * disagree, and loadKey silently re-derives under Standard. Signing stays consistent with the
-     * display (both Standard), but the numbering changed without the user.
+     * A v2 book whose active list is unreadable starts over at Account 1 under its SAVED numbering
+     * (Ledger Live stays Ledger Live; storedScheme and load agree) and carries a one-time notice,
+     * shown on the home screen after unlock. A list that is saved again reads back without it.
      */
-    @Test public void findingCorruptLedgerLiveBookRevertsToStandard() {
+    @Test public void corruptLedgerLiveBookKeepsItsNumberingAndSaysSo() {
         String stored = "{\"v\":2,\"wallet\":\"" + WALLET + "\",\"scheme\":\"ledger-live\",\"active\":0,\"accounts\":[{\"i\":0,\"a\":\"0xnot\"}]}";
         assertSame(AccountScheme.LEDGER_LIVE, AccountBook.storedScheme(stored));
-        assertSame(AccountScheme.STANDARD, AccountBook.load(stored, WALLET).scheme);
+        AccountBook book = AccountBook.load(stored, WALLET);
+        assertSame(AccountScheme.LEDGER_LIVE, book.scheme);
+        assertEquals(1, book.all().size());
+        assertEquals("Your account list was reset; account numbering is still Ledger Live.", book.resetNotice());
+        assertEquals(book.resetNotice(), AccountBook.listNotice(book.resetNotice(), 0));
+        AccountBook again = AccountBook.load(book.encode(), WALLET);
+        assertSame(AccountScheme.LEDGER_LIVE, again.scheme);
+        assertNull("one time only", again.resetNotice());
+        // Not even the numbering readable: Standard, and the notice says how to switch back.
+        AccountBook garbage = AccountBook.load("{\"v\":2,\"wallet\":", WALLET);
+        assertSame(AccountScheme.STANDARD, garbage.scheme);
+        assertEquals(AccountBook.RESET_UNREADABLE_NOTICE, garbage.resetNotice());
+        // Another wallet's book or a newer format: a fresh list, no notice.
+        assertNull(AccountBook.load(stored.replace(WALLET, STD[1].toLowerCase(java.util.Locale.ROOT)), WALLET).resetNotice());
+        assertNull(AccountBook.load(stored.replace("\"v\":2", "\"v\":3"), WALLET).resetNotice());
+        assertNull(AccountBook.listNotice(null, 0));
+        assertEquals("2 saved accounts did not match your recovery phrase and were removed from your account list. "
+                + "Add accounts again in ☰ → Accounts; each address is derived from your phrase.", AccountBook.listNotice(null, 2));
     }
 
     /** Wrong-wallet / same-scheme parked / swapped-scheme tamper is dropped. */

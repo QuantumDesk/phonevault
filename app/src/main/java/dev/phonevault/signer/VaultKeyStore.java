@@ -105,6 +105,19 @@ final class VaultKeyStore {
     }
 
     /**
+     * Run {@code use} with the wallet {@code passphrase} opens (null or empty: the standard wallet):
+     * ONE decrypt of the record, so it runs inside the same PIN window as {@link #deriveAccount},
+     * however many accounts {@code use} derives. The seed is zeroed when it returns.
+     */
+    synchronized <T> T withWallet(String passphrase, SeedVault.WalletUse<T> use) throws Exception {
+        ensureWrappingKey();
+        enforceSecureHardwarePolicy();
+        WalletRecord record = persistence.load();
+        if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
+        return SeedVault.withWallet(decrypt(record), passphrase, use);
+    }
+
+    /**
      * The first {@code count} addresses of the STANDARD wallet (no passphrase) under {@code scheme}:
      * public addresses only, for USB listAddresses after the user approves sharing them. Same PIN
      * window as {@link #deriveAccount}.
