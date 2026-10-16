@@ -32,7 +32,8 @@ import javax.crypto.spec.GCMParameterSpec;
 /**
  * Generates a BIP39 seed via {@link SeedVault} and stores the mnemonic encrypted by a
  * non-exportable StrongBox-backed Android Keystore key. The EVM key is derived from the mnemonic
- * at m/44'/60'/0'/0/0; the 24-word backup is revealable for the user.
+ * at m/44'/60'/0'/0/0; the recovery phrase (24 words when created here, 12–24 when restored) is
+ * revealable for the user.
  *
  * <p>Durability lives in {@link WalletPersistence} (journal → atomic write → read-back → settled
  * flags, permanent v3 marker, verified erase), which is fault-injected in unit tests; this class
@@ -91,11 +92,34 @@ final class VaultKeyStore {
      * is neither stored nor kept here.
      */
     synchronized SeedVault.Derived deriveAccount(int index, String passphrase) throws Exception {
+        return deriveAccount(index, passphrase, AccountScheme.STANDARD);
+    }
+
+    /** As {@link #deriveAccount(int, String)}, with the account numbered by {@code scheme}. */
+    synchronized SeedVault.Derived deriveAccount(int index, String passphrase, AccountScheme scheme) throws Exception {
         ensureWrappingKey();
         enforceSecureHardwarePolicy();
         WalletRecord record = persistence.load();
         if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
-        return SeedVault.deriveAccount(decrypt(record), passphrase, index);
+        return SeedVault.deriveAccount(decrypt(record), passphrase, index, scheme);
+    }
+
+    /**
+     * The first {@code count} addresses of the STANDARD wallet (no passphrase) under {@code scheme}:
+     * public addresses only, for USB listAddresses after the user approves sharing them. Same PIN
+     * window as {@link #deriveAccount}.
+     */
+    synchronized List<String> standardAddresses(AccountScheme scheme, int count) throws Exception {
+        return addresses(scheme, count, "");
+    }
+
+    /** As {@link #standardAddresses}, for the wallet {@code passphrase} opens (null or empty: the standard wallet). */
+    synchronized List<String> addresses(AccountScheme scheme, int count, String passphrase) throws Exception {
+        ensureWrappingKey();
+        enforceSecureHardwarePolicy();
+        WalletRecord record = persistence.load();
+        if (record == null) throw new WalletPersistence.PersistenceException("no verifiable wallet record on disk");
+        return SeedVault.addresses(decrypt(record), passphrase, scheme, count);
     }
 
     /** Work done with the standard wallet's BIP-39 seed; the seed is zeroed when it returns. */
@@ -167,7 +191,7 @@ final class VaultKeyStore {
         return commitReplacement(mnemonic);
     }
 
-    /** Decrypt and return the 24-word backup for the reveal screen. Handle with care. */
+    /** Decrypt and return the recovery phrase (12–24 words) for the reveal screen. Handle with care. */
     synchronized String revealMnemonic() throws Exception {
         ensureWrappingKey();
         WalletRecord record = persistence.load();

@@ -84,6 +84,7 @@ pub const COMMANDS: &[&str] = &[
     "migrate_destinations",
     "migrate_scan_evm",
     "migrate_scan_btc",
+    "numbering_scan",
 ];
 
 fn main() {

@@ -8,7 +8,7 @@ import java.util.List;
 import java.util.Locale;
 import java.security.SecureRandom;
 
-/** Full 24-position backup challenge; its persisted completion is bound to the exact account. */
+/** Backup spot check over the phrase's positions (12–24 words); its persisted completion is bound to the exact account. */
 final class BackupCheck {
     private static final String KEY = "backup_checked_address_v1";
     private final SharedPreferences preferences;
@@ -37,7 +37,7 @@ final class BackupCheck {
     }
 
     /**
-     * How many of the 24 words we spot-check, chosen at random. Real hardware wallets verify a
+     * How many of the words (12–24) we spot-check, chosen at random. Real hardware wallets verify a
      * handful, not the whole phrase: a full 24-position gauntlet is an onboarding wall that most
      * people abandon. This confirms the user actually wrote the phrase down; the strong
      * recoverability proof is a full restore (type the phrase back, match the address).
@@ -56,7 +56,7 @@ final class BackupCheck {
         }
 
         Challenge(String[] words, SecureRandom random, int checkCount) {
-            if (words.length != 24) throw new IllegalArgumentException("Expected 24 recovery words");
+            if (words == null || !SeedRestore.isWordCount(words.length)) throw new IllegalArgumentException("Expected 12, 15, 18, 21 or 24 recovery words");
             if (checkCount < 1 || checkCount > words.length) throw new IllegalArgumentException("bad checkCount");
             this.words = words.clone();
             this.checkCount = checkCount;

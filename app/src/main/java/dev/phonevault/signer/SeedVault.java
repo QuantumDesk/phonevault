@@ -176,7 +176,7 @@ final class SeedVault {
         }
     }
 
-    /** Highest account index the phone derives (m/44'/60'/0'/0/0 … /MAX_ACCOUNT_INDEX). */
+    /** Highest account index the phone derives (Account 1 … Account 20, under either {@link AccountScheme}). */
     static final int MAX_ACCOUNT_INDEX = 19;
     /** Longest BIP-39 passphrase the on-phone keyboard accepts. */
     static final int MAX_PASSPHRASE_LENGTH = 100;
@@ -186,7 +186,7 @@ final class SeedVault {
      * zeroes the returned array. An empty passphrase is the standard (no-passphrase) wallet.
      */
     static byte[] bip39Seed(String mnemonic, String passphrase) {
-        if (mnemonic == null || !MnemonicUtils.validateMnemonic(mnemonic)) {
+        if (mnemonic == null || !SeedRestore.isWordCount(mnemonic.split(" ", -1).length) || !MnemonicUtils.validateMnemonic(mnemonic)) {
             throw new IllegalArgumentException("Invalid BIP39 mnemonic");
         }
         String normalized = passphrase == null ? ""
@@ -231,17 +231,50 @@ final class SeedVault {
      * the account-0 key is derived transiently to name the wallet (its address) and dropped.
      */
     static Derived deriveAccount(String mnemonic, String passphrase, int index) {
+        return deriveAccount(mnemonic, passphrase, index, AccountScheme.STANDARD);
+    }
+
+    /**
+     * As {@link #deriveAccount(String, String, int)}, with account {@code index} numbered by
+     * {@code scheme} ({@link AccountScheme#path}). The identity (account-0 address, fingerprint) is
+     * the same under every scheme: account 0 is m/44'/60'/0'/0/0 under both.
+     */
+    static Derived deriveAccount(String mnemonic, String passphrase, int index, AccountScheme scheme) {
         if (index < 0 || index > MAX_ACCOUNT_INDEX) throw new IllegalArgumentException("account index out of range");
+        if (scheme == null) throw new IllegalArgumentException("no account numbering");
         byte[] seed = bip39Seed(mnemonic, passphrase);
         try {
             Bip32ECKeyPair master = Bip32ECKeyPair.generateKeyPair(seed);
             String fingerprint = masterFingerprint(seed);
-            int[] parentPath = {44 | HARDENED, 60 | HARDENED, 0 | HARDENED, 0};
-            Bip32ECKeyPair parent = Bip32ECKeyPair.deriveKeyPair(master, parentPath);
-            Credentials active = Credentials.create(Bip32ECKeyPair.deriveKeyPair(parent, new int[] {index}));
+            Credentials active = Credentials.create(Bip32ECKeyPair.deriveKeyPair(master, scheme.path(index)));
             String account0 = index == 0 ? active.getAddress()
-                    : Credentials.create(Bip32ECKeyPair.deriveKeyPair(parent, new int[] {0})).getAddress();
+                    : Credentials.create(Bip32ECKeyPair.deriveKeyPair(master, AccountScheme.STANDARD.path(0))).getAddress();
             return new Derived(active, index, account0.toLowerCase(java.util.Locale.ROOT), fingerprint);
+        } finally {
+            Arrays.fill(seed, (byte) 0);
+        }
+    }
+
+    /** Most addresses one {@code listAddresses} answer carries. */
+    static final int MAX_LISTED_ADDRESSES = 10;
+
+    /**
+     * The public addresses of accounts 0 … {@code count}-1 under {@code scheme} (EIP-55 checksummed),
+     * for the "share addresses with your Mac" screen. Each key is derived and dropped at once; only
+     * addresses leave this method.
+     */
+    static List<String> addresses(String mnemonic, String passphrase, AccountScheme scheme, int count) {
+        if (count < 1 || count > MAX_LISTED_ADDRESSES) throw new IllegalArgumentException("count out of range");
+        if (scheme == null) throw new IllegalArgumentException("no account numbering");
+        byte[] seed = bip39Seed(mnemonic, passphrase);
+        try {
+            Bip32ECKeyPair master = Bip32ECKeyPair.generateKeyPair(seed);
+            List<String> out = new ArrayList<>(count);
+            for (int i = 0; i < count; i++) {
+                String address = Credentials.create(Bip32ECKeyPair.deriveKeyPair(master, scheme.path(i))).getAddress();
+                out.add(org.web3j.crypto.Keys.toChecksumAddress(address));
+            }
+            return Collections.unmodifiableList(out);
         } finally {
             Arrays.fill(seed, (byte) 0);
         }

@@ -94,7 +94,7 @@ final class BtcScreens {
             id = r.id;
             synchronized (stateLock) {
                 if (host.passphraseWalletOpen()) {
-                    throw new RequestRefusal("Close the passphrase wallet first", "Bitcoin uses the standard wallet (your 24 words "
+                    throw new RequestRefusal("Close the passphrase wallet first", "Bitcoin uses the standard wallet (your recovery phrase "
                             + "without a passphrase). Close the passphrase wallet on the phone (☰ → Passphrase wallet), then send "
                             + "the request again. Nothing was shared or signed.");
                 }

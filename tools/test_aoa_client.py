@@ -288,6 +288,60 @@ class AttestResponseValidationTest(unittest.TestCase):
             aoa_client.validate_attest_response(self.REQUEST, self.ok(), "0x1111111111111111111111111111111111111111")
 
 
+class AccountNumberingTest(unittest.TestCase):
+    """getAddress names Ledger Live numbering; listAddresses answers are checked strictly."""
+
+    # "abandon x11 about": Standard m/44'/60'/0'/0/i and Ledger Live m/44'/60'/i'/0/0 (bip_utils 2.9.3;
+    # the phone's AccountNumberingTest cross-checks them with web3j).
+    STANDARD = ["0x9858EfFD232B4033E47d90003D41EC34EcaEda94", "0x6Fac4D18c912343BF86fa7049364Dd4E424Ab9C0",
+                "0xb6716976A3ebe8D39aCEB04372f22Ff8e6802D7A"]
+    LEDGER = ["0x9858EfFD232B4033E47d90003D41EC34EcaEda94", "0x78839F6054d7ed13918bAe0473BA31b1Ca9D7265",
+              "0x07B5FdfEB4E11826D233403Fe8Db0611CCF4c231"]
+
+    def test_get_address_with_scheme(self):
+        req = {"id": "g", "method": "getAddress"}
+        base = {"id": "g", "status": "ok", "address": self.LEDGER[1], "account": "2", "wallet": "standard"}
+        aoa_client.validate_response(req, base)
+        aoa_client.validate_response(req, dict(base, scheme="ledger-live"))
+        for bad in (dict(base, scheme="standard"), dict(base, scheme="ledger"), dict(base, scheme=1)):
+            with self.assertRaises(ValueError):
+                aoa_client.validate_response(req, bad)
+
+    def test_eip55(self):
+        for a in self.STANDARD + self.LEDGER:
+            self.assertEqual(aoa_client.eip55(a.lower()), a)
+
+    def request(self, scheme="ledger-live", count="3"):
+        return {"id": "l", "method": "listAddresses", "scheme": scheme, "count": count}
+
+    def test_list_addresses_ok_and_rejected(self):
+        ok = {"id": "l", "status": "ok", "scheme": "ledger-live", "addresses": ",".join(self.LEDGER)}
+        self.assertEqual(aoa_client.validate_list_addresses_response(self.request(), ok), self.LEDGER)
+        self.assertEqual(aoa_client.validate_list_addresses_response(self.request(), ok, self.STANDARD[0].lower()), self.LEDGER)
+        self.assertEqual(aoa_client.validate_list_addresses_response(self.request(), {"id": "l", "status": "rejected"}), [])
+        self.assertEqual(aoa_client.validate_list_addresses_response(
+            self.request(), {"id": "l", "status": "error", "error": "x"}), [])
+
+    def test_list_addresses_refuses_drift(self):
+        ok = {"id": "l", "status": "ok", "scheme": "ledger-live", "addresses": ",".join(self.LEDGER)}
+        for bad in (dict(ok, id="m"), dict(ok, scheme="standard"), dict(ok, extra="1"),
+                    dict(ok, addresses=",".join(self.LEDGER[:2])),
+                    dict(ok, addresses=",".join(self.LEDGER + self.STANDARD[1:2])),
+                    dict(ok, addresses=",".join(a.lower() for a in self.LEDGER)),
+                    dict(ok, addresses=",".join([self.LEDGER[0], self.LEDGER[1], self.LEDGER[1]])),
+                    dict(ok, addresses=" " + ",".join(self.LEDGER)),
+                    dict(ok, addresses=self.LEDGER), {"id": "l", "status": "rejected", "x": "1"}):
+            with self.assertRaises(ValueError):
+                aoa_client.validate_list_addresses_response(self.request(), bad)
+        with self.assertRaises(ValueError):  # Account 1 is not the paired address
+            aoa_client.validate_list_addresses_response(self.request(), ok, "0x" + "11" * 20)
+
+    def test_list_addresses_request_shape(self):
+        r = aoa_client.request_for(argparse_ns(command="list-addresses", scheme="standard", count="5"))
+        self.assertEqual(list(r), ["id", "method", "scheme", "count"])
+        self.assertEqual((r["method"], r["scheme"], r["count"]), ("listAddresses", "standard", "5"))
+
+
 class RequestOptionsTest(unittest.TestCase):
     """--from (multi-account phones) and --host-simulation (the Mac's claim) work together."""
 

@@ -9,8 +9,9 @@ export type Presence = "none" | "android" | "accessory";
 export interface PairedAccount { address: string; checksum: string; label: string; wallet: "standard" | "passphrase" | null; account: number | null; active: boolean }
 /** `paired` is the ACTIVE account: the one the UI shows and every request is pinned to. */
 export interface Status { phone: Presence; paired: string | null; paired_checksum: string | null; paired_label: string | null; accounts: PairedAccount[]; pairing_path: string }
-/** The phone's active account as getAddress reports it (account/wallet are null for older phone apps). */
-export interface PhoneAccount { address: string; account: number | null; wallet: "standard" | "passphrase" | null; label: string }
+/** The phone's active account as getAddress reports it (account/wallet are null for older phone apps;
+ *  scheme is the phone's account numbering, "standard" unless the phone says "ledger-live"). */
+export interface PhoneAccount { address: string; account: number | null; wallet: "standard" | "passphrase" | null; scheme?: "standard" | "ledger-live"; label: string }
 export interface Wallet { address: string; balance_wei: string; balance_eth: string; chain_id: number; block: number }
 export interface Quote {
   chain_id: string; nonce: string; max_priority_fee_per_gas: string; max_fee_per_gas: string; gas_limit: string;

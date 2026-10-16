@@ -11,6 +11,7 @@ import { extSettingsSection } from "./extension";
 import { backupCardSection } from "./backup-card";
 import { btcBusy, btcSettingsSection, type BtcNet } from "./bitcoin";
 import { identifyPhone } from "./identity";
+import { numberingSection } from "./account-numbering";
 import { state, prefs, savePrefs, rpcFor, net, applyTheme, balances, pairedAccounts, type Theme, type View } from "./state";
 
 /** What the drawer needs from the shell (main.ts). */
@@ -127,6 +128,7 @@ export function renderDrawer() {
       ),
       state.status?.pairing_path ? h("p", { class: "muted small" }, "Stored in ", h("span", { class: "mono" }, state.status.pairing_path)) : null,
     ),
+    paired ? numberingSection(() => { if (state.drawerOpen) renderDrawer(); }) : null,
     deviceSection(state.device, state.devMode, phone !== "none", () => identifyPhone(), async (on, confirmation) => {
       state.devMode = await api.setDeveloperMode(on, confirmation);
       if (phone !== "none") void identifyPhone();

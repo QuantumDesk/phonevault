@@ -85,4 +85,5 @@ permissions = [
   "allow-migrate-destinations",
   "allow-migrate-scan-evm",
   "allow-migrate-scan-btc",
+  "allow-numbering-scan",
 ]

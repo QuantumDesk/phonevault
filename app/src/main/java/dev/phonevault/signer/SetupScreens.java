@@ -16,7 +16,8 @@ import java.util.concurrent.ExecutorService;
 
 /**
  * The first-run wizard (create or restore, never silently), optional dice entropy, and on-device
- * restore from 24 words: on first run, and over an existing wallet ("Restore a different wallet",
+ * restore from a 12, 15, 18, 21 or 24-word recovery phrase (the user picks the length first):
+ * on first run, and over an existing wallet ("Restore a different wallet",
  * owned by a fresh-PIN sensitive flow and the replacement state machine exactly like Replace, USB
  * excluded throughout). Wallet storage and the publish of the new key run on the host's crypto
  * thread under its state lock with the session re-checked, as they did in MainActivity.
@@ -53,10 +54,10 @@ final class SetupScreens {
     void showFirstRunChoice() {
         clearRestoreEntry();
         LinearLayout root = pages.page("SET UP · STEP 1 OF 4", "Set up your wallet",
-                "Create a brand-new wallet on this phone, or restore one from a 24-word recovery phrase you already have. Nothing leaves this device either way.");
+                "Create a brand-new wallet on this phone, or restore one from a recovery phrase you already have (12, 15, 18, 21 or 24 words). Nothing leaves this device either way.");
         pages.card(root, "Create new", "Generates a fresh recovery phrase here, offline. You'll write it down and we'll spot-check a few words.");
         pages.action(root, "Create new wallet", true, () -> host.withSeedKey("Confirm your PIN to seal your new wallet", this::createFirstWallet));
-        pages.card(root, "Restore existing", "Type your 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
+        pages.card(root, "Restore existing", "Type your 12, 15, 18, 21 or 24 words on this screen. We'll show the address they produce so you can confirm it's the right wallet before anything is saved.");
         pages.action(root, "Restore from recovery phrase", false, this::showRestoreEntry);
         pages.action(root, "Advanced · add your own dice rolls", false, this::showDiceEntry);
         pages.action(root, "Lock now", false, host::lock);
@@ -165,7 +166,7 @@ final class SetupScreens {
     void confirmRestoreOver() {
         if (!host.walletLoaded() || !host.hasCredentials()) return;
         LinearLayout root = pages.page("SECURITY / RESTORE", "Restore a different wallet?",
-                "You will type a 24-word recovery phrase on this phone. The wallet it produces replaces the current one on this phone. Nothing changes until you confirm the address it shows.");
+                "You will type a recovery phrase (12, 15, 18, 21 or 24 words) on this phone. The wallet it produces replaces the current one on this phone. Nothing changes until you confirm the address it shows.");
         String walletId = host.walletId();
         pages.card(root, "Current Account 1", Keys.toChecksumAddress(walletId != null ? walletId : host.walletAddress()));
         pages.card(root, "Keep its backup", "If the current wallet controls any assets, keep its written phrase. This phone will no longer hold that key.");
@@ -221,14 +222,43 @@ final class SetupScreens {
     // ------------------------------------------------------------------ restore
     // On-device word entry (no system keyboard), validate, confirm address, commit.
 
-    private final String[] restoreWords = new String[SeedRestore.WORD_COUNT];
+    /** The words typed so far; its length is the word count the user chose (empty until then). */
+    private String[] restoreWords = new String[0];
+    /** The chosen length (12, 15, 18, 21 or 24), or 0 before the user picked one. */
+    private int restoreCount;
     private int restoreIndex;
     private final StringBuilder restoreBuffer = new StringBuilder();
 
     private void clearRestoreEntry() {
         Arrays.fill(restoreWords, null);
+        restoreWords = new String[0];
+        restoreCount = 0;
         restoreIndex = 0;
         restoreBuffer.setLength(0);
+    }
+
+    /** Step before typing: how many words the phrase has. Every length is checked the same way afterwards. */
+    private void showRestoreWordCount() {
+        LinearLayout root = pages.page(restoreReplacing ? "REPLACE BY RESTORE · WORD COUNT" : "RESTORE · WORD COUNT",
+                "How many words?",
+                "Count the words of your recovery phrase. Phone Vault restores 12, 15, 18, 21 and 24-word phrases (a wallet created on this phone always has 24).");
+        for (int n : SeedRestore.WORD_COUNTS) {
+            pages.action(root, n + " words", n == SeedRestore.CREATE_WORD_COUNT, () -> chooseRestoreWordCount(n));
+        }
+        pages.card(root, "Not sure?", "Count the numbered words on your backup. A different number (or a phrase in another language) can't be restored here.");
+        if (restoreReplacing) pages.action(root, "Cancel · keep current wallet", false, host::hideBackup);
+        else pages.action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
+        pages.present(root, "restore-count");
+    }
+
+    private void chooseRestoreWordCount(int count) {
+        if (!host.unlocked() || !host.operational() || !SeedRestore.isWordCount(count)) return;
+        Arrays.fill(restoreWords, null);
+        restoreWords = new String[count];
+        restoreCount = count;
+        restoreIndex = 0;
+        restoreBuffer.setLength(0);
+        showRestoreEntry();
     }
 
     private int restoreFilled() {
@@ -238,14 +268,15 @@ final class SetupScreens {
     }
 
     private void showRestoreEntry() {
+        if (restoreCount == 0) { showRestoreWordCount(); return; }
         if (restoreIndex < 0) restoreIndex = 0;
-        if (restoreIndex >= SeedRestore.WORD_COUNT) restoreIndex = SeedRestore.WORD_COUNT - 1;
+        if (restoreIndex >= restoreCount) restoreIndex = restoreCount - 1;
         String typed = restoreBuffer.toString();
         int filled = restoreFilled();
-        LinearLayout root = pages.page((restoreReplacing ? "REPLACE BY RESTORE · WORD " : "RESTORE · WORD ") + (restoreIndex + 1) + " OF " + SeedRestore.WORD_COUNT,
+        LinearLayout root = pages.page((restoreReplacing ? "REPLACE BY RESTORE · WORD " : "RESTORE · WORD ") + (restoreIndex + 1) + " OF " + restoreCount,
                 typed.isEmpty() ? (restoreWords[restoreIndex] == null ? "Type word " + (restoreIndex + 1) : restoreWords[restoreIndex])
                                 : typed + "…",
-                "Type the first letters, then tap the matching word. " + filled + " of " + SeedRestore.WORD_COUNT + " entered.");
+                "Type the first letters, then tap the matching word. " + filled + " of " + restoreCount + " entered.");
 
         // On-device letter keyboard: the appliance must not depend on a system IME. It stays at a
         // fixed position (directly under the title) so keys never jump while typing.
@@ -284,7 +315,7 @@ final class SetupScreens {
 
         // Progress strip: the words so far (this IS the recovery phrase — the screen is sensitive).
         StringBuilder strip = new StringBuilder();
-        for (int i = 0; i < SeedRestore.WORD_COUNT; i++) {
+        for (int i = 0; i < restoreCount; i++) {
             if (restoreWords[i] == null) continue;
             if (strip.length() > 0) strip.append("  ");
             strip.append(i + 1).append(' ').append(restoreWords[i]);
@@ -295,12 +326,13 @@ final class SetupScreens {
             root.addView(entered);
         }
 
-        if (filled == SeedRestore.WORD_COUNT) pages.action(root, "Restore this wallet", true, this::validateRestore);
+        if (filled == restoreCount) pages.action(root, "Restore this wallet", true, this::validateRestore);
         if (restoreIndex > 0 || restoreWords[restoreIndex] != null) pages.action(root, "← Previous word", false, () -> {
             if (restoreBuffer.length() > 0) restoreBuffer.setLength(0);
             else if (restoreIndex > 0) restoreIndex--;
             showRestoreEntry();
         });
+        if (filled == 0 && restoreBuffer.length() == 0) pages.action(root, "Change number of words (" + restoreCount + ")", false, () -> { clearRestoreEntry(); showRestoreWordCount(); });
         if (restoreReplacing) pages.action(root, "Cancel · keep current wallet", false, host::hideBackup);
         else pages.action(root, "Cancel · start over", false, () -> { clearRestoreEntry(); showFirstRunChoice(); });
         pages.present(root, "restore-entry");
@@ -316,7 +348,7 @@ final class SetupScreens {
             b.setGravity(Gravity.CENTER);
             Pages.hardenTouch(b);
             b.setOnClickListener(v -> {
-                if (!host.unlocked() || !host.operational()) return;
+                if (!host.unlocked() || !host.operational() || restoreCount == 0) return;
                 if ("⌫".equals(key)) {
                     if (restoreBuffer.length() > 0) restoreBuffer.setLength(restoreBuffer.length() - 1);
                     else if (restoreWords[restoreIndex] != null) restoreWords[restoreIndex] = null;
@@ -334,30 +366,31 @@ final class SetupScreens {
     }
 
     private void pickRestoreWord(String word) {
-        if (!SeedRestore.isWord(word)) return;
+        if (restoreCount == 0 || !SeedRestore.isWord(word)) return;
         restoreWords[restoreIndex] = word;
         restoreBuffer.setLength(0);
         // Advance to the next empty slot (or stay on the last one).
         int next = restoreIndex + 1;
-        while (next < SeedRestore.WORD_COUNT && restoreWords[next] != null) next++;
-        restoreIndex = Math.min(next, SeedRestore.WORD_COUNT - 1);
-        if (restoreFilled() == SeedRestore.WORD_COUNT) validateRestore();
+        while (next < restoreCount && restoreWords[next] != null) next++;
+        restoreIndex = Math.min(next, restoreCount - 1);
+        if (restoreFilled() == restoreCount) validateRestore();
         else showRestoreEntry();
     }
 
-    /** All 24 entered: validate (count, wordlist, checksum) and show the address for confirmation. */
+    /** Every word entered: validate (count, wordlist, checksum) and show the address for confirmation. */
     private void validateRestore() {
         final int s = host.session();
+        final int count = restoreCount;
         final String raw = String.join(" ", Arrays.asList(restoreWords).stream()
                 .map(w -> w == null ? "" : w).toArray(String[]::new));
         final String mnemonic;
         try {
-            mnemonic = SeedRestore.validate(raw);
+            mnemonic = SeedRestore.validate(raw, count);
         } catch (SeedRestore.RestoreException bad) {
             pages.showInfo("Phrase not valid yet", bad.getMessage() + ". Go back and fix the word.", this::showRestoreEntry);
             return;
         }
-        pages.showLoading("Checking your phrase", "Deriving the wallet address these 24 words produce…");
+        pages.showLoading("Checking your phrase", "Deriving the wallet address these " + count + " words produce…");
         cryptoExecutor.execute(() -> {
             try {
                 final String address = SeedRestore.deriveAddress(mnemonic, 0);
@@ -373,6 +406,7 @@ final class SetupScreens {
                     String current = host.walletAddress();
                     if (replacing && current != null) pages.card(root, "Replaces current", Keys.toChecksumAddress(current));
                     pages.card(root, "Derivation", "m/44'/60'/0'/0/0 · no passphrase");
+                    pages.card(root, "Coming from Ledger Live?", "Account 1 is the same in every wallet. If your other accounts were made in Ledger Live, switch Account numbering to Ledger Live afterwards in ☰ → Accounts.");
                     pages.action(root, replacing ? "Yes, replace with this wallet" : "Yes, restore this wallet", true,
                             () -> host.withSeedKey("Confirm your PIN to save the restored wallet",
                                     () -> { if (restoreReplacing) commitRestoreOver(mnemonic); else commitRestore(mnemonic, s); }));

@@ -46,9 +46,9 @@ public class SeedRestoreTest {
     @Test public void wrongWordCountIsRejected() {
         try {
             SeedRestore.validate("abandon abandon abandon art");
-            fail("12/short phrase must be rejected");
+            fail("a 4-word phrase must be rejected");
         } catch (SeedRestore.RestoreException e) {
-            assertTrue(e.getMessage(), e.getMessage().contains("Expected 24"));
+            assertEquals("Expected 12, 15, 18, 21 or 24 words, found 4", e.getMessage());
         }
     }
 
@@ -80,7 +80,7 @@ public class SeedRestoreTest {
             SeedRestore.validate("   ");
             fail("empty must be rejected");
         } catch (SeedRestore.RestoreException e) {
-            assertTrue(e.getMessage().contains("24-word"));
+            assertEquals("Enter your recovery phrase (12, 15, 18, 21 or 24 words)", e.getMessage());
         }
     }
 

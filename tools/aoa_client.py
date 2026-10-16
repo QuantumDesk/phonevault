@@ -316,10 +316,14 @@ def validate_response(request, response, expected_signer=None):
         return
     if request.get("method") == "getAddress":
         # Phones with multiple accounts also say which account is active ("account": "1".."20",
-        # "wallet": "standard" | "passphrase"); older apps send only the address.
+        # "wallet": "standard" | "passphrase"); older apps send only the address. Under Ledger Live
+        # account numbering the phone adds "scheme": "ledger-live" (Standard numbering omits it).
         if set(response) not in ({"id", "status", "address"},
-                                 {"id", "status", "address", "account", "wallet"}) or status != "ok":
+                                 {"id", "status", "address", "account", "wallet"},
+                                 {"id", "status", "address", "account", "wallet", "scheme"}) or status != "ok":
             raise ValueError("Phone returned a malformed address response")
+        if "scheme" in response and response["scheme"] != "ledger-live":
+            raise ValueError("Phone returned an unknown account numbering")
         if not isinstance(response["address"], str) or not re.fullmatch(
                 r"0x[0-9a-fA-F]{40}", response["address"]):
             raise ValueError("Phone returned an invalid signer address")
@@ -408,6 +412,51 @@ def validate_response(request, response, expected_signer=None):
 
 
 MESSAGE_METHODS = ("personal_sign", "eth_signTypedData_v4")
+
+
+ADDRESS_SCHEMES = ("standard", "ledger-live")
+MAX_LISTED_ADDRESSES = 10
+
+
+def eip55(address):
+    """EIP-55 checksum casing of a 0x address (any case in)."""
+    hexpart = address[2:].lower()
+    digest = evm_verify.keccak256(hexpart.encode("ascii")).hex()
+    return "0x" + "".join(c.upper() if c.isalpha() and int(digest[i], 16) >= 8 else c for i, c in enumerate(hexpart))
+
+
+def validate_list_addresses_response(request, response, expected_first=None):
+    """listAddresses: exactly the requested number of distinct, EIP-55-checksummed addresses under
+    the requested numbering, in account order. Account 1 is the same address under every numbering:
+    when the host has a pinned (paired) Account 1 it must be the first address."""
+    if not isinstance(response, dict) or response.get("id") != request.get("id"):
+        raise ValueError("Phone response does not correlate to the request")
+    status = response.get("status")
+    if status == "error":
+        if set(response) != {"id", "status", "error"} or not isinstance(response["error"], str):
+            raise ValueError("Phone returned a malformed error response")
+        return []
+    if status == "rejected":
+        if set(response) != {"id", "status"}:
+            raise ValueError("Rejected response contains unexpected fields")
+        return []
+    if status != "ok" or set(response) != {"id", "status", "scheme", "addresses"}:
+        raise ValueError("Phone returned a malformed address list")
+    if response["scheme"] != request["scheme"]:
+        raise ValueError("Phone listed addresses under another account numbering")
+    if not isinstance(response["addresses"], str):
+        raise ValueError("Phone returned a malformed address list")
+    addresses = response["addresses"].split(",")
+    if len(addresses) != int(request["count"]):
+        raise ValueError("Phone returned %d addresses, %s were asked for" % (len(addresses), request["count"]))
+    for a in addresses:
+        if not re.fullmatch(r"0x[0-9a-fA-F]{40}", a) or a != eip55(a):
+            raise ValueError("Phone returned an address that is not EIP-55 checksummed: %r" % a)
+    if len({a.lower() for a in addresses}) != len(addresses):
+        raise ValueError("Phone returned the same address twice")
+    if expected_first is not None and addresses[0].lower() != expected_first.lower():
+        raise ValueError("Account 1 differs from the paired address: this is not the paired wallet")
+    return addresses
 
 
 def personal_message_digest(message):
@@ -611,6 +660,8 @@ def _request_for(args):
     request_id = str(uuid.uuid4())
     if args.command in ("address", "pair"):
         return {"id": request_id, "method": "getAddress"}
+    if args.command == "list-addresses":
+        return {"id": request_id, "method": "listAddresses", "scheme": args.scheme, "count": args.count}
     if args.command == "btc-account":
         return {"id": request_id, "method": "btcGetAccount", "network": args.network,
                 "type": args.type, "account": args.account}
@@ -704,6 +755,12 @@ def main():
                          help="Site origin as the companion reports it (https://host[:port]); shown on the phone, never verified by it")
     message.add_argument("--from", dest="sender", default=None,
                          help="Name the signing account in the request (the phone refuses another one)")
+    listing = subparsers.add_parser(
+        "list-addresses", help="Ask for the first public addresses under an account numbering (approve on the phone)")
+    listing.add_argument("--scheme", choices=ADDRESS_SCHEMES, default="standard")
+    listing.add_argument("--count", default="5", help="1..10")
+    listing.add_argument("--expect-first", default=None,
+                         help="Account 1 must be this address (default: the pinned pairing, if any)")
     attest = subparsers.add_parser(
         "attest", help="Ask the phone to attest a fresh challenge (device check); saves the exchange")
     attest.add_argument("--challenge", default=None, help="lowercase hex, 16..64 bytes (default: 32 random bytes)")
@@ -743,6 +800,8 @@ def main():
                     f"no paired signer in {args.pairing_file}: run `pair` first "
                     "(or pass --expect-address)"
                 )
+        if args.command == "list-addresses" and not re.fullmatch(r"[1-9]|10", args.count):
+            raise ValueError("--count must be 1..10")
         if args.command == "attest" and args.challenge and not re.fullmatch(r"(?:[0-9a-f]{2}){16,64}", args.challenge):
             raise ValueError("--challenge must be 16..64 bytes of lowercase hex")
         device = switch_to_accessory(find_android_device())
@@ -763,6 +822,8 @@ def main():
             else:
                 expected_digest = bytes.fromhex(args.expect_digest[2:])
             validate_message_response(request, response, expected_digest, expected_signer)
+        elif args.command == "list-addresses":
+            validate_list_addresses_response(request, response, args.expect_first or load_paired_signer(args.pairing_file))
         elif args.command == "attest":
             validate_attest_response(request, response, args.expect_address or load_paired_signer(args.pairing_file))
             if args.save:

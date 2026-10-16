@@ -10,15 +10,25 @@ import java.util.Set;
 
 /**
  * Import an existing BIP39 recovery phrase. Pure validation logic (no Android, no storage) so the
- * rules are unit-tested: exact word count, every word in the BIP39 English list, and a valid
+ * rules are unit-tested: a BIP39 word count (12, 15, 18, 21 or 24 — the phone CREATES 24-word
+ * phrases only, but restores any standard length), every word in the BIP39 English list, and a valid
  * checksum. Restore is the ONLY proof of recoverability — the mandatory backup check
  * ({@link BackupCheck}) proves the user copied the words this device generated, not that an
  * arbitrary phrase actually restores. This is the inverse path.
  */
 final class SeedRestore {
-    static final int WORD_COUNT = 24;
+    /** The BIP39 lengths a restore accepts (128 to 256 bits of entropy, in 32-bit steps). */
+    static final int[] WORD_COUNTS = {12, 15, 18, 21, 24};
+    /** The length Phone Vault creates (256 bits). */
+    static final int CREATE_WORD_COUNT = 24;
+    static final String WORD_COUNTS_TEXT = "12, 15, 18, 21 or 24";
 
-    /** The word count Phone Vault accepts. Other BIP39 lengths (12/15/18/21) are refused for now. */
+    /** True for a BIP39 length this phone restores. web3j alone also accepts 3, 6 and 9 words: never enough. */
+    static boolean isWordCount(int count) {
+        for (int n : WORD_COUNTS) if (n == count) return true;
+        return false;
+    }
+
     static final class RestoreException extends Exception {
         RestoreException(String message) { super(message); }
     }
@@ -52,10 +62,25 @@ final class SeedRestore {
      * specific, non-secret reason (never echoes a word) so the UI can guide correction.
      */
     static String validate(String raw) throws RestoreException {
+        return validate(raw, 0);
+    }
+
+    /**
+     * As {@link #validate(String)}; {@code expected} is the word count the user chose before typing
+     * (0: any BIP39 length). A phrase of another length is refused with both counts named.
+     */
+    static String validate(String raw, int expected) throws RestoreException {
+        if (expected != 0 && !isWordCount(expected)) throw new IllegalArgumentException("not a BIP39 word count");
         String[] w = words(raw);
-        if (w.length == 0) throw new RestoreException("Enter your " + WORD_COUNT + "-word recovery phrase");
-        if (w.length != WORD_COUNT) {
-            throw new RestoreException("Expected " + WORD_COUNT + " words, found " + w.length);
+        if (w.length == 0) {
+            throw new RestoreException(expected != 0 ? "Enter your " + expected + "-word recovery phrase"
+                    : "Enter your recovery phrase (" + WORD_COUNTS_TEXT + " words)");
+        }
+        if (expected != 0 && w.length != expected) {
+            throw new RestoreException("Expected " + expected + " words, found " + w.length);
+        }
+        if (!isWordCount(w.length)) {
+            throw new RestoreException("Expected " + WORD_COUNTS_TEXT + " words, found " + w.length);
         }
         List<Integer> unknown = unknownWordPositions(raw);
         if (!unknown.isEmpty()) {

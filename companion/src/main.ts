@@ -14,6 +14,7 @@ import { qrSvg } from "./qr";
 import { tokenSection, refreshTokenBalances, resetTokenBalances, tokensOn, tokenBalancesFor, tokenUsd } from "./tokens";
 import { wcPhoneBusy } from "./walletconnect";
 import { mountWalletConnect, wcHomeSlot } from "./wc-view";
+import { numberingHomeSlot, offerNumberingScan } from "./account-numbering";
 import { activitySection, type ActivityHost } from "./activity";
 import { nftSection, resetNfts, type NftHost } from "./nfts";
 import { setupView, setupStart, setupNoticeFunds, type SetupHost } from "./onboarding";
@@ -234,6 +235,7 @@ function homeView() {
     ),
     wcHomeSlot(),
     migrateHomeCard(walletEmpty()),
+    numberingHomeSlot(() => { if (state.view === "home") render(); }),
     homeTabs(),
     prefs.tab === "nfts" ? nftSection(nftHost) : prefs.tab === "activity" ? activitySection(activityHost) : assetsTab(n),
   );
@@ -430,7 +432,7 @@ function pairView() {
       cmp.wallet === "passphrase" ? h("p", { class: "muted small" }, "This is a passphrase wallet. The phone forgets the passphrase when it locks: open the same passphrase wallet on the phone before each use.") : null,
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
-          try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null }); state.pair = { s: "idle" }; await refreshStatus(); state.phoneAddress = address; state.identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); go("home"); } catch (e) { state.pair = { s: "idle", error: errText(e) }; render(); }
+          try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null }); state.pair = { s: "idle" }; await refreshStatus(); state.phoneAddress = address; state.identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); offerNumberingScan(); go("home"); } catch (e) { state.pair = { s: "idle", error: errText(e) }; render(); }
         }, disabled: !attOk, title: attOk ? "" : state.device.checking ? "Waiting for the genuine check" : "The genuine check must pass first" }, icon("check", 18), state.device.checking ? "Checking phone…" : "It matches"),
         h("button", { class: "big", onclick: () => { state.pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),

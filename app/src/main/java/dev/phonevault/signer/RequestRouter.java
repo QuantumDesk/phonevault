@@ -18,7 +18,8 @@ import java.util.function.Supplier;
  * One USB request from the live connection, on the transport's reader thread (or the crypto
  * thread for a request held behind the lock): while LOCKED it is only decoded for the gate and
  * held (nothing is answered); unlocked it must find the wallet ready, then getAddress is answered
- * under stateLock, attestation runs on its own thread, Bitcoin goes to BtcScreens, and a signing
+ * under stateLock, attestation runs on its own thread, Bitcoin goes to BtcScreens, listAddresses to
+ * AddressShareScreens, and a signing
  * request takes the one approval slot and gets its review (ApprovalScreens). The connection
  * lifecycle (attach, disconnect, lock) stays in MainActivity. Decisions without Android state
  * are static and unit-tested (RequestRouterTest).
@@ -48,6 +49,8 @@ final class RequestRouter {
     private final Object stateLock;
     private final ApprovalScreens approvals;
     private final BtcScreens btc;
+    /** listAddresses: the share-addresses screen. */
+    private final AddressShareScreens addresses;
     /**
      * Device attestation (USB "attest", AttestationKey) runs on its own thread so a StrongBox key
      * generation (seconds on the Titan M) never delays signing work on cryptoExecutor; one at a time.
@@ -57,13 +60,14 @@ final class RequestRouter {
     private final AttestationProtocol.ChallengeLog attestChallenges = new AttestationProtocol.ChallengeLog();
     private TokenList tokenList;
 
-    RequestRouter(Host host, ApprovalScreens approvals, BtcScreens btc) {
+    RequestRouter(Host host, ApprovalScreens approvals, BtcScreens btc, AddressShareScreens addresses) {
         this.host = host;
         this.activity = host.activity();
         this.pages = host.pages();
         this.stateLock = host.stateLock();
         this.approvals = approvals;
         this.btc = btc;
+        this.addresses = addresses;
     }
 
     /** onDestroy: no attestation runs after the activity is gone. */
@@ -87,6 +91,8 @@ final class RequestRouter {
                 return MessageReview.lockedSummary(MessageRequest.parse(json));
             } else if (BtcRequest.handles(json.optString("method"))) {
                 return BtcRequest.lockedSummary(json);
+            } else if (AddressListRequest.handles(json.optString("method"))) {
+                return AddressListRequest.parse(json).lockedSummary();
             } else {
                 return TransactionReview.build(Eip1559Request.parse(json), null, tokens.get()).lockedSummary;
             }
@@ -110,14 +116,20 @@ final class RequestRouter {
     /**
      * getAddress: the ACTIVE account, plus which one it is (1-based number, standard/passphrase)
      * so the companion can label its pairing. No label, no fingerprint, no passphrase. Refused
-     * unless the key in memory is the active account's.
+     * unless the key in memory is the active account's. Under Ledger Live account numbering the
+     * answer also says {@code "scheme":"ledger-live"}; Standard numbering omits the field, so the
+     * answer is unchanged for companions that predate numbering (they refuse unknown fields).
      */
     static JSONObject addressAnswer(String id, Credentials key, SigningAccount account) {
         if (key == null || account == null || !account.address.equalsIgnoreCase(key.getAddress())) {
             throw new IllegalStateException("Wallet is not ready: finish choosing the account on the phone");
         }
-        return Pages.json("id", id, "status", "ok", "address", key.getAddress(),
+        JSONObject answer = Pages.json("id", id, "status", "ok", "address", key.getAddress(),
                 "account", account.accountNumber(), "wallet", account.walletKind());
+        if (account.scheme != AccountScheme.STANDARD) {
+            try { answer.put("scheme", account.scheme.wire); } catch (org.json.JSONException impossible) { throw new IllegalStateException(impossible); }
+        }
+        return answer;
     }
 
     void onRequest(AccessoryTransport source, JSONObject json) {
@@ -141,6 +153,10 @@ final class RequestRouter {
         }
         if (BtcRequest.handles(json.optString("method"))) {
             btc.handleBitcoin(source, json, id, s);
+            return;
+        }
+        if (AddressListRequest.handles(json.optString("method"))) {
+            addresses.handle(source, json, id, s);
             return;
         }
         if ("getAddress".equals(json.optString("method"))) {

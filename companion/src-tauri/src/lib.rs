@@ -44,6 +44,8 @@ mod btc;
 mod backup_card;
 // "Move from another wallet": read-only scan of an old wallet's public addresses/xpubs
 mod migrate;
+// "Find accounts from another wallet": Standard vs Ledger Live account numbering (listAddresses)
+mod numbering;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -138,15 +140,25 @@ pub(crate) struct PhoneAccount {
     address: String,
     account: Option<u32>,
     wallet: Option<String>,
+    /// The phone's account numbering: "standard" or "ledger-live" (numbering.rs).
+    scheme: numbering::Scheme,
     label: String,
 }
 
+/// A parsed getAddress answer.
+#[derive(Debug, PartialEq)]
+pub(crate) struct AddressAnswer {
+    pub address: String,
+    pub account: Option<u32>,
+    pub wallet: Option<String>,
+    /// Absent in the answer = Standard (what every phone app before numbering used).
+    pub scheme: numbering::Scheme,
+}
+
 /// Strict parse of a getAddress answer: `{id,status,address}` from older apps, plus
-/// `account` ("1".."20") and `wallet` ("standard" | "passphrase") from apps with accounts.
-pub(crate) fn parse_address_response(
-    request: &Value,
-    response: &Value,
-) -> CmdResult<(String, Option<u32>, Option<String>)> {
+/// `account` ("1".."20") and `wallet` ("standard" | "passphrase") from apps with accounts, plus
+/// `scheme` ("ledger-live" only; absent = Standard) under Ledger Live account numbering.
+pub(crate) fn parse_address_response(request: &Value, response: &Value) -> CmdResult<AddressAnswer> {
     let obj = response.as_object().ok_or("malformed response")?;
     if obj.get("id") != request.get("id") {
         return Err("the phone's answer is for a different request".into());
@@ -156,14 +168,16 @@ pub(crate) fn parse_address_response(
     }
     let mut keys: Vec<&str> = obj.keys().map(String::as_str).collect();
     keys.sort();
-    let with_account = keys == ["account", "address", "id", "status", "wallet"];
+    let with_scheme = keys == ["account", "address", "id", "scheme", "status", "wallet"];
+    let with_account = with_scheme || keys == ["account", "address", "id", "status", "wallet"];
     if !(keys == ["address", "id", "status"] || with_account) || obj["status"] != "ok" {
         return Err("malformed address response".into());
     }
     let addr = obj["address"].as_str().ok_or("no address")?;
     let addr = verify::parse_address(addr, verify::Case::Any).map_err(|_| "invalid address from phone")?;
+    let scheme = numbering::Scheme::from_get_address(obj.get("scheme"))?;
     if !with_account {
-        return Ok((addr, None, None));
+        return Ok(AddressAnswer { address: addr, account: None, wallet: None, scheme });
     }
     let n = obj["account"]
         .as_str()
@@ -171,7 +185,7 @@ pub(crate) fn parse_address_response(
         .filter(|n| (1..=20).contains(n))
         .ok_or("malformed account number")?;
     let w = obj["wallet"].as_str().filter(|w| *w == "standard" || *w == "passphrase").ok_or("malformed wallet kind")?;
-    Ok((addr, Some(n), Some(w.to_string())))
+    Ok(AddressAnswer { address: addr, account: Some(n), wallet: Some(w.to_string()), scheme })
 }
 
 /// Ask the phone for its ACTIVE account. Nothing is pinned until the user confirms it against the phone's screen.
@@ -180,13 +194,18 @@ async fn read_address() -> CmdResult<PhoneAccount> {
     blocking(|| {
         let request = json!({"id": uuid::Uuid::new_v4().to_string(), "method": "getAddress"});
         let response = ask_phone(request.clone(), Duration::from_secs(30))?;
-        let (addr, account, wallet) = parse_address_response(&request, &response)?;
+        let AddressAnswer { address: addr, account, wallet, scheme } = parse_address_response(&request, &response)?;
         let existing = pairing::list()?;
-        let label = existing
-            .find(&addr)
-            .map(|p| p.label.clone())
-            .unwrap_or_else(|| pairing::default_label(&existing, account, wallet.as_deref()));
-        Ok(PhoneAccount { address: verify::checksum(&addr), account, wallet, label })
+        let label = existing.find(&addr).map(|p| p.label.clone()).unwrap_or_else(|| {
+            let l = pairing::default_label(&existing, account, wallet.as_deref());
+            // Account 2+ is another address under Ledger Live numbering: say so in its name.
+            if scheme == numbering::Scheme::LedgerLive && account.is_some_and(|n| n > 1) {
+                format!("{l} · Ledger Live")
+            } else {
+                l
+            }
+        });
+        Ok(PhoneAccount { address: verify::checksum(&addr), account, wallet, scheme, label })
     })
     .await
 }
@@ -449,7 +468,8 @@ pub fn run() {
             migrate::migrate_forget,
             migrate::migrate_destinations,
             migrate::migrate_scan_evm,
-            migrate::migrate_scan_btc
+            migrate::migrate_scan_btc,
+            numbering::numbering_scan
         ])
         .setup(move |app| {
             // browser-extension bridge (native-messaging relay socket)
@@ -490,9 +510,16 @@ mod tests {
     #[test]
     fn address_answers_from_old_and_new_phone_apps() {
         let req = json!({"id": "a-1", "method": "getAddress"});
+        use numbering::Scheme::{LedgerLive, Standard};
+        let answer = |account: Option<u32>, wallet: Option<&str>, scheme| AddressAnswer {
+            address: ADDR.into(),
+            account,
+            wallet: wallet.map(str::to_string),
+            scheme,
+        };
         assert_eq!(
             parse_address_response(&req, &json!({"id": "a-1", "status": "ok", "address": ADDR})).unwrap(),
-            (ADDR.into(), None, None)
+            answer(None, None, Standard)
         );
         assert_eq!(
             parse_address_response(
@@ -500,7 +527,16 @@ mod tests {
                 &json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "passphrase"})
             )
             .unwrap(),
-            (ADDR.into(), Some(2), Some("passphrase".into()))
+            answer(Some(2), Some("passphrase"), Standard)
+        );
+        assert_eq!(
+            parse_address_response(
+                &req,
+                &json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "standard", "scheme": "ledger-live"})
+            )
+            .unwrap(),
+            answer(Some(2), Some("standard"), LedgerLive),
+            "Ledger Live numbering is reported by the phone, never assumed"
         );
         for bad in [
             json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2"}),
@@ -511,6 +547,9 @@ mod tests {
             json!({"id": "a-1", "status": "ok", "address": ADDR, "account": 2, "wallet": "standard"}),
             json!({"id": "a-2", "status": "ok", "address": ADDR}),
             json!({"id": "a-1", "status": "ok", "address": "0x12"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "standard", "scheme": "standard"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "account": "2", "wallet": "standard", "scheme": "ledger"}),
+            json!({"id": "a-1", "status": "ok", "address": ADDR, "scheme": "ledger-live"}),
         ] {
             assert!(parse_address_response(&req, &bad).is_err(), "accepted {bad}");
         }
