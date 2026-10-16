@@ -237,9 +237,9 @@ export function migrateView(): HTMLElement {
 // ---- step 1: what the old wallet is
 
 const HELP: [string, string][] = [
-  ["Ledger Live", "open the account, click the wrench (Edit account), then Advanced: copy the xpub."],
+  ["Ledger Live", "open the account, click the wrench (Edit account), then Advanced: copy the public key (xpub)."],
   ["Trezor Suite", "open the account, then Details → Show public key (xpub)."],
-  ["Sparrow", "Settings → Keystore: copy the xpub, ypub or zpub."],
+  ["Sparrow", "Settings → Keystore: copy the public key (xpub, ypub or zpub)."],
   ["MetaMask and EVM wallets", "copy the account address (0x…). One address covers every network."],
 ];
 
@@ -255,7 +255,7 @@ const typeName = (t: BtcType) => ({ native: "Native SegWit", taproot: "Taproot",
 
 function editView(): HTMLElement {
   const area = h("textarea", { rows: "5", spellcheck: "false", autocomplete: "off", autocapitalize: "off", "aria-label": "Old addresses and public keys, one per line",
-    placeholder: "0x… an Ethereum / EVM account\nzpub…, ypub… or xpub… a Bitcoin account\nbc1…, 3… or 1… a single Bitcoin address" }) as HTMLTextAreaElement;
+    placeholder: "0x… an Ethereum / EVM account\nzpub…, ypub… or xpub… a Bitcoin account public key\nbc1…, 3… or 1… a single Bitcoin address" }) as HTMLTextAreaElement;
   area.value = st.draft || (st.session?.sources.map((s) => s.id).join("\n") ?? "");
   const checks = h("ul", { class: "mig-checks", "aria-live": "polite" });
   const submit = h("button", { class: "big primary", disabled: st.saving }, st.saving ? h("i", { class: "mini-spin" }) : icon("refresh", 18), st.saving ? "Saving…" : "Check what it holds") as HTMLButtonElement;
@@ -284,8 +284,8 @@ function editView(): HTMLElement {
     h("section", { class: "card mig-card" },
       h("p", { class: "kicker" }, "Step 1 · The old wallet"),
       h("h3", null, "What's in your old wallet?"),
-      h("p", { class: "muted" }, "Paste its public addresses or account keys, one per line. Phone Vault reads what they hold from your own nodes. You then send each item from the old wallet to Phone Vault, there, the way you always have."),
-      h("label", { class: "field" }, h("span", { class: "field-label" }, "Addresses and public keys (xpub)"), area),
+      h("p", { class: "muted" }, "Paste its public addresses or public keys, one per line. Phone Vault reads what they hold from your own nodes. You then send each item from the old wallet to Phone Vault, there, the way you always have."),
+      h("label", { class: "field" }, h("span", { class: "field-label" }, "Public addresses and public keys (xpub / zpub)"), area),
       checks,
       st.saveError ? h("p", { class: "inline-error" }, icon("alert", 15), st.saveError) : null,
       h("div", { class: "actions" },
@@ -296,9 +296,9 @@ function editView(): HTMLElement {
     ),
     h("div", { class: "callout accent" },
       h("strong", { class: "ok-line" }, icon("shield", 15), "Never your recovery phrase"),
-      h("span", null, "Nothing here asks for the old wallet's recovery phrase or keys, and nothing signs for it. Addresses and xpubs only show balances; they can't move anything. A recovery phrase pasted here by mistake is refused and not kept."),
+      h("span", null, "Only PUBLIC information goes here. Never paste a recovery phrase or a private key (xprv, zprv): they are refused and not kept. Public addresses and public keys (xpub, zpub) only show balances; they can't move anything."),
     ),
-    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only). Bitcoin keys are looked up on your Esplora server (Settings → Bitcoin), which learns their addresses; an xpub reveals every address of that account."),
+    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only). Bitcoin public keys are looked up on your Esplora server (Settings → Bitcoin), which learns their addresses; a public key (xpub) reveals every address and balance of that account, so share it only with software you trust."),
     phraseNote(),
   );
 }
@@ -524,11 +524,11 @@ function btcSourceCard(s: Exclude<MSource, { kind: "evm" }>): HTMLElement {
   const total = r ? r.confirmed_sats + r.unconfirmed_sats : 0;
   return h("section", { class: "card mig-card" },
     h("div", { class: "row between" },
-      h("p", { class: "kicker" }, s.kind === "xpub" ? `Old Bitcoin account (${s.prefix})` : "Old Bitcoin address"),
-      h("button", { class: "link mono small", title: `${s.id}\nClick to copy`, onclick: () => copy(s.id, s.kind === "xpub" ? "Key" : "Address") }, short(s.id), icon("copy", 12))),
+      h("p", { class: "kicker" }, s.kind === "xpub" ? `Old Bitcoin account · public key (${s.prefix})` : "Old Bitcoin address"),
+      h("button", { class: "link mono small", title: `${s.id}\nClick to copy`, onclick: () => copy(s.id, s.kind === "xpub" ? "Public key" : "Address") }, short(s.id), icon("copy", 12))),
     !r && (!c || c.busy) ? h("p", { class: "muted small mig-checking" }, h("i", { class: "mini-spin" }), s.kind === "xpub" ? "Checking its addresses (gap limit 20)…" : "Checking the address…") : null,
     c?.error && !r ? h("p", { class: "inline-error" }, icon("alert", 15), explainNode(c.error)) : null,
-    r ? (r.status === "empty" ? h("p", { class: "empty" }, s.kind === "xpub" ? "No bitcoin found on this key's addresses." : "No bitcoin on this address.")
+    r ? (r.status === "empty" ? h("p", { class: "empty" }, s.kind === "xpub" ? "No bitcoin found on this public key's addresses." : "No bitcoin on this address.")
       : h("ul", { class: "mig-list" }, row(r.status, r.status === "move" ? `${fmtBtc(total)} ${unit}` : unit,
         r.status === "move" ? (r.unconfirmed_sats ? `${fmtBtc(r.unconfirmed_sats)} ${unit} unconfirmed · ` : "") + `send it all to your ${r.network_name} address above` : "No longer at the old wallet's addresses",
         c?.busy ? h("i", { class: "mini-spin" }) : null))) : null,

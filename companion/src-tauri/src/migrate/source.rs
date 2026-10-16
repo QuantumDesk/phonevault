@@ -129,7 +129,7 @@ pub const PHRASE: &str =
 pub fn parse(input: &str) -> Result<Source, String> {
     let s = input.trim();
     if s.is_empty() {
-        return Err("Paste an address or an extended public key.".into());
+        return Err("Paste a public address or a public key (xpub, ypub or zpub).".into());
     }
     let words = s.split_whitespace().count();
     if words >= 11 && s.split_whitespace().all(|w| w.chars().all(|c| c.is_alphabetic())) {
@@ -174,20 +174,21 @@ fn parse_evm(s: &str) -> Result<Source, String> {
 
 /// An extended key (78 bytes after base58check).
 fn parse_extended(s: &str, data: &[u8]) -> Result<Source, String> {
-    let (version, rest) = data.split_first_chunk::<4>().ok_or("malformed extended key")?;
+    let (version, rest) = data
+        .split_first_chunk::<4>()
+        .ok_or("This doesn't read as a valid public key (xpub, ypub or zpub). Copy it again from your wallet.")?;
     if let Some(why) = refused_version(*version) {
         return Err(why.into());
     }
-    let (prefix, network, types, standard) = version_info(*version).ok_or(
-        "This extended key has a version this app doesn't know. Use the xpub, ypub or zpub your wallet shows.",
-    )?;
+    let (prefix, network, types, standard) = version_info(*version)
+        .ok_or("This public key has a version this app doesn't know. Use the xpub, ypub or zpub your wallet shows.")?;
     let mut bytes = standard.to_vec();
     bytes.extend_from_slice(rest);
     let x = Xpub::decode(&bytes).map_err(|_| "This extended public key is malformed. Copy it again.".to_string())?;
     let mut notes = Vec::new();
     if types.len() > 1 {
         notes.push(
-            "An xpub doesn't say which address type it was used for, so every type is checked (Native SegWit, Taproot, Legacy, Nested SegWit)."
+            "A public key (xpub) doesn't say which address type it was used for, so every type is checked (Native SegWit, Taproot, Legacy, Nested SegWit)."
                 .to_string(),
         );
     }
@@ -208,12 +209,18 @@ fn parse_extended(s: &str, data: &[u8]) -> Result<Source, String> {
 
 /// The standard-version public key for an `Xpub` source's text (already validated by `parse`).
 pub fn xpub_of(s: &str) -> Result<Xpub, String> {
-    let data = bitcoin::base58::decode_check(s).map_err(|_| "malformed extended key".to_string())?;
-    let (version, rest) = data.split_first_chunk::<4>().ok_or("malformed extended key")?;
-    let (_, _, _, standard) = version_info(*version).ok_or("unknown extended key version")?;
+    let data = bitcoin::base58::decode_check(s).map_err(|_| {
+        "This doesn't read as a valid public key (xpub, ypub or zpub). Copy it again from your wallet.".to_string()
+    })?;
+    let (version, rest) = data
+        .split_first_chunk::<4>()
+        .ok_or("This doesn't read as a valid public key (xpub, ypub or zpub). Copy it again from your wallet.")?;
+    let (_, _, _, standard) = version_info(*version).ok_or("This public key has a version this app doesn't know.")?;
     let mut bytes = standard.to_vec();
     bytes.extend_from_slice(rest);
-    Xpub::decode(&bytes).map_err(|_| "malformed extended key".to_string())
+    Xpub::decode(&bytes).map_err(|_| {
+        "This doesn't read as a valid public key (xpub, ypub or zpub). Copy it again from your wallet.".to_string()
+    })
 }
 
 fn parse_btc_address(s: &str) -> Result<Source, String> {
