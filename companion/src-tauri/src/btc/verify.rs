@@ -757,12 +757,15 @@ mod audit_btc2 {
             assert!(verify_signed(&b, &psbt_base64(&s)).is_ok());
             let (pk, sig) = s.inputs[0].partial_sigs.iter().next().map(|(k, v)| (*k, *v)).unwrap();
             let high =
-                bitcoin::secp256k1::ecdsa::Signature::from_compact(&negate_s(&sig.signature.serialize_compact())).unwrap();
+                bitcoin::secp256k1::ecdsa::Signature::from_compact(&negate_s(&sig.signature.serialize_compact()))
+                    .unwrap();
             let mut norm = high;
             norm.normalize_s();
             assert_eq!(norm, sig.signature, "the twin normalizes back");
             assert_ne!(high, sig.signature);
-            s.inputs[0].partial_sigs.insert(pk, ecdsa::Signature { signature: high, sighash_type: EcdsaSighashType::All });
+            s.inputs[0]
+                .partial_sigs
+                .insert(pk, ecdsa::Signature { signature: high, sighash_type: EcdsaSighashType::All });
             let e = verify_signed(&b, &psbt_base64(&s)).unwrap_err();
             assert!(e.contains("does not verify"), "{kind:?}: {e}");
         }
@@ -775,12 +778,14 @@ mod audit_btc2 {
     #[test]
     fn audit_fixtures_pass_consensus() {
         let all: serde_json::Value =
-            serde_json::from_str(include_str!("../../../../app/src/test/resources/btc/audit-legacy-mixed.json")).unwrap();
+            serde_json::from_str(include_str!("../../../../app/src/test/resources/btc/audit-legacy-mixed.json"))
+                .unwrap();
         let mut n = 0;
         for c in all["cases"].as_array().unwrap() {
-            let psbt =
-                Psbt::deserialize(&base64::engine::general_purpose::STANDARD.decode(c["psbt"].as_str().unwrap()).unwrap())
-                    .unwrap();
+            let psbt = Psbt::deserialize(
+                &base64::engine::general_purpose::STANDARD.decode(c["psbt"].as_str().unwrap()).unwrap(),
+            )
+            .unwrap();
             let tx: Transaction = consensus::encode::deserialize_hex(c["finalTx"].as_str().unwrap()).unwrap();
             assert_eq!(tx.compute_txid().to_string(), c["txid"].as_str().unwrap());
             let prevouts: Vec<TxOut> = psbt

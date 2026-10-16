@@ -486,7 +486,7 @@ mod audit_tests {
     #[test]
     fn hostile_list_answers_refused_without_panic() {
         let req = list_request("l", Scheme::Standard, 2);
-        let many = std::iter::repeat(S0).take(10_000).collect::<Vec<_>>().join(",");
+        let many = std::iter::repeat_n(S0, 10_000).collect::<Vec<_>>().join(",");
         let bad = [
             json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": "0x9858EfFD232B4033E47d90003D41EC34EcaEda9é,0x00"}),
             json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": "0xé858EfFD232B4033E47d90003D41EC34EcaEda94"}),
@@ -505,7 +505,11 @@ mod audit_tests {
         }
         // a request whose count is not a string cannot be satisfied (internal misuse is caught)
         let weird = json!({"id": "l", "method": "listAddresses", "scheme": "standard", "count": 2});
-        assert!(parse_list_response(&weird, &json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": S0})).is_err());
+        assert!(parse_list_response(
+            &weird,
+            &json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": S0})
+        )
+        .is_err());
     }
 
     /// The pin check accepts a legacy pairing with no wallet kind for Account 1. Sound: listAddresses
