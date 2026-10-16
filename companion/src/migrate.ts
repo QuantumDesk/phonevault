@@ -22,11 +22,12 @@ export type MSource =
   | { kind: "evm"; id: string; address: string }
   | { kind: "xpub"; id: string; prefix: string; network: BtcNet; types: BtcType[]; note: string | null }
   | { kind: "btc_address"; id: string; network: BtcNet; btc_type: BtcType | null };
-export type MStatus = "move" | "moved" | "gone" | "empty";
+/** unknown: seen before, the node couldn't answer the re-check; pending: a Bitcoin spend waits for confirmation */
+export type MStatus = "move" | "moved" | "gone" | "unknown" | "pending" | "empty";
 export interface MItem { key: string; symbol: string; name: string; contract: string | null; decimals: number; raw: string; amount: string; destination_amount: string | null; status: MStatus }
 export interface MNft { key: string; contract: string; token_id: string; name: string | null; symbol: string | null; status: MStatus; on_phone_vault: boolean }
 export interface MApproval { key: string; kind: "token" | "collection"; contract: string; symbol: string | null; spender: string; amount: string; status: MStatus }
-export interface MWindow { searched: boolean; from_block: number | null; to_block: number | null; error: string | null }
+export interface MWindow { searched: boolean; from_block: number | null; to_block: number | null; error: string | null; capped: boolean }
 export interface EvmReport {
   chain_id: number; network: string; address: string; destination: string; native: MItem; tokens: MItem[]; unreadable_tokens: string[];
   nfts: MNft[]; nft_window: MWindow; approvals: MApproval[]; approval_window: MWindow;
@@ -39,11 +40,14 @@ export interface Destinations { evm: { address: string; label: string } | null; 
 
 const m = {
   check: (input: string) => call<MSource>("migrate_check", { input }),
+  /** the whole list: a secret spread over several lines (a phrase one word per line) */
+  checkText: (text: string) => call<void>("migrate_check_text", { text }),
   session: () => call<MSession | null>("migrate_session"),
   save: (sources: string[]) => call<MSession>("migrate_save", { sources }),
   forget: () => call<void>("migrate_forget"),
   destinations: () => call<Destinations>("migrate_destinations"),
-  scanEvm: (rpcUrl: string, address: string, deep: boolean) => call<EvmReport>("migrate_scan_evm", { rpcUrl, address, deep }),
+  /** the node's eth_chainId is checked against chainId before anything is read or saved */
+  scanEvm: (rpcUrl: string, chainId: number, address: string, deep: boolean) => call<EvmReport>("migrate_scan_evm", { rpcUrl, chainId, address, deep }),
   scanBtc: (source: string) => call<BtcReport>("migrate_scan_btc", { source }),
 };
 
@@ -62,7 +66,12 @@ export interface MigrateHost {
 // ------------------------------------------------------------------ state
 
 type Cell<T> = { report: T | null; error: string | null; busy: boolean };
-type Verify = { s: "idle" } | { s: "asking" } | { s: "compare" } | { s: "ok" } | { s: "mismatch"; shown: string | null } | { s: "error"; message: string };
+/** A verification is bound to the exact destination it was made for (`for`: address, and the
+ *  Bitcoin index): another address (account switched, next receive address) is not verified. */
+type Verify = { s: "idle" } | ({ for: string } & ({ s: "asking" } | { s: "compare" } | { s: "ok" } | { s: "mismatch"; shown: string | null } | { s: "error"; message: string }));
+const vkey = (address: string, index?: number) => `${address.toLowerCase()}#${index ?? ""}`;
+/** The verification state for this destination: idle when it was made for another one. */
+const current = (v: Verify | undefined, key: string): Verify => (v && v.s !== "idle" && v.for === key ? v : { s: "idle" });
 
 let host: MigrateHost;
 const st = {
@@ -83,6 +92,8 @@ const st = {
   verifyEvm: { s: "idle" } as Verify,
   verifyBtc: new Map<BtcNet, Verify>(),
   forgetArmed: false,
+  /** the Esplora servers set in Settings → Bitcoin (none: the defaults), for the privacy note */
+  btcServers: null as Record<string, string> | null,
 };
 
 /** Redraw, unless the user is typing in the list (the screen would be rebuilt under them). */
@@ -116,7 +127,30 @@ function load(): Promise<void> {
 
 async function loadDestinations() {
   try { st.dest = await m.destinations(); } catch { /* shown as unavailable */ }
+  try { st.btcServers = (await btcApi.accounts()).servers; } catch { /* the note then says "your Esplora server" */ }
   redraw();
+}
+
+// ------------------------------------------------------------------ privacy (who sees the addresses)
+
+const hostOf = (url: string) => { try { return new URL(url).hostname; } catch { return url; } };
+/** The default servers by the name people know them by (publicnode.com, base.org, mempool.space). */
+const site = (host: string) => host.split(".").slice(-2).join(".");
+
+/** Which servers the scan asks: the nodes and Esplora server set in Settings, named. */
+function privacyNote(): HTMLElement {
+  const evm = [...new Set(NETWORKS.map((n) => { const u = host.rpcFor(n.id); return u === n.rpc ? site(hostOf(u)) : hostOf(u); }))];
+  const custom = NETWORKS.some((n) => host.rpcFor(n.id) !== n.rpc);
+  const servers = st.btcServers ?? {};
+  const btcCustom = Object.values(servers).map(hostOf);
+  const btc = btcCustom.length ? [...new Set(btcCustom)].join(", ") + (Object.keys(servers).length < 3 ? "; mempool.space on the other Bitcoin networks" : "")
+    : st.btcServers ? "mempool.space, with blockstream.info as a fallback" : "your Esplora server";
+  const list = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+  return h("p", { class: "muted small mig-privacy" },
+    h("strong", null, "Who sees these addresses: "),
+    `the scan asks ${custom ? "your EVM nodes" : "the default EVM nodes"} (${list(evm)}) and ${btcCustom.length ? "your Esplora server" : "the default Esplora server"} (${btc}) about every address and public key here. `,
+    "They also see your Phone Vault addresses when this Mac checks them, so a server that sees both can link your old wallet to your new one (and to your IP address). A public key (xpub) reveals every address and balance of that account. ",
+    "For privacy, use your own node and Esplora server (Settings).");
 }
 
 const anyScan = () => st.evm.size > 0 || st.btc.size > 0;
@@ -134,8 +168,7 @@ async function scanEvm(address: string, chainId: number, deepWanted: boolean) {
   const k = `${address}:${chainId}`;
   const deep = deepWanted || !st.deepDone.has(k);
   try {
-    const r = await m.scanEvm(host.rpcFor(chainId), address, deep);
-    if (r.chain_id !== chainId) throw `this node is on chain ${r.chain_id}, not ${byId(chainId).name}. Check the node in Settings.`;
+    const r = await m.scanEvm(host.rpcFor(chainId), chainId, address, deep);
     cell.report = r; cell.error = null;
     if (deep) st.deepDone.add(k);
   } catch (e) { cell.error = errText(e); }
@@ -190,17 +223,32 @@ async function forget() {
 
 // ------------------------------------------------------------------ counting (Home, progress)
 
-interface Tally { toMove: number; moved: number; approvals: number; revoked: number }
+/** unknown (couldn't check) and pending (unconfirmed) items are never counted as done. */
+interface Tally { toMove: number; moved: number; unknown: number; pending: number; approvals: number; revoked: number }
 function tally(): Tally {
-  const t: Tally = { toMove: 0, moved: 0, approvals: 0, revoked: 0 };
-  const count = (s: MStatus) => { if (s === "move") t.toMove++; else if (s === "moved" || s === "gone") t.moved++; };
+  const t: Tally = { toMove: 0, moved: 0, unknown: 0, pending: 0, approvals: 0, revoked: 0 };
+  const count = (s: MStatus) => {
+    if (s === "move") t.toMove++; else if (s === "moved" || s === "gone") t.moved++;
+    else if (s === "unknown") t.unknown++; else if (s === "pending") t.pending++;
+  };
   for (const per of st.evm.values()) for (const c of per.values()) {
     const r = c.report; if (!r) continue;
     count(r.native.status); r.tokens.forEach((x) => count(x.status)); r.nfts.forEach((x) => count(x.status));
-    for (const a of r.approvals) { if (a.status === "move") t.approvals++; else if (a.status === "moved") t.revoked++; }
+    for (const a of r.approvals) { if (a.status === "move") t.approvals++; else if (a.status === "moved") t.revoked++; else if (a.status === "unknown") t.unknown++; }
   }
   for (const c of st.btc.values()) if (c.report) count(c.report.status);
   return t;
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+/** One line for what's left; "Everything found has moved" only when nothing is to do, unchecked or unconfirmed. */
+function leftLine(t: Tally): string {
+  const left = t.toMove + t.approvals;
+  if (left) return `${plural(left, "item")} left to move or revoke${t.unknown ? ` · ${t.unknown} couldn't be checked` : ""}`;
+  if (t.unknown) return `${plural(t.unknown, "item")} couldn't be checked: re-scan`;
+  if (t.pending) return `Sending… waiting for ${t.pending === 1 ? "a confirmation" : "confirmations"}`;
+  return "Everything found has moved";
 }
 
 /** Home: an empty wallet invites the assistant; a session in progress links back to it. */
@@ -208,11 +256,10 @@ export function migrateHomeCard(walletEmpty: boolean): HTMLElement | null {
   if (!st.loaded) return null;
   if (st.session) {
     const t = tally();
-    const left = t.toMove + t.approvals;
     return h("button", { class: "mig-home", onclick: () => openMigrate() },
       icon("down", 18),
       h("span", { class: "grow" }, h("strong", null, "Moving from another wallet"),
-        h("span", { class: "muted small" }, anyScan() ? (left ? `${left} item${left === 1 ? "" : "s"} left to move or revoke` : "Everything found has moved") : "Continue where you left off")),
+        h("span", { class: "muted small" }, anyScan() ? leftLine(t) : "Continue where you left off")),
       icon("back", 14));
   }
   if (!walletEmpty) return null;
@@ -264,6 +311,15 @@ function editView(): HTMLElement {
   const validate = async () => {
     const my = ++seq;
     const ls = lines();
+    // the whole text first: a recovery phrase pasted one word per line is no single bad line
+    let whole: string | null = null;
+    try { await m.checkText(area.value); } catch (e) { whole = errText(e); }
+    if (my !== seq) return;
+    if (whole) {
+      checks.replaceChildren(h("li", { class: "bad" }, icon("x", 15), h("span", { class: "grow" }, h("span", { class: "mig-what" }, whole))));
+      submit.disabled = true;
+      return;
+    }
     const rows = await Promise.all(ls.slice(0, 25).map(async (l) => {
       try { const s = await m.check(l); return { l, s, e: null as string | null }; }
       catch (e) { return { l, s: null, e: errText(e) }; }
@@ -284,7 +340,7 @@ function editView(): HTMLElement {
     h("section", { class: "card mig-card" },
       h("p", { class: "kicker" }, "Step 1 · The old wallet"),
       h("h3", null, "What's in your old wallet?"),
-      h("p", { class: "muted" }, "Paste its public addresses or public keys, one per line. Phone Vault reads what they hold from your own nodes. You then send each item from the old wallet to Phone Vault, there, the way you always have."),
+      h("p", { class: "muted" }, "Paste its public addresses or public keys, one per line. Phone Vault reads what they hold from the nodes set in Settings (see below for who sees them). You then send each item from the old wallet to Phone Vault, there, the way you always have."),
       h("label", { class: "field" }, h("span", { class: "field-label" }, "Public addresses and public keys (xpub / zpub)"), area),
       checks,
       st.saveError ? h("p", { class: "inline-error" }, icon("alert", 15), st.saveError) : null,
@@ -298,7 +354,8 @@ function editView(): HTMLElement {
       h("strong", { class: "ok-line" }, icon("shield", 15), "Never your recovery phrase"),
       h("span", null, "Only PUBLIC information goes here. Never paste a recovery phrase or a private key (xprv, zprv): they are refused and not kept. Public addresses and public keys (xpub, zpub) only show balances; they can't move anything."),
     ),
-    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only). Bitcoin public keys are looked up on your Esplora server (Settings → Bitcoin), which learns their addresses; a public key (xpub) reveals every address and balance of that account, so share it only with software you trust."),
+    privacyNote(),
+    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only)."),
     phraseNote(),
   );
 }
@@ -309,7 +366,7 @@ const phraseNote = () => h("p", { class: "muted small" }, "Restoring your old re
 
 function listView(): HTMLElement {
   const t = tally();
-  const total = t.toMove + t.moved;
+  const total = t.toMove + t.moved + t.unknown + t.pending;
   const scannedAny = anyScan();
   const busy = st.scanning;
   return h("div", { class: "stack" },
@@ -317,9 +374,11 @@ function listView(): HTMLElement {
       h("div", { class: "row between" },
         h("p", { class: "kicker" }, "Progress"),
         h("span", { class: "muted small" }, busy ? "Checking…" : st.session!.scanned_at ? `Checked ${ago(st.session!.scanned_at)}` : "")),
-      h("h3", null, !scannedAny || (busy && !total) ? "Looking at the old wallet…" : total === 0 ? "Nothing to move was found" : t.toMove === 0 ? "Everything found has moved" : `${t.moved} of ${total} moved`),
+      h("h3", null, !scannedAny || (busy && !total) ? "Looking at the old wallet…" : total === 0 && !t.approvals ? "Nothing to move was found" : t.toMove === 0 ? leftLine(t) : `${t.moved} of ${total} moved`),
       total ? h("div", { class: "mig-bar", role: "progressbar", "aria-valuemin": "0", "aria-valuemax": String(total), "aria-valuenow": String(t.moved) }, h("i", { style: `width:${Math.round((t.moved / total) * 100)}%` })) : null,
       t.approvals ? h("p", { class: "muted small" }, `${t.approvals} approval${t.approvals === 1 ? "" : "s"} still active on the old address${t.revoked ? ` · ${t.revoked} revoked` : ""}.`) : null,
+      t.unknown ? h("p", { class: "muted small" }, `${plural(t.unknown, "item")} couldn't be checked (the node didn't answer). They aren't counted as moved: Re-scan, or use another node in Settings.`) : null,
+      t.pending ? h("p", { class: "muted small" }, `${plural(t.pending, "Bitcoin transfer")} sent but not confirmed yet. It ticks off once it confirms; until then it could still be dropped or replaced.`) : null,
       h("div", { class: "row gap" },
         h("button", { class: "primary", disabled: busy, onclick: () => scanAll(false), title: "Read the balances again; items you moved tick off" }, busy ? h("i", { class: "mini-spin" }) : icon("refresh", 16), "Re-scan"),
         h("button", { disabled: busy, onclick: () => { st.editing = true; st.draft = ""; st.saveError = null; redraw(); } }, icon("pen", 15), "Edit list"),
@@ -340,6 +399,7 @@ function listView(): HTMLElement {
       h("span", null, "Moving many small tokens may cost more in fees than they're worth. Send tokens first and the network's coin (ETH, POL) last: every token transfer needs it for gas."),
     ),
     phraseNote(),
+    privacyNote(),
     st.session ? h("p", { class: "muted small" }, "Saved in ", h("span", { class: "mono" }, st.session.path), " (addresses and public keys only).") : null,
   );
 }
@@ -361,25 +421,29 @@ function phoneGate(): string | null {
 }
 
 async function verifyEvm(expected: string) {
+  const key = vkey(expected);
   const gate = phoneGate();
-  if (gate) { st.verifyEvm = { s: "error", message: gate }; redraw(); return; }
-  st.verifyEvm = { s: "asking" }; redraw();
+  if (gate) { st.verifyEvm = { s: "error", for: key, message: gate }; redraw(); return; }
+  st.verifyEvm = { s: "asking", for: key }; redraw();
   try {
     const p = await api.readAddress();
-    st.verifyEvm = p.address.toLowerCase() === expected.toLowerCase() ? { s: "compare" } : { s: "mismatch", shown: p.address };
-  } catch (e) { st.verifyEvm = { s: "error", message: explainPlain(errText(e)) }; }
+    st.verifyEvm = p.address.toLowerCase() === expected.toLowerCase() ? { s: "compare", for: key } : { s: "mismatch", for: key, shown: p.address };
+  } catch (e) { st.verifyEvm = { s: "error", for: key, message: explainPlain(errText(e)) }; }
   redraw();
 }
 
 async function verifyBtc(d: BtcDest) {
+  const key = vkey(d.address, d.index);
   const gate = phoneGate();
-  if (gate) { st.verifyBtc.set(d.network, { s: "error", message: gate }); redraw(); return; }
-  st.verifyBtc.set(d.network, { s: "asking" }); redraw();
+  if (gate) { st.verifyBtc.set(d.network, { s: "error", for: key, message: gate }); redraw(); return; }
+  st.verifyBtc.set(d.network, { s: "asking", for: key }); redraw();
   try {
     const r = await btcApi.showAddress(d.id, 0, d.index);
-    st.verifyBtc.set(d.network, r.matches ? { s: "ok" } : { s: "mismatch", shown: r.address });
+    // verified only for the address shown here (the destination may have moved on meanwhile)
+    const same = r.expected.toLowerCase() === d.address.toLowerCase();
+    st.verifyBtc.set(d.network, !r.matches ? { s: "mismatch", for: key, shown: r.address } : same ? { s: "ok", for: key } : { s: "idle" });
     if (r.matches) await loadDestinations();
-  } catch (e) { st.verifyBtc.set(d.network, { s: "error", message: explainPlain(errText(e), "btc") }); }
+  } catch (e) { st.verifyBtc.set(d.network, { s: "error", for: key, message: explainPlain(errText(e), "btc") }); }
   redraw();
 }
 
@@ -399,9 +463,11 @@ function destinationSection(): HTMLElement {
   const d = st.dest;
   if (needEvm) {
     const e = d?.evm;
+    const ekey = e ? vkey(e.address) : "";
+    const ev = current(st.verifyEvm, ekey);
     if (!e) cards.push(h("p", { class: "inline-error" }, icon("alert", 15), d ? "Pair your phone first (Settings → Phone)." : "Loading your Phone Vault address…"));
-    else if (st.verifyEvm.s === "mismatch") {
-      const shown = st.verifyEvm.shown;
+    else if (ev.s === "mismatch") {
+      const shown = ev.shown;
       cards.push(mismatchCard(shown ? "Your phone is on another account" : "The addresses differ",
         shown,
         shown ? `The phone is using a different account than ${e.label}, which this Mac shows. Switch the phone to ${e.label} (or show the other account here), then verify again.`
@@ -409,20 +475,20 @@ function destinationSection(): HTMLElement {
         () => verifyEvm(e.address), () => { st.verifyEvm = { s: "idle" }; redraw(); }));
     } else cards.push(destCard({
       kicker: "Ethereum and EVM networks", label: e.label, address: e.address, display: grouped(e.address), qr: e.address,
-      verified: st.verifyEvm.s === "ok", v: st.verifyEvm, onVerify: () => verifyEvm(e.address),
+      verified: ev.s === "ok", v: ev, onVerify: () => verifyEvm(e.address),
       note: "The same address on Base, Ethereum, Optimism, Arbitrum and Polygon. In the old wallet, choose the network the item is on.",
       ok: "The phone holds the key for this address. Safe to send to.",
-      compare: st.verifyEvm.s === "compare" ? h("div", { class: "callout" },
+      compare: ev.s === "compare" ? h("div", { class: "callout" },
         h("strong", null, "Your phone is on this account"),
         h("span", null, "On the phone, open Wallet and compare its address with the one above, group by group."),
         h("div", { class: "row gap" },
-          h("button", { class: "primary", onclick: () => { st.verifyEvm = { s: "ok" }; redraw(); } }, icon("check", 15), "It matches"),
-          h("button", { onclick: () => { st.verifyEvm = { s: "mismatch", shown: null }; redraw(); } }, "It doesn't"))) : null,
+          h("button", { class: "primary", onclick: () => { st.verifyEvm = { s: "ok", for: ekey }; redraw(); } }, icon("check", 15), "It matches"),
+          h("button", { onclick: () => { st.verifyEvm = { s: "mismatch", for: ekey, shown: null }; redraw(); } }, "It doesn't"))) : null,
     }));
   }
   for (const n of nets) {
     const b = d?.btc.find((x) => x.network === n);
-    const v = st.verifyBtc.get(n) ?? { s: "idle" };
+    const v = b ? current(st.verifyBtc.get(n), vkey(b.address, b.index)) : { s: "idle" } as Verify;
     const name = n === "bitcoin" ? "Bitcoin" : n === "testnet" ? "Bitcoin Testnet" : "Bitcoin Signet";
     if (!b) { cards.push(h("div", { class: "callout" }, h("strong", null, `No ${name} account on this Mac yet`), h("span", null, `Add one from your phone first: pick ${name} in the network menu on Home, then Add from phone. Then come back here.`))); continue; }
     if (v.s === "mismatch") {
@@ -441,7 +507,8 @@ function destinationSection(): HTMLElement {
     }));
   }
   if (!cards.length) return h("span");
-  const verifiedAll = (!needEvm || st.verifyEvm.s === "ok") && nets.every((n) => d?.btc.find((x) => x.network === n)?.verified || st.verifyBtc.get(n)?.s === "ok");
+  const verifiedAll = (!needEvm || (!!d?.evm && current(st.verifyEvm, vkey(d.evm.address)).s === "ok"))
+    && nets.every((n) => { const b = d?.btc.find((x) => x.network === n); return !!b && (b.verified || current(st.verifyBtc.get(n), vkey(b.address, b.index)).s === "ok"); });
   return h("div", { class: "stack mig-dests" },
     h("h3", { class: "section-title" }, "1 · Verify where it goes"),
     verifiedAll ? null : h("p", { class: "muted small mig-lead" }, "Before the first transfer, check the address on your phone. Malware on a computer can swap an address on screen; your phone can't be fooled that way."),
@@ -466,11 +533,12 @@ function destCard(o: { kicker: string; label: string; address: string; display: 
 
 // ---- the checklist
 
-const STATUS_TEXT: Record<MStatus, string> = { move: "To move", moved: "Moved", gone: "Left the old wallet", empty: "" };
+const STATUS_TEXT: Record<MStatus, string> = { move: "To move", moved: "Moved", gone: "Left the old wallet", unknown: "Couldn't check", pending: "Sending… (unconfirmed)", empty: "" };
+const UNKNOWN_SUB = "Couldn't check: the node didn't answer. Not counted as moved; Re-scan.";
 
 function row(status: MStatus, title: Node | string, sub: Node | string | null, extra?: Node | null): HTMLElement {
   return h("li", { class: `mig-row ${status}` },
-    h("span", { class: "mig-tick", "aria-label": STATUS_TEXT[status], title: STATUS_TEXT[status] }, status === "moved" ? icon("check", 14) : status === "gone" ? icon("up", 13) : null),
+    h("span", { class: "mig-tick", "aria-label": STATUS_TEXT[status], title: STATUS_TEXT[status] }, status === "moved" ? icon("check", 14) : status === "gone" ? icon("up", 13) : status === "unknown" ? "?" : status === "pending" ? h("i", { class: "mini-spin" }) : null),
     h("span", { class: "grow" }, h("span", { class: "mig-title" }, title), sub ? h("span", { class: "muted small mig-sub" }, sub) : null),
     extra ?? null);
 }
@@ -495,10 +563,11 @@ function evmSourceCard(s: Extract<MSource, { kind: "evm" }>): HTMLElement {
     const here: HTMLElement[] = [];
     if (r.native.status !== "empty") here.push(row(r.native.status, r.native.status === "move" ? `${fmtAmount(r.native.amount, 6)} ${r.native.symbol}` : r.native.symbol,
       r.native.status === "move" ? "Network coin: send it last" : destHas(r.native.destination_amount, r.native.symbol) ?? "No longer in the old wallet"));
-    for (const t of r.tokens) here.push(row(t.status, t.status === "move" ? `${fmtAmount(t.amount, 6)} ${t.symbol}` : t.symbol, t.status === "move" ? t.name : destHas(t.destination_amount, t.symbol) ?? "No longer in the old wallet"));
+    for (const t of r.tokens) here.push(row(t.status, t.status === "move" ? `${fmtAmount(t.amount, 6)} ${t.symbol}` : t.symbol, t.status === "move" ? t.name : t.status === "unknown" ? UNKNOWN_SUB : destHas(t.destination_amount, t.symbol) ?? "No longer in the old wallet"));
     for (const x of r.nfts) here.push(row(x.status, `${x.name ?? x.symbol ?? short(x.contract)} #${x.token_id.length > 12 ? x.token_id.slice(0, 10) + "…" : x.token_id}`,
-      x.status === "move" ? `NFT · ${short(x.contract)}` : x.on_phone_vault ? "Phone Vault holds it now" : "Sent somewhere other than Phone Vault"));
+      x.status === "move" ? `NFT · ${short(x.contract)}` : x.status === "unknown" ? UNKNOWN_SUB : x.on_phone_vault ? "Phone Vault holds it now" : "Sent somewhere other than Phone Vault"));
     if (r.unreadable_tokens.length) here.push(h("li", { class: "mig-note-row muted small" }, `Couldn't read ${r.unreadable_tokens.join(", ")} from this node.`));
+    if (r.nft_window.capped) here.push(h("li", { class: "mig-note-row muted small" }, "This node returned more NFT transfers than are checked: only the newest 5,000 were kept."));
     if (r.nft_window.searched && r.nft_window.from_block !== null && r.nft_window.to_block !== null) windows.push(`${n.name} ${fmtInt(r.nft_window.to_block - r.nft_window.from_block + 1)}`);
     if (here.length) rows.push(h("li", { class: "mig-net" }, h("i", { class: `net-dot n${n.id}` }), n.name, c.busy ? h("i", { class: "mini-spin" }) : null), ...here);
     else if (!n.testnet) nothing.push(n.name);
@@ -522,6 +591,9 @@ function btcSourceCard(s: Exclude<MSource, { kind: "evm" }>): HTMLElement {
   const r = c?.report ?? null;
   const unit = r?.unit ?? (s.network === "bitcoin" ? "BTC" : "tBTC");
   const total = r ? r.confirmed_sats + r.unconfirmed_sats : 0;
+  const sub = !r ? "" : r.status === "move" ? (r.unconfirmed_sats ? `${fmtBtc(r.unconfirmed_sats)} ${unit} unconfirmed · ` : "") + `send it all to your ${r.network_name} address above`
+    : r.status === "pending" ? `Sending… (unconfirmed): ${fmtBtc(r.confirmed_sats)} ${unit} still confirmed at the old addresses. It ticks off once the transfer confirms.`
+    : "No longer at the old wallet's addresses";
   return h("section", { class: "card mig-card" },
     h("div", { class: "row between" },
       h("p", { class: "kicker" }, s.kind === "xpub" ? `Old Bitcoin account · public key (${s.prefix})` : "Old Bitcoin address"),
@@ -529,8 +601,7 @@ function btcSourceCard(s: Exclude<MSource, { kind: "evm" }>): HTMLElement {
     !r && (!c || c.busy) ? h("p", { class: "muted small mig-checking" }, h("i", { class: "mini-spin" }), s.kind === "xpub" ? "Checking its addresses (gap limit 20)…" : "Checking the address…") : null,
     c?.error && !r ? h("p", { class: "inline-error" }, icon("alert", 15), explainNode(c.error)) : null,
     r ? (r.status === "empty" ? h("p", { class: "empty" }, s.kind === "xpub" ? "No bitcoin found on this public key's addresses." : "No bitcoin on this address.")
-      : h("ul", { class: "mig-list" }, row(r.status, r.status === "move" ? `${fmtBtc(total)} ${unit}` : unit,
-        r.status === "move" ? (r.unconfirmed_sats ? `${fmtBtc(r.unconfirmed_sats)} ${unit} unconfirmed · ` : "") + `send it all to your ${r.network_name} address above` : "No longer at the old wallet's addresses",
+      : h("ul", { class: "mig-list" }, row(r.status, r.status === "move" ? `${fmtBtc(total)} ${unit}` : unit, sub,
         c?.busy ? h("i", { class: "mini-spin" }) : null))) : null,
     r && r.types.length ? h("ul", { class: "mig-types" }, r.types.map((t) => h("li", null,
       h("span", null, `${t.name} (${t.looks})`), h("span", { class: "mono" }, `${fmtBtc(t.confirmed_sats + t.unconfirmed_sats)} ${unit}`),
@@ -548,7 +619,7 @@ function approvalsSection(): HTMLElement | null {
     const r = c.report; if (!r) continue;
     for (const a of r.approvals) items.push({ chain: byId(id).name, a });
     const w = r.approval_window;
-    if (w.searched && w.error) incomplete = true;
+    if (w.searched && (w.error || w.capped)) incomplete = true;
     if (w.searched && w.from_block !== null && w.to_block !== null && r.approvals.length) windows.push(`${byId(id).name} ${fmtInt(w.to_block - w.from_block + 1)}`);
   }
   if (!evmSources().length) return null;
@@ -557,10 +628,10 @@ function approvalsSection(): HTMLElement | null {
     items.length ? h("section", { class: "card mig-card" },
       h("p", { class: "muted" }, "Revoke these before you retire the old wallet: each lets a contract move tokens or NFTs out of the old address, even after you stop using it. Revoke them from the old wallet (a revoke tool, or the app that asked for it)."),
       h("ul", { class: "mig-list" }, items.map(({ chain, a }) => row(a.status,
-        a.kind === "token" ? `${a.amount === "unlimited" ? "Unlimited" : `${fmtAmount(a.amount, 6)}`} ${a.symbol ?? short(a.contract)}` : `All ${a.symbol ?? "NFTs"} of ${short(a.contract)}`,
-        `${a.status === "move" ? "Spender" : "Revoked · was"} ${short(a.spender)} · ${chain}`,
+        a.kind === "token" ? `${a.amount === "unlimited" ? "Unlimited" : a.status === "unknown" ? "Approval" : `${fmtAmount(a.amount, 6)}`} ${a.symbol ?? short(a.contract)}` : `All ${a.symbol ?? "NFTs"} of ${short(a.contract)}`,
+        `${a.status === "move" ? "Spender" : a.status === "unknown" ? "Couldn't check if it's still active (the node didn't answer) · spender" : "Revoked · was"} ${short(a.spender)} · ${chain}`,
         h("button", { class: "link mono small", title: `${a.spender}\nCopy spender`, onclick: () => copy(a.spender, "Spender") }, icon("copy", 12))))),
     ) : h("p", { class: "muted small" }, anyScan() ? "No active approvals found in the recent blocks searched." : "Approvals are listed here after the scan."),
-    h("p", { class: "muted small" }, `Approvals are found in recent blocks only${windows.length ? ` (${windows.join(", ")} blocks)` : ""}${incomplete ? "; some nodes served fewer" : ""}. Older approvals aren't listed: check the old address in a revoke tool before you stop using it.`),
+    h("p", { class: "muted small" }, `Approvals are found in recent blocks only${windows.length ? ` (${windows.join(", ")} blocks)` : ""}${incomplete ? "; some nodes served fewer, or more than the 5,000 newest that are checked" : ""}. Older approvals aren't listed: check the old address in a revoke tool before you stop using it.`),
   );
 }

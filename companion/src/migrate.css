@@ -48,6 +48,8 @@
 .mig-row.gone .mig-tick { border-color: var(--warn); color: var(--warn); }
 .mig-row.moved .mig-title, .mig-row.gone .mig-title { color: var(--muted); text-decoration: line-through; text-decoration-color: var(--faint); }
 .mig-row.move .mig-tick { border-color: var(--accent-line); }
+.mig-row.unknown .mig-tick { border-color: var(--warn); color: var(--warn); font-size: 12px; font-weight: 700; }
+.mig-row.pending .mig-tick { border-color: var(--accent-line); }
 .mig-note-row { padding: 4px 10px; }
 .mig-checking { display: flex; align-items: center; gap: 8px; }
 .mig-types { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 13px; }

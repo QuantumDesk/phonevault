@@ -78,6 +78,7 @@ pub const COMMANDS: &[&str] = &[
     "btc_export",
     "btc_save_export",
     "migrate_check",
+    "migrate_check_text",
     "migrate_session",
     "migrate_save",
     "migrate_forget",

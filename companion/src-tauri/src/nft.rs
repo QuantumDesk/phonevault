@@ -126,8 +126,13 @@ fn label(rpc: &eth::Rpc, contract: &str) -> (Option<String>, Option<String>) {
 fn refresh(rpc: &eth::Rpc, chain: u64, owner: &str, candidates: Vec<(String, String)>) -> Result<Vec<Nft>, String> {
     let _g = LOCK.lock().map_err(|_| "nft lock poisoned".to_string())?;
     let mut all = load(owner);
+    let mut have: std::collections::HashSet<(String, String)> = all
+        .iter()
+        .filter(|n| n.chain_id == chain)
+        .map(|n| (n.contract.to_ascii_lowercase(), n.token_id.clone()))
+        .collect();
     for (contract, id) in candidates {
-        if !all.iter().any(|n| n.chain_id == chain && n.contract.eq_ignore_ascii_case(&contract) && n.token_id == id) {
+        if have.insert((contract.to_ascii_lowercase(), id.clone())) {
             all.push(Nft {
                 chain_id: chain,
                 contract: verify::checksum(&contract),
@@ -157,10 +162,19 @@ fn refresh(rpc: &eth::Rpc, chain: u64, owner: &str, candidates: Vec<(String, Str
     Ok(all.into_iter().filter(|n| n.chain_id == chain).collect())
 }
 
-/// ERC-721 Transfer logs (to, id indexed) → (contract, decimal token id).
+/// Distinct candidates kept from one log search at most (the newest: logs come newest first). A
+/// hostile node can answer with hundreds of thousands of logs.
+pub(crate) const MAX_LOG_CANDIDATES: usize = 5_000;
+
+/// ERC-721 Transfer logs (to, id indexed) → (contract, decimal token id). De-duplicated with a
+/// hash set; at most `MAX_LOG_CANDIDATES` are kept.
 pub(crate) fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for l in logs {
+        if out.len() >= MAX_LOG_CANDIDATES {
+            break;
+        }
         let Some(t) = l.get("topics").and_then(Value::as_array) else { continue };
         let [t0, _, t2, t3] = t.as_slice() else { continue };
         if t0.as_str() != Some(abi::TRANSFER_TOPIC) || !t2.as_str().is_some_and(|x| x.eq_ignore_ascii_case(owner_topic))
@@ -178,7 +192,7 @@ pub(crate) fn erc721_candidates(logs: &[Value], owner_topic: &str) -> Vec<(Strin
         let Ok(id) = u128::from_str_radix(low, 16) else { continue };
         let Some(c) = l.get("address").and_then(Value::as_str).filter(|c| verify::is_address(c)) else { continue };
         let item = (c.to_ascii_lowercase(), id.to_string());
-        if !out.contains(&item) {
+        if seen.insert(item.clone()) {
             out.push(item);
         }
     }

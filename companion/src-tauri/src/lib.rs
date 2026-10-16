@@ -196,15 +196,10 @@ async fn read_address() -> CmdResult<PhoneAccount> {
         let response = ask_phone(request.clone(), Duration::from_secs(30))?;
         let AddressAnswer { address: addr, account, wallet, scheme } = parse_address_response(&request, &response)?;
         let existing = pairing::list()?;
-        let label = existing.find(&addr).map(|p| p.label.clone()).unwrap_or_else(|| {
-            let l = pairing::default_label(&existing, account, wallet.as_deref());
-            // Account 2+ is another address under Ledger Live numbering: say so in its name.
-            if scheme == numbering::Scheme::LedgerLive && account.is_some_and(|n| n > 1) {
-                format!("{l} · Ledger Live")
-            } else {
-                l
-            }
-        });
+        let label = existing
+            .find(&addr)
+            .map(|p| p.label.clone())
+            .unwrap_or_else(|| pairing::default_label(&existing, account, wallet.as_deref(), scheme));
         Ok(PhoneAccount { address: verify::checksum(&addr), account, wallet, scheme, label })
     })
     .await
@@ -217,11 +212,16 @@ async fn confirm_pairing(
     label: Option<String>,
     account: Option<u32>,
     wallet: Option<String>,
+    scheme: Option<String>,
 ) -> CmdResult<String> {
+    // the account numbering the phone reported (getAddress `scheme`): only names the account
+    let scheme = numbering::Scheme::from_get_address(scheme.filter(|s| s != "standard").map(Value::String).as_ref())?;
     // Only an address that a phone which passed the device check attested to in this connection.
     blocking(move || {
         attest::require_pairable(&address)
-            .and_then(|_| pairing::add(&address, label.as_deref(), wallet.as_deref(), account).map_err(String::from))
+            .and_then(|_| {
+                pairing::add(&address, label.as_deref(), wallet.as_deref(), account, scheme).map_err(String::from)
+            })
             .map(|p| p.display().to_string())
     })
     .await
@@ -463,6 +463,7 @@ pub fn run() {
             btc::btc_export,
             btc::btc_save_export,
             migrate::migrate_check,
+            migrate::migrate_check_text,
             migrate::migrate_session,
             migrate::migrate_save,
             migrate::migrate_forget,

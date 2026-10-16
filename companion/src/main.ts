@@ -395,16 +395,16 @@ function receiveView() {
 
 
 /** Ask the phone which account it is on (number, standard/passphrase) to label a new pairing. Best effort. */
-async function describePhoneAccount(address: string): Promise<{ label: string; account: number | null; wallet: string | null } | null> {
+async function describePhoneAccount(address: string): Promise<{ label: string; account: number | null; wallet: string | null; scheme: string | null } | null> {
   try {
     const info = await api.readAddress();
-    return info.address.toLowerCase() === address.toLowerCase() ? { label: info.label, account: info.account, wallet: info.wallet } : null;
+    return info.address.toLowerCase() === address.toLowerCase() ? { label: info.label, account: info.account, wallet: info.wallet, scheme: info.scheme ?? null } : null;
   } catch { return null; }
 }
 
-async function pairAccount(address: string, label: string | null, known?: { account?: number | null; wallet?: string | null }) {
+async function pairAccount(address: string, label: string | null, known?: { account?: number | null; wallet?: string | null; scheme?: string | null }) {
   const info = known?.account !== undefined ? null : await describePhoneAccount(address);
-  await api.confirmPairing(address, label ?? info?.label ?? null, known?.account ?? info?.account ?? null, known?.wallet ?? info?.wallet ?? null);
+  await api.confirmPairing(address, label ?? info?.label ?? null, known?.account ?? info?.account ?? null, known?.wallet ?? info?.wallet ?? null, known?.scheme ?? info?.scheme ?? null);
 }
 
 function pairView() {
@@ -420,7 +420,7 @@ function pairView() {
     const labelInput = h("input", { type: "text", maxlength: "40", spellcheck: "false", value: cmp.label ?? "", placeholder: `Account ${pairedAccounts().length + 1}`, "aria-label": "Name for this account on this Mac" }) as HTMLInputElement;
     if (cmp.label === undefined) void describePhoneAccount(address).then((info) => {
       if (state.pair !== cmp) return;
-      cmp.label = info?.label ?? ""; cmp.account = info?.account ?? null; cmp.wallet = info?.wallet ?? null;
+      cmp.label = info?.label ?? ""; cmp.account = info?.account ?? null; cmp.wallet = info?.wallet ?? null; cmp.scheme = info?.scheme ?? null;
       if (!labelInput.value) labelInput.value = cmp.label;
     });
     body = h("div", { class: "stack" }, h("section", { class: "card" },
@@ -432,7 +432,7 @@ function pairView() {
       cmp.wallet === "passphrase" ? h("p", { class: "muted small" }, "This is a passphrase wallet. The phone forgets the passphrase when it locks: open the same passphrase wallet on the phone before each use.") : null,
       h("div", { class: "actions" },
         h("button", { class: "big primary", onclick: async () => {
-          try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null }); state.pair = { s: "idle" }; await refreshStatus(); state.phoneAddress = address; state.identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); offerNumberingScan(); go("home"); } catch (e) { state.pair = { s: "idle", error: errText(e) }; render(); }
+          try { await pairAccount(address, labelInput.value.trim() || null, cmp.label === undefined ? undefined : { account: cmp.account ?? null, wallet: cmp.wallet ?? null, scheme: cmp.scheme ?? null }); state.pair = { s: "idle" }; await refreshStatus(); state.phoneAddress = address; state.identity = classifyPhone(address); renderHeader(); renderPhoneNotice(); offerNumberingScan(); go("home"); } catch (e) { state.pair = { s: "idle", error: errText(e) }; render(); }
         }, disabled: !attOk, title: attOk ? "" : state.device.checking ? "Waiting for the genuine check" : "The genuine check must pass first" }, icon("check", 18), state.device.checking ? "Checking phone…" : "It matches"),
         h("button", { class: "big", onclick: () => { state.pair = { s: "mismatch" }; render(); } }, "It doesn't"),
       ),

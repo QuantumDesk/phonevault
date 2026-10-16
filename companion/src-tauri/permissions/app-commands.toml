@@ -79,6 +79,7 @@ permissions = [
   "allow-btc-export",
   "allow-btc-save-export",
   "allow-migrate-check",
+  "allow-migrate-check-text",
   "allow-migrate-session",
   "allow-migrate-save",
   "allow-migrate-forget",

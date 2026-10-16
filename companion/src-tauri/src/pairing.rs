@@ -10,6 +10,7 @@
 //! is migrated on first read: it becomes "Account 1" and its activity history moves to that
 //! address's own file.
 
+use crate::numbering::Scheme;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -104,13 +105,18 @@ pub fn clean_label(label: &str) -> Option<String> {
 }
 
 /// "Account 2", "Account 2 · passphrase", or "Account N" (N = next) when the phone did not say.
-pub fn default_label(existing: &Pairings, account: Option<u32>, wallet: Option<&str>) -> String {
+/// Account 2+ under Ledger Live numbering is another address than Standard Account 2, so its
+/// name says so: "Account 2 · Ledger Live" (Account 1 is the same under both).
+pub fn default_label(existing: &Pairings, account: Option<u32>, wallet: Option<&str>, scheme: Scheme) -> String {
     let n = account.unwrap_or(existing.accounts.len() as u32 + 1);
+    let mut label = format!("Account {n}");
     if wallet == Some("passphrase") {
-        format!("Account {n} · passphrase")
-    } else {
-        format!("Account {n}")
+        label.push_str(" · passphrase");
     }
+    if scheme == Scheme::LedgerLive && account.is_some_and(|n| n > 1) {
+        label.push_str(" · Ledger Live");
+    }
+    label
 }
 
 // ---------------------------------------------------------------- public API (config dir)
@@ -128,8 +134,9 @@ pub fn add(
     label: Option<&str>,
     wallet: Option<&str>,
     account: Option<u32>,
+    scheme: Scheme,
 ) -> Result<PathBuf, PairingError> {
-    add_in(&dir()?, address, label, wallet, account).map(|_| path().unwrap_or_default())
+    add_numbered_in(&dir()?, address, label, wallet, account, scheme).map(|_| path().unwrap_or_default())
 }
 pub fn select(address: &str) -> Result<Pairings, PairingError> {
     select_in(&dir()?, address)
@@ -256,12 +263,26 @@ fn modify(dir: &Path, f: impl FnOnce(&mut Pairings) -> Result<(), PairingError>)
     Ok(p)
 }
 
+/// `add_numbered_in` under Standard numbering (tests).
+#[cfg(test)]
 pub fn add_in(
     dir: &Path,
     address: &str,
     label: Option<&str>,
     wallet: Option<&str>,
     account: Option<u32>,
+) -> Result<Pairings, PairingError> {
+    add_numbered_in(dir, address, label, wallet, account, Scheme::Standard)
+}
+
+/// `add_in` for an account the phone reported under `scheme` (only the default label differs).
+pub fn add_numbered_in(
+    dir: &Path,
+    address: &str,
+    label: Option<&str>,
+    wallet: Option<&str>,
+    account: Option<u32>,
+    scheme: Scheme,
 ) -> Result<Pairings, PairingError> {
     let address = valid_address(address)?;
     let wallet = match wallet {
@@ -273,7 +294,7 @@ pub fn add_in(
         return Err(err("account number out of range"));
     }
     modify(dir, |p| {
-        let label = label.and_then(clean_label).unwrap_or_else(|| default_label(p, account, wallet.as_deref()));
+        let label = label.and_then(clean_label).unwrap_or_else(|| default_label(p, account, wallet.as_deref(), scheme));
         match p.accounts.iter_mut().find(|a| a.address == address) {
             Some(existing) => {
                 existing.label = label;

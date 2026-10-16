@@ -39,6 +39,12 @@ pub enum Status {
     Moved,
     /// an NFT that left the old wallet, but not for Phone Vault
     Gone,
+    /// seen before, but the node could not answer the re-check (rate limit, error): still to do
+    /// until a re-scan can read it
+    Unknown,
+    /// Bitcoin: the confirmed balance is still there, but a spend of it is waiting in the mempool
+    /// (it could still be dropped or replaced): not moved until it confirms
+    Pending,
     /// never seen holding anything (not shown)
     Empty,
 }
@@ -56,6 +62,22 @@ impl Status {
         } else {
             Status::Empty
         }
+    }
+
+    /// The re-check failed: an item seen before stays on the list as `Unknown` (never dropped,
+    /// never "moved"); one never seen is not reported.
+    pub fn unknown(key: &str, found: &BTreeSet<String>) -> Status {
+        if found.contains(key) {
+            Status::Unknown
+        } else {
+            Status::Empty
+        }
+    }
+
+    /// Present, with a spend of it unconfirmed. Records it in `found` like `Move`.
+    pub fn pending(key: &str, found: &mut BTreeSet<String>) -> Status {
+        let _ = Status::of(true, key, found);
+        Status::Pending
     }
 }
 
@@ -124,6 +146,7 @@ fn set_sources_in(dir: &Path, inputs: &[String], own: &Own, now: u64) -> Result<
     if inputs.len() > MAX_SOURCES {
         return Err(format!("At most {MAX_SOURCES} entries at a time."));
     }
+    secrets_in_list(inputs)?;
     let mut parsed: Vec<Source> = Vec::new();
     for (i, x) in inputs.iter().enumerate() {
         let p = source::parse(x).map_err(|e| format!("Line {}: {e}", i + 1))?;
@@ -148,6 +171,20 @@ fn set_sources_in(dir: &Path, inputs: &[String], own: &Own, now: u64) -> Result<
     };
     save_in(dir, &s)?;
     Ok((s, parsed))
+}
+
+/// A secret anywhere in the list: on one line ("Line 3: …"), or spread over several (a phrase
+/// pasted one word per line). Nothing is kept; the message never echoes the text.
+fn secrets_in_list(lines: &[String]) -> Result<(), String> {
+    for (i, x) in lines.iter().enumerate() {
+        if let Some(why) = source::secret_in(x) {
+            return Err(format!("Line {}: {why}", i + 1));
+        }
+    }
+    match source::secret_in(&lines.join("\n")) {
+        Some(why) => Err(why.into()),
+        None => Ok(()),
+    }
 }
 
 /// Add what a scan saw to the session (re-read under the lock: scans run side by side).
@@ -222,6 +259,15 @@ pub(crate) fn migrate_check(input: String) -> CmdResult<Source> {
     let s = source::parse(&input)?;
     Own::load().check(&s)?;
     Ok(s)
+}
+
+/// Check the whole pasted list (as the user types) for a secret spread over several lines.
+#[tauri::command]
+pub(crate) fn migrate_check_text(text: String) -> CmdResult<()> {
+    if text.len() > source::MAX_TEXT {
+        return Err("That is too long for a list of addresses and public keys.".into());
+    }
+    secrets_in_list(&text.lines().map(str::to_string).collect::<Vec<_>>())
 }
 
 /// The saved session, if any.
@@ -343,17 +389,23 @@ fn session_entry(id: &str) -> Result<(PathBuf, Source, BTreeSet<String>), String
     Ok((d, src, s.found))
 }
 
-/// Scan one old EVM address on the node `rpc_url` (its chain). `deep`: also search logs for NFTs
-/// and approvals (slower); a quick re-scan re-checks only what was found before.
+/// Scan one old EVM address on the node `rpc_url`, which must be on `chain_id` (checked with
+/// eth_chainId before anything is read or recorded). `deep`: also search logs for NFTs and
+/// approvals (slower); a quick re-scan re-checks only what was found before.
 #[tauri::command]
-pub(crate) async fn migrate_scan_evm(rpc_url: String, address: String, deep: bool) -> CmdResult<evm::Report> {
+pub(crate) async fn migrate_scan_evm(
+    rpc_url: String,
+    chain_id: u64,
+    address: String,
+    deep: bool,
+) -> CmdResult<evm::Report> {
     blocking(move || {
         let id = address.trim().to_ascii_lowercase();
         let (d, src, mut found) = session_entry(&id)?;
         let Source::Evm { .. } = src else { return Err("That entry is not an EVM address.".into()) };
         let dest = pairing::load()?.ok_or(pairing::NOT_PAIRED)?.to_ascii_lowercase();
         let rpc = eth::Rpc::new(&rpc_url)?;
-        let report = evm::scan(&rpc, &id, &dest, &mut found, deep)?;
+        let report = evm::scan(&rpc, chain_id, &id, &dest, &mut found, deep)?;
         record_in(&d, found, crate::history::now())?;
         Ok(report)
     })
@@ -413,6 +465,15 @@ fn scan_btc(
     };
     let total = i64::try_from(confirmed).unwrap_or(i64::MAX).saturating_add(unconfirmed);
     let key = format!("btc:{}", src.id());
+    // "Moved" is decided by the CONFIRMED balance only: a spend still in the mempool can be stuck,
+    // dropped or replaced, so it is "sending… (unconfirmed)" until it confirms.
+    let dust = btc_scan::DUST_SATS as i64;
+    let confirmed_present = confirmed >= btc_scan::DUST_SATS;
+    let status = if confirmed_present && total < dust {
+        Status::pending(&key, found)
+    } else {
+        Status::of(confirmed_present || total >= dust, &key, found)
+    };
     Ok(BtcReport {
         source: src.id().to_string(),
         network: net,
@@ -422,7 +483,7 @@ fn scan_btc(
         types,
         confirmed_sats: confirmed,
         unconfirmed_sats: unconfirmed,
-        status: Status::of(total >= btc_scan::DUST_SATS as i64, &key, found),
+        status,
     })
 }
 
@@ -466,8 +527,15 @@ mod tests {
 
         // secrets and bad lines are refused with the line number; nothing changes
         let phrase = "abandon ".repeat(11) + "about";
-        let e = set_sources_in(&d, &[OLD.into(), phrase], &Own::default(), 400).unwrap_err();
+        let e = set_sources_in(&d, &[OLD.into(), phrase.clone()], &Own::default(), 400).unwrap_err();
         assert!(e.starts_with("Line 2: ") && e.contains("recovery phrase"), "{e}");
+        // one word per line: no single line is a secret, the list is
+        let mut lines = vec![OLD.to_string()];
+        lines.extend(phrase.split(' ').take(8).map(str::to_string));
+        let e = set_sources_in(&d, &lines, &Own::default(), 400).unwrap_err();
+        assert_eq!(e, source::PHRASE);
+        assert_eq!(migrate_check_text(lines.join("\n")).unwrap_err(), source::PHRASE);
+        assert!(migrate_check_text(format!("{OLD}\n{ADDR}")).is_ok());
         assert!(set_sources_in(&d, &[], &Own::default(), 400).is_err());
         assert!(set_sources_in(&d, &vec![OLD.to_string(); MAX_SOURCES + 1], &Own::default(), 400).is_err());
         assert_eq!(load_in(&d).unwrap().unwrap().sources, vec![OLD.to_string()]);
@@ -522,11 +590,10 @@ mod tests {
         assert_eq!(scan_btc(&src, Net::Bitcoin, &One(0), &mut fresh).unwrap().status, Status::Empty);
     }
 
-    /// Audit proof: an UNCONFIRMED spend (mempool only, possibly stuck / evicted / RBF-replaced)
-    /// already makes the entry "Moved" (mod.rs:414, 425 add the negative mempool delta), so the UI
-    /// ticks it off and Home says "Everything found has moved" before anything confirmed.
+    /// An UNCONFIRMED spend (mempool only, possibly stuck / evicted / RBF-replaced) is `Pending`
+    /// ("sending… (unconfirmed)"), not "Moved": moved is decided by the confirmed balance only.
     #[test]
-    fn audit_unconfirmed_spend_counts_as_moved() {
+    fn unconfirmed_spend_is_pending_until_it_confirms() {
         struct Pending;
         impl crate::btc::scan::Source for Pending {
             fn address(&self, a: &str) -> Result<AddressInfo, String> {
@@ -545,13 +612,19 @@ mod tests {
         assert_eq!(scan_btc(&src, Net::Bitcoin, &One(150_000), &mut found).unwrap().status, Status::Move);
         let r = scan_btc(&src, Net::Bitcoin, &Pending, &mut found).unwrap();
         assert_eq!((r.confirmed_sats, r.unconfirmed_sats), (150_000, -150_000));
-        assert_eq!(r.status, Status::Moved, "150k sats still confirmed in the old wallet, shown as moved");
+        assert_eq!(r.status, Status::Pending, "150k sats still confirmed in the old wallet: not moved yet");
+        // once it confirms, it is moved
+        assert_eq!(scan_btc(&src, Net::Bitcoin, &One(0), &mut found).unwrap().status, Status::Moved);
+        // a pending spend on an entry never seen before is still recorded (it holds coins)
+        let mut fresh = BTreeSet::new();
+        assert_eq!(scan_btc(&src, Net::Bitcoin, &Pending, &mut fresh).unwrap().status, Status::Pending);
+        assert!(fresh.contains(&format!("btc:{ADDR}")));
     }
 
-    /// Audit proof (sound): a tampered session can only ADD "seen before" keys; it can't make a
+    /// Audit (sound): a tampered session can only ADD "seen before" keys; it can't make a
     /// present item look moved, and keys for entries not in the list are dropped on record.
     #[test]
-    fn audit_tampered_found_cannot_hide_a_present_item() {
+    fn tampered_found_cannot_hide_a_present_item() {
         let mut found = BTreeSet::from([format!("btc:{ADDR}")]);
         let src = source::parse(ADDR).unwrap();
         assert_eq!(scan_btc(&src, Net::Bitcoin, &One(150_000), &mut found).unwrap().status, Status::Move);

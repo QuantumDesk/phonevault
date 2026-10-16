@@ -16,7 +16,7 @@ use crate::abi::{self, SEL_BALANCE_OF, SEL_NAME, SEL_OWNER_OF, SEL_SYMBOL};
 use crate::{chains, eth, tokens, verify, watcher};
 use serde::Serialize;
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 /// `allowance(address,address)` (ERC-20).
 pub const SEL_ALLOWANCE: &str = "dd62ed3e";
@@ -33,6 +33,9 @@ pub const APPROVAL_FOR_ALL_TOPIC: &str = "0x17307eab39ab6107e8899845ad3d59bd9653
 pub const LOG_BLOCKS: u128 = 80_000;
 /// Distinct NFTs / approvals checked per scan at most.
 const MAX_CANDIDATES: usize = 120;
+/// Distinct candidates kept from one log search at most (the newest; logs come newest first).
+/// The node is untrusted and can answer with hundreds of thousands of logs.
+pub const MAX_LOG_CANDIDATES: usize = crate::nft::MAX_LOG_CANDIDATES;
 /// Native balance below this (0.00001 of the coin) counts as emptied: what a "send max" leaves.
 pub const NATIVE_DUST_WEI: u128 = 10_000_000_000_000;
 
@@ -111,6 +114,8 @@ pub struct Window {
     pub from_block: Option<u128>,
     pub to_block: Option<u128>,
     pub error: Option<String>,
+    /// more distinct items than `MAX_LOG_CANDIDATES` were in the logs: only the newest were kept
+    pub capped: bool,
 }
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
@@ -150,16 +155,23 @@ fn label(node: &dyn Node, contract: &str) -> (Option<String>, Option<String>) {
     (s(SEL_NAME), s(SEL_SYMBOL))
 }
 
-/// Everything about `old` on the node's chain. `found`: keys seen with a balance before (the
-/// session); new ones are added to it. `deep`: also search the logs for NFTs and approvals.
+/// Everything about `old` on the node's chain, which must be `expected_chain` (checked first,
+/// before anything is read or recorded). `found`: keys seen with a balance before (the session);
+/// new ones are added to it. `deep`: also search the logs for NFTs and approvals.
 pub fn scan(
     node: &dyn Node,
+    expected_chain: u64,
     old: &str,
     dest: &str,
     found: &mut BTreeSet<String>,
     deep: bool,
 ) -> Result<Report, String> {
     let chain = u64::try_from(node.chain_id()?).map_err(|_| "chain id out of range")?;
+    if chain != expected_chain {
+        let want =
+            chains::get(expected_chain).map_or_else(|| format!("chain {expected_chain}"), |c| c.watch_name.into());
+        return Err(format!("this node is on chain {chain}, not {want}. Check the node in Settings."));
+    }
     let c = chains::get(chain).ok_or_else(|| format!("the phone has no reviewed profile for chain {chain}"))?;
     let block = node.block_number()?;
     let base = format!("evm:{chain}:{old}");
@@ -190,6 +202,20 @@ pub fn scan(
             Ok(v) => v,
             Err(_) => {
                 unreadable.push(t.symbol.clone());
+                // seen holding a balance before: keep it on the list, as "couldn't check"
+                if Status::unknown(&key, found) == Status::Unknown {
+                    items.push(Item {
+                        status: Status::Unknown,
+                        key,
+                        symbol: t.symbol.clone(),
+                        name: t.name.clone(),
+                        contract: Some(verify::checksum(&t.address)),
+                        decimals: t.decimals,
+                        raw: String::new(),
+                        amount: String::new(),
+                        destination_amount: read(dest).ok().map(|v| tokens::format_units(v, t.decimals)),
+                    });
+                }
                 continue;
             }
         };
@@ -223,12 +249,10 @@ pub fn scan(
     let mut nft_window = Window::default();
     if deep {
         let (logs, covered, error) = node.logs(from, block, json!([abi::TRANSFER_TOPIC, Value::Null, owner_topic]));
-        nft_window = Window { searched: true, from_block: covered, to_block: Some(block), error };
-        for cand in crate::nft::erc721_candidates(&logs, &owner_topic) {
-            if !candidates.contains(&cand) {
-                candidates.push(cand);
-            }
-        }
+        let new = crate::nft::erc721_candidates(&logs, &owner_topic);
+        let capped = new.len() >= MAX_LOG_CANDIDATES;
+        nft_window = Window { searched: true, from_block: covered, to_block: Some(block), error, capped };
+        merge(&mut candidates, new);
     }
     let mut nfts = Vec::new();
     let mut labels: std::collections::HashMap<String, (Option<String>, Option<String>)> = Default::default();
@@ -237,12 +261,18 @@ pub fn scan(
         let owner =
             node.call(&contract, &format!("0x{SEL_OWNER_OF}{idn:064x}")).ok().and_then(|r| abi::address_of_word(&r));
         let key = format!("{nft_prefix}{contract}:{id}");
-        let held = owner.as_deref() == Some(old);
-        let on_pv = owner.as_deref() == Some(dest);
-        let mut status = Status::of(held, &key, found);
-        if status == Status::Moved && !on_pv {
-            status = Status::Gone;
-        }
+        // no readable answer (an RPC error, a rate limit, a malformed word) is "couldn't check",
+        // never "left the old wallet"
+        let (status, on_pv) = match owner.as_deref() {
+            None => (Status::unknown(&key, found), false),
+            Some(o) => {
+                let on_pv = o == dest;
+                match Status::of(o == old, &key, found) {
+                    Status::Moved if !on_pv => (Status::Gone, false),
+                    s => (s, on_pv),
+                }
+            }
+        };
         if status == Status::Empty {
             continue;
         }
@@ -275,21 +305,28 @@ pub fn scan(
     if deep {
         let (logs, covered, error) =
             node.logs(from, block, json!([[APPROVAL_TOPIC, APPROVAL_FOR_ALL_TOPIC], owner_topic]));
-        approval_window = Window { searched: true, from_block: covered, to_block: Some(block), error };
-        for (kind, contract, spender) in approval_candidates(&logs, &owner_topic) {
-            let list = if kind == "token" { &mut erc20 } else { &mut for_all };
-            if !list.contains(&(contract.clone(), spender.clone())) {
-                list.push((contract, spender));
-            }
+        let new = approval_candidates(&logs, &owner_topic);
+        let capped = new.len() >= MAX_LOG_CANDIDATES;
+        approval_window = Window { searched: true, from_block: covered, to_block: Some(block), error, capped };
+        let (mut tokens_new, mut all_new) = (Vec::new(), Vec::new());
+        for (kind, contract, spender) in new {
+            let list = if kind == "token" { &mut tokens_new } else { &mut all_new };
+            list.push((contract, spender));
         }
+        merge(&mut erc20, tokens_new);
+        merge(&mut for_all, all_new);
     }
     let mut approvals = Vec::new();
     for (contract, spender) in erc20.into_iter().take(MAX_CANDIDATES) {
-        let Ok(word) = node.call(&contract, &data_two(SEL_ALLOWANCE, old, &spender)).and_then(|r| u256_word(&r)) else {
-            continue;
-        };
         let key = format!("{ap_prefix}{contract}:{spender}");
-        let status = Status::of(word != Some(0), &key, found);
+        let checked = node.call(&contract, &data_two(SEL_ALLOWANCE, old, &spender)).and_then(|r| u256_word(&r));
+        // a failed re-check keeps an approval seen before, as "couldn't check"; one only just
+        // found in the logs whose contract doesn't answer is left out
+        let status = match checked {
+            Ok(word) => Status::of(word != Some(0), &key, found),
+            Err(_) => Status::unknown(&key, found),
+        };
+        let word = checked.unwrap_or(None);
         if status == Status::Empty {
             continue;
         }
@@ -303,6 +340,7 @@ pub fn scan(
                 .filter(|d| *d <= 36)
         });
         let amount = match (word, decimals) {
+            _ if status == Status::Unknown => "unknown".to_string(),
             (None, _) => "unlimited".to_string(),
             (Some(v), _) if v >= u128::MAX / 2 => "unlimited".to_string(),
             (Some(v), Some(d)) => tokens::format_units(v, d),
@@ -319,13 +357,13 @@ pub fn scan(
         });
     }
     for (contract, operator) in for_all.into_iter().take(MAX_CANDIDATES) {
-        let Ok(word) =
-            node.call(&contract, &data_two(SEL_IS_APPROVED_FOR_ALL, old, &operator)).and_then(|r| u256_word(&r))
-        else {
-            continue;
-        };
         let key = format!("{all_prefix}{contract}:{operator}");
-        let status = Status::of(word == Some(1), &key, found);
+        let checked =
+            node.call(&contract, &data_two(SEL_IS_APPROVED_FOR_ALL, old, &operator)).and_then(|r| u256_word(&r));
+        let status = match checked {
+            Ok(word) => Status::of(word == Some(1), &key, found),
+            Err(_) => Status::unknown(&key, found),
+        };
         if status == Status::Empty {
             continue;
         }
@@ -355,12 +393,27 @@ pub fn scan(
     })
 }
 
+/// Append the new candidates that are not already in `list` (a hash set, not `contains`: linear).
+fn merge(list: &mut Vec<(String, String)>, new: Vec<(String, String)>) {
+    let mut seen: HashSet<(String, String)> = list.iter().cloned().collect();
+    for c in new {
+        if seen.insert(c.clone()) {
+            list.push(c);
+        }
+    }
+}
+
 /// Approval / ApprovalForAll logs where `owner` approved someone: ("token" | "collection",
 /// contract, spender), lowercase. ERC-721 single-token approvals (4 topics) are left out: they end
 /// when the NFT moves. ApprovalForAll logs that revoke (data = false) are left out too.
+/// De-duplicated with a hash set; at most `MAX_LOG_CANDIDATES` (the newest) are kept.
 pub fn approval_candidates(logs: &[Value], owner_topic: &str) -> Vec<(&'static str, String, String)> {
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for l in logs {
+        if out.len() >= MAX_LOG_CANDIDATES {
+            break;
+        }
         if l.get("removed").and_then(Value::as_bool) == Some(true) {
             continue;
         }
@@ -385,7 +438,7 @@ pub fn approval_candidates(logs: &[Value], owner_topic: &str) -> Vec<(&'static s
             _ => continue,
         };
         let item = (kind, contract.to_ascii_lowercase(), spender);
-        if !out.contains(&item) {
+        if seen.insert(item.clone()) {
             out.push(item);
         }
     }
@@ -516,7 +569,7 @@ mod tests {
     fn first_scan_finds_coins_tokens_nfts_and_approvals() {
         let f = fake();
         let mut found = BTreeSet::new();
-        let r = scan(&f, OLD, DEST, &mut found, true).unwrap();
+        let r = scan(&f, 8453, OLD, DEST, &mut found, true).unwrap();
         assert_eq!((r.chain_id, r.network), (8453, "Base"));
         assert_eq!((r.native.amount.as_str(), r.native.status), ("0.3", Status::Move));
         assert_eq!(r.native.destination_amount.as_deref(), Some("0"));
@@ -547,7 +600,7 @@ mod tests {
     fn rescan_ticks_off_what_moved_without_searching_logs() {
         let mut f = fake();
         let mut found = BTreeSet::new();
-        scan(&f, OLD, DEST, &mut found, true).unwrap();
+        scan(&f, 8453, OLD, DEST, &mut found, true).unwrap();
         // the user moved everything and revoked the token approval; the NFT went to Phone Vault
         let usdc = usdc().address.to_ascii_lowercase();
         f.balances.insert(OLD.into(), 21_000 * 300_000_000); // dust left after the max send
@@ -558,7 +611,7 @@ mod tests {
         f.calls.insert((NFT.into(), format!("0x{SEL_OWNER_OF}{:064x}", 7u128)), addr_word(DEST));
         f.logs.clear();
         *f.log_searches.borrow_mut() = 0;
-        let r = scan(&f, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&f, 8453, OLD, DEST, &mut found, false).unwrap();
         assert_eq!(*f.log_searches.borrow(), 0, "a quick re-scan reads no logs");
         assert_eq!(r.native.status, Status::Moved);
         assert_eq!(r.native.destination_amount.as_deref(), Some("0.29"));
@@ -588,7 +641,7 @@ mod tests {
     }
 }
 
-/// Security-audit proof tests (adversarial): a node that errors (or is rate limited) on the
+/// Security-audit tests (adversarial): a node that errors (or is rate limited) on the
 /// re-check calls must not make a still-live item look handled.
 #[cfg(test)]
 #[allow(clippy::indexing_slicing)]
@@ -628,57 +681,110 @@ mod audit_tests {
         }
     }
 
-    /// FINDING: an approval found active before vanishes from the report when the node fails the
-    /// `allowance` / `isApprovedForAll` re-check (evm.rs:288-290, 322-326): no "couldn't check"
-    /// marker, so the UI tally (migrate.ts:200, 211-215) can say "Everything found has moved" while an
-    /// unlimited approval is still live.
+    /// A node on another chain than the one asked for is refused before anything is read or
+    /// recorded (its items would otherwise be keyed and saved under its own chain id).
     #[test]
-    fn audit_failed_allowance_recheck_silently_drops_a_live_approval() {
+    fn wrong_chain_is_refused_before_anything_is_recorded() {
+        let mut found = BTreeSet::new();
+        let node = Node2 { calls: HashMap::new(), fail_calls: false };
+        let e = scan(&node, 1, OLD, DEST, &mut found, true).unwrap_err();
+        assert!(e.contains("chain 8453") && e.contains("Ethereum"), "{e}");
+        assert!(found.is_empty());
+    }
+
+    /// An approval found active before stays on the report, as `Unknown` ("couldn't check"), when
+    /// the node fails the `allowance` / `isApprovedForAll` re-check: it is never dropped, so the UI
+    /// can't say "Everything found has moved" while an unlimited approval may still be live.
+    #[test]
+    fn failed_allowance_recheck_keeps_the_approval_as_unknown() {
         let mut found = BTreeSet::from([
             format!("evm:8453:{OLD}:approve:{TOKEN}:{SPENDER}"),
             format!("evm:8453:{OLD}:approveall:{NFT}:{SPENDER}"),
         ]);
         let node = Node2 { calls: HashMap::new(), fail_calls: true };
-        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
-        assert!(r.approvals.is_empty(), "the live approvals are simply not reported: {:?}", r.approvals);
-        assert!(!r.approval_window.searched && r.approval_window.error.is_none(), "and nothing says the check failed");
+        let r = scan(&node, 8453, OLD, DEST, &mut found, false).unwrap();
+        assert_eq!(r.approvals.len(), 2, "{:?}", r.approvals);
+        assert!(r.approvals.iter().all(|a| a.status == Status::Unknown), "{:?}", r.approvals);
+        assert_eq!((r.approvals[0].kind, r.approvals[0].amount.as_str()), ("token", "unknown"));
+        assert_eq!(r.approvals[1].kind, "collection");
+        // the node answers again and the approval was revoked: now it ticks off
+        let calls = HashMap::from([
+            ((TOKEN.to_string(), data_two(SEL_ALLOWANCE, OLD, SPENDER)), vec![0u8; 32]),
+            ((NFT.to_string(), data_two(SEL_IS_APPROVED_FOR_ALL, OLD, SPENDER)), vec![0u8; 32]),
+        ]);
+        let r = scan(&Node2 { calls, fail_calls: false }, 8453, OLD, DEST, &mut found, false).unwrap();
+        assert!(r.approvals.iter().all(|a| a.status == Status::Moved), "{:?}", r.approvals);
     }
 
-    /// FINDING: an NFT found before is reported as `Gone` ("Sent somewhere other than Phone Vault",
-    /// counted as moved by the UI tally, migrate.ts:196) when the node merely fails `ownerOf`
-    /// (evm.rs:237-245): an RPC error is read as "not held any more".
+    /// An NFT found before is `Unknown` ("couldn't check"), not `Gone`, when the node merely fails
+    /// `ownerOf`; listed tokens seen before whose balanceOf fails stay listed as `Unknown` too.
     #[test]
-    fn audit_failed_owner_of_turns_a_held_nft_into_gone() {
-        let mut found = BTreeSet::from([format!("evm:8453:{OLD}:nft:{NFT}:7")]);
+    fn failed_owner_of_is_unknown_not_gone() {
+        let usdc = tokens::list().unwrap().iter().find(|t| t.chain_id == 8453 && t.symbol == "USDC").unwrap();
+        let usdc_key = format!("evm:8453:{OLD}:{}", usdc.address.to_ascii_lowercase());
+        let mut found = BTreeSet::from([format!("evm:8453:{OLD}:nft:{NFT}:7"), usdc_key.clone()]);
         let node = Node2 { calls: HashMap::new(), fail_calls: true };
-        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&node, 8453, OLD, DEST, &mut found, false).unwrap();
         assert_eq!(r.nfts.len(), 1);
-        assert_eq!(r.nfts[0].status, Status::Gone, "a rate-limited ownerOf reads as 'left the old wallet'");
-        // contrast: listed tokens whose balanceOf fails ARE reported as unreadable (the right pattern)
+        assert_eq!((r.nfts[0].status, r.nfts[0].on_phone_vault), (Status::Unknown, false));
         assert!(!r.unreadable_tokens.is_empty());
+        let t: Vec<_> = r.tokens.iter().filter(|t| t.key == usdc_key).collect();
+        assert_eq!(t.len(), 1, "a token seen before stays listed");
+        assert_eq!(t[0].status, Status::Unknown);
+        // an item never seen whose check fails is not reported at all
+        let mut fresh = BTreeSet::new();
+        let r = scan(&node, 8453, OLD, DEST, &mut fresh, false).unwrap();
+        assert!(r.nfts.is_empty() && r.approvals.is_empty() && r.tokens.is_empty());
     }
 
-    /// FINDING (DoS): candidate de-duplication is O(n^2) (`out.contains` in approval_candidates,
-    /// evm.rs:388, and nft::erc721_candidates, nft.rs:181) over logs a hostile node controls (up to
-    /// 40 x 16 MB answers, watcher.rs:198 / eth.rs:26). Prints timings; 4x the logs costs >6x time.
+    /// De-duplication is linear (a hash set) and the candidates kept from one hostile log answer
+    /// are capped at MAX_LOG_CANDIDATES (the newest), with the window marked `capped`. 60k distinct
+    /// logs are handled quickly (a generous bound: the old quadratic code took far longer).
     #[test]
-    fn audit_candidate_dedup_is_quadratic_in_hostile_logs() {
+    fn candidate_dedup_is_linear_and_capped() {
         let me = watcher::topic_address(OLD);
-        let mk = |n: usize| -> Vec<Value> {
-            (0..n)
-                .map(|i| json!({"address": NFT, "topics": [APPROVAL_TOPIC, me, format!("0x{:064x}", i + 1)], "data": "0x"}))
-                .collect()
-        };
-        let mut times = vec![];
-        for n in [4_000usize, 8_000, 16_000] {
-            let logs = mk(n);
-            let t = std::time::Instant::now();
-            let out = approval_candidates(&logs, &me);
-            let el = t.elapsed();
-            assert_eq!(out.len(), n);
-            eprintln!("approval_candidates: {n} distinct logs -> {el:?}");
-            times.push(el.as_secs_f64());
+        let n = 60_000usize;
+        let approvals: Vec<Value> = (0..n)
+            .map(|i| json!({"address": NFT, "topics": [APPROVAL_TOPIC, me, format!("0x{:064x}", i + 1)], "data": "0x"}))
+            .collect();
+        let transfers: Vec<Value> = (0..n)
+            .map(|i| json!({"address": NFT, "topics": [abi::TRANSFER_TOPIC, me, me, format!("0x{:064x}", i + 1)]}))
+            .collect();
+        let t = std::time::Instant::now();
+        let a = approval_candidates(&approvals, &me);
+        let b = crate::nft::erc721_candidates(&transfers, &me);
+        let el = t.elapsed();
+        assert_eq!((a.len(), b.len()), (MAX_LOG_CANDIDATES, MAX_LOG_CANDIDATES), "the cap is honoured");
+        assert_eq!(a[0].2, watcher::address_of_topic(&format!("0x{:064x}", 1)).unwrap(), "the newest are kept");
+        assert!(el < std::time::Duration::from_secs(5), "{n} hostile logs took {el:?}");
+        // duplicates collapse
+        let dup = vec![approvals[0].clone(); 10_000];
+        assert_eq!(approval_candidates(&dup, &me).len(), 1);
+
+        // a scan over such a node reports the cap on both windows
+        struct Flood(Vec<Value>);
+        impl Node for Flood {
+            fn chain_id(&self) -> Result<u128, String> {
+                Ok(8453)
+            }
+            fn block_number(&self) -> Result<u128, String> {
+                Ok(30_000_000)
+            }
+            fn balance(&self, _a: &str) -> Result<u128, String> {
+                Ok(0)
+            }
+            fn call(&self, _to: &str, _data: &str) -> Result<Vec<u8>, String> {
+                Err("reverted".into())
+            }
+            fn logs(&self, _f: u128, to: u128, _x: Value) -> (Vec<Value>, Option<u128>, Option<String>) {
+                (self.0.clone(), Some(to - 10), None)
+            }
         }
-        assert!(times[2] > times[0] * 6.0, "{times:?}");
+        let mut flood = approvals;
+        flood.extend(transfers);
+        let mut found = BTreeSet::new();
+        let r = scan(&Flood(flood), 8453, OLD, DEST, &mut found, true).unwrap();
+        assert!(r.nft_window.capped && r.approval_window.capped);
+        assert!(found.is_empty(), "nothing a reverting contract says is recorded");
     }
 }
