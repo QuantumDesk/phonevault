@@ -14,15 +14,29 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const params = new URLSearchParams(location.search);
 const OLD_EVM = "0x70997970c51812dc3a010c7d01b50e0d17dc79c8";
 const OLD_ZPUB = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
-const PHRASE = "That looks like a recovery phrase. Never type it into a computer. Phone Vault never asks for it: you move funds by sending from your old wallet. Paste an address or the account's public key (xpub) instead.";
-const PRIVATE = "That is a PRIVATE key. Don't paste it anywhere, and treat it as exposed if you shared it. Phone Vault never needs it: you move funds by sending from your old wallet. Paste the account's public key (xpub) or an address instead.";
+const PRIVATE = "This looks like a private key: a secret that can spend the old wallet's funds. It was not saved or sent anywhere, but treat it as exposed: it has been on this computer. Move the funds it holds soon, and don't paste it anywhere else. Phone Vault never needs it: you move funds by sending from your old wallet. Paste the account's public key (xpub) or an address instead.";
+const PHRASE = "This looks like a recovery phrase: the secret words that control the old wallet. It was not saved or sent anywhere, but treat it as exposed: it has been on this computer. Move everything out of that wallet soon, and never type it into a computer again. Phone Vault never asks for it: you move funds by sending from your old wallet. Paste an address or the account's public key (xpub) instead.";
+
+/** Rough stand-in for source::secret_in (no wordlist here): six words of letters in a row, numbering ignored. */
+function secretIn(text: string): string | null {
+  let run = 0;
+  for (const raw of text.split(/[\s,;|]+/)) {
+    const w = raw.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").replace(/^\d{1,2}[.):-]/, "");
+    if (!w || /^\d+$/.test(w)) continue;
+    if (/[([].*prv/i.test(raw) || /^6P[1-9A-HJ-NP-Za-km-z]{56}$/.test(w)) return PRIVATE;
+    run = /^\p{L}+$/u.test(w) ? run + 1 : 0;
+    if (run >= 6) return PHRASE;
+  }
+  return null;
+}
 
 let session: MSession | null = params.get("migrate") === "1" ? { sources: [check(OLD_EVM), check(OLD_ZPUB)], started_at: Math.floor(Date.now() / 1000) - 3600, scanned_at: 0, path: "~/Library/Application Support/PhoneVault/migration.json" } : null;
 const rounds = new Map<string, number>();
 
 function check(input: string): MSource {
   const s = input.trim();
-  if (s.split(/\s+/).length >= 11) throw PHRASE;
+  const secret = secretIn(s);
+  if (secret) throw secret;
   if (/^(0x)?[0-9a-fA-F]{64}$/.test(s) || /^[xyztuv]prv/.test(s) || /^[5KL][1-9A-HJ-NP-Za-km-z]{50,51}$/.test(s)) throw PRIVATE;
   if (/^0x/i.test(s)) {
     if (!/^0x[0-9a-fA-F]{40}$/.test(s)) throw "An Ethereum address is 0x followed by 40 hex characters.";
@@ -78,6 +92,7 @@ function evmReport(chain: number, address: string, dest: string, round: number):
 export async function migrateMock(cmd: string, a: Record<string, unknown>): Promise<unknown> {
   switch (cmd) {
     case "migrate_check": await sleep(40); return check(String(a.input ?? ""));
+    case "migrate_check_text": { const why = secretIn(String(a.text ?? "")); if (why) throw why; return undefined; }
     case "migrate_session": return session;
     case "migrate_save": {
       await sleep(250);

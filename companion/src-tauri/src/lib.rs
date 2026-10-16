@@ -463,6 +463,7 @@ pub fn run() {
             btc::btc_export,
             btc::btc_save_export,
             migrate::migrate_check,
+            migrate::migrate_check_text,
             migrate::migrate_session,
             migrate::migrate_save,
             migrate::migrate_forget,

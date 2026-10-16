@@ -146,6 +146,7 @@ fn set_sources_in(dir: &Path, inputs: &[String], own: &Own, now: u64) -> Result<
     if inputs.len() > MAX_SOURCES {
         return Err(format!("At most {MAX_SOURCES} entries at a time."));
     }
+    secrets_in_list(inputs)?;
     let mut parsed: Vec<Source> = Vec::new();
     for (i, x) in inputs.iter().enumerate() {
         let p = source::parse(x).map_err(|e| format!("Line {}: {e}", i + 1))?;
@@ -170,6 +171,20 @@ fn set_sources_in(dir: &Path, inputs: &[String], own: &Own, now: u64) -> Result<
     };
     save_in(dir, &s)?;
     Ok((s, parsed))
+}
+
+/// A secret anywhere in the list: on one line ("Line 3: …"), or spread over several (a phrase
+/// pasted one word per line). Nothing is kept; the message never echoes the text.
+fn secrets_in_list(lines: &[String]) -> Result<(), String> {
+    for (i, x) in lines.iter().enumerate() {
+        if let Some(why) = source::secret_in(x) {
+            return Err(format!("Line {}: {why}", i + 1));
+        }
+    }
+    match source::secret_in(&lines.join("\n")) {
+        Some(why) => Err(why.into()),
+        None => Ok(()),
+    }
 }
 
 /// Add what a scan saw to the session (re-read under the lock: scans run side by side).
@@ -244,6 +259,15 @@ pub(crate) fn migrate_check(input: String) -> CmdResult<Source> {
     let s = source::parse(&input)?;
     Own::load().check(&s)?;
     Ok(s)
+}
+
+/// Check the whole pasted list (as the user types) for a secret spread over several lines.
+#[tauri::command]
+pub(crate) fn migrate_check_text(text: String) -> CmdResult<()> {
+    if text.len() > source::MAX_TEXT {
+        return Err("That is too long for a list of addresses and public keys.".into());
+    }
+    secrets_in_list(&text.lines().map(str::to_string).collect::<Vec<_>>())
 }
 
 /// The saved session, if any.
@@ -503,8 +527,15 @@ mod tests {
 
         // secrets and bad lines are refused with the line number; nothing changes
         let phrase = "abandon ".repeat(11) + "about";
-        let e = set_sources_in(&d, &[OLD.into(), phrase], &Own::default(), 400).unwrap_err();
+        let e = set_sources_in(&d, &[OLD.into(), phrase.clone()], &Own::default(), 400).unwrap_err();
         assert!(e.starts_with("Line 2: ") && e.contains("recovery phrase"), "{e}");
+        // one word per line: no single line is a secret, the list is
+        let mut lines = vec![OLD.to_string()];
+        lines.extend(phrase.split(' ').take(8).map(str::to_string));
+        let e = set_sources_in(&d, &lines, &Own::default(), 400).unwrap_err();
+        assert_eq!(e, source::PHRASE);
+        assert_eq!(migrate_check_text(lines.join("\n")).unwrap_err(), source::PHRASE);
+        assert!(migrate_check_text(format!("{OLD}\n{ADDR}")).is_ok());
         assert!(set_sources_in(&d, &[], &Own::default(), 400).is_err());
         assert!(set_sources_in(&d, &vec![OLD.to_string(); MAX_SOURCES + 1], &Own::default(), 400).is_err());
         assert_eq!(load_in(&d).unwrap().unwrap().sources, vec![OLD.to_string()]);

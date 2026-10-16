@@ -40,6 +40,8 @@ export interface Destinations { evm: { address: string; label: string } | null; 
 
 const m = {
   check: (input: string) => call<MSource>("migrate_check", { input }),
+  /** the whole list: a secret spread over several lines (a phrase one word per line) */
+  checkText: (text: string) => call<void>("migrate_check_text", { text }),
   session: () => call<MSession | null>("migrate_session"),
   save: (sources: string[]) => call<MSession>("migrate_save", { sources }),
   forget: () => call<void>("migrate_forget"),
@@ -279,6 +281,15 @@ function editView(): HTMLElement {
   const validate = async () => {
     const my = ++seq;
     const ls = lines();
+    // the whole text first: a recovery phrase pasted one word per line is no single bad line
+    let whole: string | null = null;
+    try { await m.checkText(area.value); } catch (e) { whole = errText(e); }
+    if (my !== seq) return;
+    if (whole) {
+      checks.replaceChildren(h("li", { class: "bad" }, icon("x", 15), h("span", { class: "grow" }, h("span", { class: "mig-what" }, whole))));
+      submit.disabled = true;
+      return;
+    }
     const rows = await Promise.all(ls.slice(0, 25).map(async (l) => {
       try { const s = await m.check(l); return { l, s, e: null as string | null }; }
       catch (e) { return { l, s: null, e: errText(e) }; }
