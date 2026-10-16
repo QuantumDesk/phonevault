@@ -130,6 +130,11 @@ export function createMock(): Mock {
 
   // ---- Bitcoin (BIP-84 test vectors of the "abandon … about" wallet; preview only)
   const XPUB = "xpub6CatWdiZiodmUeTDp8LT5or8nmbKNcuyvz7WyksVFkKB4RHwCD3XyuvPEbvqAQY3rAPshWcMLoP2fMFMKHPJ4ZeZXYVUhLv1VMrjPC7PW6V";
+  // BIP-49 / BIP-44 account 1 of "abandon … about" (pairing preview for the older address types)
+  const BTC_OLDER: Record<string, { purpose: number; name: string; xpub: string; first: string }> = {
+    "p2sh-p2wpkh": { purpose: 49, name: "Nested SegWit", xpub: "xpub6C6nQwHaWbSrzs5tZ1q7m5R9cPK9eYpNMFesiXsYrgc1P8bvLLAet9JfHjYXKjToD8cBRswJXXbbFpXgwsswVPAZzKMa1jUp2kVkGVUaJa7", first: "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf" },
+    p2pkh: { purpose: 44, name: "Legacy", xpub: "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj", first: "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA" },
+  };
   const btcAcct = (n: number, label: string) => ({ id: `73c5da0a-bitcoin-p2wpkh-${n}`, network: "bitcoin", kind: "p2wpkh", kind_name: "Native SegWit", account: n, label, fingerprint: "73c5da0a",
     path: `m/84h/0h/${n - 1}h`, xpub: XPUB, descriptor: `wpkh([73c5da0a/84h/0h/${n - 1}h]${XPUB}/<0;1>/*)#k6qmeeqa`, active: true, unit: "BTC", network_name: "Bitcoin" });
   const btcAccounts = params.get("btc") === "0" ? [] : [btcAcct(1, "Bitcoin 1")];
@@ -342,14 +347,15 @@ export function createMock(): Mock {
       case "btc_wallet": case "btc_refresh": await sleep(cmd === "btc_refresh" ? 900 : 100); return btcWallet(String(a.id)) as T;
       case "btc_read_account": {
         await sleep(1600); if (phone === "none") throw "no Android device on USB";
-        const n = Number(a.account); const tr = a.kind === "p2tr";
-        return { id: `73c5da0a-${a.network}-${a.kind}-${n}`, network: a.network, kind: a.kind, account: n, fingerprint: "73c5da0a", path: `m/${tr ? 86 : 84}h/0h/${n - 1}h`,
-          xpub: tr ? "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ" : XPUB, descriptor: "",
-          first_address: tr ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", already_paired: false, label: `Bitcoin ${n}${tr ? " · Taproot" : ""}` } as T;
+        const n = Number(a.account); const tr = a.kind === "p2tr"; const older = BTC_OLDER[String(a.kind)];
+        return { id: `73c5da0a-${a.network}-${a.kind}-${n}`, network: a.network, kind: a.kind, account: n, fingerprint: "73c5da0a", path: `m/${older ? older.purpose : tr ? 86 : 84}h/0h/${n - 1}h`,
+          xpub: older ? older.xpub : tr ? "xpub6BgBgsespWvERF3LHQu6CnqdvfEvtMcQjYrcRzx53QJjSxarj2afYWcLteoGVky7D3UKDP9QyrLprQ3VCECoY49yfdDEHGCtMMj92pReUsQ" : XPUB, descriptor: "",
+          first_address: older ? older.first : tr ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu", already_paired: false, label: `Bitcoin ${n}${older ? ` · ${older.name}` : tr ? " · Taproot" : ""}` } as T;
       }
       case "btc_show_address": {
         await sleep(1800); if (phone === "none") throw "no Android device on USB";
-        const expected = Number(a.index) === 0 ? (String(a.id).includes("p2tr") ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu") : RECV;
+        const olderShown = Object.entries(BTC_OLDER).find(([k]) => String(a.id).includes(`-${k}-`))?.[1];
+        const expected = Number(a.index) === 0 ? (olderShown ? olderShown.first : String(a.id).includes("p2tr") ? "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr" : "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu") : RECV;
         const bad = params.get("btcshow") === "mismatch";
         const address = bad ? "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh" : expected;
         if (!bad && Number(a.index) === 1) btcVerified = true;
