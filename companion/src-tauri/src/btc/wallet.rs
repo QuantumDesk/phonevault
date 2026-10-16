@@ -3,7 +3,9 @@
 //! scripts, BIP-32 origins for PSBTs, the Sparrow export). No private key is ever here.
 //!
 //! Supported: BIP-84 native SegWit (`wpkh`, P2WPKH, bc1q…) and BIP-86 Taproot key-path (`tr`,
-//! P2TR, bc1p…), accounts 1…20 (= account index 0…19), on Bitcoin, Testnet and Signet.
+//! P2TR, bc1p…); for coins of a restored Ledger/Trezor-era wallet also BIP-49 Nested SegWit
+//! (`sh(wpkh)`, P2SH-P2WPKH, 3…) and BIP-44 Legacy (`pkh`, P2PKH, 1…); accounts 1…20 (= account
+//! index 0…19), on Bitcoin, Testnet and Signet. Extended keys are always xpub/tpub (never ypub).
 
 use bitcoin::bip32::{ChildNumber, DerivationPath, Fingerprint, Xpub};
 use bitcoin::key::{CompressedPublicKey, Secp256k1, Verification};
@@ -82,13 +84,23 @@ impl Net {
 pub enum Kind {
     P2wpkh,
     P2tr,
+    /// BIP-49 Nested SegWit: P2WPKH inside P2SH ("3…" / testnet "2…").
+    #[serde(rename = "p2sh-p2wpkh")]
+    P2shP2wpkh,
+    /// BIP-44 Legacy ("1…" / testnet "m…", "n…").
+    P2pkh,
 }
 
 impl Kind {
+    #[cfg(test)]
+    pub const ALL: [Kind; 4] = [Kind::P2wpkh, Kind::P2tr, Kind::P2shP2wpkh, Kind::P2pkh];
+
     pub fn parse(s: &str) -> Result<Kind, String> {
         match s {
             "p2wpkh" => Ok(Kind::P2wpkh),
             "p2tr" => Ok(Kind::P2tr),
+            "p2sh-p2wpkh" => Ok(Kind::P2shP2wpkh),
+            "p2pkh" => Ok(Kind::P2pkh),
             _ => Err(format!("unknown address type {s:?}")),
         }
     }
@@ -96,40 +108,80 @@ impl Kind {
         match self {
             Kind::P2wpkh => "p2wpkh",
             Kind::P2tr => "p2tr",
+            Kind::P2shP2wpkh => "p2sh-p2wpkh",
+            Kind::P2pkh => "p2pkh",
         }
     }
     pub fn purpose(self) -> u32 {
         match self {
             Kind::P2wpkh => 84,
             Kind::P2tr => 86,
+            Kind::P2shP2wpkh => 49,
+            Kind::P2pkh => 44,
         }
     }
     pub fn name(self) -> &'static str {
         match self {
             Kind::P2wpkh => "Native SegWit",
             Kind::P2tr => "Taproot",
+            Kind::P2shP2wpkh => "Nested SegWit",
+            Kind::P2pkh => "Legacy",
         }
     }
-    fn desc_fn(self) -> &'static str {
+    /// "BIP-84" …
+    pub fn bip(self) -> &'static str {
         match self {
-            Kind::P2wpkh => "wpkh",
-            Kind::P2tr => "tr",
+            Kind::P2wpkh => "BIP-84",
+            Kind::P2tr => "BIP-86",
+            Kind::P2shP2wpkh => "BIP-49",
+            Kind::P2pkh => "BIP-44",
         }
+    }
+    /// Descriptor wrapper around the key expression: (`open`, `close`).
+    fn desc_wrap(self) -> (&'static str, &'static str) {
+        match self {
+            Kind::P2wpkh => ("wpkh(", ")"),
+            Kind::P2tr => ("tr(", ")"),
+            Kind::P2shP2wpkh => ("sh(wpkh(", "))"),
+            Kind::P2pkh => ("pkh(", ")"),
+        }
+    }
+    /// Spent with an ECDSA signature by the key in PSBT_IN_BIP32_DERIVATION (all but Taproot).
+    pub fn ecdsa(self) -> bool {
+        self != Kind::P2tr
+    }
+    /// Spending it puts a witness on the input (all but Legacy).
+    pub fn segwit(self) -> bool {
+        self != Kind::P2pkh
     }
     /// Input weight beyond the 41 non-witness bytes: witness item count + signature (+ pubkey).
-    /// P2WPKH: 1 + (1 + 72) + (1 + 33) = 108 WU (72 = the longest DER signature + sighash byte).
-    /// P2TR key path: 1 + (1 + 64) = 66 WU (SIGHASH_DEFAULT: no sighash byte).
+    /// P2WPKH (native or nested): 1 + (1 + 72) + (1 + 33) = 108 WU (72 = the longest DER signature
+    /// with its sighash byte). P2TR key path: 1 + (1 + 64) = 66 WU (SIGHASH_DEFAULT: no sighash
+    /// byte). Legacy: none. (A Legacy account never mixes its inputs with SegWit ones, so the
+    /// empty stack an input without witness would carry in a SegWit transaction never applies.)
     pub fn input_witness_weight(self) -> u64 {
         match self {
-            Kind::P2wpkh => 108,
+            Kind::P2wpkh | Kind::P2shP2wpkh => 108,
             Kind::P2tr => 66,
+            Kind::P2pkh => 0,
         }
     }
-    /// scriptPubKey length of an output of this type (P2WPKH 22, P2TR 34).
+    /// Final scriptSig bytes (its length prefix is part of the 41): Nested SegWit pushes its
+    /// 22-byte redeem script (1 + 22); Legacy pushes signature and key, (1 + 72) + (1 + 33).
+    pub fn input_script_sig_len(self) -> u64 {
+        match self {
+            Kind::P2wpkh | Kind::P2tr => 0,
+            Kind::P2shP2wpkh => 23,
+            Kind::P2pkh => 107,
+        }
+    }
+    /// scriptPubKey length of an output of this type (P2WPKH 22, P2TR 34, P2SH 23, P2PKH 25).
     pub fn script_len(self) -> u64 {
         match self {
             Kind::P2wpkh => 22,
             Kind::P2tr => 34,
+            Kind::P2shP2wpkh => 23,
+            Kind::P2pkh => 25,
         }
     }
 }
@@ -167,9 +219,9 @@ impl Account {
         with_checksum(&self.descriptor_body(&chain.to_string()))
     }
     fn descriptor_body(&self, chains: &str) -> String {
+        let (open, close) = self.kind.desc_wrap();
         format!(
-            "{}([{}/{}h/{}h/{}h]{}/{}/*)",
-            self.kind.desc_fn(),
+            "{open}[{}/{}h/{}h/{}h]{}/{}/*{close}",
             self.fingerprint,
             self.kind.purpose(),
             self.net.coin_type(),
@@ -209,7 +261,11 @@ impl Account {
                 let x = XOnlyPublicKey::from(pk);
                 (Address::p2tr(&secp, x, None, self.net.network()), Some(x))
             }
+            Kind::P2shP2wpkh => (Address::p2shwpkh(&CompressedPublicKey(pk), self.net.network()), None),
+            Kind::P2pkh => (Address::p2pkh(CompressedPublicKey(pk), self.net.network()), None),
         };
+        let redeem_script =
+            (self.kind == Kind::P2shP2wpkh).then(|| ScriptBuf::new_p2wpkh(&CompressedPublicKey(pk).wpubkey_hash()));
         Ok(Derived {
             chain,
             index,
@@ -217,6 +273,7 @@ impl Account {
             address,
             pubkey: pk,
             internal_key: internal,
+            redeem_script,
             origin,
         })
     }
@@ -238,6 +295,8 @@ pub struct Derived {
     pub pubkey: bitcoin::secp256k1::PublicKey,
     /// P2TR only: the BIP-86 internal (untweaked) key
     pub internal_key: Option<XOnlyPublicKey>,
+    /// P2SH-P2WPKH only: the BIP-49 redeem script 0x0014 ‖ HASH160(pubkey)
+    pub redeem_script: Option<ScriptBuf>,
     /// full path from the master key: m/purpose'/coin'/account'/chain/index
     pub origin: DerivationPath,
 }
@@ -476,6 +535,67 @@ pub(crate) mod tests {
         let (s, _) = account(Net::Signet, Kind::P2tr, 3);
         assert_eq!(s.path().to_string(), "86'/1'/2'");
         assert!(s.derive(0, 0).unwrap().address.to_string().starts_with("tb1p"));
+    }
+
+    /// BIP-49 "Test vectors" (testnet account 0), mainnet BIP-49 / BIP-44 for "abandon … about"
+    /// (as Ledger, Trezor and embit 0.8.0 derive them), and the descriptors embit writes.
+    #[test]
+    fn bip49_and_bip44_vectors() {
+        let (t, _) = account(Net::Testnet, Kind::P2shP2wpkh, 1);
+        assert_eq!(t.path().to_string(), "49'/1'/0'");
+        assert_eq!(t.xpub.to_string(), "tpubDD7tXK8KeQ3YY83yWq755fHY2JW8Ha8Q765tknUM5rSvjPcGWfUppDFMpQ1ScziKfW3ZNtZvAD7M3u7bSs7HofjTD3KP3YxPK7X6hwV8Rk2");
+        let d = t.derive(0, 0).unwrap();
+        assert_eq!(d.pubkey.to_string(), "03a1af804ac108a8a51782198c2d034b28bf90c8803f5a53f76276fa69a4eae77f");
+        assert_eq!(d.redeem_script.as_ref().unwrap().to_hex_string(), "001438971f73930f6c141d977ac4fd4a727c854935b3");
+        assert_eq!(d.script.to_hex_string(), "a914336caa13e08b96080a32b5d818d59b4ab3b3674287");
+        assert_eq!(d.address.to_string(), "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2");
+        let (s, _) = account(Net::Signet, Kind::P2shP2wpkh, 1);
+        assert_eq!(s.derive(0, 0).unwrap().address.to_string(), "2Mww8dCYPUpKHofjgcXcBCEGmniw9CoaiD2");
+
+        let (n, _) = account(Net::Bitcoin, Kind::P2shP2wpkh, 1);
+        assert_eq!(n.xpub.to_string(), "xpub6C6nQwHaWbSrzs5tZ1q7m5R9cPK9eYpNMFesiXsYrgc1P8bvLLAet9JfHjYXKjToD8cBRswJXXbbFpXgwsswVPAZzKMa1jUp2kVkGVUaJa7");
+        assert_eq!(n.derive(0, 0).unwrap().address.to_string(), "37VucYSaXLCAsxYyAPfbSi9eh4iEcbShgf");
+        assert_eq!(n.derive(1, 0).unwrap().address.to_string(), "34K56kSjgUCUSD8GTtuF7c9Zzwokbs6uZ7");
+        assert_eq!(n.descriptor(), "sh(wpkh([73c5da0a/49h/0h/0h]xpub6C6nQwHaWbSrzs5tZ1q7m5R9cPK9eYpNMFesiXsYrgc1P8bvLLAet9JfHjYXKjToD8cBRswJXXbbFpXgwsswVPAZzKMa1jUp2kVkGVUaJa7/<0;1>/*))#zmygnj3e");
+
+        let (l, _) = account(Net::Bitcoin, Kind::P2pkh, 1);
+        assert_eq!(l.path().to_string(), "44'/0'/0'");
+        assert_eq!(l.xpub.to_string(), "xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj");
+        assert_eq!(l.derive(0, 0).unwrap().address.to_string(), "1LqBGSKuX5yYUonjxT5qGfpUsXKYYWeabA");
+        assert_eq!(l.derive(0, 1).unwrap().address.to_string(), "1Ak8PffB2meyfYnbXZR9EGfLfFZVpzJvQP");
+        assert_eq!(l.derive(1, 0).unwrap().address.to_string(), "1J3J6EvPrv8q6AC3VCjWV45Uf3nssNMRtH");
+        assert!(l.derive(0, 0).unwrap().redeem_script.is_none());
+        assert_eq!(l.descriptor(), "pkh([73c5da0a/44h/0h/0h]xpub6BosfCnifzxcFwrSzQiqu2DBVTshkCXacvNsWGYJVVhhawA7d4R5WSWGFNbi8Aw6ZRc1brxMyWMzG3DSSSSoekkudhUd9yLb6qx39T9nMdj/<0;1>/*)#kw28l7md");
+        let (lt, _) = account(Net::Testnet, Kind::P2pkh, 20);
+        assert_eq!(lt.derive(0, 0).unwrap().address.to_string(), "n3ZmDbZJwavxkXZZD19avq3qhdvirEuYzx");
+        assert_eq!(lt.descriptor(), "pkh([73c5da0a/44h/1h/19h]tpubDC5FSnBiZDMnZ89hrY5HJ7DsRtTwmJnoCfKtHwmEMDz1wA29TkdJyQuwXzKPEYFBqFpM3xWLFDarNZcjR2exnDXhZ9HXHr6BuVQX8zozEpq/<0;1>/*)#edm9s4r6");
+        let (nt, _) = account(Net::Testnet, Kind::P2shP2wpkh, 4);
+        assert_eq!(nt.descriptor(), "sh(wpkh([73c5da0a/49h/1h/3h]tpubDD7tXK8KeQ3YfwUyWrMttexrCTzsUN9bNGy6RDjvQUabHYaChowSzvMREw75uTP4F4n2HJMmJquTnYMvJfpQzbmjZ3E4212sZP4ZwzJqVjG/<0;1>/*))#hvqwwafw");
+        assert_eq!(nt.derive(0, 0).unwrap().address.to_string(), "2NBhvigX5FwR1ydAdUGFh9jq37t2TJoorNw");
+        // the wire names, and serde agrees with them
+        for k in Kind::ALL {
+            assert_eq!(Kind::parse(k.wire()).unwrap(), k);
+            assert_eq!(serde_json::to_value(k).unwrap(), json!(k.wire()));
+        }
+        assert!(Kind::parse("p2sh").is_err() && Kind::parse("P2PKH").is_err());
+    }
+
+    #[test]
+    fn new_type_account_answers_are_checked() {
+        let req = json!({"id": "r1", "method": "btcGetAccount"});
+        let (n, _) = account(Net::Bitcoin, Kind::P2shP2wpkh, 1);
+        let (l, _) = account(Net::Bitcoin, Kind::P2pkh, 1);
+        let (w, _) = account(Net::Bitcoin, Kind::P2wpkh, 1);
+        assert_eq!(parse_account_response(&req, &answer(&n), Net::Bitcoin, Kind::P2shP2wpkh, 1).unwrap(), n);
+        assert_eq!(parse_account_response(&req, &answer(&l), Net::Bitcoin, Kind::P2pkh, 1).unwrap(), l);
+        // a Native SegWit answer for a Legacy request, or a pkh descriptor over the BIP-49 key: refused
+        assert!(parse_account_response(&req, &answer(&w), Net::Bitcoin, Kind::P2pkh, 1).is_err());
+        let mut x = answer(&n);
+        x["descriptor"] = json!(with_checksum(&format!("pkh([73c5da0a/49h/0h/0h]{}/<0;1>/*)", n.xpub)));
+        assert!(parse_account_response(&req, &x, Net::Bitcoin, Kind::P2shP2wpkh, 1).is_err());
+        let mut y = answer(&n);
+        y["descriptor"] = json!(with_checksum(&format!("wpkh([73c5da0a/49h/0h/0h]{}/<0;1>/*)", n.xpub)));
+        assert!(parse_account_response(&req, &y, Net::Bitcoin, Kind::P2shP2wpkh, 1).is_err());
     }
 
     #[test]

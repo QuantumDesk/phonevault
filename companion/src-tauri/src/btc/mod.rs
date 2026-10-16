@@ -768,7 +768,12 @@ pub(crate) async fn btc_sign_start(app: AppHandle, ticket: String, quote_id: Str
         let checks = vec![
             format!("Same transaction as reviewed: {} input{}, {} output{}, recipient and amount unchanged", built.inputs.len(), if built.inputs.len() == 1 { "" } else { "s" }, built.outputs.len(), if built.outputs.len() == 1 { "" } else { "s" }),
             format!("Fee exactly {} sat (inputs − outputs, amounts from this Mac's records)", v.fee),
-            match built.account.kind { Kind::P2wpkh => "Every input signed by this wallet's key for that address (ECDSA, SIGHASH_ALL)".to_string(), Kind::P2tr => "Every input signed by this wallet's Taproot key for that address (Schnorr, SIGHASH_DEFAULT)".to_string() },
+            match built.account.kind {
+                Kind::P2tr => "Every input signed by this wallet's Taproot key for that address (Schnorr, SIGHASH_DEFAULT)".to_string(),
+                Kind::P2pkh => "Every input signed by this wallet's key for that address (ECDSA, legacy SIGHASH_ALL)".to_string(),
+                Kind::P2shP2wpkh => "Every input signed by this wallet's key for that address (ECDSA, SIGHASH_ALL; redeem script checked)".to_string(),
+                Kind::P2wpkh => "Every input signed by this wallet's key for that address (ECDSA, SIGHASH_ALL)".to_string(),
+            },
             "Each input verified by Bitcoin Core's script interpreter (libbitcoinconsensus)".to_string(),
         ];
         let view = SignedView { txid: v.txid.clone(), fee_sats: v.fee, vsize: v.vsize, rate: format!("{:.1}", v.fee as f64 / v.vsize as f64), amount_sats: built.amount,
@@ -880,11 +885,21 @@ pub struct Export {
     text: String,
 }
 
+/// The script type as Sparrow's wallet settings name it.
+fn sparrow_script_type(k: Kind) -> &'static str {
+    match k {
+        Kind::P2wpkh => "Native Segwit (P2WPKH)",
+        Kind::P2tr => "Taproot (P2TR)",
+        Kind::P2shP2wpkh => "Nested Segwit (P2SH-P2WPKH)",
+        Kind::P2pkh => "Legacy (P2PKH)",
+    }
+}
+
 fn export_for(s: &store::StoredAccount, a: &Account) -> Export {
     let path = format!("m/{}", a.path()).replace('\'', "h");
     let text = format!(
-        "Phone Vault: watch-only Bitcoin wallet\n{}\n\nNetwork: {}\nScript type: {} ({})\nMaster fingerprint: {}\nDerivation: {}\nAccount xpub: {}\n\nOutput descriptor (Sparrow: File → New Wallet → Import → Output Descriptor):\n{}\n\nReceive: {}\nChange:  {}\n\nThis file holds no private key. Anyone with it can see this account's addresses, balance and history.\n",
-        s.label, a.net.name(), a.kind.name(), if a.kind == Kind::P2tr { "BIP-86" } else { "BIP-84" }, a.fingerprint, path, a.xpub, a.descriptor(), a.chain_descriptor(0), a.chain_descriptor(1));
+        "Phone Vault: watch-only Bitcoin wallet\n{}\n\nNetwork: {}\nScript type: {} ({}, {}; Sparrow: {})\nMaster fingerprint: {}\nDerivation: {}\nAccount xpub: {}\n\nOutput descriptor (Sparrow: File → New Wallet → Import → Output Descriptor):\n{}\n\nReceive: {}\nChange:  {}\n\nThis file holds no private key. Anyone with it can see this account's addresses, balance and history.\n",
+        s.label, a.net.name(), a.kind.name(), a.kind.bip(), a.kind.wire().to_uppercase(), sparrow_script_type(a.kind), a.fingerprint, path, a.xpub, a.descriptor(), a.chain_descriptor(0), a.chain_descriptor(1));
     Export {
         descriptor: a.descriptor(),
         receive: a.chain_descriptor(0),
@@ -953,6 +968,24 @@ mod tests {
         assert!(e.text.contains("73c5da0a") && e.text.contains("m/84h/0h/0h") && e.text.contains(&a.descriptor()));
         assert!(e.receive.contains("/0/*)#") && e.change.contains("/1/*)#"));
         assert!(!e.text.to_lowercase().contains("xprv"));
+        assert!(e.text.contains("Native SegWit (BIP-84, P2WPKH; Sparrow: Native Segwit (P2WPKH))"));
+        // the migration types: Sparrow imports sh(wpkh(…)) and pkh(…) descriptors with these paths
+        for (kind, path, desc, sparrow) in [
+            (Kind::P2shP2wpkh, "m/49h/0h/0h", "sh(wpkh([73c5da0a/49h/0h/0h]xpub", "Nested Segwit (P2SH-P2WPKH)"),
+            (Kind::P2pkh, "m/44h/0h/0h", "pkh([73c5da0a/44h/0h/0h]xpub", "Legacy (P2PKH)"),
+        ] {
+            let (a, _) = test_account(Net::Bitcoin, kind, 1);
+            let s = store::StoredAccount::from_account(&a, &store::default_label(&a));
+            let e = export_for(&s, &a);
+            assert!(e.descriptor.starts_with(desc) && e.text.contains(path) && e.text.contains(sparrow), "{}", e.text);
+            assert!(e.receive.contains("/0/*))#") || e.receive.contains("/0/*)#"));
+            assert_eq!(
+                wallet::descriptor_checksum(e.change.rsplit_once('#').unwrap().0).as_deref(),
+                e.change.rsplit_once('#').map(|x| x.1)
+            );
+        }
+        let (l, _) = test_account(Net::Testnet, Kind::P2pkh, 3);
+        assert_eq!(store::default_label(&l), "Bitcoin 3 · Legacy · testnet");
     }
 
     #[test]
@@ -963,5 +996,9 @@ mod tests {
         assert!(r.as_object().unwrap().values().all(Value::is_string));
         assert_eq!(r["network"], "signet");
         assert_eq!(r["type"], "p2tr");
+        let (n, _) = test_account(Net::Bitcoin, Kind::P2shP2wpkh, 1);
+        assert_eq!(json!({"type": n.kind.wire()})["type"], "p2sh-p2wpkh");
+        assert_eq!(n.id(), "73c5da0a-bitcoin-p2sh-p2wpkh-1");
+        assert!(store::valid_id(&test_account(Net::Testnet, Kind::P2shP2wpkh, 20).0.id()));
     }
 }
