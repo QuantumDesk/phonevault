@@ -71,13 +71,14 @@ require_pin() {
 # A PIN that differs from the test PIN in its first digit (for deliberate wrong entries).
 wrong_pin() { printf '%d%s' "$(( (10#${PV_TEST_PIN:0:1} + 1) % 10 ))" "${PV_TEST_PIN:1}"; }
 
-# The throwaway phrase: 24 lowercase words; the file must be private to the caller.
+# The throwaway phrase: 12, 15, 18, 21 or 24 lowercase words (firstrun.sh writes 24); the file
+# must be private to the caller.
 require_words() {
-  [[ -n "${PV_WORDS_FILE:-}" && -s "$PV_WORDS_FILE" ]] || die "set PV_WORDS_FILE to a 0600 file holding the THROWAWAY 24-word phrase"
+  [[ -n "${PV_WORDS_FILE:-}" && -s "$PV_WORDS_FILE" ]] || die "set PV_WORDS_FILE to a 0600 file holding the THROWAWAY recovery phrase"
   local mode; mode="$(stat -c %a "$PV_WORDS_FILE" 2>/dev/null || stat -f %Lp "$PV_WORDS_FILE")"  # GNU or BSD/macOS
   [[ "$mode" =~ ^[0-7]00$ ]] || die "$PV_WORDS_FILE must be mode 0600 (it is a recovery phrase)"
   mapfile -t WORDS < <(tr -s ' ' '\n' < "$PV_WORDS_FILE" | grep -v '^$')
-  [[ ${#WORDS[@]} -eq 24 ]] || die "words file must hold exactly 24 words (has ${#WORDS[@]})"
+  [[ "${#WORDS[@]}" =~ ^(12|15|18|21|24)$ ]] || die "words file must hold 12, 15, 18, 21 or 24 words (has ${#WORDS[@]})"
 }
 
 # adb drops for a few seconds when the device owner (re)applies USB restrictions or the gadget
@@ -258,7 +259,7 @@ spot_check() {
   expect_screen "3 OF 3 WORDS CHECKED"
 }
 
-# Type all 24 WORDS on the on-device restore keyboard (letters by live key bounds, word by text).
+# Type every word of WORDS on the on-device restore keyboard (letters by live key bounds, word by text).
 type_words() {
   declare -A K; local l x1 y1 x2 y2 w i
   while read -r l x1 y1 x2 y2; do K[$l]="$(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))"; done \

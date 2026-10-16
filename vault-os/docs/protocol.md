@@ -9,7 +9,7 @@ Sources of truth, if this document and the code ever disagree:
 
 | Side | Files |
 |---|---|
-| Phone (Java) | `app/src/main/java/dev/phonevault/signer/AccessoryTransport.java` (framing, size limits, strict parse), `Eip1559Request.java`, `MessageRequest.java`, `AttestationProtocol.java`, `BtcRequest.java`, `HostSimulation.java`, `EvmSigner.java`, `MessageApprovalSession.java`, request dispatch in `MainActivity.onRequest` |
+| Phone (Java) | `app/src/main/java/dev/phonevault/signer/AccessoryTransport.java` (framing, size limits, strict parse), `Eip1559Request.java`, `MessageRequest.java`, `AttestationProtocol.java`, `BtcRequest.java`, `AddressListRequest.java`, `HostSimulation.java`, `EvmSigner.java`, `MessageApprovalSession.java`, request dispatch in `MainActivity.onRequest` |
 | Companion (Rust) | `companion/src-tauri/src/aoa.rs` (accessory switch, framing, response caps), `verify.rs`, `message.rs`, `attest/`, `btc/verify.rs` |
 | Reference client (Python) | `tools/aoa_client.py`, `tools/evm_verify.py` |
 
@@ -91,6 +91,56 @@ or settled. The host must verify every response independently (below).
 
 Returns the **active** account: its address, its 1-based account number, and `wallet` =
 `standard` or `passphrase`. No label, fingerprint or passphrase is ever sent.
+
+Under **Ledger Live account numbering** (below) the answer adds `"scheme":"ledger-live"`:
+
+```json
+{"id":"address-1","status":"ok","address":"0x…","account":"2","wallet":"standard","scheme":"ledger-live"}
+```
+
+Standard numbering omits the field, so the answer is byte-for-byte what earlier phone apps sent
+and earlier hosts (which refuse unknown fields) keep working. A host must treat a missing
+`scheme` as Standard, refuse any value other than `ledger-live`, and never assume the numbering
+changed until getAddress says so.
+
+### Account numbering and `listAddresses`
+
+Both numberings read the same recovery phrase; "Account N" (N = i + 1) is:
+
+| Numbering | Path | Used by |
+|---|---|---|
+| Standard (default) | `m/44'/60'/0'/0/i` | MetaMask, Trezor, Rabby |
+| Ledger Live | `m/44'/60'/i'/0/0` | Ledger Live |
+
+Account 1 is the same address under both. The numbering is a per-wallet setting changed only on
+the phone (☰ → Accounts → Account numbering, PIN, a check screen with the first accounts under
+the new numbering); it is saved with the standard wallet's account list and survives relock and
+reboot. A passphrase wallet has its own setting, in memory only.
+
+`listAddresses` lets a host find which numbering holds funds when someone migrates from another
+wallet:
+
+```json
+{"id":"l1","method":"listAddresses","scheme":"ledger-live","count":"5"}
+{"id":"l1","status":"ok","scheme":"ledger-live","addresses":"0x9858EfFD…,0x78839F60…,0x07B5FdfE…,0x8559A427…,0xB9506F02…"}
+```
+
+- `scheme`: exactly `standard` or `ledger-live`. `count`: `"1"`…`"10"` (canonical decimal).
+  Exact fields, all strings, like every request.
+- The phone derives the addresses of the **standard** wallet (no passphrase; refused while a
+  passphrase wallet is open) inside the PIN window, shows "Share N addresses with your Mac?" with
+  every address and its path, and answers only after **Share with your Mac**. **Don't share**
+  answers `{"id","status":"rejected"}`. Nothing is remembered: every request asks again.
+- `addresses`: exactly `count` EIP-55 addresses, comma-separated, Account 1 first. Public
+  addresses only: no key, no xpub.
+- One request at a time (the approval slot), refused while locked (held and summarised on the
+  gate like any request), before the backup check, during a sensitive flow, and while another
+  request is pending.
+
+A host must check that every address is well-formed and EIP-55, that there are exactly `count`
+distinct addresses, and that Account 1 equals an address it paired (both numberings share it), and
+must not act on a list that fails any check (`companion/src-tauri/src/numbering.rs`,
+`tools/aoa_client.py list-addresses`).
 
 ### `signEip1559`
 
@@ -228,6 +278,7 @@ python tools/aoa_client.py sign-test       # disposable Sepolia transfer; approv
 python tools/aoa_client.py sign-message --text "hello"
 python tools/aoa_client.py attest --save /tmp/attest
 python tools/aoa_client.py btc-account --network testnet
+python tools/aoa_client.py list-addresses --scheme ledger-live --count 5
 ```
 
 `pair` is mandatory: without a pinned address the client refuses every signature, because a
