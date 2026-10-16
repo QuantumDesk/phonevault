@@ -77,6 +77,7 @@ pub const COMMANDS: &[&str] = &[
     "btc_tx_status",
     "btc_export",
     "btc_save_export",
+    "numbering_scan",
 ];
 
 fn main() {

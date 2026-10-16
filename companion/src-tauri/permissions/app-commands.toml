@@ -78,4 +78,5 @@ permissions = [
   "allow-btc-tx-status",
   "allow-btc-export",
   "allow-btc-save-export",
+  "allow-numbering-scan",
 ]
