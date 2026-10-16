@@ -474,3 +474,75 @@ mod tests {
         assert_eq!(path(Scheme::LedgerLive, 0), path(Scheme::Standard, 0), "Account 1 is the same path");
     }
 }
+
+/// Adversarial audit proofs (account numbering / listAddresses). No production behaviour changes.
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+
+    const S0: &str = "0x9858EfFD232B4033E47d90003D41EC34EcaEda94";
+
+    /// Hostile phone answers never panic and are refused (multi-byte UTF-8, NULs, huge lists, odd types).
+    #[test]
+    fn hostile_list_answers_refused_without_panic() {
+        let req = list_request("l", Scheme::Standard, 2);
+        let many = std::iter::repeat(S0).take(10_000).collect::<Vec<_>>().join(",");
+        let bad = [
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": "0x9858EfFD232B4033E47d90003D41EC34EcaEda9é,0x00"}),
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": "0xé858EfFD232B4033E47d90003D41EC34EcaEda94"}),
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": format!("{S0}\u{0000},{S0}")}),
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": many}),
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": ""}),
+            json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": null}),
+            json!({"id": "l", "status": "ok", "scheme": null, "addresses": S0}),
+            json!({"id": "l", "status": "error", "error": 5}),
+            json!({"id": null, "status": "rejected"}),
+            json!(null),
+        ];
+        for b in bad {
+            let r = std::panic::catch_unwind(|| parse_list_response(&req, &b));
+            assert!(r.as_ref().is_ok_and(|x| x.is_err()), "panicked on or accepted {b}");
+        }
+        // a request whose count is not a string cannot be satisfied (internal misuse is caught)
+        let weird = json!({"id": "l", "method": "listAddresses", "scheme": "standard", "count": 2});
+        assert!(parse_list_response(&weird, &json!({"id": "l", "status": "ok", "scheme": "standard", "addresses": S0})).is_err());
+    }
+
+    /// The pin check accepts a legacy pairing with no wallet kind for Account 1. Sound: listAddresses
+    /// only ever lists the standard wallet, whose Account 1 cannot equal a passphrase wallet's address.
+    #[test]
+    fn pin_accepts_legacy_pairing_without_wallet_kind() {
+        let p = pairing::Pairings {
+            version: 2,
+            active: Some(S0.to_ascii_lowercase()),
+            accounts: vec![pairing::Paired {
+                address: S0.to_ascii_lowercase(),
+                label: "Account 1".into(),
+                wallet: None,
+                account: None,
+                paired_at: String::new(),
+            }],
+        };
+        let s = vec![S0.to_ascii_lowercase()];
+        assert!(check_pin(&s, &s, &p).is_ok());
+    }
+
+    /// FINDING (low, cosmetic misattribution): when the user clears the "Name on this Mac" field,
+    /// pairing falls back to pairing::default_label, which has no notion of numbering: Ledger Live
+    /// Account 2 and Standard Account 2 (different addresses) are both stored as "Account 2".
+    #[test]
+    fn finding_default_label_ignores_numbering() {
+        let empty = pairing::Pairings { version: 2, active: None, accounts: vec![] };
+        // default_label has no scheme input at all; the phone's "account":"2" gives the same label
+        // whichever numbering produced the address.
+        assert_eq!(pairing::default_label(&empty, Some(2), Some("standard")), "Account 2");
+    }
+
+    /// Advice is computed only from Account 2+ funding as reported by the nodes; a hostile node that
+    /// reports a balance on Ledger Live Account 2+ flips the advice to "switch" (display only).
+    #[test]
+    fn advice_trusts_node_balances() {
+        assert_eq!(advise(Scheme::Standard, &[true, false], &[true, true]), Advice::SwitchToLedgerLive);
+        assert!(message(Advice::NoFunds, false).starts_with("No funds found"));
+    }
+}
