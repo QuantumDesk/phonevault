@@ -20,7 +20,11 @@ import java.util.List;
  * address under both, so the wallet's identity ({@link #walletId}) never changes.
  *
  * <p>Derivation is deterministic, so an account is never deleted, only hidden: "Add account"
- * always opens the next unused index, and a hidden account comes back with the same address.
+ * always opens the lowest unused index, and a hidden account comes back with the same address.
+ *
+ * <p>A stored book is untrusted until {@link #dropUnverified} has re-derived every account it lists
+ * (both numberings) from the seed and dropped those whose saved address the seed does not give;
+ * only a {@link #verified} book names "your own" accounts in a review.
  *
  * <p>The standard wallet's book (with its numbering) is persisted ({@link #encode}) and bound to
  * the wallet's account-0 address ({@link #walletId}): a stored book for a different wallet (after
@@ -62,6 +66,13 @@ final class AccountBook {
     private int active;
     /** The other numbering's list, kept for switching back (null: none). Same wallet, other scheme. */
     private AccountBook parked;
+    /** False for a list read from storage until {@link #dropUnverified} has checked it against the seed. */
+    private boolean verified = true;
+    /** Why {@link #load} started the list over (shown once after unlock), or null. Not stored. */
+    private String resetNotice;
+
+    /** Re-derives account addresses from the seed (lowercase 0x). */
+    interface AddressSource { String address(AccountScheme scheme, int index); }
 
     private AccountBook(String walletId, AccountScheme scheme) {
         this.walletId = walletId;
@@ -114,24 +125,106 @@ final class AccountBook {
         for (Account a : accounts) c.accounts.add(new Account(a.index, a.address, a.label, a.hidden));
         c.active = active;
         c.parked = parked == null ? null : parked.copy();
+        c.verified = verified;
         return c;
     }
 
+    /** True when every listed address (this list and the parked one) was derived or checked against the seed. */
+    boolean verified() { return verified && (parked == null || parked.verified); }
+
+    /** Why the stored list was unreadable and started over (for a one-time notice), or null. */
+    String resetNotice() { return resetNotice; }
+
     /**
-     * The stored book if it belongs to {@code account0Address}; otherwise (none stored, unreadable,
-     * or another wallet's) a fresh one. Never throws: the metadata is a convenience, the addresses
-     * are re-derived from the seed before use.
+     * Re-derive every listed account from the seed (this list under its numbering, the parked list
+     * under its own) and drop each one whose saved address differs: such an address was never this
+     * wallet's, so it is neither listed nor named as "your account". When the active account is
+     * dropped, Account 1 becomes active. The book is {@link #verified} afterwards. Returns how many
+     * accounts were dropped.
+     *
+     * @throws IllegalStateException when Account 1 does not match (the list belongs to another wallet)
+     */
+    int dropUnverified(AddressSource seed) {
+        int dropped = dropUnverifiedList(seed);
+        if (parked != null) dropped += parked.dropUnverifiedList(seed);
+        return dropped;
+    }
+
+    private int dropUnverifiedList(AddressSource seed) {
+        if (!walletId.equals(address(seed.address(scheme, 0)))) throw new IllegalStateException("the account list belongs to another wallet");
+        int dropped = 0;
+        for (java.util.Iterator<Account> it = accounts.iterator(); it.hasNext(); ) {
+            Account a = it.next();
+            if (!a.address.equals(address(seed.address(scheme, a.index)))) {
+                it.remove();
+                dropped++;
+            }
+        }
+        if (get(active) == null) active = 0;
+        get(active).hidden = false;
+        verified = true;
+        return dropped;
+    }
+
+    /** {@link #resetNotice} when the stored list was unreadable but its numbering was not. */
+    static String resetNoticeFor(AccountScheme kept) {
+        return "Your account list was reset; account numbering is still " + kept.label + ".";
+    }
+
+    /** {@link #resetNotice} when not even the stored numbering could be read. */
+    static final String RESET_UNREADABLE_NOTICE = "Your account list could not be read and was reset to Account 1 with Standard numbering. "
+            + "If you used Ledger Live numbering, switch to it again in ☰ → Accounts.";
+
+    /**
+     * The one-time home notice after unlock when the saved account list was reset or had accounts
+     * that did not match the recovery phrase, or null. The repaired list is saved, so the next
+     * unlock shows nothing.
+     */
+    static String listNotice(String resetNotice, int dropped) {
+        if (resetNotice != null) return resetNotice;
+        if (dropped == 0) return null;
+        return (dropped == 1 ? "1 saved account did not" : dropped + " saved accounts did not")
+                + " match your recovery phrase and " + (dropped == 1 ? "was" : "were") + " removed from your account list. "
+                + "Add accounts again in ☰ → Accounts; each address is derived from your phrase.";
+    }
+
+    private static AccountBook reset(String id, AccountScheme scheme, String notice) {
+        AccountBook book = fresh(id, scheme);
+        book.resetNotice = notice;
+        return book;
+    }
+
+    /**
+     * The stored book if it belongs to {@code account0Address}; otherwise (none stored, a newer
+     * format, or another wallet's) a fresh one. A stored book of this wallet whose list is unreadable
+     * starts over at Account 1 under its SAVED numbering, with a {@link #resetNotice}. Never throws.
+     * The result is not {@link #verified}: the caller re-derives it with {@link #dropUnverified}
+     * before use.
      */
     static AccountBook load(String stored, String account0Address) {
         String id = address(account0Address);
         if (stored == null || stored.isEmpty()) return fresh(id);
+        JSONObject json;
+        int version;
+        String wallet;
         try {
-            JSONObject json = new JSONObject(stored);
-            int version = json.getInt("v");
-            if ((version != VERSION && version != VERSION_SCHEMES) || !id.equals(json.getString("wallet"))) return fresh(id);
-            AccountScheme scheme = version == VERSION ? AccountScheme.STANDARD : AccountScheme.fromWire(json.getString("scheme"));
+            json = new JSONObject(stored);
+            version = json.getInt("v");
+            wallet = json.getString("wallet");
+        } catch (JSONException unreadable) {
+            return reset(id, AccountScheme.STANDARD, RESET_UNREADABLE_NOTICE);
+        }
+        if ((version != VERSION && version != VERSION_SCHEMES) || !id.equals(wallet)) return fresh(id);
+        AccountScheme scheme;
+        try {
+            scheme = version == VERSION ? AccountScheme.STANDARD : AccountScheme.fromWire(json.getString("scheme"));
+        } catch (JSONException | IllegalArgumentException | NullPointerException unreadable) {
+            return reset(id, AccountScheme.STANDARD, RESET_UNREADABLE_NOTICE);
+        }
+        try {
             AccountBook book = decodeList(json, id, scheme);
-            if (book == null) return fresh(id);
+            if (book == null) return reset(id, scheme, resetNoticeFor(scheme));
+            book.verified = false;
             if (version == VERSION_SCHEMES && json.has("parked")) {
                 // A parked list that is unreadable or of the same numbering is dropped, never trusted;
                 // the book itself stays.
@@ -139,13 +232,14 @@ final class AccountBook {
                     JSONObject p = json.getJSONObject("parked");
                     AccountScheme other = AccountScheme.fromWire(p.getString("scheme"));
                     if (other != scheme) book.parked = decodeList(p, id, other);
+                    if (book.parked != null) book.parked.verified = false;
                 } catch (JSONException | IllegalArgumentException | NullPointerException corruptParked) {
                     book.parked = null;
                 }
             }
             return book;
         } catch (JSONException | IllegalArgumentException | NullPointerException corrupt) {
-            return fresh(id);
+            return reset(id, scheme, resetNoticeFor(scheme));
         }
     }
 
@@ -189,7 +283,8 @@ final class AccountBook {
 
     /**
      * The numbering a stored book names, before it can be bound (as {@link #storedActiveIndex}).
-     * Standard when absent or unreadable; {@link #load} decides once the wallet is derived.
+     * Standard when absent or unreadable. {@link #load} keeps this numbering for this wallet's book
+     * even when its list is unreadable.
      */
     static AccountScheme storedScheme(String stored) {
         if (stored == null || stored.isEmpty()) return AccountScheme.STANDARD;
@@ -248,11 +343,13 @@ final class AccountBook {
 
     int hiddenCount() { return accounts.size() - visible().size(); }
 
-    /** The index "Add account" opens next, or -1 at the cap. Hidden accounts keep their index. */
+    /**
+     * The index "Add account" opens next: the lowest one not listed (an account dropped by
+     * {@link #dropUnverified} can be opened again), or -1 at the cap. Hidden accounts keep their index.
+     */
     int nextIndex() {
-        int max = -1;
-        for (Account a : accounts) max = Math.max(max, a.index);
-        return max + 1 < MAX_ACCOUNTS ? max + 1 : -1;
+        for (int i = 0; i < MAX_ACCOUNTS; i++) if (get(i) == null) return i;
+        return -1;
     }
 
     /** Record a newly derived account. Its index must be {@link #nextIndex()}. */
@@ -260,6 +357,7 @@ final class AccountBook {
         if (index != nextIndex() || index < 0) throw new IllegalArgumentException("account " + index + " is not the next one");
         Account a = new Account(index, address(derivedAddress), null, false);
         accounts.add(a);
+        Collections.sort(accounts, (x, y) -> Integer.compare(x.index, y.index));
         return a;
     }
 

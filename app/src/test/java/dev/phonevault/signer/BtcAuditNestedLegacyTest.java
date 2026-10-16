@@ -79,15 +79,19 @@ public final class BtcAuditNestedLegacyTest {
 
     /**
      * Mixed Legacy + Taproot, Taproot coin WITHOUT its previous transaction (allowed) and with a
-     * lied (smaller) amount: the review shows a fee of 1 sat while the real fee is 2,999 sat more.
-     * The lie is not exploitable: the Legacy and SegWit v0 signatures are valid either way, but the
+     * lied (smaller) amount: the review shows a fee of 1 sat while the real fee is 2,999 sat more,
+     * and the fee row says that one coin's amount is stated by the Mac (honest or not: the phone
+     * can't tell). The lie is not exploitable: the Legacy and SegWit v0 signatures are valid either way, but the
      * Taproot signature commits to every amount, so it verifies only for the lie and the
      * transaction can never be completed; and the lied amount is not remembered.
      */
-    @Test public void taprootAmountLieNextToLegacyGivesAFalseFeeButNoValidTransaction() throws Exception {
+    @Test public void unprovenTaprootAmountIsLabelledOnTheFeeAndCannotYieldAValidTransaction() throws Exception {
         Psbt p = psbt(audit("audit-mainnet-legacy-third-of-four"));
         BtcPsbtReview honest = review(p, BtcNetwork.BITCOIN);
         assertEquals(3_000, honest.fee);
+        String label = "Network fee (amount of 1 coin stated by your Mac)";
+        assertTrue(BtcPsbtTest.has(honest, label, "0.00003000 BTC"));
+        assertNull(BtcPsbtTest.value(honest, "Network fee"));
         BtcTx.Output real = Psbt.witnessUtxo(Psbt.find(p.inputs.get(3), Psbt.IN_WITNESS_UTXO).value);
         assertNull(Psbt.find(p.inputs.get(3), Psbt.IN_NON_WITNESS_UTXO));
         Maps m = new Maps(p);
@@ -96,6 +100,7 @@ public final class BtcAuditNestedLegacyTest {
         BtcPsbtReview lie = BtcPsbtReview.build(m.parse(), BtcNetwork.BITCOIN, BtcKeysTest.wallet(BtcNetwork.BITCOIN), null, mem);
         assertEquals("the phone shows the host's (unproven) Taproot amount", 1, lie.fee);
         assertFalse(lie.inputs.get(3).amountProven);
+        assertTrue(BtcPsbtTest.has(lie, label, "0.00000001 BTC"));
         for (int i = 0; i < 3; i++) assertTrue(lie.inputs.get(i).amountProven);
 
         Psbt signed = Psbt.parse(BtcPsbtSigner.sign(lie, BtcKeysTest.seed(), new SecureRandom(), ZERO_AUX));

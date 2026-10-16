@@ -3,7 +3,6 @@ package dev.phonevault.signer;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -275,34 +274,52 @@ public final class SeedLengthAuditTest {
         }
     }
 
-    // ------------------------------------------------------------ FINDING (low): idle-hide page count
+    // ------------------------------------------------------------ idle-hide page count
 
     /**
      * BackupScreens.tickSeedTimer calls host.hideBackup() (MainActivity.hideBackup → clearSensitiveUi
-     * → backup.clear() → backupWords = null) BEFORE it builds "continue from page X of " + pageCount(),
-     * and pageCount() falls back to CREATE_WORD_COUNT (24 → 6 pages) when backupWords is null. So a
-     * 12/15/18/21-word phrase is always told "of 6". This test PASSES while the bug exists.
+     * → backup.clear() → backupWords = null), after which pageCount() falls back to
+     * CREATE_WORD_COUNT (24 → 6 pages). The page total in "continue from page X of N" is therefore
+     * counted BEFORE the hide, so a 12/15/18/21-word phrase is told its own page count.
      */
-    @Test public void idleHideMessageUses24WordPageCount_BUG() throws Exception {
+    @Test public void idleHideMessageCountsThePhrasesOwnPages() throws Exception {
         String backup = SourceGuard.source("BackupScreens.java");
         int tick = backup.indexOf("private void tickSeedTimer()");
+        int count = backup.indexOf("int totalPages = pageCount();", tick);
         int hide = backup.indexOf("host.hideBackup();", tick);
-        int msg = backup.indexOf("\" of \" + pageCount() + \".\"", tick);
-        assertTrue(tick > 0 && hide > tick && msg > hide);
+        int msg = backup.indexOf("\" of \" + totalPages + \".\"", tick);
+        assertTrue(tick > 0 && count > tick && hide > count && msg > hide);
+        int end = backup.indexOf("private void addSeedTimer", tick);
+        assertFalse("no pageCount() after the hide", backup.substring(hide, end).contains("pageCount()"));
+        // pageCount() really does lose the length once the words are cleared, so the order matters:
         assertTrue(backup.contains("int n = backupWords == null ? SeedRestore.CREATE_WORD_COUNT : backupWords.length;"));
-        assertTrue(backup.contains("backupWords = null;"));
         String main = SourceGuard.mainActivity();
         int h = main.indexOf("private void hideBackup()");
         assertTrue(h > 0 && main.indexOf("clearSensitiveUi();", h) > h);
-        assertTrue(main.contains("backup.clear();"));
-        // What the user is told vs the truth, after an idle hide on the last page:
-        int shownTotal = 24 / BackupScreens.wordsPerPage(24);
-        assertEquals(6, 18 / BackupScreens.wordsPerPage(18)); // 18 words: 6 pages, right by coincidence
-        for (int n : new int[] {12, 15, 21}) {
-            int real = n / BackupScreens.wordsPerPage(n);
-            assertNotEquals(n + " words", real, shownTotal);
+        // The totals each length is now told (and the 24-word fallback it used to be told):
+        assertEquals(3, 12 / BackupScreens.wordsPerPage(12));
+        assertEquals(5, 15 / BackupScreens.wordsPerPage(15));
+        assertEquals(6, 18 / BackupScreens.wordsPerPage(18));
+        assertEquals(7, 21 / BackupScreens.wordsPerPage(21));
+        assertEquals(6, 24 / BackupScreens.wordsPerPage(24));
+    }
+
+    // ------------------------------------------------------------ restore entry ownership
+
+    /**
+     * The typed restore words (restoreWords/restoreIndex/restoreBuffer) are written by the on-screen
+     * keyboard on the UI thread. commitRestore runs on the crypto executor, so it hands the clearing
+     * to the UI thread: every clearRestoreEntry() in it sits inside an activity.runOnUiThread lambda.
+     */
+    @Test public void restoreEntryIsClearedOnTheUiThread() throws Exception {
+        String body = SourceGuard.code(SourceGuard.definition("private void commitRestore("));
+        assertTrue(body.contains("cryptoExecutor.execute("));
+        int clears = 0;
+        for (int i = body.indexOf("clearRestoreEntry();"); i >= 0; i = body.indexOf("clearRestoreEntry();", i + 1)) {
+            clears++;
+            int post = body.lastIndexOf("activity.runOnUiThread(() -> {", i);
+            assertTrue("clearRestoreEntry() at " + i + " is posted to the UI thread", post >= 0 && !body.substring(post, i).contains("});"));
         }
-        assertEquals(7, 21 / BackupScreens.wordsPerPage(21)); // "page 7 of 6"
-        assertEquals(3, 12 / BackupScreens.wordsPerPage(12)); // "page 3 of 6"
+        assertEquals("success and failure paths both clear", 2, clears);
     }
 }

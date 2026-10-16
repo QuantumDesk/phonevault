@@ -218,6 +218,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** A request that arrived while LOCKED, bound to its connection (HeldRequest). Under stateLock; cleared by lock(). */
     private final HeldRequest heldRequest = new HeldRequest();
     private String gateNotice;
+    /** {@link AccountBook#listNotice} from this unlock, shown on the home screen until the phone locks. */
+    private String accountNotice;
     private int shiftPhase;
     /** Release builds: watches Settings.Global.ADB_ENABLED and adb_wifi_enabled (see adbRefused). */
     private ContentObserver adbObserver;
@@ -849,6 +851,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             pages.card(root, "Passphrase wallet · fingerprint " + account.fingerprint,
                     "Opened with your passphrase. It is not saved: locking the phone closes it. Check the fingerprint is the one you expect.");
         }
+        if (accountNotice != null && !passphraseWallet) pages.card(root, "Account list", accountNotice);
         if (battery.low()) pages.card(root, "Battery " + battery.label() + " · charge before signing",
                 "Plug in before reviewing a request. If the phone shuts down mid-review, the request is simply lost; nothing is signed.");
         if (backupVerified && walletAddress != null && walletQr != null) {
@@ -984,6 +987,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     private void clearReceivingIdentity() {
         btc.clearWallets();
+        accountNotice = null;
         walletLoaded = false;
         backupVerified = false;
         walletAddress = null;
@@ -1007,23 +1011,26 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     return;
                 }
                 if (credentialMode() && !store.credentialBound()) store.migrateToCredentialKey();
-                // The standard wallet's active account (saved list); one decrypt, like before.
+                // The standard wallet's saved account list, checked against the seed in ONE decrypt.
                 // Unlock always opens the standard wallet: a passphrase wallet must be re-entered.
-                // The saved account numbering (Standard or Ledger Live) decides which path the active account is.
-                String savedBook = getSharedPreferences(AccountScreens.ACCOUNT_PREFS, MODE_PRIVATE).getString(AccountScreens.ACCOUNT_BOOK_KEY, null);
-                AccountScheme savedScheme = AccountBook.storedScheme(savedBook);
-                SeedVault.Derived derived = store.deriveAccount(AccountBook.storedActiveIndex(savedBook), null, savedScheme);
-                AccountBook book = AccountBook.load(savedBook, derived.account0Address);
-                if (book.activeIndex() != derived.index || book.scheme != savedScheme) derived = store.deriveAccount(book.activeIndex(), null, book.scheme);
+                // The saved account numbering (Standard or Ledger Live) decides which path each account is.
+                // Every listed account (both numberings) is re-derived; one whose saved address the
+                // seed does not give is dropped, so the list never names a foreign address as yours.
+                final String savedBook = getSharedPreferences(AccountScreens.ACCOUNT_PREFS, MODE_PRIVATE).getString(AccountScreens.ACCOUNT_BOOK_KEY, null);
+                final int[] dropped = new int[1];
+                final SeedVault.Derived[] active = new SeedVault.Derived[1];
+                AccountBook book = store.withWallet(null, w -> {
+                    AccountBook b = AccountBook.load(savedBook, w.account0Address);
+                    dropped[0] = b.dropUnverified(w::address);
+                    active[0] = w.account(b.activeIndex(), b.scheme);
+                    return b;
+                });
+                SeedVault.Derived derived = active[0];
                 String address = derived.credentials.getAddress();
-                if (!book.active().address.equalsIgnoreCase(address)) {
-                    // Saved metadata disagrees with the seed: start the list over at account 1 (same numbering).
-                    book = AccountBook.fresh(derived.account0Address, book.scheme);
-                    if (derived.index != 0) derived = store.deriveAccount(0, null, book.scheme);
-                    address = derived.credentials.getAddress();
-                }
+                book.select(book.activeIndex(), address); // dropUnverified checked it; a mismatch here is refused, never published
                 final Credentials loaded = derived.credentials;
                 final AccountBook loadedBook = book;
+                final String notice = AccountBook.listNotice(book.resetNotice(), dropped[0]);
                 Bitmap qr = qrFor(address);
                 synchronized (stateLock) {
                     if (s != session.get() || !unlocked || !operational) return;
@@ -1035,6 +1042,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     walletAddress = address;
                     walletQr = qr;
                     backupVerified = backupCheck.verified(walletId);
+                    accountNotice = notice;
                     walletLoaded = true;
                 }
                 accounts.saveStandardBook(loadedBook);

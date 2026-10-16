@@ -255,6 +255,68 @@ final class SeedVault {
         }
     }
 
+    /**
+     * One wallet opened from its seed, for work that needs several of its accounts (unlock and a
+     * numbering switch re-derive every account the saved list names). Lives only inside
+     * {@link #withWallet}: the seed is zeroed when that returns and this object is not kept.
+     */
+    static final class Wallet {
+        private final Bip32ECKeyPair master;
+        private final java.util.Map<String, Bip32ECKeyPair> parents = new java.util.HashMap<>();
+        /** {@link #masterFingerprint} of the seed. */
+        final String fingerprint;
+        /** Lowercase account-0 address: the wallet's identity (the same under every numbering). */
+        final String account0Address;
+
+        private Wallet(byte[] seed) {
+            master = Bip32ECKeyPair.generateKeyPair(seed);
+            fingerprint = masterFingerprint(seed);
+            account0Address = Credentials.create(key(AccountScheme.STANDARD.path(0))).getAddress().toLowerCase(java.util.Locale.ROOT);
+        }
+
+        /** Key at {@code path}; the parent node is derived once and reused (one EC step per further account). */
+        private Bip32ECKeyPair key(int[] path) {
+            int[] parentPath = Arrays.copyOf(path, path.length - 1);
+            String k = Arrays.toString(parentPath);
+            Bip32ECKeyPair parent = parents.get(k);
+            if (parent == null) {
+                parent = Bip32ECKeyPair.deriveKeyPair(master, parentPath);
+                parents.put(k, parent);
+            }
+            return Bip32ECKeyPair.deriveKeyPair(parent, new int[] {path[path.length - 1]});
+        }
+
+        private static void check(int index, AccountScheme scheme) {
+            if (index < 0 || index > MAX_ACCOUNT_INDEX) throw new IllegalArgumentException("account index out of range");
+            if (scheme == null) throw new IllegalArgumentException("no account numbering");
+        }
+
+        /** Account {@code index} under {@code scheme}, with its key (as {@link SeedVault#deriveAccount}). */
+        Derived account(int index, AccountScheme scheme) {
+            check(index, scheme);
+            return new Derived(Credentials.create(key(scheme.path(index))), index, account0Address, fingerprint);
+        }
+
+        /** Lowercase public address of account {@code index} under {@code scheme}; the key is dropped. */
+        String address(AccountScheme scheme, int index) {
+            check(index, scheme);
+            return Credentials.create(key(scheme.path(index))).getAddress().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
+    /** Work done with one opened {@link Wallet}. */
+    interface WalletUse<T> { T apply(Wallet wallet) throws Exception; }
+
+    /** Open the wallet the mnemonic and optional passphrase define, run {@code use}, zero the seed. */
+    static <T> T withWallet(String mnemonic, String passphrase, WalletUse<T> use) throws Exception {
+        byte[] seed = bip39Seed(mnemonic, passphrase);
+        try {
+            return use.apply(new Wallet(seed));
+        } finally {
+            Arrays.fill(seed, (byte) 0);
+        }
+    }
+
     /** Most addresses one {@code listAddresses} answer carries. */
     static final int MAX_LISTED_ADDRESSES = 10;
 

@@ -249,9 +249,11 @@ final class BackupScreens {
         if (remaining <= 0) {
             boolean discarded = replacementCandidate != null;
             if (!discarded) resumeBackupPage = backupPage;
+            // Counted before hiding: hideBackup clears backupWords, and pageCount() then knows only the default length.
+            int totalPages = pageCount();
             host.hideBackup();
             String message = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
-                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of " + pageCount() + ".";
+                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of " + totalPages + ".";
             host.setStatus(message);
             pages.showInfo("Backup hidden", message, host::showHome);
             return;

@@ -438,8 +438,9 @@ final class SetupScreens {
                 }
                 qr = host.qrFor(address);
                 synchronized (stateLock) { if (s == host.session()) host.setWalletQr(qr); }
-                clearRestoreEntry();
                 activity.runOnUiThread(() -> {
+                    // The entry fields belong to the UI thread (the keyboard writes them): clear them there.
+                    clearRestoreEntry();
                     if (s != host.session() || !host.unlocked()) return;
                     host.setStatus("Wallet restored · backup verified by entry");
                     host.showHome();
@@ -447,8 +448,8 @@ final class SetupScreens {
                 });
             } catch (Exception e) {
                 synchronized (stateLock) { host.clearCredentials(); host.markWalletUnloaded(); }
-                clearRestoreEntry();
                 activity.runOnUiThread(() -> {
+                    clearRestoreEntry();
                     if (s != host.session()) return;
                     host.setGateNotice("Storage could not confirm the restored wallet. Re-enter your PIN and try again; nothing is active until it saves.");
                     host.lock();

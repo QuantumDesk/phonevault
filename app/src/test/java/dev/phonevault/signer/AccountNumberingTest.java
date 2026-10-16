@@ -301,13 +301,17 @@ public final class AccountNumberingTest {
     /** Switching numbering publishes under stateLock and saves only the standard wallet's book. */
     @Test public void numberingSwitchCallSites() throws Exception {
         String worker = SourceGuard.definition("    private void switchNumberingWorker(AccountScheme next, boolean retried) {");
-        assertTrue(worker.contains("app.vault().deriveAccount(switched.activeIndex(), pass, next)"));
+        assertTrue("one decrypt re-derives the whole list", worker.contains("app.vault().withWallet(pass, w -> {"));
+        assertTrue(worker.contains("b.dropUnverified(w::address);"));
+        assertTrue(worker.contains("derived[0] = w.account(b.activeIndex(), next);"));
         assertTrue("the derived address must match the list before it is published", worker.contains("switched.select(switched.activeIndex(), address);"));
         assertTrue(worker.contains("if (!app.requestPending() && app.approvalDecision() == null) {"));
         assertTrue(worker.contains("if (done && fingerprint == null) saveStandardBook(switched);"));
         String load = SourceGuard.definition("    private void loadKey() {");
-        assertTrue("unlock derives the active account under the saved numbering",
-                load.contains("store.deriveAccount(AccountBook.storedActiveIndex(savedBook), null, savedScheme)"));
+        assertTrue("unlock checks the saved list against the seed in one decrypt", load.contains("store.withWallet(null, w -> {"));
+        assertTrue(load.contains("AccountBook b = AccountBook.load(savedBook, w.account0Address);"));
+        assertTrue("every listed account is re-derived", load.contains("dropped[0] = b.dropUnverified(w::address);"));
+        assertTrue("the active account under the saved numbering", load.contains("active[0] = w.account(b.activeIndex(), b.scheme);"));
         assertTrue(load.contains("loadedBook.scheme);"));
     }
 }

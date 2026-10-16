@@ -313,13 +313,17 @@ final class AccountScreens {
             try {
                 if (s != app.session() || !app.unlocked()) return;
                 if ((pass == null) != (fingerprint == null)) throw new IllegalStateException("the wallet changed while switching");
-                AccountBook switched = book.withScheme(next);
-                SeedVault.Derived d = app.vault().deriveAccount(switched.activeIndex(), pass, next);
-                if (!switched.active().address.equalsIgnoreCase(d.credentials.getAddress())) {
-                    // The parked list does not match the seed: start this numbering over at Account 1.
-                    switched = book.withScheme(next, false);
-                    if (d.index != 0) d = app.vault().deriveAccount(0, pass, next);
-                }
+                // One decrypt: every account of the list coming back (and of the one being parked) is
+                // re-derived under its numbering; one whose saved address the seed does not give is
+                // dropped (Account 1 becomes active if it was the active one).
+                final SeedVault.Derived[] derived = new SeedVault.Derived[1];
+                final AccountBook switched = app.vault().withWallet(pass, w -> {
+                    AccountBook b = book.withScheme(next);
+                    b.dropUnverified(w::address);
+                    derived[0] = w.account(b.activeIndex(), next);
+                    return b;
+                });
+                SeedVault.Derived d = derived[0];
                 String address = d.credentials.getAddress();
                 Bitmap qr = app.qrFor(address);
                 boolean done = false;
@@ -573,6 +577,9 @@ final class AccountScreens {
         Map<String, String> own = new LinkedHashMap<>();
         try {
             AccountBook standard = standardBook, passphraseAccounts = passphraseBook;
+            // Only lists checked against the seed name "your account" (a stored address is never trusted as is).
+            if (standard != null && !standard.verified()) standard = null;
+            if (passphraseAccounts != null && !passphraseAccounts.verified()) passphraseAccounts = null;
             if (standard != null) for (AccountBook.Account a : new ArrayList<>(standard.all())) own.put(a.address, a.name());
             if (passphraseAccounts != null) for (AccountBook.Account a : new ArrayList<>(passphraseAccounts.all())) {
                 own.put(a.address, a.name() + " (passphrase wallet)");
