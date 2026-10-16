@@ -322,7 +322,7 @@ public final class AccountsTest {
         return payload;
     }
 
-    private static void assertMaster(String mnemonic, String passphrase, String xprv) {
+    static void assertMaster(String mnemonic, String passphrase, String xprv) {
         try {
             byte[] x = base58Check(xprv);
             byte[] chainCode = Arrays.copyOfRange(x, 13, 45);

@@ -31,7 +31,7 @@ import java.util.concurrent.ExecutorService;
  */
 final class BackupScreens {
     private static final String TAG = "Vault";
-    /** Idle time before the phrase hides. Copying 24 words onto paper means not touching the phone;
+    /** Idle time before the phrase hides. Copying up to 24 words onto paper means not touching the phone;
      *  every touch or page turn restarts it. */
     static final long SEED_TIMEOUT_MS = 120 * 1000L;
     /** Absolute cap on one reveal session, regardless of touches. */
@@ -115,7 +115,7 @@ final class BackupScreens {
                     if (!host.sensitiveValid(token, s)) { Arrays.fill(words, null); return; }
                     backupWords = words;
                     backupIdentity = host.walletId(); // the backup covers the wallet: its account-0 identity
-                    backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, 5); resumeBackupPage = 0;
+                    backupPage = checkOnly ? 0 : Math.min(resumeBackupPage, pageCount() - 1); resumeBackupPage = 0;
                     startSeedTimer();
                     if (checkOnly) startWordCheck();
                     else if (seedQrRequested) showSeedQr();
@@ -150,6 +150,12 @@ final class BackupScreens {
     private void showSeedQr() {
         if (!host.sensitiveActive() || backupWords == null || replacementCandidate != null) return;
         wipeSeedQr();
+        if (!SeedQr.supports(backupWords.length)) {
+            pages.showInfo("SeedQR not available for " + backupWords.length + " words",
+                    "The SeedQR standard covers 12 and 24-word phrases only, so this " + backupWords.length + "-word recovery phrase "
+                            + "cannot be shown as one. Your written words are the backup; nothing changed.", host::hideBackup);
+            return;
+        }
         SeedQr.Modules modules;
         try {
             modules = SeedQr.encode(backupWords, seedQrFormat);
@@ -159,16 +165,20 @@ final class BackupScreens {
             return;
         }
         boolean compact = seedQrFormat == SeedQr.Format.COMPACT;
+        String grid = modules.size + " × " + modules.size;
+        String otherGrid = SeedQr.gridSize(backupWords.length, compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT) + " × "
+                + SeedQr.gridSize(backupWords.length, compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT);
         LinearLayout root = pages.page("RECOVERY PHRASE · SEEDQR",
-                compact ? "CompactSeedQR · 25 × 25" : "Standard SeedQR · 29 × 29",
+                (compact ? "CompactSeedQR · " : "Standard SeedQR · ") + grid,
                 "Copy each black square onto the matching grid of your backup card: row and column numbers match. Never photograph or scan this screen.");
         seedQrView = new SeedQrView(activity, modules);
         root.addView(seedQrView, Pages.matchWrap(pages.dp(4)));
-        pages.card(root, "Same secret as your 24 words", compact
-                ? "SeedSigner CompactSeedQR (binary). Use the card with the 25 × 25 grid. Wallets that support SeedQR restore it; ordinary camera apps cannot read it."
-                : "SeedSigner Standard SeedQR (digits). Use the card with the 29 × 29 grid. More squares to copy, and any QR reader can decode it.");
+        pages.card(root, "Same secret as your " + backupWords.length + " words", (compact
+                ? "SeedSigner CompactSeedQR (binary). Use a " + grid + " grid. Wallets that support SeedQR restore it; ordinary camera apps cannot read it."
+                : "SeedSigner Standard SeedQR (digits). Use a " + grid + " grid. More squares to copy, and any QR reader can decode it.")
+                + (modules.size == 21 ? " The printed backup card has 25 × 25 and 29 × 29 grids only: draw a 21 × 21 grid, or use the Standard SeedQR on the 25 × 25 grid." : ""));
         pages.action(root, "Hide", true, host::hideBackup);
-        pages.action(root, compact ? "Use Standard SeedQR (29 × 29)" : "Use CompactSeedQR (25 × 25)", false, () -> {
+        pages.action(root, compact ? "Use Standard SeedQR (" + otherGrid + ")" : "Use CompactSeedQR (" + otherGrid + ")", false, () -> {
             seedQrFormat = compact ? SeedQr.Format.STANDARD : SeedQr.Format.COMPACT;
             showSeedQr();
         });
@@ -241,7 +251,7 @@ final class BackupScreens {
             if (!discarded) resumeBackupPage = backupPage;
             host.hideBackup();
             String message = discarded ? "Backup timed out. Candidate discarded; keep your current wallet and discard the partial NEW backup."
-                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of 6.";
+                    : "Backup hidden after 2 minutes without a touch. Verify your PIN to continue from page " + (resumeBackupPage + 1) + " of " + pageCount() + ".";
             host.setStatus(message);
             pages.showInfo("Backup hidden", message, host::showHome);
             return;
@@ -260,12 +270,23 @@ final class BackupScreens {
 
     // ------------------------------------------------------------------ phrase pages + spot check
 
+    /** Words per phrase page: 4 for 12 and 24 words, 3 for 15, 18 and 21, so every page is full. */
+    static int wordsPerPage(int wordCount) { return wordCount % 4 == 0 ? 4 : 3; }
+
+    /** Phrase pages for this phrase (3 for 12 words … 7 for 21, 6 for 24). */
+    private int pageCount() {
+        int n = backupWords == null ? SeedRestore.CREATE_WORD_COUNT : backupWords.length;
+        return n / wordsPerPage(n);
+    }
+
     private void showPhrasePage() {
         if (!host.sensitiveActive() || backupWords == null) return;
+        int per = wordsPerPage(backupWords.length), pageCount = pageCount();
+        if (backupPage < 0 || backupPage >= pageCount) backupPage = 0;
         LinearLayout root = pages.page(replacementCandidate == null ? "RECOVERY PHRASE" : "NEW WALLET · NOT ACTIVE",
-                "Write words " + (backupPage * 4 + 1) + "–" + (backupPage * 4 + 4),
-                "Page " + (backupPage + 1) + " of 6. Write each word beside its number. Never photograph or share your phrase.");
-        for (int i = backupPage * 4; i < backupPage * 4 + 4; i++) {
+                "Write words " + (backupPage * per + 1) + "–" + (backupPage * per + per),
+                "Page " + (backupPage + 1) + " of " + pageCount + ". Write each word beside its number. Never photograph or share your phrase.");
+        for (int i = backupPage * per; i < backupPage * per + per; i++) {
             LinearLayout row = VaultTheme.box(activity);
             row.setOrientation(LinearLayout.HORIZONTAL);
             TextView number = VaultTheme.monoText(activity, String.format(Locale.ROOT, "%02d", i + 1), 18, VaultTheme.FAINT);
@@ -275,10 +296,10 @@ final class BackupScreens {
                     new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
             root.addView(row, Pages.matchWrap(pages.dp(12)));
         }
-        if (backupPage < 5) pages.action(root, "Next four words", true, () -> { backupPage++; showPhrasePage(); });
+        if (backupPage < pageCount - 1) pages.action(root, per == 4 ? "Next four words" : "Next three words", true, () -> { backupPage++; showPhrasePage(); });
         else pages.action(root, "I've written them down · spot-check", true, this::startWordCheck);
         if (backupPage > 0) pages.action(root, "Previous words", false, () -> { backupPage--; showPhrasePage(); });
-        if (replacementCandidate == null) pages.action(root, "Show as SeedQR", false, this::showSeedQr);
+        if (replacementCandidate == null && SeedQr.supports(backupWords.length)) pages.action(root, "Show as SeedQR", false, this::showSeedQr);
         pages.action(root, replacementCandidate == null ? "Hide phrase" : "Cancel · keep current wallet", false, host::hideBackup);
         addSeedTimer(root);
         pages.present(root, "phrase");
@@ -312,7 +333,7 @@ final class BackupScreens {
                 challenge.destroy();
                 LinearLayout failed = pages.page("BACKUP NEEDS ATTENTION", "That word did not match", "Check the number and spelling on your paper. Receiving stays paused until the full check is complete.");
                 pages.action(failed, "Review recovery words", true, () -> { backupPage = 0; showPhrasePage(); });
-                pages.action(failed, "Restart the 24-word check", false, this::startWordCheck);
+                pages.action(failed, "Restart the check", false, this::startWordCheck);
                 pages.action(failed, "Cancel", false, host::hideBackup);
                 addSeedTimer(failed);
                 pages.present(failed, "backup-error");

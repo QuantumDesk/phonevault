@@ -9,24 +9,32 @@ import java.util.Collections;
 import java.util.List;
 
 /**
- * The accounts the user has opened in one wallet (m/44'/60'/0'/0/i, i = 0…{@link
- * SeedVault#MAX_ACCOUNT_INDEX}): index, public address, an optional label typed on the phone, a
- * hidden flag, and which one is active. Non-secret metadata only — no key, no seed, no passphrase.
+ * The accounts the user has opened in one wallet (i = 0…{@link SeedVault#MAX_ACCOUNT_INDEX}):
+ * index, public address, an optional label typed on the phone, a hidden flag, and which one is
+ * active. Non-secret metadata only — no key, no seed, no passphrase.
+ *
+ * <p>The book also holds the wallet's "Account numbering" ({@link AccountScheme}): which path
+ * "Account N" is (Standard m/44'/60'/0'/0/i or Ledger Live m/44'/60'/i'/0/0). Switching numbering
+ * ({@link #withScheme}) parks the current list (labels, hidden flags, active account) and brings
+ * back the other numbering's parked list, so switching back restores it. Account 1 is the same
+ * address under both, so the wallet's identity ({@link #walletId}) never changes.
  *
  * <p>Derivation is deterministic, so an account is never deleted, only hidden: "Add account"
  * always opens the next unused index, and a hidden account comes back with the same address.
  *
- * <p>The standard wallet's book is persisted ({@link #encode}) and bound to the wallet's
- * account-0 address ({@link #walletId}): a stored book for a different wallet (after replace or
- * restore) is discarded on load. A passphrase wallet's book lives in memory only and is dropped
- * on lock, so the phone keeps no trace that a passphrase wallet exists.
+ * <p>The standard wallet's book (with its numbering) is persisted ({@link #encode}) and bound to
+ * the wallet's account-0 address ({@link #walletId}): a stored book for a different wallet (after
+ * replace or restore) is discarded on load. A passphrase wallet's book (and its own numbering)
+ * lives in memory only and is dropped on lock, so the phone keeps no trace that a passphrase
+ * wallet exists.
  *
  * <p>Pure Java (org.json is part of Android; a test dependency on the JVM) so the rules are unit-tested.
  */
 final class AccountBook {
     static final int MAX_ACCOUNTS = SeedVault.MAX_ACCOUNT_INDEX + 1;
     static final int MAX_LABEL = 24;
-    private static final int VERSION = 1;
+    /** v1: Standard numbering only (what earlier apps wrote and read). v2 adds the numbering and a parked list. */
+    private static final int VERSION = 1, VERSION_SCHEMES = 2;
 
     static final class Account {
         final int index;
@@ -48,21 +56,66 @@ final class AccountBook {
 
     /** Lowercase account-0 address of the wallet these accounts belong to. */
     final String walletId;
+    /** Which path "Account N" is in this book. */
+    final AccountScheme scheme;
     private final List<Account> accounts = new ArrayList<>();
     private int active;
+    /** The other numbering's list, kept for switching back (null: none). Same wallet, other scheme. */
+    private AccountBook parked;
 
-    private AccountBook(String walletId) { this.walletId = walletId; }
+    private AccountBook(String walletId, AccountScheme scheme) {
+        this.walletId = walletId;
+        this.scheme = scheme;
+    }
 
-    /** A wallet's book with only account 0, active. */
+    /** A wallet's book with only account 0, active, Standard numbering. */
     static AccountBook fresh(String account0Address) {
+        return fresh(account0Address, AccountScheme.STANDARD);
+    }
+
+    /** A wallet's book with only account 0 (the same address under every numbering), active. */
+    static AccountBook fresh(String account0Address, AccountScheme scheme) {
+        if (scheme == null) throw new IllegalArgumentException("no account numbering");
         String id = address(account0Address);
-        AccountBook book = new AccountBook(id);
+        AccountBook book = new AccountBook(id, scheme);
         book.accounts.add(new Account(0, id, null, false));
         book.active = 0;
         return book;
     }
 
     static String defaultName(int index) { return "Account " + (index + 1); }
+
+    /**
+     * This wallet's book under {@code next} numbering: the list parked when the user last left that
+     * numbering (labels, hidden accounts, the active one), or a fresh one at Account 1; this book is
+     * parked in it. Returns this book when {@code next} is already its numbering. Never changes this
+     * book. The caller derives the returned book's active account under {@code next} and checks it
+     * with {@link #select} before publishing (a parked address that does not match the seed is
+     * never trusted).
+     */
+    AccountBook withScheme(AccountScheme next) { return withScheme(next, true); }
+
+    /** As {@link #withScheme(AccountScheme)}; {@code reuseParked} false starts {@code next} over at Account 1 (its parked list did not match the seed). */
+    AccountBook withScheme(AccountScheme next, boolean reuseParked) {
+        if (next == null) throw new IllegalArgumentException("no account numbering");
+        if (next == scheme) return this;
+        AccountBook other = reuseParked && parked != null && parked.scheme == next ? parked.copy() : fresh(walletId, next);
+        AccountBook me = copy();
+        me.parked = null;
+        other.parked = me;
+        return other;
+    }
+
+    /** The parked list of the other numbering, or null. */
+    AccountBook parked() { return parked; }
+
+    private AccountBook copy() {
+        AccountBook c = new AccountBook(walletId, scheme);
+        for (Account a : accounts) c.accounts.add(new Account(a.index, a.address, a.label, a.hidden));
+        c.active = active;
+        c.parked = parked == null ? null : parked.copy();
+        return c;
+    }
 
     /**
      * The stored book if it belongs to {@code account0Address}; otherwise (none stored, unreadable,
@@ -74,29 +127,49 @@ final class AccountBook {
         if (stored == null || stored.isEmpty()) return fresh(id);
         try {
             JSONObject json = new JSONObject(stored);
-            if (json.getInt("v") != VERSION || !id.equals(json.getString("wallet"))) return fresh(id);
-            AccountBook book = new AccountBook(id);
-            JSONArray list = json.getJSONArray("accounts");
-            boolean[] seen = new boolean[MAX_ACCOUNTS];
-            for (int i = 0; i < list.length() && i < MAX_ACCOUNTS; i++) {
-                JSONObject a = list.getJSONObject(i);
-                int index = a.getInt("i");
-                if (index < 0 || index >= MAX_ACCOUNTS || seen[index]) return fresh(id);
-                seen[index] = true;
-                String addr = address(a.getString("a"));
-                String label = a.has("l") ? cleanLabel(a.getString("l")) : null;
-                book.accounts.add(new Account(index, addr, label, a.optBoolean("h", false)));
+            int version = json.getInt("v");
+            if ((version != VERSION && version != VERSION_SCHEMES) || !id.equals(json.getString("wallet"))) return fresh(id);
+            AccountScheme scheme = version == VERSION ? AccountScheme.STANDARD : AccountScheme.fromWire(json.getString("scheme"));
+            AccountBook book = decodeList(json, id, scheme);
+            if (book == null) return fresh(id);
+            if (version == VERSION_SCHEMES && json.has("parked")) {
+                // A parked list that is unreadable or of the same numbering is dropped, never trusted;
+                // the book itself stays.
+                try {
+                    JSONObject p = json.getJSONObject("parked");
+                    AccountScheme other = AccountScheme.fromWire(p.getString("scheme"));
+                    if (other != scheme) book.parked = decodeList(p, id, other);
+                } catch (JSONException | IllegalArgumentException | NullPointerException corruptParked) {
+                    book.parked = null;
+                }
             }
-            if (!seen[0] || !id.equals(book.get(0).address)) return fresh(id);
-            Collections.sort(book.accounts, (x, y) -> Integer.compare(x.index, y.index));
-            int active = json.getInt("active");
-            Account chosen = book.get(active);
-            book.active = chosen != null && !chosen.hidden ? active : 0;
-            book.get(book.active).hidden = false;
             return book;
         } catch (JSONException | IllegalArgumentException | NullPointerException corrupt) {
             return fresh(id);
         }
+    }
+
+    /** One numbering's list ({"active","accounts"}), or null when it is not a valid list of wallet {@code id}. */
+    private static AccountBook decodeList(JSONObject json, String id, AccountScheme scheme) throws JSONException {
+        AccountBook book = new AccountBook(id, scheme);
+        JSONArray list = json.getJSONArray("accounts");
+        boolean[] seen = new boolean[MAX_ACCOUNTS];
+        for (int i = 0; i < list.length() && i < MAX_ACCOUNTS; i++) {
+            JSONObject a = list.getJSONObject(i);
+            int index = a.getInt("i");
+            if (index < 0 || index >= MAX_ACCOUNTS || seen[index]) return null;
+            seen[index] = true;
+            String addr = address(a.getString("a"));
+            String label = a.has("l") ? cleanLabel(a.getString("l")) : null;
+            book.accounts.add(new Account(index, addr, label, a.optBoolean("h", false)));
+        }
+        if (!seen[0] || !id.equals(book.get(0).address)) return null;
+        Collections.sort(book.accounts, (x, y) -> Integer.compare(x.index, y.index));
+        int active = json.getInt("active");
+        Account chosen = book.get(active);
+        book.active = chosen != null && !chosen.hidden ? active : 0;
+        book.get(book.active).hidden = false;
+        return book;
     }
 
     /**
@@ -114,20 +187,46 @@ final class AccountBook {
         }
     }
 
+    /**
+     * The numbering a stored book names, before it can be bound (as {@link #storedActiveIndex}).
+     * Standard when absent or unreadable; {@link #load} decides once the wallet is derived.
+     */
+    static AccountScheme storedScheme(String stored) {
+        if (stored == null || stored.isEmpty()) return AccountScheme.STANDARD;
+        try {
+            JSONObject json = new JSONObject(stored);
+            return json.optInt("v") == VERSION_SCHEMES ? AccountScheme.fromWire(json.getString("scheme")) : AccountScheme.STANDARD;
+        } catch (JSONException | IllegalArgumentException corrupt) {
+            return AccountScheme.STANDARD;
+        }
+    }
+
+    /**
+     * The stored form. A Standard book with nothing parked is written as v1 (what earlier apps
+     * read); anything else as v2, which an earlier app discards (it then starts its list over at
+     * Account 1, Standard numbering, re-derived from the seed).
+     */
     String encode() {
         try {
-            JSONArray list = new JSONArray();
-            for (Account a : accounts) {
-                JSONObject o = new JSONObject().put("i", a.index).put("a", a.address);
-                if (a.label != null) o.put("l", a.label);
-                if (a.hidden) o.put("h", true);
-                list.put(o);
-            }
-            return new JSONObject().put("v", VERSION).put("wallet", walletId).put("active", active)
-                    .put("accounts", list).toString();
+            JSONObject out = encodeList(this).put("wallet", walletId);
+            if (scheme == AccountScheme.STANDARD && parked == null) return out.put("v", VERSION).toString();
+            out.put("v", VERSION_SCHEMES).put("scheme", scheme.wire);
+            if (parked != null) out.put("parked", encodeList(parked).put("scheme", parked.scheme.wire));
+            return out.toString();
         } catch (JSONException impossible) {
             throw new IllegalStateException(impossible);
         }
+    }
+
+    private static JSONObject encodeList(AccountBook book) throws JSONException {
+        JSONArray list = new JSONArray();
+        for (Account a : book.accounts) {
+            JSONObject o = new JSONObject().put("i", a.index).put("a", a.address);
+            if (a.label != null) o.put("l", a.label);
+            if (a.hidden) o.put("h", true);
+            list.put(o);
+        }
+        return new JSONObject().put("active", book.active).put("accounts", list);
     }
 
     int activeIndex() { return active; }

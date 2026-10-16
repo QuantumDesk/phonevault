@@ -53,7 +53,7 @@ final class SettingsScreens {
     void showSecurity() {
         LinearLayout root = pages.page("DEVICE & WALLET", "Security", "Controls that protect access, recovery, and your ability to verify this device.");
         pages.card(root, "Backup", host.backupVerified()
-                ? "Spot-checked for Account 1. Keep the written 24 words somewhere safe and private."
+                ? "Spot-checked for Account 1. Keep your written recovery phrase somewhere safe and private."
                 : "Not checked yet. Receiving and signing stay paused until it is.");
         pages.action(root, "Check my backup", !host.backupVerified(), () -> backup.startBackupAccess(true));
         pages.action(root, "Show recovery phrase", false, backup::confirmRevealBackup);
@@ -138,6 +138,8 @@ final class SettingsScreens {
         SigningAccount shownAccount = host.activeAccount();
         pages.card(root, "Account path", shownAccount == null ? "m/44'/60'/0'/0/0 · no passphrase"
                 : shownAccount.path() + (shownAccount.passphrase ? " · passphrase wallet " + shownAccount.fingerprint : " · no passphrase"));
+        pages.card(root, "Account numbering", (shownAccount == null ? AccountScheme.STANDARD : shownAccount.scheme).label
+                + " · " + (shownAccount == null ? AccountScheme.STANDARD : shownAccount.scheme).pathPattern() + " · change it in ☰ → Accounts");
         pages.card(root, "PIN protection", host.credentialMode()
                 ? "Held by the security chip, which slows repeated guesses · "
                         + SystemCredential.MAX_FAILED_FOR_WIPE + " wrong PINs erase the phone · the key that unlocks your "

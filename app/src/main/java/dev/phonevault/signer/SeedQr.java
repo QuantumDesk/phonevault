@@ -111,6 +111,12 @@ final class SeedQr {
         return out;
     }
 
+    /** The SeedQR specification defines 12 and 24-word phrases only (15, 18 and 21 words have no SeedQR). */
+    static boolean supports(int wordCount) { return wordCount == 12 || wordCount == 24; }
+
+    /** Modules per side for this word count and format: 21, 25 or 29. */
+    static int gridSize(int wordCount, Format format) { return 17 + 4 * version(wordCount, format); }
+
     /** QR version the spec prescribes for this word count and format. */
     static int version(int wordCount, Format format) {
         if (wordCount == 24) return format == Format.COMPACT ? 2 : 3;

@@ -49,6 +49,13 @@ final class RequestOwnership {
     static final Set<Require> BTC_SHOW = Collections.unmodifiableSet(EnumSet.of(
             Require.IN_REVIEW, Require.NO_SENSITIVE_FLOW, Require.NO_ADB, Require.WALLET_LOADED, Require.BACKUP_VERIFIED));
 
+    /** A listAddresses request still owns an undecided slot (deriving the addresses, or any answer). */
+    static final Set<Require> ADDRESSES_UNDECIDED = Collections.unmodifiableSet(EnumSet.of(
+            Require.IN_REVIEW, Require.NO_SENSITIVE_FLOW, Require.NO_ADB));
+    /** The share-addresses screen may be drawn. */
+    static final Set<Require> ADDRESSES_SHOW = Collections.unmodifiableSet(EnumSet.of(
+            Require.IN_REVIEW, Require.NO_SENSITIVE_FLOW, Require.NO_ADB, Require.WALLET_LOADED, Require.BACKUP_VERIFIED));
+
     /** The live state the predicate reads. */
     interface Live {
         AccessoryTransport transport();

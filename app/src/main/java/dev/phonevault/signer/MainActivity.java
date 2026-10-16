@@ -126,8 +126,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private final BtcScreens btc = new BtcScreens(host, approvals);
     /** ☰ → Security, Display & auto-lock, Device information, Coming next. */
     private final SettingsScreens settings = new SettingsScreens(host, backup, setup, btc);
+    /** USB listAddresses: "Share N addresses with your Mac?" (migration: which account numbering holds funds). */
+    private final AddressShareScreens addressShare = new AddressShareScreens(host);
     /** USB requests: held behind the lock, readiness, getAddress, attestation, dispatch to a review. */
-    private final RequestRouter router = new RequestRouter(host, approvals, btc);
+    private final RequestRouter router = new RequestRouter(host, approvals, btc, addressShare);
     /** ☰ → Accounts and ☰ → Passphrase wallet: screens, account lists, the passphrase, switching. */
     private final AccountScreens accounts = new AccountScreens(new AccountScreens.Host() {
         @Override public Context context() { return MainActivity.this; }
@@ -842,7 +844,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         LinearLayout root = pages.page(passphraseWallet ? "PASSPHRASE WALLET · " + accountName : accountName,
                 !backupVerified ? "Back up your wallet" : passphraseWallet ? "Passphrase wallet" : "Your offline wallet",
                 backupVerified ? "Review every request here. Your keys stay on this phone."
-                        : "Before receiving or signing, write down all 24 recovery words. We'll then spot-check a few.");
+                        : "Before receiving or signing, write down all the words of your recovery phrase. We'll then spot-check a few.");
         if (backupVerified && passphraseWallet) {
             pages.card(root, "Passphrase wallet · fingerprint " + account.fingerprint,
                     "Opened with your passphrase. It is not saved: locking the phone closes it. Check the fingerprint is the one you expect.");
@@ -1007,15 +1009,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 if (credentialMode() && !store.credentialBound()) store.migrateToCredentialKey();
                 // The standard wallet's active account (saved list); one decrypt, like before.
                 // Unlock always opens the standard wallet: a passphrase wallet must be re-entered.
+                // The saved account numbering (Standard or Ledger Live) decides which path the active account is.
                 String savedBook = getSharedPreferences(AccountScreens.ACCOUNT_PREFS, MODE_PRIVATE).getString(AccountScreens.ACCOUNT_BOOK_KEY, null);
-                SeedVault.Derived derived = store.deriveAccount(AccountBook.storedActiveIndex(savedBook), null);
+                AccountScheme savedScheme = AccountBook.storedScheme(savedBook);
+                SeedVault.Derived derived = store.deriveAccount(AccountBook.storedActiveIndex(savedBook), null, savedScheme);
                 AccountBook book = AccountBook.load(savedBook, derived.account0Address);
-                if (book.activeIndex() != derived.index) derived = store.deriveAccount(book.activeIndex(), null);
+                if (book.activeIndex() != derived.index || book.scheme != savedScheme) derived = store.deriveAccount(book.activeIndex(), null, book.scheme);
                 String address = derived.credentials.getAddress();
                 if (!book.active().address.equalsIgnoreCase(address)) {
-                    // Saved metadata disagrees with the seed: start the list over at account 1.
-                    book = AccountBook.fresh(derived.account0Address);
-                    if (derived.index != 0) derived = store.deriveAccount(0, null);
+                    // Saved metadata disagrees with the seed: start the list over at account 1 (same numbering).
+                    book = AccountBook.fresh(derived.account0Address, book.scheme);
+                    if (derived.index != 0) derived = store.deriveAccount(0, null, book.scheme);
                     address = derived.credentials.getAddress();
                 }
                 final Credentials loaded = derived.credentials;
@@ -1027,7 +1031,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     accounts.clearPassphraseWallet();
                     walletId = derived.account0Address;
                     accounts.setStandardBook(loadedBook);
-                    activeAccount = new SigningAccount(loadedBook.activeIndex(), loadedBook.active().name(), false, derived.fingerprint, address);
+                    activeAccount = new SigningAccount(loadedBook.activeIndex(), loadedBook.active().name(), false, derived.fingerprint, address, loadedBook.scheme);
                     walletAddress = address;
                     walletQr = qr;
                     backupVerified = backupCheck.verified(walletId);
@@ -1312,7 +1316,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     }
 
     /** MainActivity as the flow screens see it: its fields, locks and navigation (VaultHost). */
-    private final class ScreenHost implements BtcScreens.Host, SettingsScreens.Host, RequestRouter.Host {
+    private final class ScreenHost implements BtcScreens.Host, SettingsScreens.Host, RequestRouter.Host, AddressShareScreens.Host {
         @Override public Activity activity() { return MainActivity.this; }
         @Override public Pages pages() { return pages; }
         @Override public Handler ui() { return ui; }

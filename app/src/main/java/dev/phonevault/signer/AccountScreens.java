@@ -113,7 +113,7 @@ final class AccountScreens {
         String fingerprint = passphraseFingerprint();
         LinearLayout root = host.page(fingerprint == null ? "ACCOUNTS" : "ACCOUNTS · PASSPHRASE WALLET",
                 fingerprint == null ? "Your accounts" : "Passphrase wallet accounts",
-                "Each account is its own address from the same recovery phrase (m/44'/60'/0'/0/n). The active account receives, answers your Mac and signs.");
+                "Each account is its own address from the same recovery phrase (" + book.scheme.label + " numbering, " + book.scheme.pathPattern() + "). The active account receives, answers your Mac and signs.");
         if (fingerprint != null) host.card(root, "Passphrase wallet · fingerprint " + fingerprint,
                 "This list is not saved on the phone. It starts at Account 1 each time you open the passphrase wallet; add accounts again to reach them (same addresses every time).");
         SigningAccount active = host.active();
@@ -126,6 +126,7 @@ final class AccountScreens {
         if (next >= 0) host.action(root, "+ Add " + AccountBook.defaultName(next), false, () -> confirmAdd(next));
         else host.card(root, "Limit reached", "This phone opens up to " + AccountBook.MAX_ACCOUNTS + " accounts per wallet.");
         if (book.hiddenCount() > 0) host.action(root, "Hidden accounts (" + book.hiddenCount() + ")", false, this::showHidden);
+        host.action(root, "Account numbering · " + book.scheme.label, false, this::showNumbering);
         host.action(root, "Back to Wallet", false, host::showHome);
         host.present(root, "accounts");
     }
@@ -133,7 +134,7 @@ final class AccountScreens {
     private void confirmAdd(int index) {
         if (!host.ready()) return;
         LinearLayout root = host.page("ACCOUNTS / ADD", "Add " + AccountBook.defaultName(index) + "?",
-                "The phone derives the next address from your recovery phrase (path m/44'/60'/0'/0/" + index
+                "The phone derives the next address from your recovery phrase (path " + book().scheme.pathString(index)
                         + ") and switches to it. Your existing backup already covers it: nothing new to write down.");
         host.action(root, "Add and switch", true, () -> activateAccount(index, true));
         host.action(root, "Cancel", false, this::showAccounts);
@@ -149,7 +150,8 @@ final class AccountScreens {
         LinearLayout root = host.page("ACCOUNTS / " + AccountBook.defaultName(index).toUpperCase(java.util.Locale.ROOT),
                 a.name(), isActive ? "Active · receiving and signing use this account." : "Not active.");
         host.card(root, "Address", Keys.toChecksumAddress(a.address));
-        host.card(root, "Derivation", "m/44'/60'/0'/0/" + index + (passphraseFingerprint() == null ? " · standard wallet" : " · passphrase wallet " + passphraseFingerprint()));
+        host.card(root, "Derivation", book().scheme.pathString(index) + " · " + book().scheme.label + " numbering"
+                + (passphraseFingerprint() == null ? " · standard wallet" : " · passphrase wallet " + passphraseFingerprint()));
         if (!isActive) host.action(root, "Use this account", true, () -> activateAccount(index, false));
         host.action(root, "Rename", false, () -> startRename(index));
         if (!isActive && !a.hidden) host.action(root, "Hide from the list", false, () -> {
@@ -205,6 +207,160 @@ final class AccountScreens {
         });
         host.action(root, "Cancel", false, () -> { clear(); showAccount(index); });
         host.present(root, "account-rename");
+    }
+
+    // ------------------------------------------------------------------ account numbering
+    // Standard (m/44'/60'/0'/0/i) or Ledger Live (m/44'/60'/i'/0/0). A per-wallet choice saved
+    // with the standard wallet's account list; a passphrase wallet has its own, in memory only.
+
+    /** Accounts shown in the switch confirmation: Account 1 (the same under both) and Account 2 (where they differ). */
+    static final int NUMBERING_PREVIEW = 2;
+
+    void showNumbering() {
+        if (!host.ready()) return;
+        AccountBook book = book();
+        AccountScheme current = book.scheme;
+        LinearLayout root = host.page(passphraseFingerprint() == null ? "ACCOUNTS / NUMBERING" : "ACCOUNTS / NUMBERING · PASSPHRASE WALLET",
+                "Account numbering",
+                "Which path \"Account N\" uses. Match the wallet you used before, so your accounts show the same addresses here.");
+        host.card(root, "Standard" + (current == AccountScheme.STANDARD ? " · in use" : ""),
+                AccountScheme.STANDARD.pathPattern() + "\nMetaMask, Trezor, Rabby and most wallets. Account 2 is …/0'/0/1.");
+        host.card(root, "Ledger Live" + (current == AccountScheme.LEDGER_LIVE ? " · in use" : ""),
+                AccountScheme.LEDGER_LIVE.pathPattern() + "\nLedger Live. Account 2 is …/1'/0/0.");
+        host.card(root, "Same recovery phrase, same Account 1",
+                "Both read the same recovery phrase, and Account 1 is the same address under both. Accounts 2 and later are different addresses. Switching moves nothing: funds stay where they are, and you can switch back at any time.");
+        if (passphraseFingerprint() != null) host.card(root, "Passphrase wallet",
+                "This setting applies to the open passphrase wallet only, and like its account list it is forgotten when the phone locks.");
+        AccountScheme other = current == AccountScheme.STANDARD ? AccountScheme.LEDGER_LIVE : AccountScheme.STANDARD;
+        host.action(root, "Switch to " + other.label + " numbering", true, () -> previewNumbering(other));
+        host.action(root, "All accounts", false, this::showAccounts);
+        host.present(root, "accounts-numbering");
+    }
+
+    /** PIN window, then derive the first accounts under {@code next} for the confirmation. Keeps no key. */
+    private void previewNumbering(AccountScheme next) {
+        if (!host.ready()) return;
+        if (app.requestPending()) { pages.showInfo("Finish the request first", "Approve or reject the request on screen before changing account numbering.", app::showHome); return; }
+        app.withSeedKey("Confirm your PIN to change account numbering", () -> numberingPreviewWorker(next, false));
+    }
+
+    private void numberingPreviewWorker(AccountScheme next, boolean retried) {
+        final int s = app.session();
+        final AccountBook book;
+        final String pass;
+        synchronized (stateLock) {
+            book = book();
+            // web3j derives from a String passphrase: this copy is short-lived and unreferenced after derivation.
+            pass = passphrase == null ? null : new String(passphrase);
+        }
+        if (book == null || !app.unlocked()) return;
+        pages.showLoading("Account numbering", "Deriving your first accounts under " + next.label + " numbering…");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (s != app.session() || !app.unlocked()) return;
+                List<String> first = app.vault().addresses(next, NUMBERING_PREVIEW, pass);
+                if (!first.get(0).equalsIgnoreCase(book.walletId)) throw new IllegalStateException("the wallet changed");
+                app.activity().runOnUiThread(() -> { if (s == app.session() && app.unlocked() && book() == book) confirmNumbering(next, first); });
+            } catch (Exception e) {
+                app.activity().runOnUiThread(() -> {
+                    if (s != app.session() || !app.unlocked()) return;
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
+                        app.forgetConfirmation();
+                        app.confirmDevicePin("Confirm your PIN to change account numbering", () -> numberingPreviewWorker(next, true), app::showHome);
+                        return;
+                    }
+                    Log.w(TAG, "numbering preview failed: " + KeystoreFailures.chain(e));
+                    pages.showInfo("Account numbering unchanged", "Nothing changed. " + (e.getMessage() == null ? "" : e.getMessage()), app::showHome);
+                });
+            }
+        });
+    }
+
+    /** "Switch to Ledger Live numbering?" with the first addresses it gives. */
+    private void confirmNumbering(AccountScheme next, List<String> first) {
+        if (!host.ready()) return;
+        LinearLayout root = host.page("ACCOUNTS / NUMBERING · CHECK", "Switch to " + next.label + " numbering?",
+                "These are your first accounts under " + next.label + " numbering. Compare them with the wallet you used before.");
+        for (int i = 0; i < first.size(); i++) {
+            host.card(root, AccountBook.defaultName(i) + " · " + next.pathString(i) + (i == 0 ? " · same under both" : ""), Keys.toChecksumAddress(first.get(i)));
+        }
+        host.card(root, "What changes", "Accounts 2 and later become the " + next.label + " addresses. The active account becomes "
+                + "the one you last used under " + next.label + " numbering (Account 1 the first time). Nothing moves on any network.");
+        host.action(root, "Switch to " + next.label + " numbering", true, () -> switchNumbering(next));
+        host.action(root, "Cancel", false, this::showNumbering);
+        host.present(root, "accounts-numbering-confirm");
+    }
+
+    private void switchNumbering(AccountScheme next) {
+        if (!host.ready()) return;
+        if (app.requestPending()) { pages.showInfo("Finish the request first", "Approve or reject the request on screen before changing account numbering.", app::showHome); return; }
+        app.withSeedKey("Confirm your PIN to change account numbering", () -> switchNumberingWorker(next, false));
+    }
+
+    private void switchNumberingWorker(AccountScheme next, boolean retried) {
+        final int s = app.session();
+        final AccountBook book;
+        final String fingerprint;
+        final String pass;
+        synchronized (stateLock) {
+            book = book();
+            fingerprint = passphraseFingerprint;
+            pass = passphrase == null ? null : new String(passphrase); // short-lived, as above
+        }
+        if (book == null || !app.unlocked()) return;
+        pages.showLoading("Switching to " + next.label + " numbering", "Deriving your account from your recovery phrase…");
+        cryptoExecutor.execute(() -> {
+            try {
+                if (s != app.session() || !app.unlocked()) return;
+                if ((pass == null) != (fingerprint == null)) throw new IllegalStateException("the wallet changed while switching");
+                AccountBook switched = book.withScheme(next);
+                SeedVault.Derived d = app.vault().deriveAccount(switched.activeIndex(), pass, next);
+                if (!switched.active().address.equalsIgnoreCase(d.credentials.getAddress())) {
+                    // The parked list does not match the seed: start this numbering over at Account 1.
+                    switched = book.withScheme(next, false);
+                    if (d.index != 0) d = app.vault().deriveAccount(0, pass, next);
+                }
+                String address = d.credentials.getAddress();
+                Bitmap qr = app.qrFor(address);
+                boolean done = false;
+                synchronized (stateLock) {
+                    if (s != app.session() || !app.unlocked() || !app.operational()) return;
+                    boolean sameWallet = book() == book && (fingerprint != null
+                            ? fingerprint.equals(d.fingerprint) && fingerprint.equals(passphraseFingerprint)
+                            : d.account0Address.equals(app.walletId()));
+                    if (!sameWallet) throw new IllegalStateException("the wallet changed while switching");
+                    if (!app.requestPending() && app.approvalDecision() == null) {
+                        switched.select(switched.activeIndex(), address);
+                        if (fingerprint == null) standardBook = switched; else passphraseBook = switched;
+                        app.publishAccount(d.credentials, new SigningAccount(switched.activeIndex(), switched.active().name(), fingerprint != null,
+                                d.fingerprint, address, next), address, qr);
+                        done = true;
+                    }
+                }
+                if (done && fingerprint == null) saveStandardBook(switched);
+                final boolean ok = done;
+                final String name = switched.active().name();
+                app.activity().runOnUiThread(() -> {
+                    if (s != app.session() || !app.unlocked()) return;
+                    if (app.approvalDecision() != null) return; // the request's own screen is showing
+                    app.setStatus(ok ? next.label + " account numbering · now using " + name
+                            : "Account numbering not changed: a request arrived. Try again after it.");
+                    app.showHome();
+                    app.drainPendingUsb();
+                });
+            } catch (Exception e) {
+                app.activity().runOnUiThread(() -> {
+                    if (s != app.session() || !app.unlocked()) return;
+                    if (KeystoreFailures.authLapsed(e) && !retried) {
+                        app.forgetConfirmation();
+                        app.confirmDevicePin("Confirm your PIN to change account numbering", () -> switchNumberingWorker(next, true), app::showHome);
+                        return;
+                    }
+                    Log.w(TAG, "numbering switch failed: " + KeystoreFailures.chain(e));
+                    pages.showInfo("Account numbering unchanged", "The active account is unchanged. " + (e.getMessage() == null ? "" : e.getMessage()), app::showHome);
+                });
+            }
+        });
     }
 
     // ------------------------------------------------------------------ passphrase wallet
@@ -402,7 +558,7 @@ final class AccountScreens {
             AccountBook book = book();
             SigningAccount a = host.active();
             if (book != null && a != null && book.get(a.index) != null) {
-                app.relabelActiveAccount(new SigningAccount(a.index, book.get(a.index).name(), a.passphrase, a.fingerprint, a.address));
+                app.relabelActiveAccount(new SigningAccount(a.index, book.get(a.index).name(), a.passphrase, a.fingerprint, a.address, a.scheme));
             }
         }
         if (passphraseBook == null) saveStandardBook(standardBook);
@@ -460,7 +616,7 @@ final class AccountScreens {
                     pass = passphrase == null ? null : new String(passphrase);
                 }
                 if ((pass == null) != (fingerprint == null)) throw new IllegalStateException("the wallet changed while switching");
-                SeedVault.Derived d = app.vault().deriveAccount(index, pass);
+                SeedVault.Derived d = app.vault().deriveAccount(index, pass, book.scheme);
                 pass = null;
                 String address = d.credentials.getAddress();
                 Bitmap qr = app.qrFor(address);
@@ -474,7 +630,7 @@ final class AccountScreens {
                     if (!app.requestPending() && app.approvalDecision() == null) {
                         if (add && book.get(index) == null) book.add(index, address);
                         book.select(index, address);
-                        app.publishAccount(d.credentials, new SigningAccount(index, book.active().name(), fingerprint != null, d.fingerprint, address), address, qr);
+                        app.publishAccount(d.credentials, new SigningAccount(index, book.active().name(), fingerprint != null, d.fingerprint, address, book.scheme), address, qr);
                         switched = true;
                     }
                 }
@@ -606,7 +762,7 @@ final class AccountScreens {
         cryptoExecutor.execute(() -> {
             try {
                 if (s != app.session() || !app.unlocked()) return;
-                SeedVault.Derived d = app.vault().deriveAccount(book.activeIndex(), null);
+                SeedVault.Derived d = app.vault().deriveAccount(book.activeIndex(), null, book.scheme);
                 String address = d.credentials.getAddress();
                 Bitmap qr = app.qrFor(address);
                 synchronized (stateLock) {
@@ -614,7 +770,7 @@ final class AccountScreens {
                     if (!d.account0Address.equals(app.walletId()) || !book.active().address.equalsIgnoreCase(address)) throw new IllegalStateException("the standard wallet did not match its saved account list");
                     if (app.requestPending() || app.approvalDecision() != null) throw new IllegalStateException("a request arrived; try again after it");
                     clearPassphraseWallet();
-                    app.publishAccount(d.credentials, new SigningAccount(book.activeIndex(), book.active().name(), false, d.fingerprint, address), address, qr);
+                    app.publishAccount(d.credentials, new SigningAccount(book.activeIndex(), book.active().name(), false, d.fingerprint, address, book.scheme), address, qr);
                 }
                 app.activity().runOnUiThread(() -> {
                     if (s != app.session() || !app.unlocked()) return;
