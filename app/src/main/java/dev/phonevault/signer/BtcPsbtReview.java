@@ -528,7 +528,7 @@ final class BtcPsbtReview {
             if (!o.change) continue;
             rows.add(row("Change back to your wallet ✓", btc(o.value, network) + " · " + AddressKeys.shortBtc(o.address) + " · " + o.path));
         }
-        rows.add(row("Network fee", btc(fee, network) + " (" + feeRate + " sat/vB)"));
+        rows.add(row(feeLabel(inputs), btc(fee, network) + " (" + feeRate + " sat/vB)"));
         long base = sent > 0 ? sent : totalOut;
         if (fee > DANGER_FEE_SATS || (base > 0 && fee * 10 > base) || (base == 0 && fee > 0)) {
             rows.add(row(DANGER, "The network fee is " + btc(fee, network) + (base > 0 ? ", " + percent(fee, base) + " of the amount sent" : "")
@@ -685,6 +685,19 @@ final class BtcPsbtReview {
 
     /** "1,234,567 sats". */
     static String sats(long sats) { return String.format(Locale.ROOT, "%,d sats", sats); }
+
+    /**
+     * "Network fee", or, when some coins' amounts come only from the Mac (Taproot coins sent without
+     * their previous transaction), "Network fee (amounts of N coins stated by your Mac)". Taproot
+     * signatures commit to every input's amount, so a false amount can't produce a valid transaction;
+     * the label only says where the fee's inputs came from.
+     */
+    static String feeLabel(List<SignInput> inputs) {
+        int unproven = 0;
+        for (SignInput in : inputs) if (!in.amountProven) unproven++;
+        if (unproven == 0) return "Network fee";
+        return "Network fee (" + (unproven == 1 ? "amount of 1 coin" : "amounts of " + unproven + " coins") + " stated by your Mac)";
+    }
 
     /** Fee rate with one decimal, rounded half up. */
     static String rate(long fee, long vsize) {

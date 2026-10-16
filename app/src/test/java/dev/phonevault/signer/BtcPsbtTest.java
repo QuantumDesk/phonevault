@@ -311,7 +311,7 @@ public final class BtcPsbtTest {
         assertEquals("Bitcoin", value(r, "Network"));
         assertEquals("0.01234567 BTC to\nbc1q 50rt rmj2 f8vl 9tem\n8qpf w36y lw5j g9j2 9e5z\na5\nNative SegWit (P2WPKH) address", value(r, "Send"));
         assertEquals("0.00263000 BTC · bc1q8c6f…pcp6el · m/84'/0'/0'/1/0", value(r, "Change back to your wallet ✓"));
-        String fee = value(r, "Network fee");
+        String fee = value(r, "Network fee"); // every amount proven by its previous transaction: plain label
         assertTrue(fee, fee.startsWith("0.00002433 BTC (") && fee.endsWith(" sat/vB)"));
         assertEquals("Account 1 · Native SegWit (m/84'/0'/0')\n2 coins, 0.01500000 BTC", value(r, "Spending from"));
         assertNull(value(r, MessageReview.DANGER));
@@ -446,12 +446,19 @@ public final class BtcPsbtTest {
         // Taproot: every signature commits to all amounts, so no previous transaction is needed
         Psbt tr = psbt(fixture("p2tr-send-with-change"));
         assertNull(Psbt.find(tr.inputs.get(0), Psbt.IN_NON_WITNESS_UTXO));
-        review(tr, BtcNetwork.BITCOIN);
+        BtcPsbtReview trReview = review(tr, BtcNetwork.BITCOIN);
+        int unproven = 0;
+        for (BtcPsbtReview.SignInput in : trReview.inputs) if (!in.amountProven) unproven++;
+        assertTrue(unproven > 0);
+        assertNull("the fee row says whose word its amounts are", value(trReview, "Network fee"));
+        assertEquals(BtcPsbtReview.feeLabel(trReview.inputs), unproven == 1 ? "Network fee (amount of 1 coin stated by your Mac)"
+                : "Network fee (amounts of " + unproven + " coins stated by your Mac)");
+        assertNotNull(value(trReview, BtcPsbtReview.feeLabel(trReview.inputs)));
         // the testnet fixture mixes a P2WPKH input (with it) and a Taproot input (without)
         Psbt mixed = psbt(fixture("testnet-mixed-opreturn"));
         assertNotNull(Psbt.find(mixed.inputs.get(0), Psbt.IN_NON_WITNESS_UTXO));
         assertNull(Psbt.find(mixed.inputs.get(1), Psbt.IN_NON_WITNESS_UTXO));
-        review(mixed, BtcNetwork.TESTNET);
+        assertNotNull(value(review(mixed, BtcNetwork.TESTNET), "Network fee (amount of 1 coin stated by your Mac)"));
         Maps stripped = new Maps(mixed);
         stripped.remove(stripped.in.get(0), Psbt.IN_NON_WITNESS_UTXO);
         assertRefused(stripped.parse(), BtcNetwork.TESTNET, "Input 1 is a Native SegWit coin without its previous transaction");
