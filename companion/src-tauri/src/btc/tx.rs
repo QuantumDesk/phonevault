@@ -3,10 +3,13 @@
 //! is shuffled for privacy) and is what `verify.rs` later holds the phone's answer to.
 //!
 //! * Transaction: nVersion 2, nLockTime 0, every nSequence 0xfffffffd (opts in to RBF, BIP-125).
-//! * Inputs carry `witness_utxo` and their BIP-32 origin (PSBT_IN_BIP32_DERIVATION for P2WPKH;
-//!   PSBT_IN_TAP_INTERNAL_KEY + PSBT_IN_TAP_BIP32_DERIVATION for P2TR), P2WPKH inputs also the
-//!   full previous transaction (`non_witness_utxo`) while the request stays under the phone's size
-//!   limit. The change output carries its origin too, so the phone can prove it is ours.
+//! * Inputs carry their BIP-32 origin (PSBT_IN_BIP32_DERIVATION for P2WPKH, P2SH-P2WPKH and P2PKH;
+//!   PSBT_IN_TAP_INTERNAL_KEY + PSBT_IN_TAP_BIP32_DERIVATION for P2TR), SegWit inputs their
+//!   `witness_utxo`, P2SH-P2WPKH inputs their `redeem_script`, and every input but Taproot the
+//!   full previous transaction (`non_witness_utxo`: the phone requires it, since a SegWit v0
+//!   signature commits only to its own input's amount and a legacy one to none), within the phone's
+//!   size limit. The change output carries its origin (and redeem script) too, so the phone can
+//!   prove it is ours.
 //! * Coin selection: branch-and-bound for a change-less exact match, else largest-first with a
 //!   change output; change too small to be worth spending goes to the fee instead (no dust change).
 
@@ -96,11 +99,21 @@ fn varint_len(n: u64) -> u64 {
     }
 }
 
-/// Weight of a segwit transaction spending `n_in` inputs of `kind` to outputs with these script lengths.
+/// Weight of a transaction spending `n_in` inputs of `kind` to outputs with these script lengths
+/// (SegWit serialization, marker and flag included, unless every input is Legacy).
 pub fn weight(kind: Kind, n_in: usize, out_script_lens: &[u64]) -> u64 {
     let outs: u64 = out_script_lens.iter().map(|l| 8 + varint_len(*l) + l).sum();
-    let base = 4 + 4 + varint_len(n_in as u64) + varint_len(out_script_lens.len() as u64) + 41 * n_in as u64 + outs;
-    base * 4 + 2 + kind.input_witness_weight() * n_in as u64
+    let base = 4
+        + 4
+        + varint_len(n_in as u64)
+        + varint_len(out_script_lens.len() as u64)
+        + (41 + kind.input_script_sig_len()) * n_in as u64
+        + outs;
+    if kind.segwit() {
+        base * 4 + 2 + kind.input_witness_weight() * n_in as u64
+    } else {
+        base * 4
+    }
 }
 
 pub fn vsize(weight: u64) -> u64 {
@@ -109,8 +122,9 @@ pub fn vsize(weight: u64) -> u64 {
 pub fn fee_for(vbytes: u64, rate_kvb: u64) -> u64 {
     (vbytes * rate_kvb).div_ceil(1000)
 }
-fn input_vbytes(kind: Kind) -> u64 {
-    (41 * 4 + kind.input_witness_weight()).div_ceil(4)
+/// What one more input of this type adds: P2WPKH 68, P2TR 58, P2SH-P2WPKH 91, P2PKH 148 vB.
+pub fn input_vbytes(kind: Kind) -> u64 {
+    ((41 + kind.input_script_sig_len()) * 4 + kind.input_witness_weight()).div_ceil(4)
 }
 
 /// "12.5" sat/vB → 12_500 sat/kvB (at most 3 decimals), within the allowed range.
@@ -383,37 +397,43 @@ pub fn build(
     let fp = account.fingerprint;
     for (i, c) in inputs.iter().enumerate() {
         let inp = &mut psbt.inputs[i];
-        inp.witness_utxo = Some(TxOut { value: Amount::from_sat(c.value), script_pubkey: c.derived.script.clone() });
-        match account.kind {
-            Kind::P2wpkh => {
-                inp.bip32_derivation = BTreeMap::from([(c.derived.pubkey, (fp, c.derived.origin.clone()))]);
-            }
-            Kind::P2tr => {
-                let x = c.derived.internal_key.ok_or("internal: no internal key")?;
-                inp.tap_internal_key = Some(x);
-                inp.tap_key_origins = BTreeMap::from([(x, (vec![], (fp, c.derived.origin.clone())))]);
-            }
+        // BIP-174: a witness UTXO for SegWit inputs only; a Legacy coin is described by its
+        // previous transaction alone.
+        if account.kind.segwit() {
+            inp.witness_utxo =
+                Some(TxOut { value: Amount::from_sat(c.value), script_pubkey: c.derived.script.clone() });
+        }
+        if account.kind == Kind::P2tr {
+            let x = c.derived.internal_key.ok_or("internal: no internal key")?;
+            inp.tap_internal_key = Some(x);
+            inp.tap_key_origins = BTreeMap::from([(x, (vec![], (fp, c.derived.origin.clone())))]);
+        } else {
+            inp.bip32_derivation = BTreeMap::from([(c.derived.pubkey, (fp, c.derived.origin.clone()))]);
+        }
+        if account.kind == Kind::P2shP2wpkh {
+            inp.redeem_script = Some(c.derived.redeem_script.clone().ok_or("internal: no redeem script")?);
         }
     }
     for (i, o) in outputs.iter().enumerate() {
         let Some(d) = &o.change else { continue };
         let out = &mut psbt.outputs[i];
-        match account.kind {
-            Kind::P2wpkh => {
-                out.bip32_derivation = BTreeMap::from([(d.pubkey, (fp, d.origin.clone()))]);
-            }
-            Kind::P2tr => {
-                let x = d.internal_key.ok_or("internal: no internal key")?;
-                out.tap_internal_key = Some(x);
-                out.tap_key_origins = BTreeMap::from([(x, (vec![], (fp, d.origin.clone())))]);
-            }
+        if account.kind == Kind::P2tr {
+            let x = d.internal_key.ok_or("internal: no internal key")?;
+            out.tap_internal_key = Some(x);
+            out.tap_key_origins = BTreeMap::from([(x, (vec![], (fp, d.origin.clone())))]);
+        } else {
+            out.bip32_derivation = BTreeMap::from([(d.pubkey, (fp, d.origin.clone()))]);
+        }
+        if account.kind == Kind::P2shP2wpkh {
+            out.redeem_script = Some(d.redeem_script.clone().ok_or("internal: no redeem script")?);
         }
     }
-    // Full previous transactions for every P2WPKH input: the phone requires them (it checks each
-    // input's amount against the txid it spends, so a lying server cannot inflate the fee). They
-    // were fetched and hashed to their txids when the coins were listed (btc::checked_coin); they
-    // are checked again here, and a coin without one is refused rather than sent without it.
-    if account.kind == Kind::P2wpkh {
+    // Full previous transactions for every input but Taproot: the phone requires them (it checks
+    // each input's amount against the txid it spends, so a lying server cannot inflate the fee;
+    // a Legacy signature does not even commit to its own amount). They were fetched and hashed to
+    // their txids when the coins were listed (btc::checked_coin); they are checked again here, and
+    // a coin without one is refused rather than sent without it.
+    if account.kind.ecdsa() {
         for (i, c) in inputs.iter().enumerate() {
             let prev = c
                 .prev_tx
@@ -539,6 +559,15 @@ pub mod tests {
         assert_eq!(vsize(weight(Kind::P2tr, 1, &[34])), 111);
         // 2-in 2-out P2TR: 211 vB
         assert_eq!(vsize(weight(Kind::P2tr, 2, &[34, 34])), 212);
+        // per input: P2SH-P2WPKH ~91 vB, P2PKH ~148 vB (72-byte signatures)
+        assert_eq!(input_vbytes(Kind::P2shP2wpkh), 91);
+        assert_eq!(input_vbytes(Kind::P2pkh), 148);
+        assert_eq!(input_vbytes(Kind::P2wpkh), 68);
+        // 1-in 2-out P2SH-P2WPKH (to P2SH + change): 10.5 + 91 + 2·32 → 166 vB
+        assert_eq!(vsize(weight(Kind::P2shP2wpkh, 1, &[23, 23])), 166);
+        // 1-in 2-out P2PKH: no SegWit marker, 10 + 148 + 2·34 = 226 bytes (the classic 226)
+        assert_eq!(weight(Kind::P2pkh, 1, &[25, 25]), 226 * 4);
+        assert_eq!(vsize(weight(Kind::P2pkh, 2, &[25])), 10 + 2 * 148 + 34);
         assert_eq!(fee_for(141, 1000), 141);
         assert_eq!(fee_for(141, 12_500), 1763); // 1762.5 rounds up
     }
@@ -610,7 +639,7 @@ pub mod tests {
 
     #[test]
     fn psbt_carries_origins_utxos_and_rbf() {
-        for kind in [Kind::P2wpkh, Kind::P2tr] {
+        for kind in Kind::ALL {
             let (a, _) = test_account(Net::Bitcoin, kind, 1);
             let coins = vec![coin(&a.derive(0, 0).unwrap(), 120_000, 1), coin(&a.derive(0, 3).unwrap(), 30_000, 2)];
             let to = Address::from_str("bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g").unwrap().assume_checked();
@@ -624,25 +653,42 @@ pub mod tests {
             let ch = b.change().unwrap();
             assert_eq!(ch.address, a.derive(1, 0).unwrap().address);
             for (i, inp) in b.psbt.inputs.iter().enumerate() {
-                assert_eq!(inp.witness_utxo.as_ref().unwrap().script_pubkey, b.inputs[i].derived.script);
+                if kind == Kind::P2pkh {
+                    assert!(inp.witness_utxo.is_none(), "BIP-174: no witness UTXO for a legacy input");
+                } else {
+                    assert_eq!(inp.witness_utxo.as_ref().unwrap().script_pubkey, b.inputs[i].derived.script);
+                }
                 match kind {
-                    Kind::P2wpkh => {
-                        assert_eq!(
-                            inp.bip32_derivation.values().next().unwrap(),
-                            &(a.fingerprint, b.inputs[i].derived.origin.clone())
-                        );
-                        assert!(inp.non_witness_utxo.is_some());
-                        assert!(inp.tap_key_origins.is_empty());
-                    }
                     Kind::P2tr => {
                         assert_eq!(inp.tap_internal_key, b.inputs[i].derived.internal_key);
                         assert!(inp.tap_key_origins.values().next().unwrap().0.is_empty());
                         assert!(inp.non_witness_utxo.is_none() && inp.bip32_derivation.is_empty());
                     }
+                    _ => {
+                        assert_eq!(
+                            inp.bip32_derivation.values().next().unwrap(),
+                            &(a.fingerprint, b.inputs[i].derived.origin.clone())
+                        );
+                        let prev = inp.non_witness_utxo.as_ref().unwrap();
+                        assert_eq!(
+                            prev.output[b.inputs[i].outpoint.vout as usize].script_pubkey,
+                            b.inputs[i].derived.script
+                        );
+                        assert!(inp.tap_key_origins.is_empty());
+                    }
+                }
+                assert_eq!(inp.redeem_script.is_some(), kind == Kind::P2shP2wpkh);
+                if let Some(r) = &inp.redeem_script {
+                    assert_eq!(
+                        r.to_p2sh(),
+                        b.inputs[i].derived.script,
+                        "the redeem script hashes to the coin's script"
+                    );
                 }
             }
             let ci = b.outputs.iter().position(|o| o.change.is_some()).unwrap();
             assert!(!b.psbt.outputs[ci].bip32_derivation.is_empty() || !b.psbt.outputs[ci].tap_key_origins.is_empty());
+            assert_eq!(b.psbt.outputs[ci].redeem_script.is_some(), kind == Kind::P2shP2wpkh);
             let ri = 1 - ci;
             assert!(
                 b.psbt.outputs[ri].bip32_derivation.is_empty() && b.psbt.outputs[ri].tap_key_origins.is_empty(),

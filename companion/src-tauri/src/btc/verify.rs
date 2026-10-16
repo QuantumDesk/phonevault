@@ -8,13 +8,16 @@
 //!    records, never from the returned PSBT) are exactly what the user reviewed. Any
 //!    `witness_utxo` the phone echoes must also be unchanged.
 //! 2. **Our keys, valid signatures.** Each input has exactly one signature, by the key this Mac
-//!    derives from the paired xpub for that input (P2WPKH: the BIP-32 child key; P2TR: its BIP-86
-//!    tweaked output key, which must also be the key in the spent scriptPubKey). The ECDSA
-//!    signature is checked against the BIP-143 sighash, the Schnorr signature against the BIP-341
-//!    key-spend sighash over all prevouts; only SIGHASH_ALL (or DEFAULT for Taproot) is accepted.
-//! 3. **Consensus.** The finalized transaction (witnesses assembled here from the checked
-//!    signatures, not copied from the phone) is run through Bitcoin Core's script interpreter
-//!    (`bitcoinconsensus`, with the spent outputs, Taproot included) for every input.
+//!    derives from the paired xpub for that input (P2WPKH, P2SH-P2WPKH, P2PKH: the BIP-32 child
+//!    key, which must also be the key the spent script locks to; P2TR: its BIP-86 tweaked output
+//!    key, which must also be the key in the spent scriptPubKey). The ECDSA signature is checked
+//!    against the BIP-143 sighash (native and nested SegWit) or the legacy sighash (P2PKH), the
+//!    Schnorr signature against the BIP-341 key-spend sighash over all prevouts; only SIGHASH_ALL
+//!    (or DEFAULT for Taproot) is accepted.
+//! 3. **Consensus.** The finalized transaction (scriptSigs and witnesses assembled here from the
+//!    checked signatures, not copied from the phone: P2SH-P2WPKH pushes its redeem script, P2PKH
+//!    its signature and key) is run through Bitcoin Core's script interpreter (`bitcoinconsensus`,
+//!    with the spent outputs, Taproot included) for every input.
 //!
 //! Only a transaction that passes all three is kept (by txid) for the Broadcast click.
 
@@ -23,9 +26,10 @@ use super::wallet::{Account, Kind};
 use base64::Engine;
 use bitcoin::ecdsa;
 use bitcoin::psbt::Psbt;
+use bitcoin::script::{Builder, PushBytesBuf};
 use bitcoin::secp256k1::{Message, Secp256k1};
 use bitcoin::sighash::{EcdsaSighashType, Prevouts, SighashCache, TapSighashType};
-use bitcoin::{consensus, taproot, Amount, Transaction, Witness};
+use bitcoin::{consensus, taproot, Amount, ScriptBuf, Transaction, Witness};
 
 /// A signed transaction that passed every check.
 #[derive(Clone, Debug)]
@@ -148,84 +152,98 @@ pub fn verify_signed(built: &Built, returned_b64: &str) -> Result<Verified, Stri
     // 2. one valid signature per input, by our key, SIGHASH_ALL/DEFAULT
     let secp = Secp256k1::verification_only();
     let mut cache = SighashCache::new(expected);
-    let mut witnesses = Vec::with_capacity(built.inputs.len());
+    let mut finals: Vec<(ScriptBuf, Witness)> = Vec::with_capacity(built.inputs.len());
+    let kind = built.account.kind;
     for (i, c) in built.inputs.iter().enumerate() {
         let inp = &ret.inputs[i];
         let value = Amount::from_sat(c.value);
-        let w = match built.account.kind {
-            Kind::P2wpkh => {
-                if !inp.tap_script_sigs.is_empty() || inp.tap_key_sig.is_some() {
-                    return Err(format!("input {i}: unexpected Taproot signature"));
+        let fin = if kind.ecdsa() {
+            if !inp.tap_script_sigs.is_empty() || inp.tap_key_sig.is_some() {
+                return Err(format!("input {i}: unexpected Taproot signature"));
+            }
+            let ours = bitcoin::PublicKey::new(c.derived.pubkey);
+            let redeem = match kind {
+                Kind::P2shP2wpkh => Some(c.derived.redeem_script.clone().ok_or("internal: no redeem script")?),
+                _ => None,
+            };
+            // the key we check against is the one that locks the coin
+            let locks = match kind {
+                Kind::P2wpkh => ScriptBuf::new_p2wpkh(&ours.wpubkey_hash().map_err(|e| e.to_string())?),
+                Kind::P2shP2wpkh => redeem.as_ref().ok_or("internal")?.to_p2sh(),
+                _ => ScriptBuf::new_p2pkh(&ours.pubkey_hash()),
+            };
+            if locks != c.derived.script || redeem.as_ref().is_some_and(|r| !r.is_p2wpkh()) {
+                return Err(format!("input {i}: this wallet's key does not lock the spent script"));
+            }
+            let sig = ecdsa_sig(i, inp, kind, &ours, redeem.as_deref())?;
+            if sig.sighash_type != EcdsaSighashType::All {
+                return Err(format!("input {i}: sighash type {} is not SIGHASH_ALL", sig.sighash_type));
+            }
+            let digest = match kind {
+                Kind::P2pkh => cache
+                    .legacy_signature_hash(i, &c.derived.script, EcdsaSighashType::All.to_u32())
+                    .map_err(|e| e.to_string())?
+                    .to_byte_array_compat(),
+                _ => {
+                    // BIP-143 script code from the P2WPKH program: the native script, or the redeem script
+                    let program = redeem.as_ref().unwrap_or(&c.derived.script);
+                    cache
+                        .p2wpkh_signature_hash(i, program, value, EcdsaSighashType::All)
+                        .map_err(|e| e.to_string())?
+                        .to_byte_array_compat()
                 }
-                let ours = bitcoin::PublicKey::new(c.derived.pubkey);
-                let sig: ecdsa::Signature = match (&inp.final_script_witness, inp.partial_sigs.len()) {
-                    (Some(fw), 0) => {
-                        let items: Vec<&[u8]> = fw.iter().collect();
-                        if items.len() != 2 || items[1] != ours.to_bytes().as_slice() {
-                            return Err(format!("input {i}: final witness is not for this wallet's key"));
-                        }
-                        ecdsa::Signature::from_slice(items[0]).map_err(|e| format!("input {i}: {e}"))?
-                    }
-                    (None, 1) => *inp
-                        .partial_sigs
-                        .get(&ours)
-                        .ok_or_else(|| format!("input {i}: signed by a key that is not this wallet's"))?,
-                    (None, 0) => return Err(format!("input {i} is not signed")),
-                    _ => return Err(format!("input {i}: more than one signature")),
-                };
-                if sig.sighash_type != EcdsaSighashType::All {
-                    return Err(format!("input {i}: sighash type {} is not SIGHASH_ALL", sig.sighash_type));
-                }
-                let sighash = cache
-                    .p2wpkh_signature_hash(i, &c.derived.script, value, EcdsaSighashType::All)
-                    .map_err(|e| e.to_string())?;
-                secp.verify_ecdsa(
-                    &Message::from_digest(sighash.to_byte_array_compat()),
-                    &sig.signature,
-                    &c.derived.pubkey,
-                )
+            };
+            secp.verify_ecdsa(&Message::from_digest(digest), &sig.signature, &c.derived.pubkey)
                 .map_err(|_| format!("input {i}: the signature does not verify for this wallet's key"))?;
-                Witness::p2wpkh(&sig, &c.derived.pubkey)
-            }
-            Kind::P2tr => {
-                if !inp.partial_sigs.is_empty() || !inp.tap_script_sigs.is_empty() {
-                    return Err(format!("input {i}: unexpected signature kind"));
+            match kind {
+                Kind::P2pkh => {
+                    (Builder::new().push_slice(sig.serialize()).push_key(&ours).into_script(), Witness::new())
                 }
-                let sig: taproot::Signature = match (&inp.final_script_witness, inp.tap_key_sig) {
-                    (Some(fw), None) => {
-                        let items: Vec<&[u8]> = fw.iter().collect();
-                        if items.len() != 1 {
-                            return Err(format!("input {i}: final witness is not a key-path spend"));
-                        }
-                        taproot::Signature::from_slice(items[0]).map_err(|e| format!("input {i}: {e}"))?
+                Kind::P2shP2wpkh => (
+                    push_only(redeem.as_deref().ok_or("internal")?.as_bytes())?,
+                    Witness::p2wpkh(&sig, &c.derived.pubkey),
+                ),
+                _ => (ScriptBuf::new(), Witness::p2wpkh(&sig, &c.derived.pubkey)),
+            }
+        } else {
+            if !inp.partial_sigs.is_empty() || !inp.tap_script_sigs.is_empty() {
+                return Err(format!("input {i}: unexpected signature kind"));
+            }
+            let sig: taproot::Signature = match (&inp.final_script_witness, inp.tap_key_sig) {
+                (Some(fw), None) => {
+                    let items: Vec<&[u8]> = fw.iter().collect();
+                    if items.len() != 1 {
+                        return Err(format!("input {i}: final witness is not a key-path spend"));
                     }
-                    (None, Some(s)) => s,
-                    (None, None) => return Err(format!("input {i} is not signed")),
-                    _ => return Err(format!("input {i}: two signatures")),
-                };
-                if !matches!(sig.sighash_type, TapSighashType::Default | TapSighashType::All) {
-                    return Err(format!("input {i}: sighash type {} is not SIGHASH_DEFAULT/ALL", sig.sighash_type));
+                    taproot::Signature::from_slice(items[0]).map_err(|e| format!("input {i}: {e}"))?
                 }
-                let internal = c.derived.internal_key.ok_or("internal: no internal key")?;
-                let output_key = Account::output_key(&secp, internal);
-                // the spent script is OP_1 <output key>: the key we check against is the one that locks the coin
-                if c.derived.script.as_bytes().get(2..) != Some(&output_key.serialize()[..]) {
-                    return Err(format!("input {i}: internal key does not match the spent script"));
-                }
-                let sighash = cache
-                    .taproot_key_spend_signature_hash(i, &Prevouts::All(&prevouts), sig.sighash_type)
-                    .map_err(|e| e.to_string())?;
-                secp.verify_schnorr(&sig.signature, &Message::from_digest(sighash.to_byte_array_compat()), &output_key)
-                    .map_err(|_| format!("input {i}: the signature does not verify for this wallet's key"))?;
-                Witness::p2tr_key_spend(&sig)
+                (None, Some(s)) => s,
+                (None, None) => return Err(format!("input {i} is not signed")),
+                _ => return Err(format!("input {i}: two signatures")),
+            };
+            if !matches!(sig.sighash_type, TapSighashType::Default | TapSighashType::All) {
+                return Err(format!("input {i}: sighash type {} is not SIGHASH_DEFAULT/ALL", sig.sighash_type));
             }
+            let internal = c.derived.internal_key.ok_or("internal: no internal key")?;
+            let output_key = Account::output_key(&secp, internal);
+            // the spent script is OP_1 <output key>: the key we check against is the one that locks the coin
+            if c.derived.script.as_bytes().get(2..) != Some(&output_key.serialize()[..]) {
+                return Err(format!("input {i}: internal key does not match the spent script"));
+            }
+            let sighash = cache
+                .taproot_key_spend_signature_hash(i, &Prevouts::All(&prevouts), sig.sighash_type)
+                .map_err(|e| e.to_string())?;
+            secp.verify_schnorr(&sig.signature, &Message::from_digest(sighash.to_byte_array_compat()), &output_key)
+                .map_err(|_| format!("input {i}: the signature does not verify for this wallet's key"))?;
+            (ScriptBuf::new(), Witness::p2tr_key_spend(&sig))
         };
-        witnesses.push(w);
+        finals.push(fin);
     }
 
     // 3. finalize from what was checked, then let Bitcoin Core's interpreter run every input
     let mut tx = expected.clone();
-    for (i, w) in witnesses.into_iter().enumerate() {
+    for (i, (script_sig, w)) in finals.into_iter().enumerate() {
+        tx.input[i].script_sig = script_sig;
         tx.input[i].witness = w;
     }
     consensus_check(&tx, &prevouts)?;
@@ -235,6 +253,72 @@ pub fn verify_signed(built: &Built, returned_b64: &str) -> Result<Verified, Stri
         return Err(format!("signed transaction is {vsize} vB, larger than the {} vB it was priced for", built.vsize));
     }
     Ok(Verified { txid: tx.compute_txid().to_string(), hex: consensus::encode::serialize_hex(&tx), fee, vsize })
+}
+
+/// A script that is one data push of `data`.
+fn push_only(data: &[u8]) -> Result<ScriptBuf, String> {
+    let b = PushBytesBuf::try_from(data.to_vec()).map_err(|e| e.to_string())?;
+    Ok(Builder::new().push_slice(b).into_script())
+}
+
+/// The one ECDSA signature the phone returned for input `i`: a partial signature by `ours`, or
+/// (from a phone that finalizes) the signature in a final witness / scriptSig that is exactly the
+/// one this Mac would build for that key.
+fn ecdsa_sig(
+    i: usize,
+    inp: &bitcoin::psbt::Input,
+    kind: Kind,
+    ours: &bitcoin::PublicKey,
+    redeem: Option<&bitcoin::Script>,
+) -> Result<ecdsa::Signature, String> {
+    let finalized = inp.final_script_witness.is_some() || inp.final_script_sig.is_some();
+    match (finalized, inp.partial_sigs.len()) {
+        (false, 1) => inp
+            .partial_sigs
+            .get(ours)
+            .copied()
+            .ok_or_else(|| format!("input {i}: signed by a key that is not this wallet's")),
+        (false, 0) => Err(format!("input {i} is not signed")),
+        (false, _) => Err(format!("input {i}: more than one signature")),
+        (true, 0) => {
+            let sig_bytes: Vec<u8> = match kind {
+                Kind::P2pkh => {
+                    if inp.final_script_witness.as_ref().is_some_and(|w| !w.is_empty()) {
+                        return Err(format!("input {i}: a legacy input has no witness"));
+                    }
+                    let ss = inp.final_script_sig.as_ref().ok_or_else(|| format!("input {i} is not signed"))?;
+                    let items: Vec<Vec<u8>> = ss
+                        .instructions()
+                        .map(|x| match x {
+                            Ok(bitcoin::script::Instruction::PushBytes(b)) => Ok(b.as_bytes().to_vec()),
+                            _ => Err(format!("input {i}: final scriptSig is not two pushes")),
+                        })
+                        .collect::<Result<_, _>>()?;
+                    if items.len() != 2 || items[1] != ours.to_bytes() {
+                        return Err(format!("input {i}: final scriptSig is not for this wallet's key"));
+                    }
+                    items[0].clone()
+                }
+                _ => {
+                    let fw = inp.final_script_witness.as_ref().ok_or_else(|| format!("input {i} is not signed"))?;
+                    let expect_ss = match redeem {
+                        Some(r) => push_only(r.as_bytes())?,
+                        None => ScriptBuf::new(),
+                    };
+                    if inp.final_script_sig.clone().unwrap_or_default() != expect_ss {
+                        return Err(format!("input {i}: final scriptSig is not this wallet's"));
+                    }
+                    let items: Vec<&[u8]> = fw.iter().collect();
+                    if items.len() != 2 || items[1] != ours.to_bytes().as_slice() {
+                        return Err(format!("input {i}: final witness is not for this wallet's key"));
+                    }
+                    items[0].to_vec()
+                }
+            };
+            ecdsa::Signature::from_slice(&sig_bytes).map_err(|e| format!("input {i}: {e}"))
+        }
+        (true, _) => Err(format!("input {i}: more than one signature")),
+    }
 }
 
 /// libbitcoinconsensus (Bitcoin Core 26) over every input, with all spent outputs (needed for Taproot).
@@ -263,6 +347,12 @@ trait ByteArray {
     fn to_byte_array_compat(self) -> [u8; 32];
 }
 impl ByteArray for bitcoin::sighash::SegwitV0Sighash {
+    fn to_byte_array_compat(self) -> [u8; 32] {
+        use bitcoin::hashes::Hash;
+        self.to_byte_array()
+    }
+}
+impl ByteArray for bitcoin::sighash::LegacySighash {
     fn to_byte_array_compat(self) -> [u8; 32] {
         use bitcoin::hashes::Hash;
         self.to_byte_array()
@@ -311,38 +401,60 @@ mod tests {
         Xpriv::new_master(bitcoin::NetworkKind::Main, &[7u8; 32]).unwrap()
     }
 
+    /// The final scriptSig / witness of `v`'s transaction as PSBT final fields (None when empty).
+    fn finals_of(v: &Verified, i: usize) -> (Option<ScriptBuf>, Option<Witness>) {
+        let t = signed_tx(v);
+        let ss = Some(t.input[i].script_sig.clone()).filter(|s| !s.is_empty());
+        let w = Some(t.input[i].witness.clone()).filter(|w| !w.is_empty());
+        (ss, w)
+    }
+
     #[test]
     fn honest_signatures_verify_and_finalize() {
-        for kind in [Kind::P2wpkh, Kind::P2tr] {
+        for kind in Kind::ALL {
             let (b, key) = built(kind);
             assert!(b.inputs.len() >= 2, "multi-input case");
             let signed = phone_sign(&b.psbt, &key);
             let v = verify_signed(&b, &psbt_base64(&signed)).unwrap();
             assert_eq!(v.fee, b.fee);
-            assert_eq!(v.txid, b.psbt.unsigned_tx.compute_txid().to_string(), "segwit: txid fixed before signing");
+            let unsigned_txid = b.psbt.unsigned_tx.compute_txid().to_string();
+            match kind {
+                Kind::P2wpkh | Kind::P2tr => {
+                    assert_eq!(v.txid, unsigned_txid, "native segwit: txid fixed before signing")
+                }
+                // the scriptSig (redeem script; for Legacy the signature too) is part of the txid
+                Kind::P2shP2wpkh | Kind::P2pkh => assert_ne!(v.txid, unsigned_txid),
+            }
             assert!(
                 v.vsize <= b.vsize && v.vsize + 3 >= b.vsize,
-                "estimate is a tight upper bound ({} vs {})",
+                "{kind:?}: estimate is a tight upper bound ({} vs {})",
                 v.vsize,
                 b.vsize
             );
             // the result is a complete, valid transaction
-            assert!(signed_tx(&v).input.iter().all(|i| !i.witness.is_empty()));
-            consensus_check(&signed_tx(&v), &b.prevouts()).unwrap();
+            let t = signed_tx(&v);
+            match kind {
+                Kind::P2pkh => assert!(t.input.iter().all(|i| i.witness.is_empty() && !i.script_sig.is_empty())),
+                Kind::P2shP2wpkh => assert!(t.input.iter().all(|i| !i.witness.is_empty()
+                    && i.script_sig.len() == 23
+                    && i.script_sig.as_bytes()[..3] == [0x16, 0x00, 0x14])),
+                _ => assert!(t.input.iter().all(|i| !i.witness.is_empty() && i.script_sig.is_empty())),
+            }
+            consensus_check(&t, &b.prevouts()).unwrap();
             // rust-bitcoin's own finalizer agrees with ours
             let mut f = signed.clone();
             for (i, inp) in f.inputs.iter_mut().enumerate() {
-                inp.final_script_witness = Some(signed_tx(&v).input[i].witness.clone());
+                (inp.final_script_sig, inp.final_script_witness) = finals_of(&v, i);
                 inp.partial_sigs.clear();
                 inp.tap_key_sig = None;
             }
-            assert_eq!(f.extract_tx_unchecked_fee_rate(), signed_tx(&v));
+            assert_eq!(f.extract_tx_unchecked_fee_rate(), t);
         }
     }
 
     #[test]
     fn tampered_outputs_or_fees_are_refused() {
-        for kind in [Kind::P2wpkh, Kind::P2tr] {
+        for kind in Kind::ALL {
             let (b, key) = built(kind);
             let ri = b.outputs.iter().position(|o| o.change.is_none()).unwrap();
             let ci = 1 - ri;
@@ -396,7 +508,7 @@ mod tests {
 
     #[test]
     fn wrong_keys_sighash_types_and_bad_signatures_are_refused() {
-        for kind in [Kind::P2wpkh, Kind::P2tr] {
+        for kind in Kind::ALL {
             let (b, key) = built(kind);
             // signed by another wallet (with our derivation paths): no signature by our keys
             let mut foreign = b.psbt.clone();
@@ -416,9 +528,9 @@ mod tests {
                 inp.bip32_derivation = b.psbt.inputs[i].bip32_derivation.clone();
                 inp.tap_key_origins = b.psbt.inputs[i].tap_key_origins.clone();
             }
-            if kind == Kind::P2wpkh {
+            if kind.ecdsa() {
                 // a foreign key's partial sig is not ours
-                assert!(verify_signed(&b, &psbt_base64(&s)).is_err());
+                assert!(verify_signed(&b, &psbt_base64(&s)).is_err(), "{kind:?}");
             } else {
                 // tap_key_sig by another key: Schnorr check against our output key fails
                 for inp in s.inputs.iter_mut() {
@@ -431,39 +543,44 @@ mod tests {
             // a valid signature moved to another input
             let good = phone_sign(&b.psbt, &key);
             let mut swapped = good.clone();
-            match kind {
-                Kind::P2wpkh => {
-                    let s0 = *good.inputs[0].partial_sigs.values().next().unwrap();
-                    let k1 = *good.inputs[1].partial_sigs.keys().next().unwrap();
-                    swapped.inputs[1].partial_sigs = std::collections::BTreeMap::from([(k1, s0)]);
-                }
-                Kind::P2tr => swapped.inputs[1].tap_key_sig = good.inputs[0].tap_key_sig,
+            if kind.ecdsa() {
+                let s0 = *good.inputs[0].partial_sigs.values().next().unwrap();
+                let k1 = *good.inputs[1].partial_sigs.keys().next().unwrap();
+                swapped.inputs[1].partial_sigs = std::collections::BTreeMap::from([(k1, s0)]);
+            } else {
+                swapped.inputs[1].tap_key_sig = good.inputs[0].tap_key_sig;
             }
-            assert!(verify_signed(&b, &psbt_base64(&swapped)).unwrap_err().contains("does not verify"));
+            assert!(verify_signed(&b, &psbt_base64(&swapped)).unwrap_err().contains("does not verify"), "{kind:?}");
             // SIGHASH_NONE / ALL|ANYONECANPAY: refused even though the signature is valid for it
             let mut p = b.psbt.clone();
-            match kind {
-                Kind::P2wpkh => {
-                    for inp in p.inputs.iter_mut() {
-                        inp.sighash_type = Some(EcdsaSighashType::None.into());
-                    }
-                }
-                Kind::P2tr => {
-                    for inp in p.inputs.iter_mut() {
-                        inp.sighash_type = Some(TapSighashType::AllPlusAnyoneCanPay.into());
-                    }
-                }
+            for inp in p.inputs.iter_mut() {
+                inp.sighash_type = Some(if kind.ecdsa() {
+                    EcdsaSighashType::None.into()
+                } else {
+                    TapSighashType::AllPlusAnyoneCanPay.into()
+                });
             }
-            assert!(verify_signed(&b, &psbt_base64(&phone_sign(&p, &key))).unwrap_err().contains("sighash"));
+            assert!(
+                verify_signed(&b, &psbt_base64(&phone_sign(&p, &key))).unwrap_err().contains("sighash"),
+                "{kind:?}"
+            );
             // an unsigned input
             let mut half = good.clone();
             half.inputs[2].partial_sigs.clear();
             half.inputs[2].tap_key_sig = None;
             assert!(verify_signed(&b, &psbt_base64(&half)).unwrap_err().contains("not signed"));
             // the phone echoing a different spent amount
-            let mut amt = good.clone();
-            amt.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(1);
-            assert!(verify_signed(&b, &psbt_base64(&amt)).is_err());
+            if kind.segwit() {
+                let mut amt = good.clone();
+                amt.inputs[0].witness_utxo.as_mut().unwrap().value = Amount::from_sat(1);
+                assert!(verify_signed(&b, &psbt_base64(&amt)).is_err());
+            } else {
+                // Legacy: the phone echoing a witness UTXO at all must match the coin too
+                let mut amt = good.clone();
+                amt.inputs[0].witness_utxo =
+                    Some(TxOut { value: Amount::from_sat(1), script_pubkey: b.inputs[0].derived.script.clone() });
+                assert!(verify_signed(&b, &psbt_base64(&amt)).unwrap_err().contains("changed the spent amount"));
+            }
             // garbage
             assert!(verify_signed(&b, "not base64!").is_err());
             assert!(verify_signed(&b, &base64::engine::general_purpose::STANDARD.encode(b"psbt\xff")).is_err());
@@ -472,23 +589,89 @@ mod tests {
 
     #[test]
     fn finalized_witnesses_from_the_phone_are_checked_too() {
-        for kind in [Kind::P2wpkh, Kind::P2tr] {
+        for kind in Kind::ALL {
             let (b, key) = built(kind);
             let v = verify_signed(&b, &psbt_base64(&phone_sign(&b.psbt, &key))).unwrap();
             let mut fin = b.psbt.clone();
             for (i, inp) in fin.inputs.iter_mut().enumerate() {
-                inp.final_script_witness = Some(signed_tx(&v).input[i].witness.clone());
+                (inp.final_script_sig, inp.final_script_witness) = finals_of(&v, i);
             }
-            assert_eq!(verify_signed(&b, &psbt_base64(&fin)).unwrap().txid, v.txid);
-            // a final witness for another key
+            assert_eq!(verify_signed(&b, &psbt_base64(&fin)).unwrap().txid, v.txid, "{kind:?}");
+            // a final witness (Legacy: scriptSig) for another key
             let mut bad = fin.clone();
-            let mut w: Vec<Vec<u8>> =
-                bad.inputs[0].final_script_witness.as_ref().unwrap().iter().map(<[u8]>::to_vec).collect();
-            let last = w.len() - 1;
-            w[last][5] ^= 1;
-            bad.inputs[0].final_script_witness = Some(Witness::from_slice(&w));
-            assert!(verify_signed(&b, &psbt_base64(&bad)).is_err());
+            if kind.segwit() {
+                let mut w: Vec<Vec<u8>> =
+                    bad.inputs[0].final_script_witness.as_ref().unwrap().iter().map(<[u8]>::to_vec).collect();
+                let last = w.len() - 1;
+                w[last][5] ^= 1;
+                bad.inputs[0].final_script_witness = Some(Witness::from_slice(&w));
+            } else {
+                let mut ss = bad.inputs[0].final_script_sig.as_ref().unwrap().to_bytes();
+                let last = ss.len() - 1;
+                ss[last] ^= 1;
+                bad.inputs[0].final_script_sig = Some(ScriptBuf::from_bytes(ss));
+            }
+            assert!(verify_signed(&b, &psbt_base64(&bad)).is_err(), "{kind:?}");
+            match kind {
+                Kind::P2shP2wpkh => {
+                    // the right witness under another scriptSig (not this key's redeem script)
+                    let mut other = fin.clone();
+                    other.inputs[0].final_script_sig = fin.inputs[1].final_script_sig.clone();
+                    assert!(verify_signed(&b, &psbt_base64(&other)).unwrap_err().contains("final scriptSig"));
+                }
+                Kind::P2pkh => {
+                    // a legacy input with a witness
+                    let mut w = fin.clone();
+                    w.inputs[0].final_script_witness = Some(Witness::from_slice(&[vec![1u8]]));
+                    assert!(verify_signed(&b, &psbt_base64(&w)).unwrap_err().contains("no witness"));
+                }
+                _ => {}
+            }
         }
+    }
+
+    /// The phone's end-to-end fixtures (app/src/test/resources/btc/psbt-e2e.json, generated with
+    /// embit by tools/btc_fixtures.py; the phone reproduces every signature byte for byte) are
+    /// valid transactions for Bitcoin Core's interpreter: Legacy, Nested SegWit, Native SegWit and
+    /// Taproot inputs, alone and mixed.
+    #[test]
+    fn phone_fixtures_pass_consensus() {
+        let all: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../app/src/test/resources/btc/psbt-e2e.json")).unwrap();
+        let mut n = 0;
+        for c in all["cases"].as_array().unwrap() {
+            let psbt = Psbt::deserialize(
+                &base64::engine::general_purpose::STANDARD.decode(c["psbt"].as_str().unwrap()).unwrap(),
+            )
+            .unwrap();
+            let tx: Transaction = consensus::encode::deserialize_hex(c["finalTx"].as_str().unwrap()).unwrap();
+            assert_eq!(tx.compute_txid().to_string(), c["txid"].as_str().unwrap());
+            let prevouts: Vec<TxOut> = psbt
+                .inputs
+                .iter()
+                .zip(&psbt.unsigned_tx.input)
+                .map(|(i, t)| match (&i.non_witness_utxo, &i.witness_utxo) {
+                    (Some(prev), _) => prev.output[t.previous_output.vout as usize].clone(),
+                    (None, Some(w)) => w.clone(),
+                    _ => panic!("no utxo"),
+                })
+                .collect();
+            consensus_check(&tx, &prevouts).unwrap_or_else(|e| panic!("{}: {e}", c["name"]));
+            // and one changed signature byte breaks it
+            let mut broken = tx.clone();
+            if broken.input[0].witness.is_empty() {
+                let mut ss = broken.input[0].script_sig.to_bytes();
+                ss[10] ^= 1;
+                broken.input[0].script_sig = ScriptBuf::from_bytes(ss);
+            } else {
+                let mut w: Vec<Vec<u8>> = broken.input[0].witness.iter().map(<[u8]>::to_vec).collect();
+                w[0][10] ^= 1;
+                broken.input[0].witness = Witness::from_slice(&w);
+            }
+            assert!(consensus_check(&broken, &prevouts).is_err());
+            n += 1;
+        }
+        assert!(n >= 7);
     }
 
     #[test]

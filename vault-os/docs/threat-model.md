@@ -377,7 +377,8 @@ never stands in for another), and the phone checks the claim against the account
 ## Bitcoin on the companion
 
 The Mac is a **watch-only** Bitcoin wallet for keys that stay on the phone (BIP-84 P2WPKH and
-BIP-86 P2TR, accounts 1–20). It holds the account xpub, fingerprint and descriptor
+BIP-86 P2TR; for coins of a restored Ledger/Trezor-era wallet also BIP-49 P2SH-P2WPKH and BIP-44
+P2PKH; accounts 1–20; one script type per account, never mixed in one send). It holds the account xpub, fingerprint and descriptor
 (`btc-accounts.json`, 0600, every entry re-derived and re-checked on load), never a private key.
 
 **Pairing.** `btcGetAccount` answers are schema-exact; the path must be the one requested, the
@@ -393,8 +394,8 @@ signature must belong to it).
 **Server (Esplora) is untrusted.** It supplies balances, coins, fee estimates and relays the
 broadcast. Every coin is accepted only if the server's previous transaction hashes to the coin's
 txid and pays exactly that value to exactly the derived script; P2TR sighashes commit to all spent
-amounts, every P2WPKH input carries its `non_witness_utxo` (the phone requires it; a send that cannot
-include them all is refused). A lying server can hide funds, lie
+amounts, every other input (P2WPKH, P2SH-P2WPKH, P2PKH) carries its `non_witness_utxo` (the phone
+requires it; a send that cannot include them all is refused). A lying server can hide funds, lie
 about history/fees, or censor a broadcast; it cannot redirect funds. It **learns every address of
 the account and the user's IP** (~40 address queries for the first scan, then a few per refresh);
 custom servers (own node; http only to localhost/LAN) are used alone, without fallback.
@@ -403,9 +404,12 @@ custom servers (own node; http only to localhost/LAN) are used alone, without fa
 PSBT must contain byte-for-byte the unsigned transaction this Mac built (so recipient, amount,
 change and fee are as reviewed; fee computed from the Mac's own input amounts); echoed
 `witness_utxo` must be unchanged; each input carries exactly one signature, by the key derived here
-for that input (P2WPKH: ECDSA over the BIP-143 sighash; P2TR: Schnorr over the BIP-341 key-spend
-sighash against the tweaked output key that also appears in the spent script), SIGHASH_ALL or
-DEFAULT only; witnesses are assembled on the Mac from the checked signatures and each input is run
+for that input (P2WPKH and P2SH-P2WPKH: ECDSA over the BIP-143 sighash, script code from the
+P2WPKH program / redeem script; P2PKH: ECDSA over the legacy sighash; P2TR: Schnorr over the
+BIP-341 key-spend sighash against the tweaked output key that also appears in the spent script),
+and that key must lock the spent script; SIGHASH_ALL or DEFAULT only; scriptSigs (P2SH-P2WPKH: the
+redeem script push; P2PKH: signature and key) and witnesses are assembled on the Mac from the
+checked signatures and each input is run
 through Bitcoin Core's interpreter (libbitcoinconsensus 26, with all spent outputs). Only then is
 the transaction kept by txid; Broadcast is a separate click that cannot take bytes from the UI.
 Tests: tampered outputs/fees/locktime/sequence, foreign keys, moved signatures, non-ALL sighash,
@@ -419,7 +423,8 @@ no Tor, no BIP-21 parameters, no script-path/multisig; testnet uses Testnet4 ser
 
 **Scope.** The phone signs Bitcoin from the SAME 24 words as the EVM accounts: Native SegWit
 (P2WPKH, BIP-84, m/84'/coin'/a') and Taproot key path (P2TR, BIP-86, m/86'/coin'/a', no script
-tree), accounts a = 0…19 (USB "account" "1"…"20"), coin type 0 for `bitcoin` and 1 for
+tree), and — so that a restored Ledger/Trezor phrase reaches its older coins — Nested SegWit
+(P2SH-P2WPKH, BIP-49, m/49'/coin'/a') and Legacy (P2PKH, BIP-44, m/44'/coin'/a'), accounts a = 0…19 (USB "account" "1"…"20"), coin type 0 for `bitcoin` and 1 for
 `testnet`/`signet`. Three USB methods (README, "Bitcoin"): `btcGetAccount` (watch-only xpub and
 descriptor), `btcShowAddress` (address shown big for comparison) and `btcSignPsbt` (BIP-174 v0).
 The phone never builds, finalizes or broadcasts transactions: the companion does, and verifies
@@ -428,7 +433,7 @@ the signatures it gets back.
 **Keys.** Nothing new is stored. On the first Bitcoin request of an unlocked session the phone
 decrypts the record inside the seed-key PIN window (`withSeedKey` → `VaultKeyStore.
 withStandardSeed`, one decrypt; the BIP-39 seed array is zeroed when it returns) and derives the
-master fingerprint and the 40 account PUBLIC keys of that network (`BtcWallet`); private
+master fingerprint and the 80 account PUBLIC keys of that network (`BtcWallet`); private
 intermediates are destroyed (`Bip32.Key.destroy` zeroes the 32-byte secret). The public keys are
 cached in memory until lock or a wallet change — never written to disk, because a cached xpub
 decides which outputs the phone calls "change ✓", and a file an attacker could edit must not be
@@ -438,10 +443,12 @@ against the public key the review verified, signs, verifies every signature, and
 keys before the response is queued. The arithmetic uses BigInteger (not zeroable), the same
 documented limitation as web3j on the EVM path. No new dependency: Bouncy Castle's lightweight
 API (already shipped) provides secp256k1, SHA-256, RIPEMD-160 and HMAC-SHA512; BIP-32, Base58,
-Bech32/Bech32m, BIP-340 Schnorr, the BIP-341/143 sighashes and PSBT are implemented in the app and
-tested against every published vector of BIP-32 (TV1), 84, 86, 173, 350, 340, 341 (wallet), 143,
-174/371 and 380, plus signatures cross-checked byte for byte with an independent implementation
-(embit; `tools/btc_fixtures.py`).
+Bech32/Bech32m, BIP-340 Schnorr, the BIP-341/143 and legacy sighashes and PSBT are implemented in
+the app and tested against every published vector of BIP-32 (TV1), 84, 86, 49, 173, 350, 340, 341
+(wallet), 143, 174/371 and 380 (BIP-44: the well-known "abandon … about" addresses), plus
+signatures cross-checked byte for byte with an independent implementation (embit;
+`tools/btc_fixtures.py`) whose final transactions the companion's tests run through
+libbitcoinconsensus.
 
 **Passphrase wallets.** Bitcoin always uses the STANDARD wallet. While a passphrase wallet is open
 every Bitcoin request is refused with "Close the passphrase wallet first": supporting it would
@@ -460,35 +467,46 @@ already received. `btcShowAddress` answers only after the user tapped "Done: it 
 v2 fields refused; ≤ 200 KiB; ≤ 100 inputs and outputs; canonical sizes; no duplicate keys; key
 and value shapes of every BIP-174/371 field; unsigned transaction without scriptSigs or witness;
 non-witness UTXO must hash to its outpoint), then the signing policy. Refused with the reason on
-screen: any input that is not this wallet's own coin — every input needs a witness UTXO and a
-(Taproot) BIP-32 derivation for this wallet's fingerprint at an allowed path for the request's
-network, and the phone re-derives the key from the account xpub and must reproduce the UTXO's
-script (coinjoin, payjoin, multisig, P2SH-wrapped and legacy coins are refused); a non-witness
-UTXO that disagrees with the witness UTXO; sighash other than ALL (SegWit v0) or DEFAULT/ALL
-(Taproot); any input field the phone does not understand (redeem/witness scripts, finalized data,
-Taproot script path or merkle root, MuSig2, preimages, proprietary, unknown); an output script
+screen: any input that is not this wallet's own coin — every input needs a (Taproot) BIP-32
+derivation for this wallet's fingerprint at an allowed path for the request's network whose
+purpose is the script's type (84' P2WPKH, 86' P2TR, 49' P2SH-P2WPKH, 44' P2PKH), and the phone
+re-derives the key from the account xpub and must reproduce the UTXO's script (coinjoin, payjoin,
+multisig and other P2SH scripts are refused); a SegWit input without a witness UTXO; any input
+but Taproot without its non-witness UTXO (the previous transaction, hashed to the outpoint: a
+legacy P2PKH signature commits to no amount at all, a SegWit v0 one only to its own); a non-witness
+UTXO that disagrees with the witness UTXO; a P2SH-P2WPKH input without its redeem script or with
+one other than 0x0014 ‖ HASH160(derived key), a redeem script on any other input; sighash other
+than ALL (ECDSA: SegWit v0 and legacy) or DEFAULT/ALL (Taproot); any input field the phone does not
+understand (witness scripts, finalized data, Taproot script path or merkle root, MuSig2,
+preimages, proprietary, unknown); an output script
 that is not P2PKH/P2SH/P2WPKH/P2WSH/P2TR or push-only OP_RETURN; an output that claims to be this
 wallet's but whose script is not the derived key's; outputs worth more than the inputs.
 
 **Review.** Network first (test networks in amber, "test coins with no value"); "Spending from"
-per account; each recipient as "Send 0.01234567 BTC to" + the full address in 4-character
-groups, with the address book name, first-time and look-alike (address-poisoning) rows from the
+per account and type ("Account 1 · Nested SegWit (m/49'/0'/0')"); each recipient as "Send
+0.01234567 BTC to" + the full address in 4-character groups + its address type ("Legacy (P2PKH)
+address"), with the address book name, first-time and look-alike (address-poisoning) rows from the
 same `AddressSafety` / `RecipientHistory` as EVM, keyed `btc:<network>:<address>` and per wallet
 `btc-wallet:<network>:<fingerprint>`; own receiving addresses marked as yours; OP_RETURN as "Data
 output (n bytes)" (DANGER if it carries value: burned); change as "Change back to your wallet ✓
-(short address · path)" ONLY when verified by derivation (an unverified output is a recipient);
+(short address · path)" ONLY when verified by derivation AND on the change chain of an account
+and script type the transaction spends from, within the gap limit (other own keys get a WARNING
+with their path; an unverified output is a recipient);
 "Network fee 0.00002345 BTC (12.3 sat/vB)" with vsize from the unsigned transaction plus the
-largest possible witness of each input (≤ 1 vB high per ECDSA input). DANGER when the fee exceeds
+largest possible scriptSig and witness of each input (≤ 1 vB high per ECDSA input). DANGER when the fee exceeds
 10 % of the amount sent or 0.01 BTC; WARNING above 500 sat/vB or below 1 sat/vB. Technical
 details list every input (outpoint, amount, path) and output (sats, script type), lock time and
-replace-by-fee. The receipt shows the txid (final for SegWit) and offers "Save as contact".
+replace-by-fee. The receipt shows the final txid (for P2SH-P2WPKH and P2PKH inputs computed with the
+scriptSigs the host will add, which are part of the txid) and offers "Save as contact".
 
 **SegWit fee attack.** A host that lies about input amounts cannot get a valid signature over a
 wrong amount for the input signed (BIP-143 commits each signature to its own input's amount;
-BIP-341 commits every Taproot signature to all inputs' amounts and scripts). The residual SegWit
+BIP-341 commits every Taproot signature to all inputs' amounts and scripts). A legacy (P2PKH)
+signature commits to NO amount, so the phone never takes a P2PKH amount from anything but the
+previous transaction that hashes to the outpoint. The residual SegWit
 v0 attack — two signing sessions over the same coins, each lying about a different input, then
 combining the valid halves — is mitigated by (1) checking the non-witness UTXO when the host
-supplies one, and (2) `BtcAmountMemory`: the phone remembers, in memory for the app's lifetime,
+supplies one (the phone now requires it for every non-Taproot input), and (2) `BtcAmountMemory`: the phone remembers, in memory for the app's lifetime,
 the amount and script it signed each coin as, and refuses a later PSBT that claims a different
 one. A restart forgets; hosts should send non-witness UTXOs for SegWit v0 inputs.
 

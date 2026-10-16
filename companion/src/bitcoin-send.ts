@@ -7,7 +7,7 @@ import type { SendError } from "./api";
 import { h, icon, padlock, short, copy, toast, capitalize, fact, statusCard } from "./ui";
 import { stepper, clockLine, clockTicker, cancelButton } from "./send-flow";
 import { explainSendError, asSendError } from "./errors";
-import { btcState, btcApi, wallets, go, btcNet, fmtBtc, fmtSats, usd, groupedBtc, btcToSats, satsToBtcStr } from "./bitcoin-core";
+import { btcState, btcApi, wallets, go, btcNet, btcKind, fmtBtc, fmtSats, usd, groupedBtc, btcToSats, satsToBtcStr } from "./bitcoin-core";
 import type { BtcAccount, BtcHistory, BtcQuote, Fees, AddrCheck, Signed } from "./bitcoin-core";
 
 /** What the send flow needs from the Bitcoin screens (bitcoin.ts). */
@@ -144,7 +144,7 @@ function flowBody(a: BtcAccount): Node {
       const maxBtn = h("button", { class: `chip-btn${draft.max ? " on" : ""}`, type: "button", disabled: quoting, onclick: () => { draft.max = !draft.max; btcState.host.renderNow(); } }, "Max");
       const feeBtn = (k: "slow" | "normal" | "fast", label: string, eta: string) => {
         const r = fees ? fees[k] : null;
-        const vb = a.kind === "p2tr" ? 154 : 141;
+        const vb = btcKind(a.kind).vbytes; // a typical 1-input, 2-output send
         return h("button", { type: "button", class: `fee-opt${draft.fee === k ? " on" : ""}`, disabled: !fees, onclick: () => { draft.fee = k; btcState.host.renderNow(); } },
           h("strong", null, label), h("span", { class: "muted small" }, eta), h("span", { class: "mono small" }, r ? `${r} sat/vB` : "…"), h("span", { class: "muted small" }, r ? `≈ ${fmtSats(Math.ceil(r * vb))}${$(Math.ceil(r * vb)) ? ` · ${$(Math.ceil(r * vb))}` : ""}` : ""));
       };

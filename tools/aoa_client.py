@@ -527,7 +527,14 @@ def exchange(endpoint_in, endpoint_out, request, timeout_ms=300_000, max_respons
 
 
 BTC_NETWORKS = ("bitcoin", "testnet", "signet")
-BTC_TYPES = ("p2wpkh", "p2tr")
+BTC_TYPES = ("p2wpkh", "p2tr", "p2sh-p2wpkh", "p2pkh")
+# type -> (BIP-44-style purpose, descriptor open/close, address prefixes on bitcoin / test networks)
+BTC_TYPE_SHAPES = {
+    "p2wpkh": ("84", "wpkh(", ")", ("bc1q",), ("tb1q",)),
+    "p2tr": ("86", "tr(", ")", ("bc1p",), ("tb1p",)),
+    "p2sh-p2wpkh": ("49", "sh(wpkh(", "))", ("3",), ("2",)),
+    "p2pkh": ("44", "pkh(", ")", ("1",), ("m", "n")),
+}
 BTC_ACCOUNT_FIELDS = {"id", "status", "fingerprint", "path", "xpub", "descriptor"}
 
 
@@ -564,7 +571,7 @@ def validate_btc_response(request, response):
             raise ValueError("btcGetAccount answer does not match the protocol")
         if not re.fullmatch(r"[0-9a-f]{8}", response["fingerprint"]):
             raise ValueError("fingerprint must be 8 lowercase hex")
-        purpose = "84" if request["type"] == "p2wpkh" else "86"
+        purpose, opening, closing, _main, _test = BTC_TYPE_SHAPES[request["type"]]
         coin = "0" if request["network"] == "bitcoin" else "1"
         account = int(request["account"]) - 1
         if response["path"] != f"m/{purpose}'/{coin}'/{account}'":
@@ -572,16 +579,14 @@ def validate_btc_response(request, response):
         prefix = "xpub" if request["network"] == "bitcoin" else "tpub"
         if not response["xpub"].startswith(prefix):
             raise ValueError(f"extended key is not a {prefix}")
-        function = "wpkh" if request["type"] == "p2wpkh" else "tr"
-        expected = f"{function}([{response['fingerprint']}/{purpose}h/{coin}h/{account}h]{response['xpub']}/<0;1>/*)#"
+        expected = f"{opening}[{response['fingerprint']}/{purpose}h/{coin}h/{account}h]{response['xpub']}/<0;1>/*{closing}#"
         if not response["descriptor"].startswith(expected) or len(response["descriptor"]) != len(expected) + 8:
             raise ValueError("descriptor does not match the account")
     elif method == "btcShowAddress":
         if set(response) != {"id", "status", "address"} or status != "ok":
             raise ValueError("btcShowAddress answer does not match the protocol")
-        hrp = "bc1" if request["network"] == "bitcoin" else "tb1"
-        version = "q" if request["type"] == "p2wpkh" else "p"
-        if not response["address"].startswith(hrp + version):
+        _purpose, _open, _close, main, test = BTC_TYPE_SHAPES[request["type"]]
+        if not response["address"].startswith(main if request["network"] == "bitcoin" else test):
             raise ValueError("address does not match the requested network and type")
     else:
         if set(response) != {"id", "status", "psbt"} or status != "approved":

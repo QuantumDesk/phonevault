@@ -6,8 +6,9 @@ import java.util.Locale;
 /**
  * The watch-only view of the standard wallet's Bitcoin accounts on one network, derived from the
  * SAME BIP-39 seed as the EVM accounts: the master fingerprint and the account-level public keys
- * m/84'/coin'/a' (P2WPKH, BIP-84) and m/86'/coin'/a' (P2TR, BIP-86) for a = 0…19 (the USB
- * "account" 1…20). No private key is kept: everything below the account level (receive/change
+ * m/84'/coin'/a' (P2WPKH, BIP-84), m/86'/coin'/a' (P2TR, BIP-86), and, for coins received by a
+ * Ledger/Trezor-era wallet restored from the same phrase, m/49'/coin'/a' (P2SH-P2WPKH, BIP-49) and
+ * m/44'/coin'/a' (P2PKH, BIP-44), for a = 0…19 (the USB "account" 1…20). No private key is kept: everything below the account level (receive/change
  * addresses, change and input verification) uses public derivation.
  *
  * <p>Built inside the seed-key window ({@link #derive}) and cached in memory for the unlocked
@@ -22,24 +23,38 @@ final class BtcWallet {
     static final int MAX_PSBT_INDEX = 999_999;
 
     enum Type {
-        P2WPKH("p2wpkh", 84, "wpkh", "Native SegWit"),
-        P2TR("p2tr", 86, "tr", "Taproot");
+        P2WPKH("p2wpkh", 84, "wpkh(", ")", "Native SegWit"),
+        P2TR("p2tr", 86, "tr(", ")", "Taproot"),
+        /** BIP-49 "Nested SegWit": P2WPKH wrapped in P2SH (3… / 2…). */
+        P2SH_P2WPKH("p2sh-p2wpkh", 49, "sh(wpkh(", "))", "Nested SegWit"),
+        /** BIP-44 "Legacy": P2PKH (1… / m…, n…). */
+        P2PKH("p2pkh", 44, "pkh(", ")", "Legacy");
 
         final String wire;
         final int purpose;
-        final String descriptorFunction;
+        final String descriptorOpen, descriptorClose;
         final String label;
 
-        Type(String wire, int purpose, String descriptorFunction, String label) {
+        Type(String wire, int purpose, String descriptorOpen, String descriptorClose, String label) {
             this.wire = wire;
             this.purpose = purpose;
-            this.descriptorFunction = descriptorFunction;
+            this.descriptorOpen = descriptorOpen;
+            this.descriptorClose = descriptorClose;
             this.label = label;
         }
 
+        /** Signed with ECDSA over a 33-byte key named in PSBT_IN/OUT_BIP32_DERIVATION (everything but Taproot). */
+        boolean ecdsa() { return this != P2TR; }
+
         static Type fromWire(String v) {
             for (Type t : values()) if (t.wire.equals(v)) return t;
-            throw new IllegalArgumentException("Unsupported Bitcoin address type (p2wpkh or p2tr)");
+            throw new IllegalArgumentException("Unsupported Bitcoin address type (p2wpkh, p2tr, p2sh-p2wpkh or p2pkh)");
+        }
+
+        /** The type whose BIP-44-style purpose is {@code purpose}, or null. */
+        static Type forPurpose(int purpose) {
+            for (Type t : values()) if (t.purpose == purpose) return t;
+            return null;
         }
     }
 
@@ -114,10 +129,10 @@ final class BtcWallet {
 
     String xpub(Type type, int account) { return account(type, account).serializePublic(network.xpubVersion); }
 
-    /** wpkh([fp/84h/0h/0h]xpub…/<0;1>/*)#checksum, or tr(…) for Taproot. */
+    /** wpkh([fp/84h/0h/0h]xpub…/<0;1>/*)#checksum; tr(…), sh(wpkh(…)) or pkh(…) for the other types. */
     String descriptor(Type type, int account) {
-        String body = type.descriptorFunction + "([" + fingerprintHex() + "/" + type.purpose + "h/" + network.coinType + "h/"
-                + account + "h]" + xpub(type, account) + "/<0;1>/*)";
+        String body = type.descriptorOpen + "[" + fingerprintHex() + "/" + type.purpose + "h/" + network.coinType + "h/"
+                + account + "h]" + xpub(type, account) + "/<0;1>/*" + type.descriptorClose;
         return Descriptors.withChecksum(body);
     }
 
@@ -135,9 +150,16 @@ final class BtcWallet {
     }
 
     static byte[] scriptFor(Type type, byte[] compressedPub) {
-        if (type == Type.P2WPKH) return BtcScript.p2wpkh(BtcCrypto.hash160(compressedPub));
-        return BtcScript.p2tr(BtcCrypto.taprootOutputKey(Arrays.copyOfRange(compressedPub, 1, 33)));
+        switch (type) {
+            case P2WPKH: return BtcScript.p2wpkh(BtcCrypto.hash160(compressedPub));
+            case P2SH_P2WPKH: return BtcScript.p2sh(BtcCrypto.hash160(redeemScript(compressedPub)));
+            case P2PKH: return BtcScript.p2pkhScript(BtcCrypto.hash160(compressedPub));
+            default: return BtcScript.p2tr(BtcCrypto.taprootOutputKey(Arrays.copyOfRange(compressedPub, 1, 33)));
+        }
     }
+
+    /** BIP-49 redeem script: the P2WPKH witness program 0x0014 ‖ HASH160(pubkey). */
+    static byte[] redeemScript(byte[] compressedPub) { return BtcScript.p2wpkh(BtcCrypto.hash160(compressedPub)); }
 
     String address(Type type, int account, int change, int index) {
         return BtcScript.address(scriptPubKey(type, account, change, index), network);

@@ -7,8 +7,8 @@ import { onEvent, openExternal, errText } from "./api";
 import { h, icon, padlock, short, copy, ago, toast, fact } from "./ui";
 import { qrSvg } from "./qr";
 import { explainPlain } from "./errors";
-import { btcState, btcApi, wallets, go, btcNet, fmtBtc, fmtSats, usd, groupedBtc } from "./bitcoin-core";
-import type { BtcHost, BtcNet, BtcAccount, BtcWallet, Candidate, Shown, Export } from "./bitcoin-core";
+import { btcState, btcApi, wallets, go, btcNet, btcKind, fmtBtc, fmtSats, usd, groupedBtc } from "./bitcoin-core";
+import type { BtcHost, BtcNet, BtcKind, BtcAccount, BtcWallet, Candidate, Shown, Export } from "./bitcoin-core";
 import { initBtcSend, btcSendFormOpen, btcSendBusy, startSend, startBump, sendView } from "./bitcoin-send";
 import "./bitcoin.css";
 
@@ -225,6 +225,7 @@ function receiveView(a: BtcAccount) {
       ),
       verifyBox,
     ),
+    btcKind(a.kind).older ? h("p", { class: "muted small" }, `${btcKind(a.kind).name} is an older address type, here to reach coins of a restored Ledger or Trezor wallet. For new coins, Native SegWit is recommended: it costs less to spend.`) : null,
     verified ? null : h("div", { class: "callout accent" },
       h("strong", null, "Verify it on your phone before the first payment"),
       h("span", null, "This Mac computed the address from your account's public key. Malware on a computer can swap an address on screen; your phone can't be fooled that way. Tap Verify on phone and compare."),
@@ -261,7 +262,7 @@ function pairView() {
     };
     body = h("section", { class: "card" },
       h("p", { class: "kicker" }, "Step 2 of 2 · Compare on the phone"),
-      h("h3", null, `${c.kind === "p2tr" ? "Taproot" : "Native SegWit"} account ${c.account}`),
+      h("h3", null, `${btcKind(c.kind).name} account ${c.account}`),
       h("dl", { class: "facts" },
         fact("Fingerprint", h("span", { class: "mono" }, c.fingerprint)),
         fact("Path", h("span", { class: "mono" }, c.path)),
@@ -293,7 +294,9 @@ function pairView() {
     );
   } else {
     const reading = pair.s === "reading";
-    const kindSeg = (k: string, label: string, note: string) => h("button", { class: pairDraft.kind === k ? "on" : "", title: note, onclick: () => { pairDraft.kind = k; btcState.host.renderNow(); } }, label);
+    const kindSeg = (k: string, label: string, note: string) => h("button", { type: "button", class: pairDraft.kind === k ? "on" : "", "aria-pressed": String(pairDraft.kind === k), title: note, onclick: () => { pairDraft.kind = k; btcState.host.renderNow(); } }, label);
+    const kindButton = (id: BtcKind) => { const k = btcKind(id); return kindSeg(k.id, `${k.name} (${n.test ? k.testPrefix : k.prefix})`, `${k.bip}. ${k.note}`); };
+    const draftKind = btcKind(pairDraft.kind);
     const acct = h("select", { class: "net-select", "aria-label": "Account number" }, Array.from({ length: 20 }, (_, i) => h("option", { value: i + 1, selected: pairDraft.account === i + 1 }, `Account ${i + 1}`)));
     acct.addEventListener("change", () => { pairDraft.account = Number(acct.value); });
     const read = async () => {
@@ -309,8 +312,10 @@ function pairView() {
       h("h3", null, "Add a Bitcoin account from your phone"),
       h("p", { class: "muted" }, "The phone shares the account's public key (xpub) once you approve it there. This Mac can then show balances and prepare transactions; only the phone can sign."),
       h("div", { class: "field" }, h("span", { class: "field-label" }, "Address type"),
-        h("div", { class: "segmented two" }, kindSeg("p2wpkh", "Native SegWit (bc1q)", "BIP-84. Supported everywhere. Recommended."), kindSeg("p2tr", "Taproot (bc1p)", "BIP-86. Slightly cheaper to spend; a few services can't send to it yet."))),
-      h("p", { class: "muted small" }, pairDraft.kind === "p2tr" ? "Taproot (BIP-86): a little cheaper to spend. A few older exchanges can't send to bc1p addresses yet." : "Native SegWit (BIP-84): works with every wallet and exchange. The default."),
+        h("div", { class: "segmented two" }, kindButton("p2wpkh"), kindButton("p2tr")),
+        h("span", { class: "muted small" }, "Restored a Ledger or Trezor phrase? Older address types:"),
+        h("div", { class: "segmented two" }, kindButton("p2sh-p2wpkh"), kindButton("p2pkh"))),
+      h("p", { class: "muted small" }, draftKind.note),
       h("label", { class: "field" }, h("span", { class: "field-label" }, "Account"), h("span", { class: "net-chip asset-chip" }, h("span", null, `Account ${pairDraft.account}`), icon("chevron", 14), acct)),
       pair.s === "choose" && pair.error ? h("p", { class: "inline-error" }, icon("alert", 15), pair.error) : null,
       h("div", { class: "actions" },

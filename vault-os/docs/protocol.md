@@ -192,9 +192,12 @@ GENUINE / DEVELOPMENT / FAIL; see [device-attestation.md](device-attestation.md)
 ### Bitcoin: `btcGetAccount`, `btcShowAddress`, `btcSignPsbt`
 
 Same seed, standard wallet only (refused while a passphrase wallet is open). `network` is
-`bitcoin`, `testnet` or `signet` (coin type 0 / 1 / 1); `type` is `p2wpkh` (BIP-84) or `p2tr`
-(BIP-86, key path); `account` is `"1"`…`"20"` (account `"1"` is `m/84'/coin'/0'` or
-`m/86'/coin'/0'`).
+`bitcoin`, `testnet` or `signet` (coin type 0 / 1 / 1); `type` is `p2wpkh` (BIP-84), `p2tr`
+(BIP-86, key path), or, for coins of a restored Ledger/Trezor-era wallet, `p2sh-p2wpkh` (BIP-49
+Nested SegWit, `3…` / `2…`) or `p2pkh` (BIP-44 Legacy, `1…` / `m…`, `n…`); `account` is
+`"1"`…`"20"` (account `"1"` is `m/84'/coin'/0'`, `m/86'/coin'/0'`, `m/49'/coin'/0'` or
+`m/44'/coin'/0'`). The account key is always an `xpub`/`tpub` (never SLIP-132 `ypub`); the
+descriptor names the script: `wpkh(…)`, `tr(…)`, `sh(wpkh(…))` or `pkh(…)`.
 
 ```json
 {"id":"b1","method":"btcGetAccount","network":"bitcoin","type":"p2wpkh","account":"1"}
@@ -212,10 +215,16 @@ Same seed, standard wallet only (refused while a passphrase wallet is open). `ne
 - `btcShowAddress` (`change` `"0"`/`"1"`, `index` `"0"`…`"9999"`) answers after the user compared
   the address on the phone and tapped Done.
 - `btcSignPsbt` takes a canonical, padded base64 BIP-174 **v0** PSBT (≤ 200 KiB decoded,
-  ≤ 100 inputs/outputs) and returns it with `PSBT_IN_PARTIAL_SIG` (P2WPKH, BIP-143 ECDSA,
-  `SIGHASH_ALL`) or `PSBT_IN_TAP_KEY_SIG` (P2TR key path, BIP-341/340 Schnorr, 64 bytes for
-  `SIGHASH_DEFAULT`) added. The host finalizes and broadcasts after its own checks
-  (`companion/src-tauri/src/btc/verify.rs`).
+  ≤ 100 inputs/outputs) and returns it with `PSBT_IN_PARTIAL_SIG` (P2WPKH and P2SH-P2WPKH:
+  BIP-143 ECDSA; P2PKH: legacy-sighash ECDSA; all `SIGHASH_ALL`) or `PSBT_IN_TAP_KEY_SIG` (P2TR
+  key path, BIP-341/340 Schnorr, 64 bytes for `SIGHASH_DEFAULT`) added; nothing is finalized. The
+  host builds the scriptSig / witness (P2SH-P2WPKH: scriptSig = push of the redeem script
+  `0014‖HASH160(key)`, witness = sig, key; P2PKH: scriptSig = sig, key) and broadcasts after its
+  own checks (`companion/src-tauri/src/btc/verify.rs`). Every input but Taproot must carry
+  `non_witness_utxo` (the previous transaction proves the amount: a legacy signature commits to
+  no amount, a SegWit v0 one only to its own); SegWit inputs carry `witness_utxo`, P2SH-P2WPKH
+  inputs their `redeem_script`; P2PKH inputs may omit `witness_utxo` (if present it must agree).
+  Inputs may mix types; the BIP-32 path's purpose must match each script's type.
 
 Signing rules and the review are in [threat-model.md](threat-model.md) ("Bitcoin").
 

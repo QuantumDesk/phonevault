@@ -13,7 +13,21 @@ export const BTC_NETS: { id: BtcNet; name: string; unit: string; test: boolean }
 ];
 export const btcNet = (id: BtcNet) => BTC_NETS.find((n) => n.id === id) ?? BTC_NETS[0];
 
-export interface BtcAccount { id: string; network: BtcNet; kind: "p2wpkh" | "p2tr"; kind_name: string; account: number; label: string; fingerprint: string; path: string; xpub: string; descriptor: string; active: boolean; unit: string; network_name: string }
+/** The phone's address types (USB "type"). Nested SegWit and Legacy reach coins of a restored Ledger/Trezor-era wallet. */
+export type BtcKind = "p2wpkh" | "p2tr" | "p2sh-p2wpkh" | "p2pkh";
+export const BTC_KINDS: { id: BtcKind; name: string; bip: string; prefix: string; testPrefix: string; older: boolean; note: string; vbytes: number }[] = [
+  { id: "p2wpkh", name: "Native SegWit", bip: "BIP-84", prefix: "bc1q", testPrefix: "tb1q", older: false, vbytes: 141,
+    note: "Native SegWit (BIP-84): works with every wallet and exchange. The default." },
+  { id: "p2tr", name: "Taproot", bip: "BIP-86", prefix: "bc1p", testPrefix: "tb1p", older: false, vbytes: 154,
+    note: "Taproot (BIP-86): a little cheaper to spend. A few older exchanges can't send to bc1p addresses yet." },
+  { id: "p2sh-p2wpkh", name: "Nested SegWit", bip: "BIP-49", prefix: "3…", testPrefix: "2…", older: true, vbytes: 166,
+    note: "Nested SegWit (BIP-49, P2SH-P2WPKH): the \"SegWit\" accounts of older Ledger, Trezor and other wallets. Add it to reach coins you received there with the same recovery phrase. Native SegWit is recommended for new coins: spending from here costs about a third more in fees." },
+  { id: "p2pkh", name: "Legacy", bip: "BIP-44", prefix: "1…", testPrefix: "m… / n…", older: true, vbytes: 226,
+    note: "Legacy (BIP-44, P2PKH): the original address type of older Ledger, Trezor and other wallets. Add it to reach coins you received there with the same recovery phrase. Native SegWit is recommended for new coins: spending from here costs about twice as much in fees." },
+];
+export const btcKind = (id: string) => BTC_KINDS.find((k) => k.id === id) ?? BTC_KINDS[0];
+
+export interface BtcAccount { id: string; network: BtcNet; kind: BtcKind; kind_name: string; account: number; label: string; fingerprint: string; path: string; xpub: string; descriptor: string; active: boolean; unit: string; network_name: string }
 export interface Accounts { accounts: BtcAccount[]; servers: Record<string, string>; defaults: Record<string, string[]> }
 export interface Candidate { id: string; network: BtcNet; kind: string; account: number; fingerprint: string; path: string; xpub: string; descriptor: string; first_address: string; already_paired: boolean; label: string }
 export interface Shown { address: string; expected: string; matches: boolean }

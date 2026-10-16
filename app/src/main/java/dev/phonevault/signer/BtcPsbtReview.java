@@ -17,14 +17,21 @@ import java.util.Set;
  *
  * <p>Refused (with a reason shown on the phone), before any review exists:
  * <ul>
- *   <li>any input that is not this wallet's own Native SegWit (m/84'/coin'/a'/c/i) or Taproot
- *       key-path (m/86'/coin'/a'/c/i, BIP-86, no script tree) coin, proven by deriving the key from
- *       the account xpub and matching the UTXO's script (coinjoin / payjoin / multisig are not supported);</li>
- *   <li>an input without a witness UTXO, or whose non-witness UTXO disagrees with it; a Native SegWit
- *       input without its non-witness UTXO (the previous transaction proves the amount);</li>
- *   <li>sighash types other than ALL (SegWit v0) or DEFAULT/ALL (Taproot);</li>
- *   <li>input fields the phone does not understand (scripts, finalized data, script-path Taproot,
- *       MuSig2, hash preimages, proprietary or unknown types): they could change what a signature means;</li>
+ *   <li>any input that is not this wallet's own Native SegWit (m/84'/coin'/a'/c/i), Taproot
+ *       key-path (m/86'/coin'/a'/c/i, BIP-86, no script tree), Nested SegWit (m/49'/coin'/a'/c/i,
+ *       BIP-49, P2SH-P2WPKH) or Legacy (m/44'/coin'/a'/c/i, BIP-44, P2PKH) coin, proven by deriving the
+ *       key from the account xpub and matching the UTXO's script; the derivation's purpose must be
+ *       the script type's (coinjoin / payjoin / multisig are not supported);</li>
+ *   <li>a SegWit input without a witness UTXO, or any input whose non-witness UTXO disagrees with
+ *       it; any input but Taproot without its non-witness UTXO (the previous transaction, hashed to
+ *       the outpoint's txid, proves the amount: SegWit v0 signatures commit only to their own
+ *       input's amount, and legacy P2PKH signatures to no amount at all);</li>
+ *   <li>a Nested SegWit input without its redeem script, or with one that is not 0x0014 ‖
+ *       HASH160(the derived key); a redeem script on any other input;</li>
+ *   <li>sighash types other than ALL (ECDSA: SegWit v0 and legacy) or DEFAULT/ALL (Taproot);</li>
+ *   <li>input fields the phone does not understand (witness scripts, finalized data, script-path
+ *       Taproot, MuSig2, hash preimages, proprietary or unknown types): they could change what a
+ *       signature means;</li>
  *   <li>an output script that is not a standard address type or OP_RETURN data;</li>
  *   <li>an output that claims to be this wallet's but does not match the derived key;</li>
  *   <li>outputs worth more than the inputs; a coin the phone already signed for with a different amount.</li>
@@ -45,6 +52,11 @@ final class BtcPsbtReview {
     static final double WARNING_FEE_RATE = 500.0;
     /** Witness bytes once signed (count prefix included): P2WPKH 1 + (1+72) + (1+33); P2TR key path 1 + (1+64[+1]). */
     static final int P2WPKH_WITNESS = 108, P2TR_WITNESS = 66;
+    /**
+     * Final scriptSig bytes: Nested SegWit pushes its 22-byte redeem script (1 + 22); Legacy pushes
+     * the signature and the key, (1+72) + (1+33).
+     */
+    static final int P2SH_P2WPKH_SCRIPTSIG = 23, P2PKH_SCRIPTSIG = 107;
 
     static final class SignInput {
         final int index;
@@ -217,48 +229,69 @@ final class BtcPsbtReview {
             if (!outpoints.add(txIn.outpoint())) throw refuse("Input " + (i + 1) + " spends the same coin twice.");
             List<Psbt.Entry> map = psbt.inputs.get(i);
             for (Psbt.Entry e : map) {
+                if (e.type == Psbt.IN_REDEEM_SCRIPT) continue; // allowed on Nested SegWit inputs only (checked below)
                 String why = inputFieldProblem(e.type);
                 if (why != null) throw refuse("Input " + (i + 1) + " carries " + why + ", which this phone does not sign.");
             }
             Psbt.Entry wu = Psbt.find(map, Psbt.IN_WITNESS_UTXO);
-            if (wu == null) throw refuse("Input " + (i + 1) + " has no witness UTXO (amount and script of the coin), so the phone can't check it.");
-            BtcTx.Output utxo = Psbt.witnessUtxo(wu.value);
-            BtcScript.Kind kind = BtcScript.kind(utxo.script);
-            BtcWallet.Type type = kind == BtcScript.Kind.P2WPKH ? BtcWallet.Type.P2WPKH : kind == BtcScript.Kind.P2TR ? BtcWallet.Type.P2TR : null;
-            if (type == null) {
-                throw refuse("Input " + (i + 1) + " spends a " + BtcScript.kindLabel(kind) + " coin. The phone signs only its own Native SegWit (BIP-84) and Taproot (BIP-86) coins.");
-            }
             Psbt.Entry nwu = Psbt.find(map, Psbt.IN_NON_WITNESS_UTXO);
-            if (nwu == null && type == BtcWallet.Type.P2WPKH) {
-                // A SegWit v0 signature commits only to ITS OWN input's amount, so the host's word for
-                // the others is all the review has: two signing sessions, each lying about a different
-                // input, combine into a transaction with a much larger real fee. The previous
-                // transaction (hashed to the outpoint's txid) proves the amount. Taproot signatures
-                // commit to every input's amount and script, so Taproot inputs may omit it.
-                throw refuse("Input " + (i + 1) + " is a Native SegWit coin without its previous transaction (non-witness UTXO), "
-                        + "so the phone can't prove the coin's amount and the fee shown could be false. Update the Mac app and try again.");
-            }
+            BtcTx.Output prevOut = null;
             if (nwu != null) {
                 BtcTx prev = BtcTx.parse(nwu.value, BtcTx.MAX_PREV_IO);
                 // Psbt.parse already checked these; repeated here because the fee shown depends on them.
                 if (!Arrays.equals(prev.txid(), txIn.prevTxid) || txIn.vout >= prev.outputs.size()) {
                     throw refuse("Input " + (i + 1) + ": the previous transaction is not the one this input spends.");
                 }
-                BtcTx.Output o = prev.outputs.get((int) txIn.vout);
-                if (o.value != utxo.value || !Arrays.equals(o.script, utxo.script)) {
+                prevOut = prev.outputs.get((int) txIn.vout);
+            }
+            BtcTx.Output utxo;
+            if (wu != null) {
+                utxo = Psbt.witnessUtxo(wu.value);
+                if (prevOut != null && (prevOut.value != utxo.value || !Arrays.equals(prevOut.script, utxo.script))) {
                     throw refuse("Input " + (i + 1) + ": the previous transaction and the witness UTXO disagree about the coin.");
                 }
+            } else if (prevOut != null && BtcScript.kind(prevOut.script) == BtcScript.Kind.P2PKH) {
+                // A legacy coin has no witness: its previous transaction alone says what it is (BIP-174).
+                utxo = prevOut;
+            } else {
+                throw refuse("Input " + (i + 1) + " has no witness UTXO (amount and script of the coin), so the phone can't check it.");
+            }
+            BtcScript.Kind kind = BtcScript.kind(utxo.script);
+            BtcWallet.Type type = typeOf(kind);
+            if (type == null) {
+                throw refuse("Input " + (i + 1) + " spends a " + BtcScript.kindLabel(kind) + " coin. The phone signs only its own Native SegWit (BIP-84), "
+                        + "Taproot (BIP-86), Nested SegWit (BIP-49) and Legacy (BIP-44) coins.");
+            }
+            if (nwu == null && type != BtcWallet.Type.P2TR) {
+                // A SegWit v0 signature commits only to ITS OWN input's amount, and a legacy (P2PKH)
+                // signature to no amount at all, so the host's word for the others is all the review
+                // has: two signing sessions, each lying about a different input, combine into a
+                // transaction with a much larger real fee. The previous transaction (hashed to the
+                // outpoint's txid) proves the amount. Taproot signatures commit to every input's
+                // amount and script, so Taproot inputs may omit it.
+                throw refuse("Input " + (i + 1) + " is a " + type.label + " coin without its previous transaction (non-witness UTXO), "
+                        + "so the phone can't prove the coin's amount and the fee shown could be false. Update the Mac app and try again.");
+            }
+            Psbt.Entry redeem = Psbt.find(map, Psbt.IN_REDEEM_SCRIPT);
+            if (redeem != null && type != BtcWallet.Type.P2SH_P2WPKH) {
+                throw refuse("Input " + (i + 1) + " carries " + inputFieldProblem(Psbt.IN_REDEEM_SCRIPT) + ", which this phone does not sign.");
+            }
+            if (redeem == null && type == BtcWallet.Type.P2SH_P2WPKH) {
+                throw refuse("Input " + (i + 1) + " is a Nested SegWit (P2SH) coin without its redeem script, so the phone can't tell what it signs.");
             }
             Owned own = ownedBy(map, type, true, fp, network, wallet, utxo.script, "Input " + (i + 1));
             if (own == null) {
                 throw refuse("Input " + (i + 1) + " is not a coin of this wallet (no key derivation for fingerprint " + fpHex
                         + "). Transactions that mix in other people's coins (coinjoin, payjoin, multisig) are not supported.");
             }
+            if (redeem != null && !Arrays.equals(redeem.value, BtcWallet.redeemScript(own.pubkey))) {
+                throw refuse("Input " + (i + 1) + " names a redeem script that is not this wallet's key's (BIP-49: 0x0014 ‖ HASH160 of the key).");
+            }
             Psbt.Entry sh = Psbt.find(map, Psbt.IN_SIGHASH_TYPE);
-            int hashType = type == BtcWallet.Type.P2WPKH ? BtcTx.SIGHASH_ALL : BtcTx.SIGHASH_DEFAULT;
+            int hashType = type.ecdsa() ? BtcTx.SIGHASH_ALL : BtcTx.SIGHASH_DEFAULT;
             if (sh != null) {
                 long v = new BtcTx.Reader(sh.value).u32();
-                boolean ok = type == BtcWallet.Type.P2WPKH ? v == BtcTx.SIGHASH_ALL : v == BtcTx.SIGHASH_DEFAULT || v == BtcTx.SIGHASH_ALL;
+                boolean ok = type.ecdsa() ? v == BtcTx.SIGHASH_ALL : v == BtcTx.SIGHASH_DEFAULT || v == BtcTx.SIGHASH_ALL;
                 if (!ok) throw refuse("Input " + (i + 1) + " asks for signature hash type 0x" + Long.toHexString(v)
                         + ". Only SIGHASH_ALL (and DEFAULT for Taproot) is signed: other types let the transaction be changed after you sign.");
                 hashType = (int) v;
@@ -294,9 +327,15 @@ final class BtcPsbtReview {
                 continue;
             }
             String address = BtcScript.address(o.script, network);
-            BtcWallet.Type type = kind == BtcScript.Kind.P2WPKH ? BtcWallet.Type.P2WPKH : kind == BtcScript.Kind.P2TR ? BtcWallet.Type.P2TR : null;
+            BtcWallet.Type type = typeOf(kind);
             Owned own = type == null ? null : ownedBy(map, type, false, fp, network, wallet, o.script, "Output " + (i + 1));
             if (type == null) noOwnClaim(map, fp, i);
+            if (own != null && type == BtcWallet.Type.P2SH_P2WPKH) {
+                Psbt.Entry redeem = Psbt.find(map, Psbt.OUT_REDEEM_SCRIPT);
+                if (redeem != null && !Arrays.equals(redeem.value, BtcWallet.redeemScript(own.pubkey))) {
+                    throw refuse("Output " + (i + 1) + " names a redeem script that is not this wallet's key's.");
+                }
+            }
             // Change ✓ only on the change chain of an account AND script type this PSBT spends from,
             // within the gap limit; an own receive address ✓ only within the gap limit. Any other key
             // of this wallet is a normal output with a WARNING naming its full path.
@@ -316,16 +355,32 @@ final class BtcPsbtReview {
         if (totalOut > totalIn) {
             throw refuse("The outputs (" + btc(totalOut, network) + ") are worth more than the coins spent (" + btc(totalIn, network) + ").");
         }
-        int[] witness = new int[ins.size()];
+        int[] scriptSig = new int[ins.size()], witness = new int[ins.size()];
         for (int k = 0; k < ins.size(); k++) {
             SignInput in = ins.get(k);
-            witness[k] = in.type == BtcWallet.Type.P2WPKH ? P2WPKH_WITNESS : P2TR_WITNESS + (in.hashType == BtcTx.SIGHASH_ALL ? 1 : 0);
+            switch (in.type) {
+                case P2WPKH: witness[k] = P2WPKH_WITNESS; break;
+                case P2SH_P2WPKH: scriptSig[k] = P2SH_P2WPKH_SCRIPTSIG; witness[k] = P2WPKH_WITNESS; break;
+                case P2PKH: scriptSig[k] = P2PKH_SCRIPTSIG; break;
+                default: witness[k] = P2TR_WITNESS + (in.hashType == BtcTx.SIGHASH_ALL ? 1 : 0);
+            }
         }
-        long vsize = tx.vsize(witness);
+        long vsize = tx.vsize(scriptSig, witness);
         BtcPsbtReview r = new BtcPsbtReview(network, psbt, ins, outs, totalIn, totalOut, sent, change, vsize,
                 walletKey(network, fpHex));
         r.render(safety, wallet);
         return r;
+    }
+
+    /** The account type that pays to a script of this kind (P2SH: Nested SegWit only), or null. */
+    static BtcWallet.Type typeOf(BtcScript.Kind kind) {
+        switch (kind) {
+            case P2WPKH: return BtcWallet.Type.P2WPKH;
+            case P2TR: return BtcWallet.Type.P2TR;
+            case P2SH: return BtcWallet.Type.P2SH_P2WPKH;
+            case P2PKH: return BtcWallet.Type.P2PKH;
+            default: return null;
+        }
     }
 
     /** The phone's verified claim on a key: which account/branch/index of this wallet it is. */
@@ -349,7 +404,7 @@ final class BtcPsbtReview {
         for (Psbt.Entry e : map) {
             if (e.type == ecdsaType) {
                 Psbt.Origin o = Psbt.origin(e.value, what);
-                if (Arrays.equals(o.fingerprint, fp)) (type == BtcWallet.Type.P2WPKH ? mine : wrongKind).add(new Psbt.Derivation(e.keyData, o, 0));
+                if (Arrays.equals(o.fingerprint, fp)) (type.ecdsa() ? mine : wrongKind).add(new Psbt.Derivation(e.keyData, o, 0));
             } else if (e.type == tapType) {
                 Psbt.Derivation d = Psbt.tapDerivation(e, what);
                 if (Arrays.equals(d.origin.fingerprint, fp)) (type == BtcWallet.Type.P2TR ? mine : wrongKind).add(d);
@@ -362,6 +417,12 @@ final class BtcPsbtReview {
         if (d.leafHashes != 0) throw refuse(what + " uses a Taproot script path; only key-path spends (BIP-86) are signed.");
         int[] p = d.origin.path;
         String shown = Bip32.pathString(p);
+        BtcWallet.Type pathType = p.length == 5 && (p[0] & Bip32.HARDENED) != 0 ? BtcWallet.Type.forPurpose(p[0] & ~Bip32.HARDENED) : null;
+        if (pathType != null && pathType != type) {
+            // e.g. a BIP-84 key named for a P2SH output: the key may be ours, but the script is not its type's
+            throw refuse(what + " names key path " + shown + " (" + pathType.label + "), which does not fit its script type ("
+                    + type.label + ").");
+        }
         if (p.length != 5 || p[0] != (type.purpose | Bip32.HARDENED) || p[1] != (network.coinType | Bip32.HARDENED)
                 || (p[2] & Bip32.HARDENED) == 0 || (p[2] & ~Bip32.HARDENED) >= BtcWallet.ACCOUNTS
                 || (p[3] != 0 && p[3] != 1) || p[4] < 0 || p[4] > BtcWallet.MAX_PSBT_INDEX) {
@@ -370,7 +431,7 @@ final class BtcPsbtReview {
         }
         int account = p[2] & ~Bip32.HARDENED;
         byte[] pub = wallet.publicKey(type, account, p[3], p[4]);
-        byte[] expectKey = type == BtcWallet.Type.P2WPKH ? pub : Arrays.copyOfRange(pub, 1, 33);
+        byte[] expectKey = type.ecdsa() ? pub : Arrays.copyOfRange(pub, 1, 33);
         if (!Arrays.equals(expectKey, d.key)) throw refuse(what + " names key path " + shown + " but a different key than this wallet's.");
         if (!Arrays.equals(BtcWallet.scriptFor(type, pub), script)) throw refuse(what + " claims key path " + shown + " but its script does not belong to that key.");
         if (type == BtcWallet.Type.P2TR) {
@@ -387,7 +448,8 @@ final class BtcPsbtReview {
             if (e.type == Psbt.OUT_BIP32_DERIVATION) origin = e.value;
             else if (e.type == Psbt.OUT_TAP_BIP32_DERIVATION) origin = Psbt.tapDerivation(e, "output").origin.fingerprint;
             if (origin != null && origin.length >= 4 && Arrays.equals(Arrays.copyOf(origin, 4), fp)) {
-                throw refuse("Output " + (index + 1) + " claims to be this wallet's, but it is not a Native SegWit or Taproot address the phone derives.");
+                throw refuse("Output " + (index + 1) + " claims to be this wallet's, but it is not an address type the phone derives "
+                        + "(Native SegWit, Taproot, Nested SegWit or Legacy).");
             }
         }
     }
@@ -448,7 +510,7 @@ final class BtcPsbtReview {
                 if (o.value > 0) rows.add(row(DANGER, btc(o.value, network) + " sent to the data output is destroyed forever: nobody can ever spend it."));
                 continue;
             }
-            rows.add(row("Send", btc(o.value, network) + " to\n" + BtcScript.grouped(o.address, 5)));
+            rows.add(row("Send", btc(o.value, network) + " to\n" + BtcScript.grouped(o.address, 5) + "\n" + BtcScript.kindLabel(o.kind) + " address"));
             if (o.ownReceive) {
                 rows.add(row("Your own address ✓", "This wallet's receiving address " + o.path + " (checked by the phone)."));
             } else if (o.ownElsewhere) {

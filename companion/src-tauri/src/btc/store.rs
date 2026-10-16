@@ -211,8 +211,11 @@ pub fn add_in(dir: &Path, a: &Account, label: Option<&str>) -> Result<Accounts, 
 }
 
 pub fn default_label(a: &Account) -> String {
-    let base =
-        if a.kind == Kind::P2tr { format!("Bitcoin {} · Taproot", a.number) } else { format!("Bitcoin {}", a.number) };
+    let base = if a.kind == Kind::P2wpkh {
+        format!("Bitcoin {}", a.number)
+    } else {
+        format!("Bitcoin {} · {}", a.number, a.kind.name())
+    };
     match a.net {
         Net::Bitcoin => base,
         Net::Testnet => format!("{base} · testnet"),
