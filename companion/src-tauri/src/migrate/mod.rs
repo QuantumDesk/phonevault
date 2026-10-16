@@ -365,17 +365,23 @@ fn session_entry(id: &str) -> Result<(PathBuf, Source, BTreeSet<String>), String
     Ok((d, src, s.found))
 }
 
-/// Scan one old EVM address on the node `rpc_url` (its chain). `deep`: also search logs for NFTs
-/// and approvals (slower); a quick re-scan re-checks only what was found before.
+/// Scan one old EVM address on the node `rpc_url`, which must be on `chain_id` (checked with
+/// eth_chainId before anything is read or recorded). `deep`: also search logs for NFTs and
+/// approvals (slower); a quick re-scan re-checks only what was found before.
 #[tauri::command]
-pub(crate) async fn migrate_scan_evm(rpc_url: String, address: String, deep: bool) -> CmdResult<evm::Report> {
+pub(crate) async fn migrate_scan_evm(
+    rpc_url: String,
+    chain_id: u64,
+    address: String,
+    deep: bool,
+) -> CmdResult<evm::Report> {
     blocking(move || {
         let id = address.trim().to_ascii_lowercase();
         let (d, src, mut found) = session_entry(&id)?;
         let Source::Evm { .. } = src else { return Err("That entry is not an EVM address.".into()) };
         let dest = pairing::load()?.ok_or(pairing::NOT_PAIRED)?.to_ascii_lowercase();
         let rpc = eth::Rpc::new(&rpc_url)?;
-        let report = evm::scan(&rpc, &id, &dest, &mut found, deep)?;
+        let report = evm::scan(&rpc, chain_id, &id, &dest, &mut found, deep)?;
         record_in(&d, found, crate::history::now())?;
         Ok(report)
     })

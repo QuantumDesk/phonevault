@@ -100,6 +100,7 @@ export async function migrateMock(cmd: string, a: Record<string, unknown>): Prom
     }
     case "migrate_scan_evm": {
       const chain = NETWORKS.find((n) => n.rpc === a.rpcUrl)?.id ?? 8453;
+      if (chain !== a.chainId) throw `this node is on chain ${chain}, not chain ${String(a.chainId)}. Check the node in Settings.`;
       const id = String(a.address).toLowerCase();
       const r = (rounds.get(`${id}:${chain}`) ?? 0) + 1; rounds.set(`${id}:${chain}`, r);
       await sleep(a.deep ? 700 + Math.random() * 1600 : 400 + Math.random() * 500);

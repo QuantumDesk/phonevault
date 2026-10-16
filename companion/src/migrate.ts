@@ -44,7 +44,8 @@ const m = {
   save: (sources: string[]) => call<MSession>("migrate_save", { sources }),
   forget: () => call<void>("migrate_forget"),
   destinations: () => call<Destinations>("migrate_destinations"),
-  scanEvm: (rpcUrl: string, address: string, deep: boolean) => call<EvmReport>("migrate_scan_evm", { rpcUrl, address, deep }),
+  /** the node's eth_chainId is checked against chainId before anything is read or saved */
+  scanEvm: (rpcUrl: string, chainId: number, address: string, deep: boolean) => call<EvmReport>("migrate_scan_evm", { rpcUrl, chainId, address, deep }),
   scanBtc: (source: string) => call<BtcReport>("migrate_scan_btc", { source }),
 };
 
@@ -135,8 +136,7 @@ async function scanEvm(address: string, chainId: number, deepWanted: boolean) {
   const k = `${address}:${chainId}`;
   const deep = deepWanted || !st.deepDone.has(k);
   try {
-    const r = await m.scanEvm(host.rpcFor(chainId), address, deep);
-    if (r.chain_id !== chainId) throw `this node is on chain ${r.chain_id}, not ${byId(chainId).name}. Check the node in Settings.`;
+    const r = await m.scanEvm(host.rpcFor(chainId), chainId, address, deep);
     cell.report = r; cell.error = null;
     if (deep) st.deepDone.add(k);
   } catch (e) { cell.error = errText(e); }

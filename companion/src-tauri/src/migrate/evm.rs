@@ -155,16 +155,23 @@ fn label(node: &dyn Node, contract: &str) -> (Option<String>, Option<String>) {
     (s(SEL_NAME), s(SEL_SYMBOL))
 }
 
-/// Everything about `old` on the node's chain. `found`: keys seen with a balance before (the
-/// session); new ones are added to it. `deep`: also search the logs for NFTs and approvals.
+/// Everything about `old` on the node's chain, which must be `expected_chain` (checked first,
+/// before anything is read or recorded). `found`: keys seen with a balance before (the session);
+/// new ones are added to it. `deep`: also search the logs for NFTs and approvals.
 pub fn scan(
     node: &dyn Node,
+    expected_chain: u64,
     old: &str,
     dest: &str,
     found: &mut BTreeSet<String>,
     deep: bool,
 ) -> Result<Report, String> {
     let chain = u64::try_from(node.chain_id()?).map_err(|_| "chain id out of range")?;
+    if chain != expected_chain {
+        let want =
+            chains::get(expected_chain).map_or_else(|| format!("chain {expected_chain}"), |c| c.watch_name.into());
+        return Err(format!("this node is on chain {chain}, not {want}. Check the node in Settings."));
+    }
     let c = chains::get(chain).ok_or_else(|| format!("the phone has no reviewed profile for chain {chain}"))?;
     let block = node.block_number()?;
     let base = format!("evm:{chain}:{old}");
@@ -562,7 +569,7 @@ mod tests {
     fn first_scan_finds_coins_tokens_nfts_and_approvals() {
         let f = fake();
         let mut found = BTreeSet::new();
-        let r = scan(&f, OLD, DEST, &mut found, true).unwrap();
+        let r = scan(&f, 8453, OLD, DEST, &mut found, true).unwrap();
         assert_eq!((r.chain_id, r.network), (8453, "Base"));
         assert_eq!((r.native.amount.as_str(), r.native.status), ("0.3", Status::Move));
         assert_eq!(r.native.destination_amount.as_deref(), Some("0"));
@@ -593,7 +600,7 @@ mod tests {
     fn rescan_ticks_off_what_moved_without_searching_logs() {
         let mut f = fake();
         let mut found = BTreeSet::new();
-        scan(&f, OLD, DEST, &mut found, true).unwrap();
+        scan(&f, 8453, OLD, DEST, &mut found, true).unwrap();
         // the user moved everything and revoked the token approval; the NFT went to Phone Vault
         let usdc = usdc().address.to_ascii_lowercase();
         f.balances.insert(OLD.into(), 21_000 * 300_000_000); // dust left after the max send
@@ -604,7 +611,7 @@ mod tests {
         f.calls.insert((NFT.into(), format!("0x{SEL_OWNER_OF}{:064x}", 7u128)), addr_word(DEST));
         f.logs.clear();
         *f.log_searches.borrow_mut() = 0;
-        let r = scan(&f, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&f, 8453, OLD, DEST, &mut found, false).unwrap();
         assert_eq!(*f.log_searches.borrow(), 0, "a quick re-scan reads no logs");
         assert_eq!(r.native.status, Status::Moved);
         assert_eq!(r.native.destination_amount.as_deref(), Some("0.29"));
@@ -674,6 +681,17 @@ mod audit_tests {
         }
     }
 
+    /// A node on another chain than the one asked for is refused before anything is read or
+    /// recorded (its items would otherwise be keyed and saved under its own chain id).
+    #[test]
+    fn wrong_chain_is_refused_before_anything_is_recorded() {
+        let mut found = BTreeSet::new();
+        let node = Node2 { calls: HashMap::new(), fail_calls: false };
+        let e = scan(&node, 1, OLD, DEST, &mut found, true).unwrap_err();
+        assert!(e.contains("chain 8453") && e.contains("Ethereum"), "{e}");
+        assert!(found.is_empty());
+    }
+
     /// An approval found active before stays on the report, as `Unknown` ("couldn't check"), when
     /// the node fails the `allowance` / `isApprovedForAll` re-check: it is never dropped, so the UI
     /// can't say "Everything found has moved" while an unlimited approval may still be live.
@@ -684,7 +702,7 @@ mod audit_tests {
             format!("evm:8453:{OLD}:approveall:{NFT}:{SPENDER}"),
         ]);
         let node = Node2 { calls: HashMap::new(), fail_calls: true };
-        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&node, 8453, OLD, DEST, &mut found, false).unwrap();
         assert_eq!(r.approvals.len(), 2, "{:?}", r.approvals);
         assert!(r.approvals.iter().all(|a| a.status == Status::Unknown), "{:?}", r.approvals);
         assert_eq!((r.approvals[0].kind, r.approvals[0].amount.as_str()), ("token", "unknown"));
@@ -694,7 +712,7 @@ mod audit_tests {
             ((TOKEN.to_string(), data_two(SEL_ALLOWANCE, OLD, SPENDER)), vec![0u8; 32]),
             ((NFT.to_string(), data_two(SEL_IS_APPROVED_FOR_ALL, OLD, SPENDER)), vec![0u8; 32]),
         ]);
-        let r = scan(&Node2 { calls, fail_calls: false }, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&Node2 { calls, fail_calls: false }, 8453, OLD, DEST, &mut found, false).unwrap();
         assert!(r.approvals.iter().all(|a| a.status == Status::Moved), "{:?}", r.approvals);
     }
 
@@ -706,7 +724,7 @@ mod audit_tests {
         let usdc_key = format!("evm:8453:{OLD}:{}", usdc.address.to_ascii_lowercase());
         let mut found = BTreeSet::from([format!("evm:8453:{OLD}:nft:{NFT}:7"), usdc_key.clone()]);
         let node = Node2 { calls: HashMap::new(), fail_calls: true };
-        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
+        let r = scan(&node, 8453, OLD, DEST, &mut found, false).unwrap();
         assert_eq!(r.nfts.len(), 1);
         assert_eq!((r.nfts[0].status, r.nfts[0].on_phone_vault), (Status::Unknown, false));
         assert!(!r.unreadable_tokens.is_empty());
@@ -715,7 +733,7 @@ mod audit_tests {
         assert_eq!(t[0].status, Status::Unknown);
         // an item never seen whose check fails is not reported at all
         let mut fresh = BTreeSet::new();
-        let r = scan(&node, OLD, DEST, &mut fresh, false).unwrap();
+        let r = scan(&node, 8453, OLD, DEST, &mut fresh, false).unwrap();
         assert!(r.nfts.is_empty() && r.approvals.is_empty() && r.tokens.is_empty());
     }
 
@@ -765,7 +783,7 @@ mod audit_tests {
         let mut flood = approvals;
         flood.extend(transfers);
         let mut found = BTreeSet::new();
-        let r = scan(&Flood(flood), OLD, DEST, &mut found, true).unwrap();
+        let r = scan(&Flood(flood), 8453, OLD, DEST, &mut found, true).unwrap();
         assert!(r.nft_window.capped && r.approval_window.capped);
         assert!(found.is_empty(), "nothing a reverting contract says is recorded");
     }
