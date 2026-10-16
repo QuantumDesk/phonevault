@@ -5,20 +5,17 @@
 //! The server is untrusted: sums are checked (no wrap, never more than 21 M BTC), and a server that
 //! calls every address "used" cannot keep the scan going: it stops after `MAX_ADDRESSES` per key.
 //!
-//! The derivation for Legacy (P2PKH) and Nested SegWit (P2SH-P2WPKH) lives here rather than in
-//! `btc::wallet`, which only knows the types Phone Vault pairs (Native SegWit, Taproot).
-//! TODO(btc-types): once `btc::wallet::Kind` has Legacy / Nested SegWit, derive through it instead.
+//! Addresses are derived by `btc::wallet::address_for`, the same code as for paired accounts
+//! (Native SegWit, Taproot, Nested SegWit, Legacy).
 
 #![deny(clippy::indexing_slicing)]
 
 use super::source::BtcType;
 use crate::btc::esplora::AddressInfo;
 use crate::btc::scan::{Source, GAP};
-use crate::btc::wallet::Net;
+use crate::btc::wallet::{address_for, Kind, Net};
 use bitcoin::bip32::{ChildNumber, Xpub};
-use bitcoin::key::{CompressedPublicKey, Secp256k1};
-use bitcoin::secp256k1::XOnlyPublicKey;
-use bitcoin::Address;
+use bitcoin::key::Secp256k1;
 use serde::Serialize;
 
 /// Addresses asked about per extended key at most (all types, both chains).
@@ -35,15 +32,17 @@ pub fn derive(x: &Xpub, t: BtcType, net: Net, chain: u32, index: u32) -> Result<
         ChildNumber::from_normal_idx(index).map_err(|e| e.to_string())?,
     ];
     let pk = x.derive_pub(&secp, &path).map_err(|e| e.to_string())?.public_key;
-    let c = CompressedPublicKey(pk);
-    let n = net.network();
-    Ok(match t {
-        BtcType::Legacy => Address::p2pkh(c.pubkey_hash(), n),
-        BtcType::Nested => Address::p2shwpkh(&c, n),
-        BtcType::Native => Address::p2wpkh(&c, n),
-        BtcType::Taproot => Address::p2tr(&secp, XOnlyPublicKey::from(pk), None, n),
+    Ok(address_for(&secp, kind_of(t), net, pk).to_string())
+}
+
+/// The paired-account type with the same script.
+pub fn kind_of(t: BtcType) -> Kind {
+    match t {
+        BtcType::Legacy => Kind::P2pkh,
+        BtcType::Nested => Kind::P2shP2wpkh,
+        BtcType::Native => Kind::P2wpkh,
+        BtcType::Taproot => Kind::P2tr,
     }
-    .to_string())
 }
 
 /// What one script type of an old key holds.
@@ -185,6 +184,22 @@ mod tests {
             derive(&account("m/86'/0'/0'"), BtcType::Taproot, Net::Bitcoin, 0, 0).unwrap(),
             "bc1p5cyxnuxmeuwuvkwfem96lqzszd02n6xdcjrs20cac6yqjjwudpxqkedrcr"
         );
+        // the same addresses as a paired account of that type (btc::wallet) derives
+        for (t, path) in [
+            (BtcType::Legacy, "m/44'/0'/0'"),
+            (BtcType::Nested, "m/49'/0'/0'"),
+            (BtcType::Native, "m/84'/0'/0'"),
+            (BtcType::Taproot, "m/86'/0'/0'"),
+        ] {
+            let (a, _) = crate::btc::wallet::tests::account(Net::Bitcoin, kind_of(t), 1);
+            assert_eq!(a.xpub, account(path));
+            for (chain, i) in [(0, 0), (0, 7), (1, 3)] {
+                assert_eq!(
+                    derive(&a.xpub, t, Net::Bitcoin, chain, i).unwrap(),
+                    a.derive(chain, i).unwrap().address.to_string()
+                );
+            }
+        }
         // the zpub of the same account, through the parser
         assert_eq!(xpub_of(ZPUB).unwrap(), account("m/84'/0'/0'"));
         assert!(matches!(parse(ZPUB).unwrap(), Entry::Xpub { .. }));

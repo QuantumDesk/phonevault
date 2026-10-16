@@ -255,15 +255,8 @@ impl Account {
             ChildNumber::from_normal_idx(chain).map_err(|e| e.to_string())?,
             ChildNumber::from_normal_idx(index).map_err(|e| e.to_string())?,
         ]);
-        let (address, internal) = match self.kind {
-            Kind::P2wpkh => (Address::p2wpkh(&CompressedPublicKey(pk), self.net.network()), None),
-            Kind::P2tr => {
-                let x = XOnlyPublicKey::from(pk);
-                (Address::p2tr(&secp, x, None, self.net.network()), Some(x))
-            }
-            Kind::P2shP2wpkh => (Address::p2shwpkh(&CompressedPublicKey(pk), self.net.network()), None),
-            Kind::P2pkh => (Address::p2pkh(CompressedPublicKey(pk), self.net.network()), None),
-        };
+        let address = address_for(&secp, self.kind, self.net, pk);
+        let internal = (self.kind == Kind::P2tr).then(|| XOnlyPublicKey::from(pk));
         let redeem_script =
             (self.kind == Kind::P2shP2wpkh).then(|| ScriptBuf::new_p2wpkh(&CompressedPublicKey(pk).wpubkey_hash()));
         Ok(Derived {
@@ -299,6 +292,23 @@ pub struct Derived {
     pub redeem_script: Option<ScriptBuf>,
     /// full path from the master key: m/purpose'/coin'/account'/chain/index
     pub origin: DerivationPath,
+}
+
+/// The address of `kind` for one public key on `net` (P2TR: BIP-86, no script tree). The one
+/// place every Bitcoin address of this app is derived (paired accounts and the migration scan).
+pub fn address_for<C: Verification>(
+    secp: &Secp256k1<C>,
+    kind: Kind,
+    net: Net,
+    pk: bitcoin::secp256k1::PublicKey,
+) -> Address {
+    let n = net.network();
+    match kind {
+        Kind::P2wpkh => Address::p2wpkh(&CompressedPublicKey(pk), n),
+        Kind::P2tr => Address::p2tr(secp, XOnlyPublicKey::from(pk), None, n),
+        Kind::P2shP2wpkh => Address::p2shwpkh(&CompressedPublicKey(pk), n),
+        Kind::P2pkh => Address::p2pkh(CompressedPublicKey(pk), n),
+    }
 }
 
 pub fn account_path(kind: Kind, net: Net, number: u32) -> DerivationPath {
