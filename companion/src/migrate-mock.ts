@@ -52,7 +52,7 @@ function evmReport(chain: number, address: string, dest: string, round: number):
   const empty: EvmReport = {
     chain_id: chain, network: n.name, address: checksumAddress(address), destination: dest,
     native: item(k("native"), n.symbol, n.symbol, "0", "empty", "0"), tokens: [], unreadable_tokens: [], nfts: [],
-    nft_window: { searched: true, from_block: 20_431_234, to_block: 20_511_233, error: null }, approvals: [], approval_window: { searched: true, from_block: 20_431_234, to_block: 20_511_233, error: null },
+    nft_window: { searched: true, from_block: 20_431_234, to_block: 20_511_233, error: null, capped: false }, approvals: [], approval_window: { searched: true, from_block: 20_431_234, to_block: 20_511_233, error: null, capped: false },
   };
   const later = round > 1;
   if (chain === 8453) return { ...empty,
@@ -69,7 +69,7 @@ function evmReport(chain: number, address: string, dest: string, round: number):
   };
   if (chain === 1) return { ...empty,
     native: item(k("native"), "ETH", "ETH", later ? "0.00000412" : "0.0518", later ? "moved" : "move", later ? "0.1802" : "0.1284"),
-    nft_window: { searched: true, from_block: 21_201_000, to_block: 21_210_000, error: "searched as far back as the node allows" },
+    nft_window: { searched: true, from_block: 21_201_000, to_block: 21_210_000, error: "searched as far back as the node allows", capped: false },
   };
   if (chain === 137) return { ...empty, unreadable_tokens: ["WETH"] };
   return empty;
@@ -112,11 +112,12 @@ export async function migrateMock(cmd: string, a: Record<string, unknown>): Prom
       const id = String(a.source);
       const r = (rounds.get(id) ?? 0) + 1; rounds.set(id, r);
       await sleep(1200);
-      const later = r > 1;
+      const later = r > 2;
+      const sending = r === 2; // the second scan sees the transfer in the mempool, the third confirmed
       const kind = session?.sources.find((s) => s.id === id);
       const report: BtcReport = { source: id, network: "bitcoin", network_name: "Bitcoin", unit: "BTC", server: "mempool.space",
         types: kind?.kind === "xpub" ? [{ btc_type: "native", name: "Native SegWit", looks: "bc1q…", confirmed_sats: later ? 0 : 1_234_500, unconfirmed_sats: 0, used_addresses: 6, checked_addresses: 47, first_address: "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu" }] : [],
-        confirmed_sats: later ? 0 : 1_234_500, unconfirmed_sats: 0, status: later ? "moved" : "move" };
+        confirmed_sats: later ? 0 : 1_234_500, unconfirmed_sats: sending ? -1_234_500 : 0, status: later ? "moved" : sending ? "pending" : "move" };
       return report;
     }
     default: throw `preview: no mock for ${cmd}`;
