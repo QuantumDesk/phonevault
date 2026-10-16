@@ -326,4 +326,51 @@ mod tests {
         assert!(parse(&"x".repeat(MAX_INPUT + 1)).is_err());
         assert!(parse("bc1q… two words").is_err());
     }
+
+    /// Audit proof. SOUND: no secret shape tried here parses as a source (so none can be saved:
+    /// migrate_save re-parses every line, mod.rs:129), and no error echoes the input.
+    /// FINDING (low, UX): several common secret shapes get the generic "doesn't look like an
+    /// address" / "public key version" text instead of the PHRASE / PRIVATE_KEY warning that tells
+    /// the user to treat it as exposed (source.rs:135, 180-184).
+    #[test]
+    fn audit_secret_shapes_refused_but_not_always_named() {
+        let words = "abandon ".repeat(11) + "about";
+        let ws: Vec<&str> = words.split(' ').collect();
+        let numbered = ws.iter().enumerate().map(|(i, w)| format!("{}. {w}", i + 1)).collect::<Vec<_>>().join(" ");
+        let comma = ws.join(", ");
+        let commanospace = ws.join(",");
+        let trailing_dot = format!("{words}.");
+        let half = ws[..6].join(" ");
+        let xprv = "xprv9s21ZrQH143K3QTDL4LXw2F7HEK3wJUD2nW2nRk4stbPy6cq3jPPqjiChkVvvNKmPGJxWUtg6LnF5kejMRNNU3TGtRBeJgk33yuGBxrMPHi";
+        let descriptor = format!("wpkh({xprv}/84h/0h/0h/0/*)");
+        // the same xprv re-encoded with Litecoin's Ltpv version bytes (0x019d9cfe)
+        let mut data = bitcoin::base58::decode_check(xprv).unwrap();
+        data[..4].copy_from_slice(&[0x01, 0x9d, 0x9c, 0xfe]);
+        let ltpv = bitcoin::base58::encode_check(&data);
+        let bip38 = "6PRVWUbkzzsbcVac2qwfssoUJAN1Xhrg6bNk8J7Nzm5H7kxEbn2Nh2ZoGg";
+        let japanese = "あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あいこくしん　あおぞら";
+        let named = |s: &str| {
+            let e = parse(s).expect_err(s);
+            assert!(!e.contains(s), "error echoes the input");
+            e == PHRASE || e == PRIVATE_KEY
+        };
+        // named correctly
+        assert!(named(&words) && named(&words.to_uppercase()) && named(&words.replace(' ', "\n")) && named(japanese));
+        assert!(named(xprv) && named(&format!("0X{}", "AB".repeat(32))));
+        // refused, but NOT named as a secret (the user isn't told to treat it as exposed)
+        for (what, s) in [
+            ("numbered phrase", numbered.as_str()),
+            ("comma-separated phrase", comma.as_str()),
+            ("comma-joined phrase", commanospace.as_str()),
+            ("phrase ending in a period", trailing_dot.as_str()),
+            ("half a phrase (one line of a 2-column card)", half.as_str()),
+            ("one word per line: each line alone", "abandon"),
+            ("descriptor holding an xprv", descriptor.as_str()),
+            ("Litecoin-version xprv", ltpv.as_str()),
+            ("BIP-38 encrypted key", bip38),
+        ] {
+            assert!(!named(s), "{what} is now named; update the audit");
+        }
+        assert!(parse(&ltpv).unwrap_err().contains("public key has a version"), "a private key is called a public key");
+    }
 }

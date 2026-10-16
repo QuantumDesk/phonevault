@@ -587,3 +587,98 @@ mod tests {
         assert_eq!(u256_word(&[0xff; 32]).unwrap(), None);
     }
 }
+
+/// Security-audit proof tests (adversarial): a node that errors (or is rate limited) on the
+/// re-check calls must not make a still-live item look handled.
+#[cfg(test)]
+#[allow(clippy::indexing_slicing)]
+mod audit_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    const OLD: &str = "0x1111111111111111111111111111111111111111";
+    const DEST: &str = "0x2222222222222222222222222222222222222222";
+    const SPENDER: &str = "0x3333333333333333333333333333333333333333";
+    const NFT: &str = "0x4444444444444444444444444444444444444444";
+    const TOKEN: &str = "0x6666666666666666666666666666666666666666";
+
+    /// Base; eth_call answered from `calls` (or every call fails, like a rate-limited node).
+    struct Node2 {
+        calls: HashMap<(String, String), Vec<u8>>,
+        fail_calls: bool,
+    }
+    impl Node for Node2 {
+        fn chain_id(&self) -> Result<u128, String> {
+            Ok(8453)
+        }
+        fn block_number(&self) -> Result<u128, String> {
+            Ok(30_000_000)
+        }
+        fn balance(&self, _a: &str) -> Result<u128, String> {
+            Ok(0)
+        }
+        fn call(&self, to: &str, data: &str) -> Result<Vec<u8>, String> {
+            if self.fail_calls {
+                return Err("HTTP 429: rate limit".into());
+            }
+            self.calls.get(&(to.to_ascii_lowercase(), data.to_string())).cloned().ok_or_else(|| "reverted".into())
+        }
+        fn logs(&self, _f: u128, _t: u128, _x: Value) -> (Vec<Value>, Option<u128>, Option<String>) {
+            (vec![], None, None)
+        }
+    }
+
+    /// FINDING: an approval found active before vanishes from the report when the node fails the
+    /// `allowance` / `isApprovedForAll` re-check (evm.rs:288-290, 322-326): no "couldn't check"
+    /// marker, so the UI tally (migrate.ts:200, 211-215) can say "Everything found has moved" while an
+    /// unlimited approval is still live.
+    #[test]
+    fn audit_failed_allowance_recheck_silently_drops_a_live_approval() {
+        let mut found = BTreeSet::from([
+            format!("evm:8453:{OLD}:approve:{TOKEN}:{SPENDER}"),
+            format!("evm:8453:{OLD}:approveall:{NFT}:{SPENDER}"),
+        ]);
+        let node = Node2 { calls: HashMap::new(), fail_calls: true };
+        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
+        assert!(r.approvals.is_empty(), "the live approvals are simply not reported: {:?}", r.approvals);
+        assert!(!r.approval_window.searched && r.approval_window.error.is_none(), "and nothing says the check failed");
+    }
+
+    /// FINDING: an NFT found before is reported as `Gone` ("Sent somewhere other than Phone Vault",
+    /// counted as moved by the UI tally, migrate.ts:196) when the node merely fails `ownerOf`
+    /// (evm.rs:237-245): an RPC error is read as "not held any more".
+    #[test]
+    fn audit_failed_owner_of_turns_a_held_nft_into_gone() {
+        let mut found = BTreeSet::from([format!("evm:8453:{OLD}:nft:{NFT}:7")]);
+        let node = Node2 { calls: HashMap::new(), fail_calls: true };
+        let r = scan(&node, OLD, DEST, &mut found, false).unwrap();
+        assert_eq!(r.nfts.len(), 1);
+        assert_eq!(r.nfts[0].status, Status::Gone, "a rate-limited ownerOf reads as 'left the old wallet'");
+        // contrast: listed tokens whose balanceOf fails ARE reported as unreadable (the right pattern)
+        assert!(!r.unreadable_tokens.is_empty());
+    }
+
+    /// FINDING (DoS): candidate de-duplication is O(n^2) (`out.contains` in approval_candidates,
+    /// evm.rs:388, and nft::erc721_candidates, nft.rs:181) over logs a hostile node controls (up to
+    /// 40 x 16 MB answers, watcher.rs:198 / eth.rs:26). Prints timings; 4x the logs costs >6x time.
+    #[test]
+    fn audit_candidate_dedup_is_quadratic_in_hostile_logs() {
+        let me = watcher::topic_address(OLD);
+        let mk = |n: usize| -> Vec<Value> {
+            (0..n)
+                .map(|i| json!({"address": NFT, "topics": [APPROVAL_TOPIC, me, format!("0x{:064x}", i + 1)], "data": "0x"}))
+                .collect()
+        };
+        let mut times = vec![];
+        for n in [4_000usize, 8_000, 16_000] {
+            let logs = mk(n);
+            let t = std::time::Instant::now();
+            let out = approval_candidates(&logs, &me);
+            let el = t.elapsed();
+            assert_eq!(out.len(), n);
+            eprintln!("approval_candidates: {n} distinct logs -> {el:?}");
+            times.push(el.as_secs_f64());
+        }
+        assert!(times[2] > times[0] * 6.0, "{times:?}");
+    }
+}

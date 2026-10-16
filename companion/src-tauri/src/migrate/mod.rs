@@ -521,4 +521,53 @@ mod tests {
         let mut fresh = BTreeSet::new();
         assert_eq!(scan_btc(&src, Net::Bitcoin, &One(0), &mut fresh).unwrap().status, Status::Empty);
     }
+
+    /// Audit proof: an UNCONFIRMED spend (mempool only, possibly stuck / evicted / RBF-replaced)
+    /// already makes the entry "Moved" (mod.rs:414, 425 add the negative mempool delta), so the UI
+    /// ticks it off and Home says "Everything found has moved" before anything confirmed.
+    #[test]
+    fn audit_unconfirmed_spend_counts_as_moved() {
+        struct Pending;
+        impl crate::btc::scan::Source for Pending {
+            fn address(&self, a: &str) -> Result<AddressInfo, String> {
+                Ok(AddressInfo {
+                    address: a.into(),
+                    chain_stats: Stats { funded_txo_sum: 150_000, tx_count: 1, ..Stats::default() },
+                    mempool_stats: Stats { spent_txo_sum: 150_000, tx_count: 1, ..Stats::default() },
+                })
+            }
+            fn txs(&self, _: &str) -> Result<Vec<Tx>, String> {
+                Ok(vec![])
+            }
+        }
+        let src = source::parse(ADDR).unwrap();
+        let mut found = BTreeSet::new();
+        assert_eq!(scan_btc(&src, Net::Bitcoin, &One(150_000), &mut found).unwrap().status, Status::Move);
+        let r = scan_btc(&src, Net::Bitcoin, &Pending, &mut found).unwrap();
+        assert_eq!((r.confirmed_sats, r.unconfirmed_sats), (150_000, -150_000));
+        assert_eq!(r.status, Status::Moved, "150k sats still confirmed in the old wallet, shown as moved");
+    }
+
+    /// Audit proof (sound): a tampered session can only ADD "seen before" keys; it can't make a
+    /// present item look moved, and keys for entries not in the list are dropped on record.
+    #[test]
+    fn audit_tampered_found_cannot_hide_a_present_item() {
+        let mut found = BTreeSet::from([format!("btc:{ADDR}")]);
+        let src = source::parse(ADDR).unwrap();
+        assert_eq!(scan_btc(&src, Net::Bitcoin, &One(150_000), &mut found).unwrap().status, Status::Move);
+        // oversized / non-printable keys and foreign entries are refused by the loader
+        let d = tmp();
+        let bad = format!(
+            "{{\"version\":1,\"sources\":[\"{ADDR}\"],\"found\":[\"btc:{ADDR}\\u0000\"],\"started_at\":1,\"scanned_at\":1}}"
+        );
+        btc_store::write_private(&d, FILE, bad.as_bytes()).unwrap();
+        assert!(load_in(&d).is_err());
+        // a symlinked session file is refused
+        std::fs::remove_file(d.join(FILE)).unwrap();
+        let real = d.join("real.json");
+        btc_store::write_private(&d, "real.json", b"{}").unwrap();
+        std::os::unix::fs::symlink(&real, d.join(FILE)).unwrap();
+        assert!(load_in(&d).unwrap_err().contains("not a regular file"));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
 }
