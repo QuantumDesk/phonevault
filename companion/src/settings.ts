@@ -27,6 +27,8 @@ export interface SettingsHost {
   btcNets(): { id: BtcNet; name: string; test: boolean }[];
   /** start the guided setup over */
   restartSetup(): void;
+  /** open "Move from another wallet" */
+  openMigrate(): void;
 }
 let host: SettingsHost;
 let version = "";
@@ -163,6 +165,7 @@ export function renderDrawer() {
     h("section", { class: "set" },
       h("h4", null, "TOOLS"),
       h("button", { class: "radio", onclick: () => { closeDrawer(); host.go("tool"); } }, icon("pen", 16), h("span", { class: "grow" }, "Sign a message"), icon("back", 14)),
+      h("button", { class: "radio", onclick: () => { closeDrawer(); host.openMigrate(); } }, icon("down", 16), h("span", { class: "grow" }, "Move from another wallet"), icon("back", 14)),
     ),
     h("section", { class: "set about" },
       h("h4", null, "ABOUT"),
