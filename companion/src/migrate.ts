@@ -66,7 +66,12 @@ export interface MigrateHost {
 // ------------------------------------------------------------------ state
 
 type Cell<T> = { report: T | null; error: string | null; busy: boolean };
-type Verify = { s: "idle" } | { s: "asking" } | { s: "compare" } | { s: "ok" } | { s: "mismatch"; shown: string | null } | { s: "error"; message: string };
+/** A verification is bound to the exact destination it was made for (`for`: address, and the
+ *  Bitcoin index): another address (account switched, next receive address) is not verified. */
+type Verify = { s: "idle" } | ({ for: string } & ({ s: "asking" } | { s: "compare" } | { s: "ok" } | { s: "mismatch"; shown: string | null } | { s: "error"; message: string }));
+const vkey = (address: string, index?: number) => `${address.toLowerCase()}#${index ?? ""}`;
+/** The verification state for this destination: idle when it was made for another one. */
+const current = (v: Verify | undefined, key: string): Verify => (v && v.s !== "idle" && v.for === key ? v : { s: "idle" });
 
 let host: MigrateHost;
 const st = {
@@ -87,6 +92,8 @@ const st = {
   verifyEvm: { s: "idle" } as Verify,
   verifyBtc: new Map<BtcNet, Verify>(),
   forgetArmed: false,
+  /** the Esplora servers set in Settings → Bitcoin (none: the defaults), for the privacy note */
+  btcServers: null as Record<string, string> | null,
 };
 
 /** Redraw, unless the user is typing in the list (the screen would be rebuilt under them). */
@@ -120,7 +127,30 @@ function load(): Promise<void> {
 
 async function loadDestinations() {
   try { st.dest = await m.destinations(); } catch { /* shown as unavailable */ }
+  try { st.btcServers = (await btcApi.accounts()).servers; } catch { /* the note then says "your Esplora server" */ }
   redraw();
+}
+
+// ------------------------------------------------------------------ privacy (who sees the addresses)
+
+const hostOf = (url: string) => { try { return new URL(url).hostname; } catch { return url; } };
+/** The default servers by the name people know them by (publicnode.com, base.org, mempool.space). */
+const site = (host: string) => host.split(".").slice(-2).join(".");
+
+/** Which servers the scan asks: the nodes and Esplora server set in Settings, named. */
+function privacyNote(): HTMLElement {
+  const evm = [...new Set(NETWORKS.map((n) => { const u = host.rpcFor(n.id); return u === n.rpc ? site(hostOf(u)) : hostOf(u); }))];
+  const custom = NETWORKS.some((n) => host.rpcFor(n.id) !== n.rpc);
+  const servers = st.btcServers ?? {};
+  const btcCustom = Object.values(servers).map(hostOf);
+  const btc = btcCustom.length ? [...new Set(btcCustom)].join(", ") + (Object.keys(servers).length < 3 ? " (mempool.space on the other Bitcoin networks)" : "")
+    : st.btcServers ? "mempool.space (blockstream.info as a fallback)" : "your Esplora server";
+  const list = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
+  return h("p", { class: "muted small mig-privacy" },
+    h("strong", null, "Who sees these addresses: "),
+    `the scan asks ${custom ? "your EVM nodes" : "the default EVM nodes"} (${list(evm)}) and ${btcCustom.length ? "your Esplora server" : "the default Esplora server"} (${btc}) about every address and public key here. `,
+    "They also see your Phone Vault addresses when this Mac checks them, so a server that sees both can link your old wallet to your new one (and to your IP address). A public key (xpub) reveals every address and balance of that account. ",
+    "For privacy, use your own node and Esplora server (Settings).");
 }
 
 const anyScan = () => st.evm.size > 0 || st.btc.size > 0;
@@ -310,7 +340,7 @@ function editView(): HTMLElement {
     h("section", { class: "card mig-card" },
       h("p", { class: "kicker" }, "Step 1 · The old wallet"),
       h("h3", null, "What's in your old wallet?"),
-      h("p", { class: "muted" }, "Paste its public addresses or public keys, one per line. Phone Vault reads what they hold from your own nodes. You then send each item from the old wallet to Phone Vault, there, the way you always have."),
+      h("p", { class: "muted" }, "Paste its public addresses or public keys, one per line. Phone Vault reads what they hold from the nodes set in Settings (see below for who sees them). You then send each item from the old wallet to Phone Vault, there, the way you always have."),
       h("label", { class: "field" }, h("span", { class: "field-label" }, "Public addresses and public keys (xpub / zpub)"), area),
       checks,
       st.saveError ? h("p", { class: "inline-error" }, icon("alert", 15), st.saveError) : null,
@@ -324,7 +354,8 @@ function editView(): HTMLElement {
       h("strong", { class: "ok-line" }, icon("shield", 15), "Never your recovery phrase"),
       h("span", null, "Only PUBLIC information goes here. Never paste a recovery phrase or a private key (xprv, zprv): they are refused and not kept. Public addresses and public keys (xpub, zpub) only show balances; they can't move anything."),
     ),
-    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only). Bitcoin public keys are looked up on your Esplora server (Settings → Bitcoin), which learns their addresses; a public key (xpub) reveals every address and balance of that account, so share it only with software you trust."),
+    privacyNote(),
+    h("p", { class: "muted small" }, "Saved on this Mac until you choose Forget (public data only)."),
     phraseNote(),
   );
 }
@@ -368,6 +399,7 @@ function listView(): HTMLElement {
       h("span", null, "Moving many small tokens may cost more in fees than they're worth. Send tokens first and the network's coin (ETH, POL) last: every token transfer needs it for gas."),
     ),
     phraseNote(),
+    privacyNote(),
     st.session ? h("p", { class: "muted small" }, "Saved in ", h("span", { class: "mono" }, st.session.path), " (addresses and public keys only).") : null,
   );
 }
@@ -389,25 +421,29 @@ function phoneGate(): string | null {
 }
 
 async function verifyEvm(expected: string) {
+  const key = vkey(expected);
   const gate = phoneGate();
-  if (gate) { st.verifyEvm = { s: "error", message: gate }; redraw(); return; }
-  st.verifyEvm = { s: "asking" }; redraw();
+  if (gate) { st.verifyEvm = { s: "error", for: key, message: gate }; redraw(); return; }
+  st.verifyEvm = { s: "asking", for: key }; redraw();
   try {
     const p = await api.readAddress();
-    st.verifyEvm = p.address.toLowerCase() === expected.toLowerCase() ? { s: "compare" } : { s: "mismatch", shown: p.address };
-  } catch (e) { st.verifyEvm = { s: "error", message: explainPlain(errText(e)) }; }
+    st.verifyEvm = p.address.toLowerCase() === expected.toLowerCase() ? { s: "compare", for: key } : { s: "mismatch", for: key, shown: p.address };
+  } catch (e) { st.verifyEvm = { s: "error", for: key, message: explainPlain(errText(e)) }; }
   redraw();
 }
 
 async function verifyBtc(d: BtcDest) {
+  const key = vkey(d.address, d.index);
   const gate = phoneGate();
-  if (gate) { st.verifyBtc.set(d.network, { s: "error", message: gate }); redraw(); return; }
-  st.verifyBtc.set(d.network, { s: "asking" }); redraw();
+  if (gate) { st.verifyBtc.set(d.network, { s: "error", for: key, message: gate }); redraw(); return; }
+  st.verifyBtc.set(d.network, { s: "asking", for: key }); redraw();
   try {
     const r = await btcApi.showAddress(d.id, 0, d.index);
-    st.verifyBtc.set(d.network, r.matches ? { s: "ok" } : { s: "mismatch", shown: r.address });
+    // verified only for the address shown here (the destination may have moved on meanwhile)
+    const same = r.expected.toLowerCase() === d.address.toLowerCase();
+    st.verifyBtc.set(d.network, !r.matches ? { s: "mismatch", for: key, shown: r.address } : same ? { s: "ok", for: key } : { s: "idle" });
     if (r.matches) await loadDestinations();
-  } catch (e) { st.verifyBtc.set(d.network, { s: "error", message: explainPlain(errText(e), "btc") }); }
+  } catch (e) { st.verifyBtc.set(d.network, { s: "error", for: key, message: explainPlain(errText(e), "btc") }); }
   redraw();
 }
 
@@ -427,9 +463,11 @@ function destinationSection(): HTMLElement {
   const d = st.dest;
   if (needEvm) {
     const e = d?.evm;
+    const ekey = e ? vkey(e.address) : "";
+    const ev = current(st.verifyEvm, ekey);
     if (!e) cards.push(h("p", { class: "inline-error" }, icon("alert", 15), d ? "Pair your phone first (Settings → Phone)." : "Loading your Phone Vault address…"));
-    else if (st.verifyEvm.s === "mismatch") {
-      const shown = st.verifyEvm.shown;
+    else if (ev.s === "mismatch") {
+      const shown = ev.shown;
       cards.push(mismatchCard(shown ? "Your phone is on another account" : "The addresses differ",
         shown,
         shown ? `The phone is using a different account than ${e.label}, which this Mac shows. Switch the phone to ${e.label} (or show the other account here), then verify again.`
@@ -437,20 +475,20 @@ function destinationSection(): HTMLElement {
         () => verifyEvm(e.address), () => { st.verifyEvm = { s: "idle" }; redraw(); }));
     } else cards.push(destCard({
       kicker: "Ethereum and EVM networks", label: e.label, address: e.address, display: grouped(e.address), qr: e.address,
-      verified: st.verifyEvm.s === "ok", v: st.verifyEvm, onVerify: () => verifyEvm(e.address),
+      verified: ev.s === "ok", v: ev, onVerify: () => verifyEvm(e.address),
       note: "The same address on Base, Ethereum, Optimism, Arbitrum and Polygon. In the old wallet, choose the network the item is on.",
       ok: "The phone holds the key for this address. Safe to send to.",
-      compare: st.verifyEvm.s === "compare" ? h("div", { class: "callout" },
+      compare: ev.s === "compare" ? h("div", { class: "callout" },
         h("strong", null, "Your phone is on this account"),
         h("span", null, "On the phone, open Wallet and compare its address with the one above, group by group."),
         h("div", { class: "row gap" },
-          h("button", { class: "primary", onclick: () => { st.verifyEvm = { s: "ok" }; redraw(); } }, icon("check", 15), "It matches"),
-          h("button", { onclick: () => { st.verifyEvm = { s: "mismatch", shown: null }; redraw(); } }, "It doesn't"))) : null,
+          h("button", { class: "primary", onclick: () => { st.verifyEvm = { s: "ok", for: ekey }; redraw(); } }, icon("check", 15), "It matches"),
+          h("button", { onclick: () => { st.verifyEvm = { s: "mismatch", for: ekey, shown: null }; redraw(); } }, "It doesn't"))) : null,
     }));
   }
   for (const n of nets) {
     const b = d?.btc.find((x) => x.network === n);
-    const v = st.verifyBtc.get(n) ?? { s: "idle" };
+    const v = b ? current(st.verifyBtc.get(n), vkey(b.address, b.index)) : { s: "idle" } as Verify;
     const name = n === "bitcoin" ? "Bitcoin" : n === "testnet" ? "Bitcoin Testnet" : "Bitcoin Signet";
     if (!b) { cards.push(h("div", { class: "callout" }, h("strong", null, `No ${name} account on this Mac yet`), h("span", null, `Add one from your phone first: pick ${name} in the network menu on Home, then Add from phone. Then come back here.`))); continue; }
     if (v.s === "mismatch") {
@@ -469,7 +507,8 @@ function destinationSection(): HTMLElement {
     }));
   }
   if (!cards.length) return h("span");
-  const verifiedAll = (!needEvm || st.verifyEvm.s === "ok") && nets.every((n) => d?.btc.find((x) => x.network === n)?.verified || st.verifyBtc.get(n)?.s === "ok");
+  const verifiedAll = (!needEvm || (!!d?.evm && current(st.verifyEvm, vkey(d.evm.address)).s === "ok"))
+    && nets.every((n) => { const b = d?.btc.find((x) => x.network === n); return !!b && (b.verified || current(st.verifyBtc.get(n), vkey(b.address, b.index)).s === "ok"); });
   return h("div", { class: "stack mig-dests" },
     h("h3", { class: "section-title" }, "1 · Verify where it goes"),
     verifiedAll ? null : h("p", { class: "muted small mig-lead" }, "Before the first transfer, check the address on your phone. Malware on a computer can swap an address on screen; your phone can't be fooled that way."),
