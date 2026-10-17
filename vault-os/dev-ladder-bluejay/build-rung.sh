@@ -15,6 +15,11 @@ JOBS="${PV_JOBS:-24}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${TREE}" || exit 9
 export LC_ALL=C
+# PV_DEV_ADB_KEY is the sync's input (sync-rung.sh installs it as
+# vendor/phonevault/config/debug_adbkey.pub). The rung common.mk reads the same name with `?=`, so
+# an exported absolute path would reach PRODUCT_ADB_KEYS and Soong rejects it ("Path is outside
+# directory"): the build always uses the in-tree copy.
+unset PV_DEV_ADB_KEY
 # shellcheck disable=SC1091
 source build/envsetup.sh
 lunch vault_bluejay-cp2a-userdebug
