@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Phone Vault (bluejay, ladder rung b4d+): no telephony and no Wi-Fi software. The modem and
+  Wi-Fi drivers have been gone since b4a; b4d removes rild, the radio HALs, the phone process
+  (TeleService) and its providers, the carrier/IMS/eUICC apps, the Wi-Fi HAL, the supplicant,
+  hostapd and wificond. The feature files are not installed any more, and these features are
+  also withdrawn here so that no other partition can bring one back (SystemConfig removes
+  unavailable features after reading every partition):
+    - without android.hardware.telephony SystemServer starts no MmsServiceBroker, SystemUI
+      shows no "Emergency" button and no carrier text, and TelephonyRegistry skips the
+      emergency-number queries that need the phone process;
+    - without android.hardware.wifi SystemServer starts no WifiService, WifiScanningService,
+      RttService, WifiAwareService or WifiP2pService, so nothing asks for IWifi, the
+      supplicant or hostapd.
+  android.software.telecom stays: Telecom is part of system_server on Android 17 (the
+  telephonycore APEX) and runs without a phone account, as on a Wi-Fi-only tablet.
+  Installed only by rungs that remove the telephony/Wi-Fi software (dev-ladder-bluejay/rung-b4d).
+-->
+<config>
+    <unavailable-feature name="android.hardware.telephony" />
+    <unavailable-feature name="android.hardware.telephony.calling" />
+    <unavailable-feature name="android.hardware.telephony.carrierlock" />
+    <unavailable-feature name="android.hardware.telephony.cdma" />
+    <unavailable-feature name="android.hardware.telephony.data" />
+    <unavailable-feature name="android.hardware.telephony.euicc" />
+    <unavailable-feature name="android.hardware.telephony.euicc.mep" />
+    <unavailable-feature name="android.hardware.telephony.gsm" />
+    <unavailable-feature name="android.hardware.telephony.ims" />
+    <unavailable-feature name="android.hardware.telephony.ims.singlereg" />
+    <unavailable-feature name="android.hardware.telephony.mbms" />
+    <unavailable-feature name="android.hardware.telephony.messaging" />
+    <unavailable-feature name="android.hardware.telephony.radio.access" />
+    <unavailable-feature name="android.hardware.telephony.satellite" />
+    <unavailable-feature name="android.hardware.telephony.subscription" />
+    <unavailable-feature name="android.software.sip" />
+    <unavailable-feature name="android.software.sip.voip" />
+    <unavailable-feature name="com.verizon.hardware.telephony.lte" />
+    <unavailable-feature name="com.verizon.hardware.telephony.ehrpd" />
+    <unavailable-feature name="android.hardware.wifi" />
+    <unavailable-feature name="android.hardware.wifi.aware" />
+    <unavailable-feature name="android.hardware.wifi.direct" />
+    <unavailable-feature name="android.hardware.wifi.passpoint" />
+    <unavailable-feature name="android.hardware.wifi.rtt" />
+</config>

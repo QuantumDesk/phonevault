@@ -26,6 +26,7 @@ dev-ladder-bluejay/
   rung-b4a/      … b4a (radios: Wi-Fi/BT/NFC/eSE/GNSS/modem drivers + their services + features)
   rung-b4b/      … b4b (app strip slice A = crosshatch 4a)
   rung-b4c/      … b4c (app strip slice B = crosshatch 4b, ModuleMetadata kept)
+  rung-b4d/      … b4d (telephony + Wi-Fi software: rild, radio HALs, phone process, carrier/IMS/eUICC apps, Wi-Fi HAL)
 ```
 
 A rung directory has the same meaning as on crosshatch: it holds only the files that still
@@ -106,9 +107,9 @@ lives on a build host.
 | b4a | b3 + **radios off** (crosshatch 2d-a/2d-b/2d-c2/4b-feature intent): Wi-Fi (bcmdhd4389, cfg80211, rfkill), Bluetooth (nitrous), NFC + eSE (st21nfc, st54spi, st33spi), GNSS (bcm47765, bbd_pps_gpio), modem interface (cpif stack) out of the kernel image **together with** their services (BT HAL, NFC HAL, gto eSE HAL, GNSS HAL + gpsd/lhd/scd, cbd/rfsd/dmd/shared_modem_platform), VINTF entries and features (BT, NFC, OMAPI, GPS). Telephony framework, rild and the radio HAL stay (telephony rung, as on crosshatch); the modem firmware stays on its partitions, never booted | **passed**: 0 FAIL; no wlan/rmnet/bluetooth/umts, radio services undefined, Titan M2 gatekeeperd running. Found: `pktrouter` (wfc-pkt-router) crash-loops with the modem gone; removed in b4c | [b4a](#b4a-radios) |
 | b4b | b4a + **app strip slice A** (= crosshatch 4a, adapted): 32 user-facing modules (camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF/Canvas, AudioFX, Updater, pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceAsWebcam, …) | **passed**: 0 FAIL | [b4b / b4c](#b4b--b4c-app-strip) |
 | b4c | b4b + **app strip slice B** (= crosshatch 4b, adapted): 47 on-demand system modules (telephony UI/role apps, backup, print, WebView + feature, MTP, Lineage parts/profiles, CDM/credential/DSU/cert/PAC/VPN/captive-portal/SE/BT-MIDI satellites, providers, Pixel blobs) and `pktrouter`. **ModuleMetadata kept** (crosshatch 4b boot loop), Settings, LatinIME, GoogleParts (eUICC disabler on gs101) kept | **passed**: 0 FAIL, 167 packages, only crash `euiccpixel` ×2 at boot. `firstrun.sh`, `usbsigntest.sh`, `msgsigntest.sh`, `credentialtest.sh` pass. The lock screen still says "Emergency calls only" on this dev rung: the release overlay's `config_voice_capable=false` is not in the ladder; check it on the release build | [b4b / b4c](#b4b--b4c-app-strip) |
+| b4d | b4c + **telephony and Wi-Fi software out** (the drivers went in b4a): `rild_exynos`, the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), TeleService, TelephonyProvider, CarrierConfig, MmsService, ONS, Iwlan, the Samsung/Google RIL, IMS, carrier, OMA-DM and Verizon apps, the eUICC apps + update APEX + GoogleParts, the Pixel Wi-Fi HAL APEX, wpa_supplicant, hostapd, wificond; every `android.hardware.telephony*`/`wifi*`/`sip` feature withdrawn; the release overlay's `config_voice_capable`/`config_sms_capable=false` now in the ladder. **Telecom kept** (system_server on A17) | not flashed yet | [b4d](#b4d-telephony-and-wi-fi-software) |
 
-Not yet done on the 6a: the appliance VINTF manifest, the camera/TPU/sensor slice, the telephony
-rung, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
+Not yet done on the 6a: the appliance VINTF manifest, the camera/TPU/sensor slice, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
 
 ## b1 checklist
 
@@ -136,7 +137,7 @@ rung, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
 
 The on-phone tests run from the Mac need Homebrew bash ≥ 4 (macOS bash 3.2 lacks `mapfile`).
 
-## Hardening rungs b2–b4c (crosshatch 2d-a … 4b parity)
+## Hardening rungs b2–b4d (crosshatch 2d-a … 4b parity, then b4d ahead of the crosshatch ladder)
 
 One cumulative rung each on top of b1, so a failed flash bisects to one change set. All are
 **userdebug dev rungs with adb kept** (release adb-off is the `vendor/phonevault` user-build
@@ -154,6 +155,7 @@ appliance VINTF manifest and the camera/TPU/sensor slice are still open (b5+).
 | 3 | gadget HAL allowlist + port HAL host refusal | b3 | gs101 USB HALs are **prebuilt blobs**: enforced in `init.gs101.usb.rc` + `ueventd.rc` (instances, sink-only port, root-only role nodes) + `usbcore.authorized_default=0` (b2) |
 | 4a | app strip slice A | b4b | `Android.bp` overrides |
 | 4b | app strip slice B + BT/NFC features | b4a (features) + b4c (apps) | ModuleMetadata kept |
+| release-only on crosshatch | telephony/radio/IMS stack, Wi-Fi HAL | b4d | `Android.bp` overrides + rc/VINTF/feature removal; Telecom kept (A17 mainline, in system_server) |
 
 ### What the GKI kernel allows (b2, b4a)
 
@@ -352,6 +354,124 @@ Android 17 might have grown a boot-time dependency on `CompanionDeviceManager`,
 **rollback:** reflash b4b. If `handheld_core_hardware.xml` still declares
 `android.software.webview`, WebViewUpdateService starts with no provider and logs it (not
 fatal).
+
+### b4d: telephony and Wi-Fi software
+
+> **b4d status (2026-10-17): does not boot on the 6a.** Flashed twice; slot a exhausts its retries.
+> Android 17 requests a plain `reboot` a few seconds into system_server start-up, right after
+> UsbDeviceManager initialises (where adb drops, so the trigger is not in the captured logs; the
+> pstore console needs root, which the ladder never uses). The phone was restored to b4c.
+> Next: split b4d into b4d-1 (rild, radio daemons and radio HAL entries, eSIM app only; keep
+> TeleService, Telecom, TelephonyProvider, CarrierConfig and the Wi-Fi HAL) and b4d-2 (Wi-Fi HAL)
+> to find which removal Android 17 needs. Separately, the leftover `/system/bin/wificond` is a
+> dangling compat symlink (no service starts it); check-build should treat it as absent.
+
+
+b4a removed the modem and Wi-Fi drivers but kept rild, the telephony framework and the Wi-Fi HAL
+(crosshatch kept them for a telephony rung). On the b4c phone that leftover loops forever:
+`ril-daemon` restarts every ~5 s ("RIL RESET by RilApplication Init Fail"), hwservicemanager asks
+init for `IOemSlsiRadioExternal/rilExternal` and `IRadio/slot1`, `com.android.phone` ANRs "failed
+to complete startup" in a loop next to the OEM-RIL / RIL-hook persistent apps,
+`vendor.wifi_hal_legacy` (`vendor.google.wifi_ext-service-vendor`) fails with "Failed to start
+legacy HAL: TIMED_OUT" / "Unknown iface name: wlan0", and `com.google.euiccpixel` crashes at boot.
+`adb reboot` also drops USB without the phone ever rebooting (no new boot reason). The suspected
+cause is shutdown waiting on that wedged stack (`ShutdownThread` shuts the radios down through
+the phone process before rebooting). b4d removes the stack so that nothing can loop.
+
+**Changes** (cumulative on b4c; `BoardConfigVault.mk` and the kernel lists are unchanged):
+
+| what | removed | how |
+|---|---|---|
+| RIL + vendor radio daemons | `rild_exynos` (`ril-daemon`), `vendor.google.radioext@1.0-service` (+ `manifest_radioext.xml`), `bipchmgr` (SIM toolkit BIP), `android.hardware.secure_element@1.2-uicc-service` (SIM1/SIM2), `init.radio` (`init-radio-sh`), `modem_logging_control` | `Android.bp` overrides; `vendor-google-bluejay.diff` drops their rc copies (`rild_exynos.rc`, `vendor.google.radioext@1.0-service.rc`, `bipchmgr.rc`, `android.hardware.secure_element@1.2-uicc-service.rc`, `init.vendor_telephony.rc`, `init.modem_logging_control.rc`) |
+| radio HAL VINTF | `android.hardware.radio` (`@1.2::ISap/slot1,2`, `@1.6::IRadio/slot1,2`), `android.hardware.radio.config` (`@1.1::IRadioConfig/default`), `android.hardware.secure_element` `ISecureElement/SIM1,SIM2`, `vendor.samsung_slsi.telephony.hardware.radioExternal` (`@1.1::IOemSlsiRadioExternal/rilExternal`) | `device-google-gs101.diff` (`vintf/manifest.xml`); `vendor.google.radioext` goes with its fragment module |
+| AOSP telephony apps | `TeleService` (com.android.phone), `TelephonyProvider`, `CarrierConfig`, `MmsService`, `ONS`, `Iwlan` | overrides |
+| Samsung/Google telephony blobs | `OemRilService`, `OemRilHookService`, `grilservice`, `ShannonIms`, `ShannonRcs`, `ShannonQualifiedNetworksService`, `CarrierSettings`, `CarrierSetup`, `CarrierWifi`, `WfcActivation`, `ImsServiceEntitlement`, `TetheringEntitlement`, `AppDirectedSMSService`, `VZWAPNLib`, `MyVerizonServices`, `ConnMO`, `DCMO`, `DiagMon`, `DMService` (+ its four JNI-lib modules), `OemDmTrigger`, `ConnectivityThermalPowerManager` | overrides |
+| eUICC | `EuiccGoogle`, `EuiccGoogleOverlay`, `EuiccSupportPixel` (+ its three `DKA_RC7_*` copies), `EuiccSupportPixelPermissions`, `com.google.pixel.euicc.update` (vendor APEX), `GoogleParts` (on gs101 its only job is re-enabling the two eUICC packages at boot) | overrides; the vendor diff drops the `EuiccSupportPixel/` copies |
+| Wi-Fi | `com.google.pixel.wifi.ext` (vendor APEX: `vendor.wifi_hal_legacy` = IWifi v4 + IWifiExt, with its rc and VINTF fragment inside), `wpa_supplicant` + `wpa_supplicant.conf`, `hostapd` (their rc and VINTF fragments ship with the modules), `wificond` | overrides |
+| features | `android.hardware.telephony` and every sub-feature (gsm, ims, ims.singlereg, carrierlock, euicc, calling, data, messaging, radio.access, subscription, …), `android.software.sip(.voip)`, `com.verizon.hardware.telephony.*`, `android.hardware.wifi` (+ direct, aware, passpoint, rtt) | the feature files are no longer installed (gs101 diff: Wi-Fi, euicc, carrierlock; vendor diff: gsm, ims, ims.singlereg, features-verizon), **and** `/product/etc/sysconfig/phonevault-no-telephony-wifi.xml` withdraws them all (it also covers Lineage's `sip.voip`) |
+| overlay | `config_voice_capable=false`, `config_sms_capable=false`, `config_enable_emergency_call_while_sim_locked=false` | the release `vendor/phonevault/overlay` already had them; the build host's repo copy predated them, so b4d is the first ladder image that carries them |
+
+**Kept, and why:**
+
+- **Telecom.** On Android 17 Telecom is a mainline module: the `com.android.telephonycore` APEX
+  puts `framework-telephony` and `framework-telecom` on the boot classpath and `service-telecom`
+  in system_server; `TelecomShim` (com.android.server.telecom) is the package it runs as.
+  SystemServer starts `TelecomLoaderService` on any device with a microphone (not only with
+  telephony), and removing the APEX would break the boot classpath. `android.software.telecom`
+  stays declared (`handheld_core_hardware.xml`), as on a Wi-Fi-only tablet. It does not bring the
+  keyguard "Emergency" button back: SystemUI shows that only with `android.hardware.telephony`.
+- The `com.android.wifi` APEX: `framework-wifi` is on the boot classpath. Without
+  `android.hardware.wifi`, SystemServer starts no WifiService, WifiScanningService, RttService,
+  WifiAwareService or WifiP2pService.
+- `com.android.cellbroadcast` (APEXes are a later rung) and `BlockedNumberProvider` (Telecom and
+  SystemUI query it).
+- Inert leftovers: the static RROs aimed at removed packages, the carrier data files, the vendor
+  RIL libraries (no client left), and the privapp/sysconfig XMLs of removed packages (ignored for
+  absent packages).
+- `google_modemctl` and `cp_thermal_zone` (b4a), and everything else from b4c: USB lock-down,
+  kernel module removal, app strip, Titan M2/Trusty, the signer app, adb.
+
+**Why system_server should tolerate this** (Android 17 `frameworks/base`):
+
+- `MmsServiceBroker` is started only with `FEATURE_TELEPHONY`.
+- `TelephonyRegistry` lives in system_server. Without `FEATURE_TELEPHONY_CALLING` /
+  `_MESSAGING` it skips the emergency-number query, which is the one that needs the phone process.
+- `PermissionPolicyService` and `AppRestrictionController` register their carrier-privilege
+  callbacks with TelephonyRegistry, not with the phone process.
+- `SystemEmergencyHelper` catches the `IllegalStateException` from `isEmergencyNumber`.
+- Nothing in `services/` calls `waitForService` on `phone`, `isub` or a Wi-Fi service.
+
+Android TV images also ship without TeleService, and Lineage's own Wi-Fi-only tablet config uses
+the same `config_voice_capable`/`config_sms_capable=false` overlay.
+
+**Pass criteria** (`./check-rung.sh b4d`, cumulative):
+
+- No `android.hardware.telephony*`, `android.hardware.wifi*`, `android.software.sip*` or Verizon
+  feature.
+- `init.svc.` undefined for `ril-daemon vendor.google.radioext@1.0 BIP-Channel-Manager
+  secure_element_uicc_hal_service init-radio-sh modem_logging_start vendor.wifi_hal_legacy
+  wpa_supplicant hostapd wificond`.
+- No `phone isub carrier_config imms wifi wifiscanner wifip2p wifiaware rttmanager` system service.
+- The 32 telephony/eUICC packages absent; `com.android.server.telecom` present.
+- **No init service in `[restarting]`** (a FAIL from b4d on, a WARN before).
+- No log line naming IRadio, radioExternal or IWifi; no phone, eUICC or OEM-RIL process in the
+  crash buffer or in ActivityManager.
+- Everything from b1–b4c (owner, kiosk LOCKED, Titan/Trusty running, USB lock-down) and the app
+  suites (`firstrun.sh`, `usbsigntest.sh`, `tokensigntest.sh`, `msgsigntest.sh`,
+  `credentialtest.sh`).
+
+Then the **reboot test**, by hand (check-rung.sh never reboots):
+
+1. Note `adb shell cat /proc/sys/kernel/random/boot_id`.
+2. Run `adb reboot` and wait.
+3. Pass: adb comes back by itself within about 2 minutes with a **different** `boot_id`, the
+   phone shows the boot lock screen, and `adb shell getprop sys.boot.reason.last` reads `reboot`
+   (or `reboot,…`).
+4. Repeat once from the power menu (Restart).
+
+**Risks:**
+
+1. **Boot loop** (moderate; lower than b4c): something on Android 17 still depends on the phone
+   process or on IWifi. Symptom: the boot animation runs for minutes, or system_server / SystemUI
+   keep restarting. adb is up early on userdebug, so capture:
+   - `adb logcat -b all -d > b4d-boot.txt`
+   - `adb logcat -b crash -d`
+   - `adb shell dumpsys activity processes`
+
+   Look for `FATAL EXCEPTION`, and for `UnsupportedOperationException` / `IllegalStateException`
+   from `TelephonyManager`, `SubscriptionManager` or `WifiManager`. **Rollback:** reflash b4c
+   (below).
+2. **SystemUI or Settings crash** on a missing Wi-Fi/telephony manager (QS internet tile, status
+   bar mobile icons): capture the same logs. The kiosk (Phone Vault as HOME) needs neither.
+3. **`adb reboot` still hangs**: then telephony was not the cause. Force a restart (hold Power for
+   about 10 s), then capture `adb logcat -b all -d` around "ShutdownThread" / "init: Reboot",
+   `adb shell getprop sys.boot.reason.last`, and an `adb bugreport` (it includes the previous
+   boot's pstore console log).
+4. **`wificond` noise**: zygote's rc says `onrestart restart wificond`. With the service gone, init
+   logs one error per zygote restart (noise only).
+
+**Rollback:** reflash b4c from the Mac: `cd ~/pv-bluejay/out-b4c2 && ./flash-b4c-mac.sh --check`,
+then `echo FLASH | ./flash-b4c-mac.sh`. That is the b4c image the phone runs now.
 
 ### Flashing a rung from the Mac (human-approved; the phone in the bootloader)
 
