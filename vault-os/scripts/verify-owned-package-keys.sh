@@ -105,7 +105,7 @@ for package_path in "${packages[@]}"; do
     exit 1
   }
   cert_digest="$(sed -n \
-    's/^Signer #1 certificate SHA-256 digest: //p' <<<"${report}" | head -1 | \
+    -E 's/^(Signer #1|V[0-9.]+ Signer:) certificate SHA-256 digest: //p' <<<"${report}" | head -1 | \
     tr '[:upper:]' '[:lower:]')"
   grep -Fqx "${cert_digest}" "${allowed_cert_digests}" || {
     echo "package is not signed by an owned release certificate: ${package_path}" >&2

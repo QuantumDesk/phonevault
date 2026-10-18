@@ -91,7 +91,7 @@ grep -Fqx 'Number of signers: 1' <<<"${SIGNATURE_REPORT}" || {
   exit 1
 }
 ACTUAL_CERT="$("${APKSIGNER[@]}" verify --print-certs "${APK}" \
-  | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -1)"
+  | sed -n -E 's/^(Signer #1|V[0-9.]+ Signer:) certificate SHA-256 digest: //p' | head -1)"
 [[ -n "${ACTUAL_CERT}" ]] || { echo "certificate digest was not found" >&2; exit 1; }
 ACTUAL_CERT_LOWER="$(printf '%s' "${ACTUAL_CERT}" | tr '[:upper:]' '[:lower:]')"
 EXPECTED_CERT_LOWER="$(printf '%s' "${EXPECTED_CERT}" | tr '[:upper:]' '[:lower:]')"
