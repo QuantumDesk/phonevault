@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# On-phone pass criteria for a flashed bluejay rung (b1 … b4d), over adb from the Mac.
+# On-phone pass criteria for a flashed bluejay rung (b1 … b4d-1, b4d), over adb from the Mac.
 #   check-rung.sh RUNG            all checks of RUNG and every rung below it (cumulative)
 #   check-rung.sh RUNG --no-usb   skip the USB function-switch probe (it re-enumerates USB)
 # Read-only except the b3+ probe, which asks the framework for MTP/RNDIS/MIDI and expects the
@@ -8,16 +8,16 @@
 # macOS's bash 3.2. Exit 1 if any FAIL; WARN lines need a human look (see README, per rung).
 # Then run the app suites as usual (tools/dev-device: firstrun/usbsigntest/tokensigntest/
 # msgsigntest/credentialtest with PV_THROWAWAY_DEVICE=1) - this script does not replace them.
-# It never reboots the phone: the b4d `adb reboot` test is a separate manual step (README, b4d).
+# It never reboots the phone: the b4d-1/b4d `adb reboot` test is a separate manual step (README).
 set -uo pipefail
-RUNG="${1:?rung (b1, b2, b3, b4a, b4b, b4c, b4d)}"
+RUNG="${1:?rung (b1, b2, b3, b4a, b4b, b4c, b4d-1, b4d)}"
 PROBE_USB=1; [[ "${2:-}" == --no-usb ]] && PROBE_USB=0
 A="${ADB:-adb}"
 DIR="$(cd "$(dirname "$0")" && pwd)"
 RUNG_DIR="${DIR}/rung-${RUNG}"
 [[ -d "${RUNG_DIR}" ]] || { echo "no such rung: ${RUNG_DIR}" >&2; exit 2; }
 
-ORDER="b1 b2 b3 b4a b4b b4c b4d"
+ORDER="b1 b2 b3 b4a b4b b4c b4d-1 b4d"   # b4d-1 = b4d's radio-daemon half only
 rank() { local i=0 r; for r in ${ORDER}; do i=$((i+1)); [[ "$r" == "$1" ]] && { echo $i; return; }; done; echo 0; }
 R=$(rank "${RUNG}"); [[ ${R} -gt 0 ]] || { echo "unknown rung ${RUNG}" >&2; exit 2; }
 at_least() { [[ ${R} -ge $(rank "$1") ]]; }
@@ -48,7 +48,7 @@ home="$(sh_ cmd package resolve-activity --brief -a android.intent.action.MAIN -
 loops=""; for i in 1 2 3; do loops="${loops} $(sh_ getprop | grep '\[restarting\]' | sed -E 's/^\[init\.svc\.([^]]*)\].*/\1/' | tr '\n' ' ')"; sleep 10; done
 loops="$(echo ${loops} | tr ' ' '\n' | sort -u | tr '\n' ' ')"
 if [[ -z "${loops// /}" ]]; then pass "no init service in [restarting]"
-elif at_least b4d; then fail "services seen restarting: ${loops} (b4d removed ril-daemon and the Wi-Fi HAL: nothing may loop)"
+elif at_least b4d-1; then fail "services seen restarting: ${loops} (ril-daemon and the radio daemons are gone since b4d-1: nothing may loop)"
 else warn "services seen restarting: ${loops} (expected at b4a-b4c: ril-daemon, see README)"; fi
 crashes="$(sh_ logcat -b crash -d | grep -c -E 'FATAL EXCEPTION|Fatal signal')"
 [[ "${crashes:-0}" -eq 0 ]] && pass "crash buffer empty" || warn "${crashes} crash entries: adb logcat -b crash -d"
@@ -150,7 +150,7 @@ if at_least b4a; then
   for s in bluetooth_manager nfc; do
     echo "${svcs}" | grep -q -E "^[0-9]+[[:space:]]+${s}:" && fail "system service ${s} registered" || pass "no ${s} system service"
   done
-  at_least b4d || echo "    rild: init.svc.ril-daemon=$(prop init.svc.ril-daemon) (kept until b4d; no modem behind it)"
+  at_least b4d-1 || echo "    rild: init.svc.ril-daemon=$(prop init.svc.ril-daemon) (kept until b4d-1; no modem behind it)"
   echo "    baseband: gsm.version.baseband='$(prop gsm.version.baseband)' (modem firmware stays on the modem partitions, never booted)"
   # Titan M2 / Trusty stack must be untouched
   tm="$(sh_ getprop | grep -E '^\[init\.svc\.[^]]*(citadel|weaver|keymint|gatekeeper|authsecret|oemlock)[^]]*\]' | tr -d '[]' | tr '\n' ' ')"
@@ -197,6 +197,49 @@ if at_least b4b; then
     echo "${pk}" | grep -qx "${p}" && pass "kept ${p}" || fail "MISSING required package ${p}"
   done
   sh_ dumpsys webviewupdate >/dev/null 2>&1; echo "    webviewupdate service: $(sh_ service list | grep -c webviewupdate) (0 when android.software.webview is not declared)"
+fi
+
+# ---- b4d-1: rild, vendor radio daemons, radio HAL entries, eSIM app ----
+if at_least b4d-1; then
+  for s in ril-daemon vendor.google.radioext@1.0 BIP-Channel-Manager secure_element_uicc_hal_service \
+           init-radio-sh modem_logging_start; do
+    st="$(prop init.svc.${s})"
+    [[ -z "${st}" ]] && pass "service ${s} not defined" || fail "service ${s}: ${st}"
+  done
+  check_absent_pkgs "b4d-1 RIL/eSIM strip" com.samsung.slsi.telephony.oemril \
+    com.samsung.slsi.telephony.oem.oemrilhookservice com.google.android.grilservice \
+    com.google.euiccpixel com.google.euiccpixel.permissions
+  # Nothing asks hwservicemanager (or init, through it) for a radio HAL any more: the b4c log was
+  # full of "trying to start it as a lazy HAL" / ctl.interface_start for IRadio/slot1 and
+  # IOemSlsiRadioExternal/rilExternal.
+  asks="$(sh_ logcat -d -b all | grep -E 'lazy HAL|ctl\.interface_start|interface_start' | grep -c -E 'IRadio|IRadioConfig|ISap|IOemSlsiRadioExternal|radioExternal|ISecureElement/SIM|radioext')"
+  [[ "${asks:-0}" -eq 0 ]] && pass "no radio HAL start requests in the log" || fail "${asks} radio HAL start requests: adb logcat -d -b all | grep -E 'lazy HAL|interface_start'"
+  bad="$(sh_ logcat -b crash -d | grep -E -o '(euiccpixel|oemril[a-z]*|grilservice)' | sort -u | tr '\n' ' ')"
+  [[ -z "${bad// /}" ]] && pass "no eSIM/OEM-RIL process in the crash buffer" || fail "crash buffer names: ${bad}"
+fi
+if [[ "${RUNG}" == b4d-1 ]]; then
+  # b4d-1 keeps the telephony framework, Telecom and Wi-Fi (b4d, which removed them, does not boot).
+  pk="$(sh_ pm list packages | sed 's/^package://')"
+  for p in com.android.phone com.android.server.telecom com.android.providers.telephony \
+           com.android.carrierconfig; do
+    echo "${pk}" | grep -qx "${p}" && pass "kept ${p}" || fail "MISSING kept package ${p}"
+  done
+  svcs="$(sh_ service list)"
+  for s in phone isub telecom wifi; do
+    echo "${svcs}" | grep -q -E "^[0-9]+[[:space:]]+${s}:" && pass "system service ${s} registered (kept)" || warn "no ${s} system service (kept on purpose; check logcat)"
+  done
+  feats="$(sh_ pm list features)"
+  for f in android.hardware.telephony android.hardware.wifi; do
+    echo "${feats}" | grep -q "feature:${f}$" && pass "feature ${f} still declared (unchanged from b4c)" || fail "feature ${f} withdrawn (b4d-1 must not change features)"
+  done
+  # The b4c loop: com.android.phone "failed to complete startup" ANRs / crashes. b4d-1 must end it.
+  ph="$(sh_ logcat -d -b all | grep -c -E 'ANR in com\.android\.phone|failed to complete startup')"
+  [[ "${ph:-0}" -eq 0 ]] && pass "no com.android.phone ANR / failed startup" || fail "${ph} com.android.phone ANR/startup-failure lines (README b4d-1: next step)"
+  pc="$(sh_ logcat -b crash -d | grep -c -E 'Process: com\.android\.phone|com\.android\.phone.*(died|crash)')"
+  [[ "${pc:-0}" -eq 0 ]] && pass "com.android.phone not in the crash buffer" || fail "com.android.phone crashed ${pc}x"
+  st="$(prop init.svc.vendor.wifi_hal_legacy)"
+  echo "    Wi-Fi HAL: init.svc.vendor.wifi_hal_legacy=${st:-undefined} (kept; no wlan0 since b4a, so 'TIMED_OUT' in logcat is expected noise)"
+  echo "    reboot: check-rung never reboots; run the README b4d-1 reboot test (adb reboot -> new boot_id)."
 fi
 
 # ---- b4d: telephony + Wi-Fi software ----

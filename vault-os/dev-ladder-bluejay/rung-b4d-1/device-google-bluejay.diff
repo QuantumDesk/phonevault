@@ -1,0 +1,17 @@
+diff --git a/vintf/manifest.xml b/vintf/manifest.xml
+index 7f151d7..89d6029 100644
+--- a/vintf/manifest.xml
++++ b/vintf/manifest.xml
+@@ -4,9 +4,7 @@
+      SPDX-License-Identifier: Apache-2.0
+ -->
+ <manifest version="9.0" type="device">
+-    <hal format="hidl">
+-        <name>android.hardware.secure_element</name>
+-        <transport>hwbinder</transport>
+-        <fqname>@1.2::ISecureElement/eSE1</fqname>
+-    </hal>
++    <!-- Phone Vault (bluejay rung b4a): no eSE1 secure element HAL. The st54spi/st33spi eSE drivers
++         and android.hardware.secure_element@1.2-service-gto are gone; a declared HIDL HAL that
++         never registers would make its clients wait. -->
+ </manifest>

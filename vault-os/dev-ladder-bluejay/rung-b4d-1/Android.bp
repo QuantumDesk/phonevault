@@ -1,0 +1,196 @@
+android_app_import {
+    name: "PhoneVault",
+    apk: "PhoneVault.apk",
+    presigned: true,
+    // Keep APK Signature Scheme v2 intact; Soong must not realign or rewrite
+    // this already-verified signer artifact.
+    preprocessed: true,
+    // Device-owner authority is granted by DevicePolicyManager, not by
+    // priv-app placement. Keep the signer in the ordinary system-app domain
+    // (frameworks/base 0003 refuses a privileged owner).
+    privileged: false,
+    // gs101 enforces build/make/target/product/generic_system.mk's artifact path requirement:
+    // a device product may not install into /system. Apps on /product are still system apps
+    // (ApplicationInfo.FLAG_SYSTEM) and, outside priv-app, not privileged, which is exactly
+    // what frameworks/base 0003 requires of the owner.
+    product_specific: true,
+    // main.mk drops every module named here before it expands `required`, so an override
+    // removes a module whichever inherited makefile listed it (crosshatch rung 4). It does not
+    // help when another installed module `required`s the target: checked for b1 in
+    // out/soong/Android-vault_bluejay.mk (nothing requires Launcher3QuickStep or
+    // Launcher3Overlay). Verify on the target-files after the build.
+    overrides: [
+        // Rung b0 (= crosshatch rung 1b): the appliance has no setup wizard.
+        "LineageSetupWizard",
+
+        // Rung b1: no launcher, so HOME has exactly one real candidate (PhoneVault, plus
+        // Settings' direct-boot FallbackHome at priority -1000) and no chooser can appear,
+        // whatever happens to the preferred-activity records. On Lineage 24.0 Trebuchet is
+        // packages/apps/Launcher3's `Launcher3QuickStep` (system_ext/priv-app, listed by AOSP
+        // handheld_system_ext.mk and Lineage common_mobile.mk); its `required` auto-generated
+        // RRO, privapp allowlists and protolog go with it. Launcher3Overlay is Lineage's RRO for
+        // it (vendor/lineage/overlay/rro_packages). b0 showed "Trebuchet" in a HOME chooser.
+        "Launcher3QuickStep",
+        "Launcher3Overlay",
+
+        // Rung b4a: the radios. Each service goes together with its kernel driver
+        // (BoardConfigVault.mk) and, where it has one, its VINTF entry (a declared HAL that never
+        // registers makes clients wait) and its init rc (vendor-google-bluejay.diff drops the rc
+        // copies of the prebuilt daemons). out/soong/Android-vault_bluejay.mk confirms that no
+        // installed module `required`s any of these.
+        // NFC: the ST NFC HAL (rc + AIDL fragment ship with the module) and the gto eSE HAL
+        // (eSE1, declared in device/google/bluejay/vintf/manifest.xml: removed by the device diff).
+        "android.hardware.nfc-service.st",
+        "android.hardware.secure_element@1.2-service-gto",
+        // Bluetooth: the Broadcom HAL (its HALs are declared in gs101 vintf/manifest.xml: removed
+        // by the gs101 diff) and the two feature files. Without android.hardware.bluetooth
+        // SystemServer does not start BluetoothManagerService (crosshatch 4b).
+        "android.hardware.bluetooth-service.bcmbtlinux",
+        "android.hardware.bluetooth.prebuilt.xml",
+        "android.hardware.bluetooth_le.prebuilt.xml",
+        // GNSS: Broadcom gpsd/lhd/scd, the GNSS HIDL HAL and its manifest fragment, the feature.
+        "android.hardware.gnss@2.1-service-brcm",
+        "android.hardware.gnss@2.1-service-brcm.xml",
+        "gpsd",
+        "lhd",
+        "scd",
+        "android.hardware.location.gps.prebuilt.xml",
+        // Modem: cbd (boots the CP over cpif), rfsd (modem remote file system), dmd (modem
+        // diagnostics, HIDL oemservice + its fragment), shared_modem_platform (modem crash/logging
+        // platform, AIDL + its fragment). rild and the radio HAL manifest stayed at b4a (as on
+        // crosshatch); b4d-1 removes them (section below). The telephony framework stays.
+        "cbd",
+        "rfsd",
+        "dmd",
+        "dmd.xml",
+        "shared_modem_platform",
+        "shared_modem_platform.xml",
+
+        // Rung b4b: app strip slice A (= crosshatch rung 4a, adapted to the Lineage 24.0 bluejay
+        // image): user-facing apps nothing in system_server or SystemUI binds at boot. Names
+        // checked against the b1 target files and out/soong/Android-vault_bluejay.mk (no other
+        // installed module `required`s any of them; Aperture requires ApertureLensLauncher, both
+        // listed). Reasons per module: dev-ladder-bluejay/README.md, b4b.
+        "Aperture",
+        "ApertureLensLauncher",
+        "ApertureOverlayBluejay",
+        "AudioFX",
+        "Camelot",
+        "Canvas",
+        "DeskClock",
+        "Etar",
+        "ExactCalculator",
+        "Glimpse",
+        "Jelly",
+        "Recorder",
+        "Twelve",
+        "Updater",
+        "AvatarPicker",
+        "Backgrounds",
+        "BasicDreams",
+        "EasterEgg",
+        "HTMLViewer",
+        "LiveWallpapersPicker",
+        "PhotoTable",
+        "SoundPicker",
+        "ThemePicker",
+        "ThemesStub",
+        "AccessibilityMenu",
+        "CameraExtensionsProxy",
+        "DeviceAsWebcam",
+        "DeviceDiagnostics",
+        "DownloadProviderUi",
+        "EmergencyInfo",
+        "SettingsIntelligence",
+        "Tag",
+
+        // Rung b4c: app strip slice B (= crosshatch rung 4b, adapted): system-side modules bound
+        // only on demand. KEPT on purpose (as on crosshatch): ModuleMetadata (without it
+        // system_server boot-loops: "Call to getInstalledModules before metadata loaded"),
+        // Settings (FallbackHome, confirm-credential), LatinIME (the step-up PIN prompt's IME),
+        // and on bluejay GoogleParts (gs101's is only the eUICC disabler, not Active Edge) and the
+        // telephony stack (its radio daemons go in b4d-1, below). Reasons per module: README.md, b4c.
+        "CallLogBackup",
+        "CarrierDefaultApp",
+        "CellBroadcastLegacyApp",
+        "Contacts",
+        "Dialer",
+        "SimAppDialog",
+        "Stk",
+        "messaging",
+        "BackupRestoreConfirmation",
+        "LocalContactsBackup",
+        "LocalTransport",
+        "Seedvault",
+        "SharedStorageBackup",
+        "WallpaperBackup",
+        "BuiltInPrintService",
+        "PrintRecommendationService",
+        "PrintSpooler",
+        "webview",
+        "android.software.webview.prebuilt.xml",
+        "MtpService",
+        "StorageManager",
+        "LineageParts",
+        "Profiles",
+        "QuickAccessWallet",
+        "BluetoothMidiService",
+        "CaptivePortalLogin",
+        "CertInstaller",
+        "CompanionDeviceManager",
+        "CredentialManager",
+        "DynamicSystemInstallationService",
+        "PacProcessor",
+        "ProxyHandler",
+        "SecureElement",
+        "StatementService",
+        "VpnDialogs",
+        "BookmarkProvider",
+        "CalendarProvider",
+        "E2eeContactKeysProvider",
+        "PartnerBookmarksProvider",
+        "NowPlayingPrebuilt",
+        "DeviceIntelligenceNetworkPrebuiltAstrea",
+        "DevicePersonalizationAiAiPrebuiltPixel2021",
+        "HardwareInfo",
+        "HotwordEnrollmentOKGoogleFUSIONPro",
+        "HotwordEnrollmentXGoogleFUSIONPro",
+        "PixelCameraServices",
+        "PersistentBackgroundCameraServices",
+
+        // Rung b4d-1: the radio daemon half of b4d only (b4d, which also removed TeleService,
+        // the carrier/IMS apps and the Wi-Fi HAL, does not boot on Android 17). With the modem
+        // driver gone since b4a, rild only looped ("RIL RESET by RilApplication Init Fail" every
+        // ~5 s), hwservicemanager kept asking init for IRadio/slot1 and
+        // IOemSlsiRadioExternal/rilExternal, the OEM-RIL/hook persistent apps restarted and
+        // com.google.euiccpixel crashed at boot. Each daemon goes with its init rc
+        // (vendor-google-bluejay.diff) and its VINTF entry (device-google-gs101.diff:
+        // android.hardware.radio, radio.config, secure_element SIM1/SIM2, Samsung
+        // radioExternal; vendor.google.radioext goes with its fragment module below).
+        // KEPT on purpose: TeleService (com.android.phone), Telecom, TelephonyProvider,
+        // CarrierConfig, the IMS/carrier apps, the other eUICC packages, GoogleParts, the whole
+        // Wi-Fi stack, and every feature b4c declares (README.md, b4d-1).
+        // Vendor radio daemons: rild, the GoogleRil radio-ext HAL (+ its VINTF fragment), the SIM
+        // toolkit BIP channel manager, the UICC secure-element HAL (SIM1/SIM2; its client
+        // com.android.se went in b4c), init.radio.sh, modem logging control.
+        "rild_exynos",
+        "vendor.google.radioext@1.0-service",
+        "manifest_radioext.xml",
+        "bipchmgr",
+        "android.hardware.secure_element@1.2-uicc-service",
+        "init.radio",
+        "modem_logging_control",
+        // RIL-side persistent apps that talk straight to the removed HALs: Samsung OEM RIL
+        // (radioExternal), its RIL hook service, and the Google RIL service (radioext).
+        "OemRilService",
+        "OemRilHookService",
+        "grilservice",
+        // eSIM: com.google.euiccpixel (+ its permissions package; the vendor diff drops the
+        // DKA_RC7_* copies in its priv-app dir). The crash at boot on b4c.
+        "EuiccSupportPixel",
+        "EuiccSupportPixelPermissions",
+    ],
+    dex_preopt: {
+        enabled: true,
+    },
+}
