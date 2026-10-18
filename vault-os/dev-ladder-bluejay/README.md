@@ -108,7 +108,7 @@ lives on a build host.
 | b4a | b3 + **radios off** (crosshatch 2d-a/2d-b/2d-c2/4b-feature intent): Wi-Fi (bcmdhd4389, cfg80211, rfkill), Bluetooth (nitrous), NFC + eSE (st21nfc, st54spi, st33spi), GNSS (bcm47765, bbd_pps_gpio), modem interface (cpif stack) out of the kernel image **together with** their services (BT HAL, NFC HAL, gto eSE HAL, GNSS HAL + gpsd/lhd/scd, cbd/rfsd/dmd/shared_modem_platform), VINTF entries and features (BT, NFC, OMAPI, GPS). Telephony framework, rild and the radio HAL stay (telephony rung, as on crosshatch); the modem firmware stays on its partitions, never booted | **passed**: 0 FAIL; no wlan/rmnet/bluetooth/umts, radio services undefined, Titan M2 gatekeeperd running. Found: `pktrouter` (wfc-pkt-router) crash-loops with the modem gone; removed in b4c | [b4a](#b4a-radios) |
 | b4b | b4a + **app strip slice A** (= crosshatch 4a, adapted): 32 user-facing modules (camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF/Canvas, AudioFX, Updater, pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceAsWebcam, …) | **passed**: 0 FAIL | [b4b / b4c](#b4b--b4c-app-strip) |
 | b4c | b4b + **app strip slice B** (= crosshatch 4b, adapted): 47 on-demand system modules (telephony UI/role apps, backup, print, WebView + feature, MTP, Lineage parts/profiles, CDM/credential/DSU/cert/PAC/VPN/captive-portal/SE/BT-MIDI satellites, providers, Pixel blobs) and `pktrouter`. **ModuleMetadata kept** (crosshatch 4b boot loop), Settings, LatinIME, GoogleParts (eUICC disabler on gs101) kept | **passed**: 0 FAIL, 167 packages, only crash `euiccpixel` ×2 at boot. `firstrun.sh`, `usbsigntest.sh`, `msgsigntest.sh`, `credentialtest.sh` pass. The lock screen still says "Emergency calls only" on this dev rung: the release overlay's `config_voice_capable=false` is not in the ladder; check it on the release build | [b4b / b4c](#b4b--b4c-app-strip) |
-| b4d-1 | b4c + **b4d's radio-daemon half only** (bisecting b4d): `rild_exynos` (`ril-daemon`), the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), the RIL-side persistent apps `OemRilService`, `OemRilHookService`, `grilservice`, and `com.google.euiccpixel` (+ its permissions package). **Kept:** TeleService, Telecom, TelephonyProvider, CarrierConfig, the IMS/carrier apps, EuiccGoogle, GoogleParts, the whole Wi-Fi stack, every b4c feature | not flashed yet | [b4d-1](#b4d-1-radio-daemons-only) |
+| b4d-1 | b4c + **b4d's radio-daemon half only** (bisecting b4d): `rild_exynos` (`ril-daemon`), the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), the RIL-side persistent apps `OemRilService`, `OemRilHookService`, `grilservice`, and `com.google.euiccpixel` (+ its permissions package). **Kept:** TeleService, Telecom, TelephonyProvider, CarrierConfig, the IMS/carrier apps, EuiccGoogle, GoogleParts, the whole Wi-Fi stack, every b4c feature, and b4c's framework overlay (no `config_voice_capable=false`, which b4d also added) | not flashed yet | [b4d-1](#b4d-1-radio-daemons-only) |
 | b4d | b4c + **telephony and Wi-Fi software out** (the drivers went in b4a): `rild_exynos`, the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), TeleService, TelephonyProvider, CarrierConfig, MmsService, ONS, Iwlan, the Samsung/Google RIL, IMS, carrier, OMA-DM and Verizon apps, the eUICC apps + update APEX + GoogleParts, the Pixel Wi-Fi HAL APEX, wpa_supplicant, hostapd, wificond; every `android.hardware.telephony*`/`wifi*`/`sip` feature withdrawn; the release overlay's `config_voice_capable`/`config_sms_capable=false` now in the ladder. **Telecom kept** (system_server on A17) | **does not boot**: Android 17 requests `reboot` a few seconds into system_server start-up, right after UsbDeviceManager init; restored to b4c. Bisected with b4d-1 | [b4d](#b4d-telephony-and-wi-fi-software) |
 
 Not yet done on the 6a: the appliance VINTF manifest, the camera/TPU/sensor slice, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
@@ -489,7 +489,8 @@ the boot failure is in what b4d-1 keeps (TeleService and the other telephony app
 HAL, which b4d-2 tests).
 
 **Changes vs b4c** (`rung-b4d-1/` is a copy of `rung-b4c/` plus only these parts of b4d;
-`BoardConfigVault.mk`, `common.mk` and the kernel lists are unchanged apart from comments):
+`BoardConfigVault.mk`, `common.mk` and the kernel lists are unchanged apart from comments;
+`config.xml` keeps the framework overlay at b4c's, see below):
 
 | what | removed | how |
 |---|---|---|
@@ -510,6 +511,15 @@ phone process's RIL gets "not declared" back at once instead of waiting on a dec
 never registers, which should end its "failed to complete startup" loop. If it does not, the
 telephony features are the next lever (on a later rung, not in b4d-1). The `/system/bin/wificond`
 compat-symlink note from b4d does not apply: `wificond` is kept, so the link has its target.
+
+**A third b4d variable, held back in b4d-1: the overlay.** b4c (`out-b4c2`) was built before the
+release overlay's `config_voice_capable`, `config_sms_capable` and
+`config_enable_emergency_call_while_sim_locked=false` reached the build host's repo copy; b4d was
+the first ladder image that carried them (a dump of the two product framework-res RROs differs in
+exactly these three booleans). `config_voice_capable=false` changes how Telecom, TeleService and
+PhoneWindowManager behave at boot, so it is as much a b4d suspect as the removals. b4d-1 therefore
+carries `rung-b4d-1/config.xml`: the release `config.xml` without those three entries, so the
+framework overlay is the b4c one. They get their own step after b4d-1/b4d-2.
 
 **Pass criteria** (`./check-rung.sh b4d-1`, cumulative over b1–b4c):
 
