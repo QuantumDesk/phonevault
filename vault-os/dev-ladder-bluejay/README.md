@@ -26,6 +26,7 @@ dev-ladder-bluejay/
   rung-b4a/      … b4a (radios: Wi-Fi/BT/NFC/eSE/GNSS/modem drivers + their services + features)
   rung-b4b/      … b4b (app strip slice A = crosshatch 4a)
   rung-b4c/      … b4c (app strip slice B = crosshatch 4b, ModuleMetadata kept)
+  rung-b4d-1/    … b4d-1 (b4d's radio-daemon half only: rild + vendor radio daemons, radio HAL entries, OEM-RIL apps, euiccpixel)
   rung-b4d/      … b4d (telephony + Wi-Fi software: rild, radio HALs, phone process, carrier/IMS/eUICC apps, Wi-Fi HAL)
 ```
 
@@ -107,7 +108,8 @@ lives on a build host.
 | b4a | b3 + **radios off** (crosshatch 2d-a/2d-b/2d-c2/4b-feature intent): Wi-Fi (bcmdhd4389, cfg80211, rfkill), Bluetooth (nitrous), NFC + eSE (st21nfc, st54spi, st33spi), GNSS (bcm47765, bbd_pps_gpio), modem interface (cpif stack) out of the kernel image **together with** their services (BT HAL, NFC HAL, gto eSE HAL, GNSS HAL + gpsd/lhd/scd, cbd/rfsd/dmd/shared_modem_platform), VINTF entries and features (BT, NFC, OMAPI, GPS). Telephony framework, rild and the radio HAL stay (telephony rung, as on crosshatch); the modem firmware stays on its partitions, never booted | **passed**: 0 FAIL; no wlan/rmnet/bluetooth/umts, radio services undefined, Titan M2 gatekeeperd running. Found: `pktrouter` (wfc-pkt-router) crash-loops with the modem gone; removed in b4c | [b4a](#b4a-radios) |
 | b4b | b4a + **app strip slice A** (= crosshatch 4a, adapted): 32 user-facing modules (camera/gallery/music/browser/clock/calendar/calculator/recorder/PDF/Canvas, AudioFX, Updater, pickers, dreams, EasterEgg, HTMLViewer, Tag, DeviceAsWebcam, …) | **passed**: 0 FAIL | [b4b / b4c](#b4b--b4c-app-strip) |
 | b4c | b4b + **app strip slice B** (= crosshatch 4b, adapted): 47 on-demand system modules (telephony UI/role apps, backup, print, WebView + feature, MTP, Lineage parts/profiles, CDM/credential/DSU/cert/PAC/VPN/captive-portal/SE/BT-MIDI satellites, providers, Pixel blobs) and `pktrouter`. **ModuleMetadata kept** (crosshatch 4b boot loop), Settings, LatinIME, GoogleParts (eUICC disabler on gs101) kept | **passed**: 0 FAIL, 167 packages, only crash `euiccpixel` ×2 at boot. `firstrun.sh`, `usbsigntest.sh`, `msgsigntest.sh`, `credentialtest.sh` pass. The lock screen still says "Emergency calls only" on this dev rung: the release overlay's `config_voice_capable=false` is not in the ladder; check it on the release build | [b4b / b4c](#b4b--b4c-app-strip) |
-| b4d | b4c + **telephony and Wi-Fi software out** (the drivers went in b4a): `rild_exynos`, the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), TeleService, TelephonyProvider, CarrierConfig, MmsService, ONS, Iwlan, the Samsung/Google RIL, IMS, carrier, OMA-DM and Verizon apps, the eUICC apps + update APEX + GoogleParts, the Pixel Wi-Fi HAL APEX, wpa_supplicant, hostapd, wificond; every `android.hardware.telephony*`/`wifi*`/`sip` feature withdrawn; the release overlay's `config_voice_capable`/`config_sms_capable=false` now in the ladder. **Telecom kept** (system_server on A17) | not flashed yet | [b4d](#b4d-telephony-and-wi-fi-software) |
+| b4d-1 | b4c + **b4d's radio-daemon half only** (bisecting b4d): `rild_exynos` (`ril-daemon`), the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), the RIL-side persistent apps `OemRilService`, `OemRilHookService`, `grilservice`, and `com.google.euiccpixel` (+ its permissions package). **Kept:** TeleService, Telecom, TelephonyProvider, CarrierConfig, the IMS/carrier apps, EuiccGoogle, GoogleParts, the whole Wi-Fi stack, every b4c feature, and b4c's framework overlay (no `config_voice_capable=false`, which b4d also added) | not flashed yet | [b4d-1](#b4d-1-radio-daemons-only) |
+| b4d | b4c + **telephony and Wi-Fi software out** (the drivers went in b4a): `rild_exynos`, the radio-ext/BIP/UICC-SE/init.radio/modem-logging daemons and their rc, the radio HAL VINTF entries (IRadio/ISap slot1+2, IRadioConfig, SIM1/SIM2, Samsung radioExternal), TeleService, TelephonyProvider, CarrierConfig, MmsService, ONS, Iwlan, the Samsung/Google RIL, IMS, carrier, OMA-DM and Verizon apps, the eUICC apps + update APEX + GoogleParts, the Pixel Wi-Fi HAL APEX, wpa_supplicant, hostapd, wificond; every `android.hardware.telephony*`/`wifi*`/`sip` feature withdrawn; the release overlay's `config_voice_capable`/`config_sms_capable=false` now in the ladder. **Telecom kept** (system_server on A17) | **does not boot**: Android 17 requests `reboot` a few seconds into system_server start-up, right after UsbDeviceManager init; restored to b4c. Bisected with b4d-1 | [b4d](#b4d-telephony-and-wi-fi-software) |
 
 Not yet done on the 6a: the appliance VINTF manifest, the camera/TPU/sensor slice, the user build (b8) and the relock (b9); see `docs/port-bluejay.md` §5.
 
@@ -361,9 +363,9 @@ fatal).
 > Android 17 requests a plain `reboot` a few seconds into system_server start-up, right after
 > UsbDeviceManager initialises (where adb drops, so the trigger is not in the captured logs; the
 > pstore console needs root, which the ladder never uses). The phone was restored to b4c.
-> Next: split b4d into b4d-1 (rild, radio daemons and radio HAL entries, eSIM app only; keep
-> TeleService, Telecom, TelephonyProvider, CarrierConfig and the Wi-Fi HAL) and b4d-2 (Wi-Fi HAL)
-> to find which removal Android 17 needs. Separately, the leftover `/system/bin/wificond` is a
+> Next: split b4d into [b4d-1](#b4d-1-radio-daemons-only) (rild, radio daemons and radio HAL
+> entries, eSIM app only; keep TeleService, Telecom, TelephonyProvider, CarrierConfig and the Wi-Fi
+> HAL) and b4d-2 (Wi-Fi HAL) to find which removal Android 17 needs. Separately, the leftover `/system/bin/wificond` is a
 > dangling compat symlink (no service starts it); check-build should treat it as absent.
 
 
@@ -472,6 +474,111 @@ Then the **reboot test**, by hand (check-rung.sh never reboots):
 
 **Rollback:** reflash b4c from the Mac: `cd ~/pv-bluejay/out-b4c2 && ./flash-b4c-mac.sh --check`,
 then `echo FLASH | ./flash-b4c-mac.sh`. That is the b4c image the phone runs now.
+
+### b4d-1: radio daemons only
+
+The first half of the b4d bisect. b4d removed telephony and Wi-Fi together and does not boot
+(status note above). b4c boots but loops: `ril-daemon` restarts every ~5 s, hwservicemanager keeps
+asking init for `IOemSlsiRadioExternal/rilExternal` and `IRadio/slot1`, the OEM-RIL / RIL-hook
+persistent apps restart, `com.android.phone` ANRs "failed to complete startup", the Wi-Fi ext HAL
+times out on the missing `wlan0`, `com.google.euiccpixel` crashes at boot, and `adb reboot` drops
+USB without the phone ever rebooting. b4d-1 is the smallest change that removes the looping radio
+daemon and every declaration that makes something ask for it, and nothing else. If `adb reboot`
+works on b4d-1, the wedged RIL stack was the shutdown blocker. If b4d-1 boots where b4d did not,
+the boot failure is in what b4d-1 keeps (TeleService and the other telephony apps, or the Wi-Fi
+HAL, which b4d-2 tests).
+
+**Changes vs b4c** (`rung-b4d-1/` is a copy of `rung-b4c/` plus only these parts of b4d;
+`BoardConfigVault.mk`, `common.mk` and the kernel lists are unchanged apart from comments;
+`config.xml` keeps the framework overlay at b4c's, see below):
+
+| what | removed | how |
+|---|---|---|
+| RIL + vendor radio daemons | `rild_exynos` (`ril-daemon`), `vendor.google.radioext@1.0-service` (+ `manifest_radioext.xml`), `bipchmgr` (SIM toolkit BIP), `android.hardware.secure_element@1.2-uicc-service` (SIM1/SIM2; its client `com.android.se` went in b4c), `init.radio` (`init-radio-sh`), `modem_logging_control` | `Android.bp` overrides; `vendor-google-bluejay.diff` drops their rc copies (`rild_exynos.rc`, `vendor.google.radioext@1.0-service.rc`, `bipchmgr.rc`, `android.hardware.secure_element@1.2-uicc-service.rc`, `init.vendor_telephony.rc`, `init.modem_logging_control.rc`) |
+| radio HAL VINTF | `android.hardware.radio` (`@1.2::ISap/slot1,2`, `@1.6::IRadio/slot1,2`), `android.hardware.radio.config` (`@1.1::IRadioConfig/default`), `android.hardware.secure_element` `ISecureElement/SIM1,SIM2`, `vendor.samsung_slsi.telephony.hardware.radioExternal` (`@1.1::IOemSlsiRadioExternal/rilExternal`) | `device-google-gs101.diff` (`vintf/manifest.xml`, same hunk as b4d); `vendor.google.radioext` goes with its fragment module |
+| RIL-side persistent apps | `OemRilService` (com.samsung.slsi.telephony.oemril, the radioExternal client), `OemRilHookService` (…oem.oemrilhookservice), `grilservice` (the radioext client) | overrides. These are the "oemril/mrilhook restarting" processes; with their HALs gone they could only loop |
+| eSIM | `EuiccSupportPixel` (com.google.euiccpixel, the boot crash) + `EuiccSupportPixelPermissions` | overrides; the vendor diff drops the three `DKA_RC7_*` copies in its priv-app dir |
+
+**Kept, unlike b4d:** TeleService (`com.android.phone`), Telecom (telephonycore APEX + TelecomShim),
+TelephonyProvider, CarrierConfig, MmsService, ONS, Iwlan, the Shannon IMS/RCS/QNS apps, the
+carrier, OMA-DM and Verizon apps, `EuiccGoogle` + its overlay, the eUICC update APEX,
+`GoogleParts`, `ConnectivityThermalPowerManager`, the Wi-Fi HAL APEX, `wpa_supplicant`, `hostapd`,
+`wificond`, and **every feature b4c declares** (`android.hardware.telephony*`, `wifi*`, `sip`; no
+`phonevault-no-telephony-wifi.xml`, no overlay change). TeleService and Telecom stay because
+crosshatch 4b needed them ([hardening-ladder.md](../docs/hardening-ladder.md)). Features are left
+alone so that the only variable is the radio daemon. With the radio HAL no longer declared, the
+phone process's RIL gets "not declared" back at once instead of waiting on a declared HAL that
+never registers, which should end its "failed to complete startup" loop. If it does not, the
+telephony features are the next lever (on a later rung, not in b4d-1). The `/system/bin/wificond`
+compat-symlink note from b4d does not apply: `wificond` is kept, so the link has its target.
+
+**A third b4d variable, held back in b4d-1: the overlay.** b4c (`out-b4c2`) was built before the
+release overlay's `config_voice_capable`, `config_sms_capable` and
+`config_enable_emergency_call_while_sim_locked=false` reached the build host's repo copy; b4d was
+the first ladder image that carried them (a dump of the two product framework-res RROs differs in
+exactly these three booleans). `config_voice_capable=false` changes how Telecom, TeleService and
+PhoneWindowManager behave at boot, so it is as much a b4d suspect as the removals. b4d-1 therefore
+carries `rung-b4d-1/config.xml`: the release `config.xml` without those three entries, so the
+framework overlay is the b4c one. They get their own step after b4d-1/b4d-2.
+
+**Pass criteria** (`./check-rung.sh b4d-1`, cumulative over b1–b4c):
+
+- `init.svc.` undefined for `ril-daemon vendor.google.radioext@1.0 BIP-Channel-Manager
+  secure_element_uicc_hal_service init-radio-sh modem_logging_start`.
+- **No init service in `[restarting]`** (a FAIL from b4d-1 on). If the only one left is
+  `vendor.wifi_hal_legacy`, that points at b4d-2, not at a b4d-1 regression.
+- No hwservicemanager "lazy HAL" / `ctl.interface_start` request for IRadio, IRadioConfig, ISap,
+  radioExternal, radioext or ISecureElement/SIM in `logcat -b all`.
+- `com.google.euiccpixel(.permissions)`, `…oemril`, `…oemrilhookservice` and `…grilservice` not
+  installed, and none of them in the crash buffer.
+- Kept: `com.android.phone`, `com.android.server.telecom`, `com.android.providers.telephony`,
+  `com.android.carrierconfig` installed; `android.hardware.telephony` and `android.hardware.wifi`
+  still declared; the `phone`/`isub`/`telecom`/`wifi` system services are reported (WARN if absent).
+- No `ANR in com.android.phone` / "failed to complete startup" and no phone crash in the log.
+- Everything from b1–b4c and the app suites (`firstrun.sh`, `usbsigntest.sh`, `tokensigntest.sh`,
+  `msgsigntest.sh`, `credentialtest.sh`).
+
+Then the **reboot test**, by hand, exactly as for b4d (check-rung.sh never reboots): note
+`adb shell cat /proc/sys/kernel/random/boot_id`, run `adb reboot`, and expect adb back by itself
+within about 2 minutes with a different `boot_id`, the boot lock screen, and
+`getprop sys.boot.reason.last` = `reboot` (or `reboot,…`). Repeat once from the power menu.
+
+**check-build expectations** (`rung-b4d-1/expect-build.txt`): the b4c set minus its "rild/radio
+HAL stays" lines, plus: every daemon binary and rc above and `manifest_radioext.xml` absent; no
+`android.hardware.radio`/`radio.config`/radioExternal/radioext `<name>` and no
+IRadio/ISap/IRadioConfig/IOemSlsiRadioExternal/`ISecureElement/SIM` in the device manifest; no
+`service ril-daemon` in `init.gs101.rc`; the OEM-RIL/gril/euiccpixel APKs and the DKA files
+absent; TeleService, TelephonyProvider, CarrierConfig, TelecomShim, telephonycore, EuiccGoogle,
+GoogleParts, both Wi-Fi APEXes, wpa_supplicant, hostapd, wificond and the telephony/Wi-Fi feature
+files present; `phonevault-no-telephony-wifi.xml` absent.
+
+**Risks:**
+
+1. **Boot loop** (low; b4d-1 removes only what b4c already showed to be dead). If b4d-1 does not
+   boot either, the cause is in the radio half (most likely the phone process reacting to an
+   undeclared IRadio). Capture `adb logcat -b all -d` and `adb logcat -b crash -d` as for b4d,
+   then reflash b4c.
+2. **`com.android.phone` still loops** (ANR or crash on the missing radio HAL): b4d-1 then FAILs
+   on the phone checks but still answers the reboot question. The next rung withdraws the
+   telephony features (or TeleService) with the phone process.
+3. **`adb reboot` still hangs**: then the RIL stack was not the shutdown blocker. Force a restart
+   (hold Power for about 10 s) and capture as in b4d risk 3. The Wi-Fi HAL (b4d-2) is next.
+4. **`EuiccGoogle` without `euiccpixel`**: the LPA may log errors when TeleService's
+   EuiccController binds it (no SIM, no eUICC firmware path). Crash-buffer entries for
+   `com.google.android.euicc` show up as the cumulative "crash buffer" WARN.
+
+**Rollback:** reflash b4c from the Mac: `cd ~/pv-bluejay/out-b4c2 && ./flash-b4c-mac.sh --check`,
+then `echo FLASH | ./flash-b4c-mac.sh`.
+
+**Flash (human-approved, phone in the bootloader):**
+
+```sh
+mkdir -p ~/pv-bluejay && cd ~/pv-bluejay
+rsync -av --exclude 'vault_bluejay-*.zip' <build-host>:/build/out-b4d-1/ out-b4d-1/
+cd out-b4d-1 && ./flash-b4d-1-mac.sh --check && ./flash-b4d-1-mac.sh    # type FLASH
+# hands-off first boot to SET PIN, then from the repo:
+vault-os/dev-ladder-bluejay/check-rung.sh b4d-1     # then the app suites and the reboot test
+```
 
 ### Flashing a rung from the Mac (human-approved; the phone in the bootloader)
 
