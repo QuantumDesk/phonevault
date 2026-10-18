@@ -5,20 +5,22 @@
 # override is silently defeated when an installed module `required`s its target, so the image,
 # not the Android.bp, is the proof. sign-release.sh runs it on the input target-files before
 # anything is signed.
-#   verify-release-overrides.sh TARGET_FILES_ZIP [REPOSITORY_ROOT]
+#   verify-release-overrides.sh TARGET_FILES_ZIP [REPOSITORY_ROOT [ANDROID_BP]]
+# ANDROID_BP defaults to the release list above; a bluejay beta passes its resolved list
+# (release-bluejay/build-beta.sh: the base rung's Android.bp, e.g. rung-b4d-1).
 # Fails (exit 1) when an overridden module is still packaged, and when the release Android.bp
 # has no active override at all: the release list is never empty, so an empty parse proves
 # nothing. Parsing and matching: vaultgates/overrides.py.
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 || -z "$1" ]]; then
-  echo "usage: $0 TARGET_FILES_ZIP [REPOSITORY_ROOT]" >&2
+if [[ $# -lt 1 || $# -gt 3 || -z "$1" ]]; then
+  echo "usage: $0 TARGET_FILES_ZIP [REPOSITORY_ROOT [ANDROID_BP]]" >&2
   exit 2
 fi
 TARGET_FILES="$1"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPOSITORY_ROOT="${2:-$(cd "${SCRIPT_DIR}/../.." && pwd)}"
-BLUEPRINT="${REPOSITORY_ROOT}/vault-os/vendor/phonevault/prebuilt/Android.bp"
+BLUEPRINT="${3:-${REPOSITORY_ROOT}/vault-os/vendor/phonevault/prebuilt/Android.bp}"
 [[ -s "${BLUEPRINT}" ]] || {
   echo "missing release overrides: ${BLUEPRINT}" >&2
   exit 1
@@ -27,6 +29,6 @@ BLUEPRINT="${REPOSITORY_ROOT}/vault-os/vendor/phonevault/prebuilt/Android.bp"
   echo "missing target-files archive: ${TARGET_FILES}" >&2
   exit 1
 }
-echo "release overrides: ${TARGET_FILES}"
+echo "release overrides: ${TARGET_FILES} (list: ${BLUEPRINT})"
 python3 "${SCRIPT_DIR}/vaultgate.py" overrides check \
   "${BLUEPRINT}" "${TARGET_FILES}" --require-overrides

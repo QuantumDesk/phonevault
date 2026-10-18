@@ -3,7 +3,9 @@
 # vault-os/device/phonevault) carries no development deviation. Run by
 # install-overlay.sh before a release tree is prepared and by sign-release.sh
 # before anything is signed.
-#   verify-release-source.sh [REPOSITORY_ROOT]
+#   verify-release-source.sh [REPOSITORY_ROOT [--bluejay-beta BETA]]
+# --bluejay-beta also checks the resolved bluejay beta configuration release-bluejay/BETA
+# (release-bluejay/README.md; run by sync-beta.sh and build-beta.sh).
 #
 # Development-only settings (adb as the default USB function, insecure adb,
 # pre-authorised adb keys, early-boot adb init scripts, DEBUG-NN bisection
@@ -13,4 +15,4 @@ set -euo pipefail
 
 REPOSITORY_ROOT="${1:-$(cd "$(dirname "$0")/../.." && pwd)}"
 
-python3 "$(dirname "$0")/vaultgate.py" release-source "${REPOSITORY_ROOT}"
+python3 "$(dirname "$0")/vaultgate.py" release-source "${REPOSITORY_ROOT}" "${@:2}"
