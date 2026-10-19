@@ -1,0 +1,95 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Phone Vault Project <build@phonevault.invalid>
+Date: Mon, 19 Oct 2026 12:00:00 -0400
+Subject: [PATCH] usb: optionally use the accessory function as the charging
+ composition
+
+With adb disabled, UsbDeviceManager's "charging" composition (no function
+selected, FUNCTION_NONE) is MTP. A fixed-function device that creates no MTP
+gadget function instance (Phone Vault bluejay rung b3: only accessory.gs2 and
+the userspace-AOA ffs.aoa/ffs.ctrl exist) cannot compose MTP: the gadget HAL
+fails the request, and the framework never retries a failed charging request
+(setCurrentUsbFunctionsCb). The gadget is never bound, the device does not
+enumerate at all, and a USB host cannot even send the AOA control requests.
+
+The prebuilt gs101 gadget HAL accepts no adb-free composition other than the
+data functions (MTP, PTP, MIDI, RNDIS, audio source, UVC, NCM) and ACCESSORY:
+NONE pulls the gadget down, and CTRL alone (userspace AOA's control function)
+is "Combination not supported". So add config_usbChargingFunctionsAccessory
+(default false: upstream behaviour). When true and adb is off, the charging
+composition is FUNCTION_ACCESSORY: the device enumerates as the accessory
+(18d1:2d00) with no other interface, the host performs the AOA handshake on
+it, and ACCESSORY=START moves mCurrentFunctions from NONE to ACCESSORY, which
+re-enumerates and attaches the accessory with the host's strings as usual.
+mCurrentFunctions stays NONE while charging, so no accessory is attached and
+updateCurrentAccessory does not run until the host has sent START.
+---
+diff --git a/core/res/res/values/config.xml b/core/res/res/values/config.xml
+index 8ffc645..61d32b6 100644
+--- a/core/res/res/values/config.xml
++++ b/core/res/res/values/config.xml
+@@ -537,6 +537,13 @@
+     <!-- If this is true, the message that USB is only being used for charging will be shown. -->
+     <bool name="config_usbChargingMessage">true</bool>
+ 
++    <!-- If this is true, the USB gadget composition used while no function is selected
++         ("charging", FUNCTION_NONE) is the Android Open Accessory function instead of MTP when
++         adb is disabled. For fixed-function devices whose gadget has no MTP function instance:
++         the device still enumerates on a USB host, which can then perform the AOA handshake,
++         and no MTP interface is ever presented. -->
++    <bool name="config_usbChargingFunctionsAccessory">false</bool>
++
+     <!-- Set this true only if the device has separate attention and notification lights. -->
+     <bool name="config_useAttentionLight">false</bool>
+ 
+diff --git a/core/res/res/values/symbols.xml b/core/res/res/values/symbols.xml
+index 1214550..d8dbeff 100644
+--- a/core/res/res/values/symbols.xml
++++ b/core/res/res/values/symbols.xml
+@@ -2154,6 +2154,7 @@
+   <java-symbol type="bool" name="config_sf_limitedAlpha" />
+   <java-symbol type="bool" name="config_unplugTurnsOnScreen" />
+   <java-symbol type="bool" name="config_usbChargingMessage" />
++  <java-symbol type="bool" name="config_usbChargingFunctionsAccessory" />
+   <java-symbol type="bool" name="config_skipScreenOnBrightnessRamp" />
+   <java-symbol type="bool" name="config_skipScreenOffTransition" />
+   <java-symbol type="bool" name="config_allowAutoBrightnessWhileDozing" />
+diff --git a/services/usb/java/com/android/server/usb/UsbDeviceManager.java b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+index 88387b3..d09384c 100644
+--- a/services/usb/java/com/android/server/usb/UsbDeviceManager.java
++++ b/services/usb/java/com/android/server/usb/UsbDeviceManager.java
+@@ -853,6 +853,8 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
+         protected boolean mConnected;
+         protected boolean mConfigured;
+         protected long mScreenUnlockedFunctions;
++        // config_usbChargingFunctionsAccessory: without adb, the charging composition is ACCESSORY.
++        protected final boolean mAccessoryChargingFunctions;
+         protected boolean mBootCompleted;
+         protected boolean mCurrentFunctionsApplied;
+         protected boolean mUseUsbNotification;
+@@ -920,6 +922,11 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
+             boolean massStorageSupported = primary != null && primary.allowMassStorage();
+             mUseUsbNotification = !massStorageSupported && mContext.getResources().getBoolean(
+                     com.android.internal.R.bool.config_usbChargingMessage);
++            mAccessoryChargingFunctions = mContext.getResources().getBoolean(
++                    com.android.internal.R.bool.config_usbChargingFunctionsAccessory);
++            if (mAccessoryChargingFunctions) {
++                Slog.i(TAG, "Charging functions without adb: accessory");
++            }
+         }
+ 
+         public void sendMessage(int what, boolean arg) {
+@@ -1983,6 +1990,11 @@ public class UsbDeviceManager implements ActivityTaskManagerInternal.ScreenObser
+             // else enable MTP as usual.
+             if (isAdbEnabled()) {
+                 return UsbManager.FUNCTION_ADB;
++            } else if (mAccessoryChargingFunctions) {
++                // No MTP function to enumerate with: present the accessory function, so that the
++                // host sees the device and can start the AOA handshake (ACCESSORY=START moves
++                // mCurrentFunctions to ACCESSORY, which re-enumerates with the host's strings).
++                return UsbManager.FUNCTION_ACCESSORY;
+             } else {
+                 return UsbManager.FUNCTION_MTP;
+             }
+--
+2.50.1

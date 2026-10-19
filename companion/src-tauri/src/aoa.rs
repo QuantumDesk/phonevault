@@ -84,6 +84,8 @@ pub fn presence() -> Result<Presence, AoaError> {
         }
         seen = Presence::Android;
     }
+    // No accessory on the bus: whatever comes next must be switched again.
+    *known_accessory() = None;
     Ok(seen)
 }
 
@@ -108,16 +110,68 @@ fn accessory_device(ctx: &Context) -> Result<Option<Device<Context>>, AoaError> 
     Ok(found.pop())
 }
 
-/// Ask the phone to re-enumerate as our accessory. No-op if it already did.
+/// (bus, address) of the accessory this process switched or already used. A Phone Vault user
+/// build with adb off idles in the accessory composition itself (18d1:2d00 before any handshake:
+/// vault-os frameworks-base-a17 0006; its gadget has no other function to enumerate with), so an
+/// accessory that is not this one may not have our identity yet and is switched like any other
+/// Android device.
+static KNOWN_ACCESSORY: Mutex<Option<(u8, u8)>> = Mutex::new(None);
+/// After START, how long an accessory may keep its address before it counts as switched: a phone
+/// whose accessory session predates this process does not re-enumerate.
+const SETTLE_WITHOUT_REENUMERATION: Duration = Duration::from_secs(4);
+
+fn location(device: &Device<Context>) -> (u8, u8) {
+    (device.bus_number(), device.address())
+}
+
+fn known_accessory() -> MutexGuard<'static, Option<(u8, u8)>> {
+    KNOWN_ACCESSORY.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Ask the phone to re-enumerate as our accessory. No-op if it already did for this process.
 fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
     if let Some(acc) = accessory_device(ctx)? {
-        return Ok(acc);
+        let here = location(&acc);
+        if *known_accessory() == Some(here) {
+            return Ok(acc);
+        }
+        if send_identity(&acc).is_err() {
+            // Not answering AOA requests: an accessory switched before this process started.
+            *known_accessory() = Some(here);
+            return Ok(acc);
+        }
+        return wait_for_accessory(ctx, Some(here));
     }
     let mut devices = google_devices(ctx)?;
     let device = devices.pop().ok_or(AoaError::NoDevice)?;
     if devices.len() > 1 {
         return Err(proto("more than one Android device is attached; keep only the vault on USB"));
     }
+    send_identity(&device)?;
+    wait_for_accessory(ctx, None)
+}
+
+/// Wait for the accessory to (re-)enumerate after START. `previous` is the accessory START was
+/// sent to, if the phone already was one: it is accepted once it has kept its address for
+/// SETTLE_WITHOUT_REENUMERATION.
+fn wait_for_accessory(ctx: &Context, previous: Option<(u8, u8)>) -> Result<Device<Context>, AoaError> {
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(12);
+    while Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(400));
+        if let Some(acc) = accessory_device(ctx)? {
+            let here = location(&acc);
+            if previous != Some(here) || started.elapsed() >= SETTLE_WITHOUT_REENUMERATION {
+                *known_accessory() = Some(here);
+                return Ok(acc);
+            }
+        }
+    }
+    Err(proto("the phone did not re-enumerate in accessory mode"))
+}
+
+/// The AOA handshake on EP0: protocol version, our identity strings, START.
+fn send_identity(device: &Device<Context>) -> Result<(), AoaError> {
     let handle = device.open()?;
     let t = Duration::from_secs(2);
     let mut version = [0u8; 2];
@@ -134,15 +188,7 @@ fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
         handle.write_control(rt_out, AOA_SEND_IDENT, 0, index as u16, &bytes, t)?;
     }
     handle.write_control(rt_out, AOA_START, 0, 0, &[], t)?;
-    drop(handle);
-    let deadline = Instant::now() + Duration::from_secs(12);
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(400));
-        if let Some(acc) = accessory_device(ctx)? {
-            return Ok(acc);
-        }
-    }
-    Err(proto("the phone did not re-enumerate in accessory mode"))
+    Ok(())
 }
 
 pub struct Session {

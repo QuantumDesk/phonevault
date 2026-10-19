@@ -39,6 +39,7 @@ follow-up once a beta has booted.
 |---|---|---|
 | `beta1` | rung b4d-1 | **the first beta**: b4d-1 as a user build (below) |
 | `beta1-novoice` | beta beta1 | opt-in experiment: beta1 + `config_voice_capable`, `config_sms_capable`, `config_enable_emergency_call_while_sim_locked` = false (the release overlay verbatim). Not built yet |
+| `beta2` | rung b4d-1 | **beta1 + the USB enumeration fix** ([below](#beta2-usb-enumeration-without-adb)): beta1's files (version/channel `beta2`) + `config_usbChargingFunctionsAccessory=true` (frameworks-base-a17 0006). beta1 booted to SET PIN but never appeared on the Mac's USB |
 
 ## What beta1 carries
 
@@ -202,7 +203,9 @@ bc553fe503208ebf39999d6737c53b7668cc10d18b731be84e5725422e24d560  super.img
 45cfad7626dca37d4070bb0c5e00aa481545a60001be780a6b30475f5da0bf86  vault_bluejay-img-beta1.zip
 ```
 
-Not flashed yet.
+**On hardware (2026-10-19):** boots to Phone Vault's SET PIN, but the Mac's USB tree shows no
+device at all (no adb, as intended, but also nothing under `system_profiler SPUSBDataType`):
+risk 2 below, confirmed. Fixed in [beta2](#beta2-usb-enumeration-without-adb).
 
 ## Flash (from the Mac, bootloader only, human-approved)
 
@@ -276,3 +279,125 @@ options, the beta AVB key, the rollback index, the hardened recovery, the releas
    gs101 tree is less exercised.
 4. **Kernel command line**: low; the console options only affect the UART and kmsg rate limiting.
 5. **AVB**: low; the phone is unlocked (orange), and the same layout as b1–b4d-1 with another key.
+
+## beta2: USB enumeration without adb
+
+**Root cause** (beta1 on hardware; read from the A17 sources and the prebuilt HAL):
+
+1. `frameworks/base/services/usb/java/com/android/server/usb/UsbDeviceManager.java`: with no
+   function selected the framework composes the "charging" functions, `getChargingFunctions()` =
+   ADB if adb is enabled, **else MTP**. beta1 is `user` with `persist.sys.usb.config=none`, so
+   adb is off and the boot-time request is MTP. In `UsbHandlerHal.setCurrentUsbFunctionsCb` a
+   failed request is retried with the defaults only when it was *not* the charging request
+   (`else if (!mChargingFunctions) … MSG_SET_CHARGING_FUNCTIONS`): a failed charging request is
+   final, the gadget stays unbound, and nothing enumerates, not even as a charging-only device.
+2. The b3 gadget rc (`init.gs101.usb.rc`, rung-b4d-1 `vendor-google-bluejay.diff`) creates only
+   `accessory.gs2`, `ffs.aoa`, `ffs.ctrl` (+ `ffs.adb` when debuggable). The prebuilt
+   `android.hardware.usb.gadget-service.gs101` links MTP as `ffs.mtp`, which does not exist, so
+   the MTP request fails. The rungs never saw this because adb (then the charging function) was on.
+3. Userspace AOA (A17's `ffs.ctrl` control function, served by `aoad` from `system/usb/aoa/daemon`)
+   is off on this build and would not help. The framework needs both the aconfig flag
+   `android.hardware.usb.flags.enable_aoa_userspace_implementation` (not set in the cp2a release
+   config) and `ro.usb.userspace.aoa.enabled`, which `usb_accessory_utils`
+   (`hardware/google/pixel/usb/UsbAccessoryUtils.cpp`) sets from `enable_uaoa_all_pixels_except_p8`
+   (also unset): hence the dev logs' "Device enabled userspace AOA: false". Even with it on, the
+   charging composition would be MTP|CTRL (MTP still missing), and the prebuilt HAL masks CTRL
+   out and then rejects a CTRL-only request as "Combination not supported" (disassembly of its
+   VID/PID switch: after `functions & ~CTRL`, only ADB, ACCESSORY, MTP, PTP, MIDI, RNDIS, audio
+   source, UVC, NCM and their adb combinations have a PID; NONE pulls the gadget down). With this
+   HAL the **only** adb-free composition that exposes no data function is ACCESSORY
+   (`accessory.gs2`, 18d1:2d00).
+
+**Fix:** `patches/frameworks-base-a17/0006` adds the framework resource
+`config_usbChargingFunctionsAccessory` (default false = upstream behaviour); beta2's overlay sets it
+true. With adb off, `getChargingFunctions()` returns ACCESSORY instead of MTP. Effect:
+
+- idle (cable in, nothing from the host yet): the phone enumerates as **18d1:2d00** with one
+  interface, the accessory's vendor-specific ff/ff/00 with two bulk endpoints. Nothing on the
+  phone reads them: `mCurrentFunctions` stays NONE, no accessory is attached, no app sees anything.
+- the host sends the AOA handshake (GET_PROTOCOL, the six strings, START) on EP0 of that device;
+  the kernel accessory driver (kernel AOA, as on b3) raises `ACCESSORY=START`, the framework
+  reads the strings and makes ACCESSORY the current function; the gadget HAL always tears the
+  gadget down and re-composes (no same-function shortcut in its `setCurrentUsbFunctions`), so the
+  phone re-enumerates as 18d1:2d00 and the accessory is attached with the host's strings
+  (`USB_ACCESSORY_ATTACHED` → the app's AccessoryTransport).
+- after the session (unplug, or the accessory closed) the framework restores the charging
+  composition: the accessory again, without strings.
+
+**Why nothing else can be exposed:** the gadget can only link function instances that exist in
+configfs, and the b3 rc creates no other instance (configfs `functions/` and the gadget root stay
+root-owned; the HAL runs as system). The patch only changes which existing function the framework
+requests; adb stays off (`ro.debuggable=0` → no `ffs.adb` instance at all;
+`persist.sys.usb.config=none`). Gates: rung b3/b4d-1 expectations (none of `mtp.gs0 ptp.gs1
+audio_source rndis midi acm. dm.gs7 uts.gs8 ncm.gs9 etr_miu uvc.0 ffs.mtp ffs.ptp`, root-owned
+configfs), beta1's (no adb endpoint outside the debuggable trigger, user props) and beta2's own:
+an **allowlist** of instances (`accessory.gs2 ffs.aoa ffs.ctrl ffs.adb`), init never links a
+function into a configuration and never writes `UDC`. build-beta.sh checks that every
+frameworks-base-a17 patch is applied in the tree and that the compiled product RRO carries
+`config_usbChargingFunctionsAccessory=true` (and framework-res its false default). The production
+gate is unchanged (no adb anywhere).
+
+**Host side:** `companion/src-tauri/src/aoa.rs` used to skip the handshake whenever it saw a
+2d00/2d01 device ("already switched"). An idle beta2 phone *is* 2d00 without strings, so the
+companion now remembers the accessory it switched (bus/address; forgotten when no accessory is on
+the bus) and handshakes an accessory it does not know; if that accessory keeps its address for
+4 s after START it is taken as already switched (a session that predates the companion).
+`tools/aoa_client.py` (one-shot) always handshakes, with the same 4 s fallback.
+
+### beta2 build (2026-10-19)
+
+Built on the build host into `/build/out-beta2` exactly as beta1 (`sync-beta.sh beta2` with
+beta1's signed release APK, byte-identical: same app; `build-beta.sh beta2` with installclean;
+1 h 05 min), then a no-installclean gate re-run after a build-beta.sh fix (the new RRO check
+SIGPIPE'd `aapt` under pipefail; the artifacts were already right). All gates passed: production,
+release source (`--bluejay-beta beta2`, voice-capable warnings as beta1), overrides (111 absent,
+58 APKs), check-build (70 modules removed, 444 `.ko`, 123 expectations incl. beta2's USB
+allowlist), cmdline, AVB (beta key `7d4a65ae…fd4`, flags 0, rollback index 2026101300), app
+(cert `934c4f78…032f`, APK `6b5073e9…3b71`), USB (`config_usbChargingFunctionsAccessory`: false
+in framework-res, true in the product RRO; services.jar carries the 0006 code).
+`user`, `CP2A.260605.016`, `test-keys`, incremental/date `1792426224`, SPL 2026-10-01,
+Phone Vault 0.1.0-beta2.
+
+```
+5be3d4b02b8e79838fe2d9913b97b26f5736fb1b8888eee6482ab2484e07f7aa  images/boot.img
+030d6b7fd27bfd15632b593059345a345703b6f8d2f9670cba0415a9c3542b5e  images/vendor_boot.img
+8d5687a541e9b88453b89c9e42d537fd784444ffc40feb099de2c4f062849287  images/dtbo.img
+4a5a0bb47984d05cc77fdd868b14fdfc8aab158bfe4a356980503765fcc07e9b  images/pvmfw.img
+cac0ebde96ff5a80414c1f6ee447b0099d06270161d435937922111c46045c16  images/vbmeta.img
+6adcb66dc432d3727d0fdd885cf6767c129141dba4df2d2f5bbda53c65bdb673  images/vbmeta_system.img
+94d818fa529c4dcbcc77fa3ef129a3c6b47367bc9bf283cb7464af9c36e47639  images/vbmeta_vendor.img
+86a204263d9970fa594385f7aca41854c6c6970e32961a4776d4c390ebd1baf6  super.img
+654e604b46980ab4753e6e016dd08870871a44a1a5e63632fdccaea470c2a451  images/android-info.txt
+72cd2a860f168be500262f276614f9aa25776f10f519eca105f29567f0f76a75  flash-beta2-mac.sh
+5aba4539bf9e8d887b3bc61e8f1e0e3efd27df81ac36918a0b111043ee0c8d48  manifest.json
+65054fff18572fb935710481b56a90e40c957e60e55b6d87e85fcc4053e005da  vault_bluejay-target_files-beta2.zip
+210130a5202b22d9af5cfb2b1541c7a8d65813bcd94ad1bc04fa542628f47787  vault_bluejay-img-beta2.zip
+```
+
+Not flashed yet. Flash and rollback as beta1 (`rsync … /build/out-beta2/ out-beta2/`,
+`./flash-beta2-mac.sh --check`, `./flash-beta2-mac.sh`).
+
+### Verify on hardware without adb
+
+1. Flash as beta1 (`flash-beta2-mac.sh`), first boot to SET PIN, set the PIN.
+2. USB-C cable to the Mac: `system_profiler SPUSBDataType` shows a **Google device**
+   (Vendor ID `0x18d1`, the phone's product string and serial) with **Product ID `0x2d00`**, and
+   nothing else from the phone: no MTP/PTP volume (Image Capture sees nothing), no
+   network/serial/MIDI/audio device. `ioreg -p IOUSB -l -w0` shows one interface for it, class
+   255/255/0. `adb devices` lists nothing.
+3. Start the companion: it detects the phone and pairs. During the handshake the phone leaves the
+   bus for about a second and comes back, still **0x2d00** = accessory without adb (0x2d01 =
+   accessory + adb must never appear on beta2). The app shows the connection; signing works.
+4. Unplug/replug: 0x2d00 again within seconds; the companion pairs again.
+5. Fail signs: no Google device at all (fix not active: is it really beta2?), a second interface,
+   or any PID other than 0x2d00: stop and report.
+
+**Risks:** (1) untested on hardware, and without adb a misbehaviour cannot be logged; rollback =
+reflash b4d-1, where `adb shell settings put global adb_enabled 0` reproduces beta1's no-device
+state but not the fix (0006 is in the tree for every rung, inert unless the resource is set).
+(2) Older companion builds skip the handshake on a 2d00 device and time out: use the companion
+from this commit. (3) The gs101 gadget HAL may cap charge current while the accessory function is
+composed (its `usb_limit_accessory_*` paths); a Mac port supplies less anyway. (4) A host that
+opens the idle accessory's bulk endpoints without the handshake talks to nothing; the endpoint
+exists only as the AOA transport itself. (5) Rebuilding the framework changes framework-res
+(new public-internal resource): if the build misbehaves, compare with beta1's target files.

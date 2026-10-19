@@ -44,6 +44,10 @@ for rp in "${OVERLAY}"/patches/bootable-recovery/*.patch; do
   git -C bootable/recovery apply --reverse --check "${rp}" 2>/dev/null \
     || fail "recovery hardening not applied in the tree: $(basename "${rp}")"
 done
+for fp in "${OVERLAY}"/patches/frameworks-base-a17/*.patch; do
+  git -C frameworks/base apply --reverse --check "${fp}" 2>/dev/null \
+    || fail "frameworks/base patch not applied in the tree: $(basename "${fp}") (run sync-beta.sh)"
+done
 
 # shellcheck disable=SC1091
 source build/envsetup.sh
@@ -189,6 +193,29 @@ note "OK   signer app: release variant, cert ${APP_CERT_WANT} (beta app key), ap
 
 # ---- recovery: hardened source in the tree (step 7 of sync-beta.sh) ----
 note "OK   recovery: $(ls "${OVERLAY}"/patches/bootable-recovery/*.patch | xargs -n1 basename) applied to bootable/recovery (recovery binary in VENDOR_BOOT/RAMDISK/system/bin/recovery)"
+
+# ---- USB charging composition (frameworks-base-a17 0006): the compiled overlay carries the
+# beta's value. With it true, the no-adb charging composition is the accessory function. ----
+USB_RES=config_usbChargingFunctionsAccessory
+if grep -Eq "<bool name=\"${USB_RES}\">true</bool>" "${CONFIG}/config.xml" 2>/dev/null; then
+  RES_TMP="$(mktemp -d)"
+  unzip -q -o "${TF}" SYSTEM/framework/framework-res.apk \
+    "PRODUCT/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk" -d "${RES_TMP}" \
+    || fail "framework-res.apk / its product RRO missing from the target files"
+  # Dump to a variable first: grep -q would close the pipe early and, under pipefail, the
+  # SIGPIPE'd aapt would fail the check.
+  fwres="$("${TOOLS}/bin/aapt" dump resources "${RES_TMP}/SYSTEM/framework/framework-res.apk")"
+  grep -Eq "android:bool/${USB_RES}: t=0x12 d=0x00000000 " <<<"${fwres}" \
+    || fail "framework-res.apk lacks ${USB_RES} (default false): frameworks-base-a17 0006 not built"
+  unset fwres
+  rro="$("${TOOLS}/bin/aapt" dump resources \
+    "${RES_TMP}/PRODUCT/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk" \
+    | grep -E "bool/${USB_RES}: t=0x12 ")"
+  rm -rf "${RES_TMP}"
+  [[ -n "${rro}" ]] && ! grep -q 'd=0x00000000' <<<"${rro}" \
+    || fail "product RRO does not set ${USB_RES}=true: ${rro:-<absent>}"
+  note "OK   USB: ${USB_RES}=true in the product RRO (charging composition without adb = accessory, 18d1:2d00)"
+fi
 
 # ---- release gates ----
 echo "== gate: production target files (user build, adb, props, init, debug ramdisk)"

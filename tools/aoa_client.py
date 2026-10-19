@@ -51,18 +51,34 @@ def find_android_device():
     return devices[0]
 
 
-def switch_to_accessory(device):
-    if device.idProduct in AOA_ACCESSORY_PRODUCTS:
-        return device
-    protocol = device.ctrl_transfer(0xC0, AOA_GET_PROTOCOL, 0, 0, 2)
-    version = int(protocol[0]) | (int(protocol[1]) << 8)
-    if version < 1:
-        raise RuntimeError(f"Unsupported Android Open Accessory protocol {version}")
-    for index, value in enumerate(IDENTITY):
-        device.ctrl_transfer(0x40, AOA_SEND_IDENT, 0, index, value.encode("utf-8") + b"\0")
-    device.ctrl_transfer(0x40, AOA_START, 0, 0, None)
+# After START, how long an accessory may keep its address before it counts as switched (a phone
+# already in an accessory session does not re-enumerate).
+SETTLE_WITHOUT_REENUMERATION = 4.0
 
-    deadline = time.monotonic() + 12
+
+def switch_to_accessory(device):
+    # A device that is already an accessory gets the handshake too: a Phone Vault user build with
+    # adb off idles in the accessory composition (18d1:2d00) before any host has sent its
+    # identity (vault-os frameworks-base-a17 0006). If it does not answer, it is a phone whose
+    # accessory session already runs: use it as it is.
+    previous = None
+    if device.idProduct in AOA_ACCESSORY_PRODUCTS:
+        previous = (device.bus, device.address)
+    try:
+        protocol = device.ctrl_transfer(0xC0, AOA_GET_PROTOCOL, 0, 0, 2)
+        version = int(protocol[0]) | (int(protocol[1]) << 8)
+        if version < 1:
+            raise RuntimeError(f"Unsupported Android Open Accessory protocol {version}")
+        for index, value in enumerate(IDENTITY):
+            device.ctrl_transfer(0x40, AOA_SEND_IDENT, 0, index, value.encode("utf-8") + b"\0")
+        device.ctrl_transfer(0x40, AOA_START, 0, 0, None)
+    except usb.core.USBError:
+        if previous is None:
+            raise
+        return device
+
+    started = time.monotonic()
+    deadline = started + 12
     while time.monotonic() < deadline:
         time.sleep(0.4)
         accessories = [
@@ -75,7 +91,9 @@ def switch_to_accessory(device):
                 f"Expected one Phone Vault accessory, found {len(accessories)}"
             )
         if accessories:
-            return accessories[0]
+            here = (accessories[0].bus, accessories[0].address)
+            if here != previous or time.monotonic() - started >= SETTLE_WITHOUT_REENUMERATION:
+                return accessories[0]
     raise RuntimeError("Phone did not re-enumerate in accessory mode")
 
 
