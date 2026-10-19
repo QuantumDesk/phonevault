@@ -335,6 +335,16 @@ real_case() {  # NAME EXPECTED_STDERR|'' MUTATION...
 # shellcheck disable=SC2016  # literal init/property syntax below
 {
 real_case stock-layout ''
+# AOSP rootdir's /adb_keys -> /product/etc/security/adb_keys links (root and vendor_boot ramdisks,
+# every build) are inert while the target is absent; a present target or a writable target is not.
+real_case adb-keys-dangling-link '' \
+  "mkdir -p ROOT && ln -s /product/etc/security/adb_keys ROOT/adb_keys && ln -s /product/etc/security/adb_keys VENDOR_BOOT/RAMDISK/adb_keys"
+real_case adb-keys-link-with-key 'contains debug/ADB artifacts' \
+  "ln -s /product/etc/security/adb_keys VENDOR_BOOT/RAMDISK/adb_keys && mkdir -p PRODUCT/etc/security && printf 'QAAAA host\n' > PRODUCT/etc/security/adb_keys"
+real_case adb-keys-link-writable 'contains debug/ADB artifacts' \
+  "ln -s /data/misc/adb/adb_keys VENDOR_BOOT/RAMDISK/adb_keys"
+real_case adb-keys-relative-link 'contains debug/ADB artifacts' \
+  "printf 'QAAAA host\n' > VENDOR_BOOT/RAMDISK/keys.txt && ln -s keys.txt VENDOR_BOOT/RAMDISK/adb_keys"
 # The filtered import only loads ro.vendor.vault.*, so its ro.adb.secure=0 is ignored, as init does.
 real_case filtered-import-honoured ''
 real_case filtered-import-wildcard 'production target-files contains contradictory ro\.adb\.secure' \
