@@ -344,6 +344,39 @@ the bus) and handshakes an accessory it does not know; if that accessory keeps i
 4 s after START it is taken as already switched (a session that predates the companion).
 `tools/aoa_client.py` (one-shot) always handshakes, with the same 4 s fallback.
 
+### beta2 build (2026-10-19)
+
+Built on the build host into `/build/out-beta2` exactly as beta1 (`sync-beta.sh beta2` with
+beta1's signed release APK, byte-identical: same app; `build-beta.sh beta2` with installclean;
+1 h 05 min), then a no-installclean gate re-run after a build-beta.sh fix (the new RRO check
+SIGPIPE'd `aapt` under pipefail; the artifacts were already right). All gates passed: production,
+release source (`--bluejay-beta beta2`, voice-capable warnings as beta1), overrides (111 absent,
+58 APKs), check-build (70 modules removed, 444 `.ko`, 123 expectations incl. beta2's USB
+allowlist), cmdline, AVB (beta key `7d4a65ae…fd4`, flags 0, rollback index 2026101300), app
+(cert `934c4f78…032f`, APK `6b5073e9…3b71`), USB (`config_usbChargingFunctionsAccessory`: false
+in framework-res, true in the product RRO; services.jar carries the 0006 code).
+`user`, `CP2A.260605.016`, `test-keys`, incremental/date `1792426224`, SPL 2026-10-01,
+Phone Vault 0.1.0-beta2.
+
+```
+5be3d4b02b8e79838fe2d9913b97b26f5736fb1b8888eee6482ab2484e07f7aa  images/boot.img
+030d6b7fd27bfd15632b593059345a345703b6f8d2f9670cba0415a9c3542b5e  images/vendor_boot.img
+8d5687a541e9b88453b89c9e42d537fd784444ffc40feb099de2c4f062849287  images/dtbo.img
+4a5a0bb47984d05cc77fdd868b14fdfc8aab158bfe4a356980503765fcc07e9b  images/pvmfw.img
+cac0ebde96ff5a80414c1f6ee447b0099d06270161d435937922111c46045c16  images/vbmeta.img
+6adcb66dc432d3727d0fdd885cf6767c129141dba4df2d2f5bbda53c65bdb673  images/vbmeta_system.img
+94d818fa529c4dcbcc77fa3ef129a3c6b47367bc9bf283cb7464af9c36e47639  images/vbmeta_vendor.img
+86a204263d9970fa594385f7aca41854c6c6970e32961a4776d4c390ebd1baf6  super.img
+654e604b46980ab4753e6e016dd08870871a44a1a5e63632fdccaea470c2a451  images/android-info.txt
+72cd2a860f168be500262f276614f9aa25776f10f519eca105f29567f0f76a75  flash-beta2-mac.sh
+5aba4539bf9e8d887b3bc61e8f1e0e3efd27df81ac36918a0b111043ee0c8d48  manifest.json
+65054fff18572fb935710481b56a90e40c957e60e55b6d87e85fcc4053e005da  vault_bluejay-target_files-beta2.zip
+210130a5202b22d9af5cfb2b1541c7a8d65813bcd94ad1bc04fa542628f47787  vault_bluejay-img-beta2.zip
+```
+
+Not flashed yet. Flash and rollback as beta1 (`rsync … /build/out-beta2/ out-beta2/`,
+`./flash-beta2-mac.sh --check`, `./flash-beta2-mac.sh`).
+
 ### Verify on hardware without adb
 
 1. Flash as beta1 (`flash-beta2-mac.sh`), first boot to SET PIN, set the PIN.
