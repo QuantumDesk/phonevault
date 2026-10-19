@@ -202,9 +202,12 @@ if grep -Eq "<bool name=\"${USB_RES}\">true</bool>" "${CONFIG}/config.xml" 2>/de
   unzip -q -o "${TF}" SYSTEM/framework/framework-res.apk \
     "PRODUCT/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk" -d "${RES_TMP}" \
     || fail "framework-res.apk / its product RRO missing from the target files"
-  "${TOOLS}/bin/aapt" dump resources "${RES_TMP}/SYSTEM/framework/framework-res.apk" \
-    | grep -Eq "android:bool/${USB_RES}: t=0x12 d=0x00000000 " \
+  # Dump to a variable first: grep -q would close the pipe early and, under pipefail, the
+  # SIGPIPE'd aapt would fail the check.
+  fwres="$("${TOOLS}/bin/aapt" dump resources "${RES_TMP}/SYSTEM/framework/framework-res.apk")"
+  grep -Eq "android:bool/${USB_RES}: t=0x12 d=0x00000000 " <<<"${fwres}" \
     || fail "framework-res.apk lacks ${USB_RES} (default false): frameworks-base-a17 0006 not built"
+  unset fwres
   rro="$("${TOOLS}/bin/aapt" dump resources \
     "${RES_TMP}/PRODUCT/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk" \
     | grep -E "bool/${USB_RES}: t=0x12 ")"
