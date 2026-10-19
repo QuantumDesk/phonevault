@@ -50,6 +50,15 @@ indication area are unchanged. It covers the blueprint path only, which is the
 compiled path while `com.android.systemui.migrate_clocks_to_blueprint` is
 ENABLED/READ_ONLY (bp1a).
 
+`frameworks-base-a17/0006-usb-accessory-charging-functions-without-mtp.patch` adds the
+framework resource `config_usbChargingFunctionsAccessory` (default false). With adb off,
+`UsbDeviceManager`'s "charging" composition is MTP; a product that creates no MTP gadget
+function (bluejay b3) then never binds its gadget and does not enumerate at all. When the
+product overlays the resource to true, the charging composition without adb is the Android Open
+Accessory function instead (18d1:2d00, no other interface), so a USB host sees the device and can
+perform the AOA handshake. Only `release-bluejay/beta2` sets it; dev rungs (adb on) and ordinary
+products keep upstream behaviour.
+
 The patches under `patches/appliance/`, `patches/device-crosshatch/`, and
 `patches/kernel-crosshatch/` are also Phone Vault changes. They remove
 appliance-inapplicable SystemServer startup paths, hardware declarations,
