@@ -67,7 +67,9 @@ messaging, and a watch-only Bitcoin wallet. Unsigned and not notarized.
   ([dev-ladder-bluejay](vault-os/dev-ladder-bluejay/README.md)) rungs b0–b4c passed on hardware:
   hands-off factory boot into the kiosk, our development AVB key with verification on, unused
   kernel modules removed, USB lock-down, radios off, app strip. The app suites (first run, USB
-  signing, message signing, credential) pass on b4c.
+  signing, message signing, credential) pass on b4c. b4d-1 (radio daemons out) passed too; the
+  first `user` image, **beta1** ([release-bluejay](vault-os/release-bluejay/README.md): no adb,
+  hardened recovery, beta-signed AVB and release app), is built and not yet flashed.
 
 ### Debug-only state on development images
 
