@@ -23,7 +23,9 @@ TF="${2:?target files zip}"
 OUTD="${3:?out dir (images/)}"
 TREE="${4:-${LINEAGE_TREE:?usage: check-build.sh RUNG TARGET_FILES.zip OUT_DIR TREE (or set LINEAGE_TREE)}}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RUNG_DIR="${SCRIPT_DIR}/rung-${RUNG}"
+# RUNG is a rung name (b2, b4d-1, ...) or a directory with a rung's layout (release-bluejay's
+# resolved beta config, written by resolve-beta.sh).
+if [[ "${RUNG}" == */* ]]; then RUNG_DIR="${RUNG}"; else RUNG_DIR="${SCRIPT_DIR}/rung-${RUNG}"; fi
 [[ -d "${RUNG_DIR}" ]] || { echo "no such rung: ${RUNG_DIR}" >&2; exit 2; }
 [[ -s "${TF}" ]] || { echo "target files not found: ${TF}" >&2; exit 2; }
 

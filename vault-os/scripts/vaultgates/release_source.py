@@ -1,7 +1,16 @@
 """Release-source gate: the release configuration (vault-os/vendor/phonevault,
 vault-os/device/phonevault) carries no development deviation.
 
-  vaultgate.py release-source REPOSITORY_ROOT
+  vaultgate.py release-source REPOSITORY_ROOT [--bluejay-beta BETA]
+
+With --bluejay-beta, the bluejay beta configuration release-bluejay/BETA is checked too, as it is
+resolved for the build tree (its BASE chain down to a dev-ladder-bluejay rung, the beta's files
+replacing the rung's): the effective common.mk / BoardConfigVault.mk / Android.bp get the same
+adb, property, init and adb-key rules as the release configuration, plus the bluejay beta
+invariants (beta AVB key, never the dev key; project rollback index; no serial/early console or
+printk.devkmsg on the kernel command line; usbcore.authorized_default=0 kept; recovery hardening
+applied by sync-beta.sh). config_voice_capable=false is reported, not required: rung b4d, the
+first image to carry it, did not boot, so the first beta leaves it out (beta1-novoice tests it).
 
 Development-only settings (adb as the default USB function, insecure adb, pre-authorised
 adb keys, early-boot adb init scripts, DEBUG-NN bisection markers, backup copies of
@@ -249,14 +258,149 @@ def check(root):
     return errors, len(files)
 
 
+BETA_FILES = ("common.mk", "BoardConfigVault.mk", "Android.bp", "config.xml",
+              "device-google-bluejay.diff", "device-google-gs101.diff",
+              "vendor-google-bluejay.diff", "device-google-bluejay-kernels.diff")
+CMDLINE_REMOVED = ("earlycon=", "console=", "androidboot.console=", "printk.devkmsg=")
+
+
+def resolve_beta(vault, beta, depth=0):
+    """(effective {name: path}, beta directories in the chain) for release-bluejay/BETA,
+    exactly as release-bluejay/resolve-beta.sh resolves it."""
+    directory = vault / "release-bluejay" / beta
+    if depth > 8 or not (directory / "BASE").is_file():
+        raise ValueError(f"release-bluejay/{beta}: missing or looping BASE")
+    kind, _, name = (directory / "BASE").read_text(encoding="utf-8").strip().partition(" ")
+    name = name.strip()
+    if kind == "rung":
+        rung = vault / "dev-ladder-bluejay" / f"rung-{name}"
+        if not rung.is_dir():
+            raise ValueError(f"release-bluejay/{beta}: BASE names a missing rung: {name}")
+        effective = {f: rung / f for f in BETA_FILES if (rung / f).is_file()}
+        chain = []
+    elif kind == "beta":
+        effective, chain = resolve_beta(vault, name, depth + 1)
+    else:
+        raise ValueError(f"release-bluejay/{beta}: bad BASE: {kind} {name}")
+    for path in sorted(directory.iterdir()):
+        if path.name in BETA_FILES:
+            effective[path.name] = path
+    return effective, chain + [directory]
+
+
+def check_bluejay_beta(root, beta):
+    """Return (errors, warnings, number of files checked) for release-bluejay/BETA."""
+    vault = root / "vault-os"
+    errors, warnings = [], []
+    fail = errors.append
+    try:
+        effective, chain = resolve_beta(vault, beta)
+    except ValueError as error:
+        return [str(error)], [], 0
+
+    # The beta's own files: no development leftovers or markers.
+    own = [p for d in chain for p in sorted(d.iterdir()) if p.is_file()]
+    for path in own:
+        relative = path.relative_to(root).as_posix()
+        if FORBIDDEN_NAMES.search(path.name) or "zzz-debug" in relative:
+            fail(f"development leftover file in the beta configuration: {relative}")
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if DEBUG_MARKER.search(line):
+                fail(f"{relative}:{number}: development marker in the beta configuration: {line.strip()}")
+
+    def text_of(name):
+        path = effective.get(name)
+        return (path.relative_to(root).as_posix(), path.read_text(encoding="utf-8")) if path else (name, "")
+
+    # Effective makefiles: the release rules.
+    for name in ("common.mk", "BoardConfigVault.mk"):
+        relative, text = text_of(name)
+        if not text:
+            fail(f"release-bluejay/{beta}: no effective {name}")
+            continue
+        for line in logical_lines(text):
+            if re.search(r"\b(PRODUCT_ADB_KEYS|WITH_ADB_INSECURE|ADB_INSECURE|PV_DEV_ADB_KEY)\b", line) \
+                    or "debug_adbkey" in line:
+                fail(f"{relative}: adb key/insecure-adb setting in the beta configuration: {line}")
+            errors.extend(property_violations(relative, line))
+            if re.search(r"etc/init/[^\s:]*debug[^\s:]*\.rc", line, re.IGNORECASE):
+                fail(f"{relative}: installs a debug init script: {line}")
+            if ADB_KEYS_DESTINATION.search(line) or ADB_KEYS_MODULE.search(line):
+                fail(f"{relative}: installs a pre-authorised adb host key: {line}")
+    relative, blueprint = text_of("Android.bp")
+    if ADB_KEYS_MODULE.search(re.sub(r"//[^\n]*|#[^\n]*", "", blueprint)):
+        fail(f"{relative}: installs a pre-authorised adb host key")
+
+    _, common = text_of("common.mk")
+    if not re.search(r"(?m)^\s*persist\.sys\.usb\.config=none\s*$", common):
+        fail(f"release-bluejay/{beta}: effective common.mk must set persist.sys.usb.config=none")
+
+    relative, board = text_of("BoardConfigVault.mk")
+    board_lines = list(logical_lines(board))
+    for required in ("include vendor/phonevault/config/release-version.mk",
+                     "BOARD_AVB_ROLLBACK_INDEX := $(PHONEVAULT_AVB_ROLLBACK_INDEX)"):
+        if required not in board_lines:
+            fail(f"{relative} lacks: {required}")
+    keys = [l.split(":=", 1)[1].strip() for l in board_lines
+            if re.match(r"PHONEVAULT_AVB_KEY\s*:=", l)]
+    if keys != ["vendor/phonevault/keys/avb_bluejay_beta.pem"]:
+        fail(f"{relative}: PHONEVAULT_AVB_KEY must be exactly vendor/phonevault/keys/avb_bluejay_beta.pem: {keys}")
+    for line in board_lines:
+        if re.search(r"avb_bluejay_dev|_DEV_rsa|keys/avb\.pem|testkey", line):
+            fail(f"{relative}: names a development/test AVB key: {line}")
+    removed = " ".join(l.split(":=", 1)[1] for l in board_lines
+                       if re.match(r"PHONEVAULT_KERNEL_CMDLINE_REMOVED\s*:=", l))
+    for word in CMDLINE_REMOVED:
+        if f"{word}%" not in removed.split():
+            fail(f"{relative}: kernel command line keeps {word}* (PHONEVAULT_KERNEL_CMDLINE_REMOVED)")
+    if "BOARD_KERNEL_CMDLINE := $(filter-out $(PHONEVAULT_KERNEL_CMDLINE_REMOVED),$(BOARD_KERNEL_CMDLINE))" \
+            not in board_lines:
+        fail(f"{relative}: PHONEVAULT_KERNEL_CMDLINE_REMOVED is not filtered out of BOARD_KERNEL_CMDLINE")
+    if not any(re.match(r"PHONEVAULT_KERNEL_CMDLINE\s*:?=.*\busbcore\.authorized_default=0\b", l)
+               for l in board_lines):
+        fail(f"{relative}: usbcore.authorized_default=0 (rung b2) is missing")
+
+    # Recovery hardening reaches the bluejay tree only through sync-beta.sh.
+    sync = vault / "release-bluejay/sync-beta.sh"
+    if not sync.is_file() or "patches/bootable-recovery" not in sync.read_text(encoding="utf-8"):
+        fail("release-bluejay/sync-beta.sh does not apply patches/bootable-recovery")
+
+    # Kiosk escape: reported, not required (see module docstring).
+    _, overlay = text_of("config.xml")
+    if not overlay:
+        overlay = (vault / "vendor/phonevault/overlay/frameworks/base/core/res/res/values/config.xml"
+                   ).read_text(encoding="utf-8")
+    for resource in ("config_voice_capable", "config_sms_capable"):
+        if not re.search(rf'<bool name="{resource}">false</bool>', overlay):
+            warnings.append(f"release-bluejay/{beta}: framework overlay leaves {resource} at its default "
+                            "(known beta1 gap: keyguard Emergency button; beta1-novoice tests it)")
+    return errors, warnings, len(own) + len(effective)
+
+
 def main(argv):
-    errors, checked = check(pathlib.Path(argv[0]).resolve())
+    if len(argv) not in (1, 3) or (len(argv) == 3 and argv[1] != "--bluejay-beta"):
+        print("usage: vaultgate.py release-source REPOSITORY_ROOT [--bluejay-beta BETA]", file=sys.stderr)
+        return 2
+    root = pathlib.Path(argv[0]).resolve()
+    errors, checked = check(root)
+    warnings = []
+    beta_note = ""
+    if len(argv) == 3:
+        beta_errors, warnings, beta_checked = check_bluejay_beta(root, argv[2])
+        errors += beta_errors
+        beta_note = f"; bluejay beta {argv[2]}: {beta_checked} files checked"
+    for warning in warnings:
+        print(f"WARNING: {warning}", file=sys.stderr)
     if errors:
         print("release source gate failed:", file=sys.stderr)
         for error in errors:
             print(f"  {error}", file=sys.stderr)
         return 1
-    print(f"Release source gate passed: {checked} release configuration files checked.")
+    print(f"Release source gate passed: {checked} release configuration files checked{beta_note}.")
     return 0
 
 

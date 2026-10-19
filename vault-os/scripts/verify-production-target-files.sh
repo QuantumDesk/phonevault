@@ -104,6 +104,17 @@ fi
 debug_artifacts="$(grep -Ei \
   '(^|/)adb_keys$|zzz-debug|debug_adbkey|(^|/)(force_debuggable|adb_debug\.prop)$|^(ROOT|BOOT/RAMDISK|INIT_BOOT/RAMDISK|VENDOR_BOOT/RAMDISK|RECOVERY/RAMDISK)/(.*/)?userdebug_plat_sepolicy\.cil$' \
   "${listing}" || true)"
+# AOSP's rootdir links /adb_keys -> /product/etc/security/adb_keys in the root and vendor_boot
+# ramdisks on every build; with no key installed that link points at nothing on a dm-verity
+# partition. Such a dangling link to a verified read-only path is inert (vaultgates/
+# adb_keys_links.py); a real file or a link to anything else still fails.
+adb_keys_entries="$(grep -E '(^|/)adb_keys$' <<<"${debug_artifacts}" || true)"
+if [[ -n "${adb_keys_entries}" ]]; then
+  live_adb_keys="$(python3 "$(dirname "$0")/vaultgate.py" adb-keys-links "${TARGET_FILES}" \
+    <<<"${adb_keys_entries}")"
+  debug_artifacts="$( { grep -Ev '(^|/)adb_keys$' <<<"${debug_artifacts}" || true; \
+    printf '%s\n' "${live_adb_keys}"; } | sed '/^$/d')"
+fi
 if [[ -n "${debug_artifacts}" ]]; then
   echo "production target-files contains debug/ADB artifacts:" >&2
   printf '%s\n' "${debug_artifacts}" >&2

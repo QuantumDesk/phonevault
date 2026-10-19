@@ -16,6 +16,7 @@ GATES = {
     "patch-provenance": "vaultgates.patch_provenance",
     "overrides": "vaultgates.overrides",
     "bluejay-check-build": "vaultgates.bluejay_check_build",
+    "adb-keys-links": "vaultgates.adb_keys_links",
 }
 
 

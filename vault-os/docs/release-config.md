@@ -139,6 +139,17 @@ device cannot place calls (the power menu was already limited to power off / res
 Note the dev-ladder rungs up to 4b still declare telephony features, so the button can still
 appear on those images.
 
+## 7. Pixel 6a (bluejay) beta
+
+The sections above describe the crosshatch release config. The 6a's first release-style image is
+`release-bluejay/beta1` ([README](../release-bluejay/README.md)): ladder rung b4d-1 built `user`,
+without adb keys or adb, with the recovery patch (section 4), the console/kmsg kernel options
+removed, AVB and the signer app (release build) signed with BETA-TEST keys from the build host.
+Gates on it: production target-files (section 3.2), release source with `--bluejay-beta beta1`,
+release overrides against the beta's list, and the bluejay artifact checks; the appliance gate
+(3.3) and `sign-release.sh` are still crosshatch-only. `config_voice_capable=false` (section 6) is
+held back to the `beta1-novoice` variant because rung b4d, which first carried it, did not boot.
+
 ## Still needs a phone
 
 - Boot a full **release** (user) build and run the per-rung checklist (owner, kiosk LOCKED,

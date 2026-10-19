@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Phone Vault beta1-novoice (bluejay): an OPT-IN experiment, not the first beta. It is
+         beta1 plus the release overlay's config_voice_capable / config_sms_capable /
+         config_enable_emergency_call_while_sim_locked = false. Rung b4d (which also carried
+         them) did not boot; b4d-1 (without them) did, so beta1 leaves them out and this variant
+         tests them alone, on top of a beta1 that boots. Below this comment the file is the
+         release overlay (vendor/phonevault/overlay/frameworks/base/core/res/res/values/config.xml)
+         verbatim; release-bluejay/README.md, "beta1-novoice". -->
+
+    <!-- Provisioned as device owner by DevicePolicyManagerService on the first boot of a
+         fresh /data (frameworks-base patch 0003). The app then installs its own HOME
+         preference, keyguard, kiosk and user-restriction policy — no adb step exists. -->
+    <string name="config_fixedFunctionDeviceOwner" translatable="false">dev.phonevault.signer/.VaultDeviceAdminReceiver</string>
+
+    <!-- No ambient display: the crosshatch device overlay enables the doze service and makes
+         always-on display available. An appliance has nothing to show with the screen off
+         (and no clock, see config_phonevaultHideKeyguardClock), so restore the AOSP defaults:
+         no doze component (no AOD, no pulsing), AOD unavailable, no pickup pulse. -->
+    <string name="config_dozeComponent" translatable="false"></string>
+    <bool name="config_dozeAlwaysOnDisplayAvailable">false</bool>
+    <bool name="config_dozeAlwaysOnEnabled">false</bool>
+    <bool name="config_dozePulsePickup">false</bool>
+
+    <!-- Default for Settings.Secure.LOCKSCREEN_USE_DOUBLE_LINE_CLOCK: moot while the clock is
+         hidden, single-line if it is ever shown. -->
+    <integer name="config_doublelineClockDefault">0</integer>
+    <!-- Phone Vault: no voice or SMS capability. The keyguard/bouncer "Emergency" button opens
+         the emergency dialer (com.android.phone.EmergencyDialer, outside the lock-task kiosk),
+         so it is a kiosk escape. SystemUI (EmergencyButton.updateEmergencyCallButton) shows it
+         only when android.hardware.telephony is declared; the release gate forbids every
+         android.hardware.telephony* feature, and these resources make the rest of the
+         platform (TelephonyManager.isVoiceCapable / isSmsCapable, Telecom, PhoneWindowManager)
+         agree that the device cannot place calls. A physical check on the release build is
+         still required (vault-os/docs/release-config.md). -->
+    <bool name="config_voice_capable">false</bool>
+    <bool name="config_sms_capable">false</bool>
+    <bool name="config_enable_emergency_call_while_sim_locked">false</bool>
+
+    <!-- Phone Vault: the power menu (allowed inside the kiosk) offers only power off and restart;
+         no emergency, lockdown, screenshot, bug report, logout or settings entries. -->
+    <string-array name="config_globalActionsList" translatable="false">
+        <item>power</item>
+        <item>restart</item>
+    </string-array>
+</resources>
