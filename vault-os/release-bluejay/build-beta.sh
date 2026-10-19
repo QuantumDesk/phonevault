@@ -55,8 +55,16 @@ echo "=== BLUEJAY BETA ${BETA} BUILD START $(date) product=${TARGET_PRODUCT} var
 # Switching from the userdebug rungs: drop everything staged for the previous variant (the build
 # also does this when previous_build_config.mk changes; explicit here so no userdebug-only file,
 # adb_keys or debug ramdisk payload can survive into the user images).
-m installclean || fail "installclean"
+# PV_BETA_NO_INSTALLCLEAN=1 skips it when re-running a beta whose previous build was already this
+# user variant (previous_build_config.mk must say so).
 PV_PRODUCT_OUT="out/target/product/bluejay"
+if [[ "${PV_BETA_NO_INSTALLCLEAN:-}" == 1 ]]; then
+  grep -qx 'PREVIOUS_BUILD_CONFIG := vault_bluejay-user' "${PV_PRODUCT_OUT}/previous_build_config.mk" \
+    || fail "PV_BETA_NO_INSTALLCLEAN=1 but the out dir was last built as another variant"
+  echo "   installclean skipped (out dir already vault_bluejay-user)"
+else
+  m installclean || fail "installclean"
+fi
 mapfile -t PV_OVERRIDES < <(python3 "${GATES}/vaultgate.py" overrides list vendor/phonevault/prebuilt/Android.bp)
 for d in "${PV_PRODUCT_OUT}"/{system,system_ext,product,vendor,odm}/{app,priv-app}/*/; do
   [[ -d "${d}" ]] || continue

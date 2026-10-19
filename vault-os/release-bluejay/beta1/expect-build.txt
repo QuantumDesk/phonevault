@@ -13,10 +13,12 @@ nogrep VENDOR/build.prop ^persist\.adb\.notify=
 grep PRODUCT/etc/build.prop ^ro\.phonevault\.channel=beta1$
 grep VENDOR_BOOT/RAMDISK/prop.default ^ro\.debuggable=0$
 
-# No pre-authorised adb host (rung images had all three).
+# No pre-authorised adb host: the key file is gone (rung images shipped it). AOSP's rootdir still
+# installs /adb_keys -> /product/etc/security/adb_keys in both ramdisks on every build; with the
+# target absent the links are inert (the production gate's adb_keys_links check).
 absent PRODUCT/etc/security/adb_keys
-absent ROOT/adb_keys
-absent VENDOR_BOOT/RAMDISK/adb_keys
+grep ROOT/adb_keys \A/product/etc/security/adb_keys\Z
+grep VENDOR_BOOT/RAMDISK/adb_keys \A/product/etc/security/adb_keys\Z
 
 # No debug ramdisk payload in the image.
 absent VENDOR_BOOT/RAMDISK/force_debuggable
