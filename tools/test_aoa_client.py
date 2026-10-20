@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import errno
 import json
 from pathlib import Path
 import sys
@@ -71,6 +72,100 @@ class DeviceSelectionTest(unittest.TestCase):
         with patch("usb.core.find", return_value=iter([first, second])):
             with self.assertRaisesRegex(RuntimeError, "exactly one"):
                 aoa_client.find_android_device()
+
+
+class FakePhone:
+    """A phone as UsbDeviceManager + f_accessory behave (same model as the companion's tests)."""
+
+    def __init__(self, mode, app_reads=True):
+        self.mode, self.app_reads = mode, app_reads  # mode: adb | idle | stale | live | gone
+        self.idle_is_accessory = mode == "idle"
+        self.address, self.start_pending = 10, False
+        self.handshakes = self.resets = 0
+
+    def scan(self):
+        if self.mode == "gone":
+            return []
+        return [aoa_client.Seen(self.address, self.mode != "adb", (1, self.address))]
+
+    def handshake(self, dev):
+        assert dev == self.address
+        self.handshakes += 1
+        if self.mode in ("adb", "idle"):  # the function set changes: re-enumerates, attached
+            self.mode = "live" if self.app_reads else "stale"
+            self.address += 1
+        else:  # unchanged function set: nothing happens, START stays pending
+            self.start_pending = True
+
+    def reset(self, dev):
+        assert dev == self.address
+        self.resets += 1
+        if self.mode in ("live", "stale"):
+            if self.start_pending:
+                self.mode = "live" if self.app_reads else "stale"
+            else:
+                self.mode = "idle" if self.idle_is_accessory else "adb"
+                self.address += 1
+            self.start_pending = False
+
+    def open_reading(self, dev, wait):
+        if dev != self.address:
+            raise usb.core.USBError("gone", errno=errno.ENODEV)
+        return ("in", "out") if self.mode == "live" else None
+
+    def pause(self, seconds):
+        pass
+
+
+class ConnectTest(unittest.TestCase):
+    def test_live_session_is_used_without_handshake(self):
+        phone = FakePhone("live")
+        self.assertEqual(("in", "out"), aoa_client.connect(phone))
+        self.assertEqual((0, 0), (phone.handshakes, phone.resets))
+
+    def test_plain_android_phone_is_switched(self):
+        phone = FakePhone("adb")
+        aoa_client.connect(phone)
+        self.assertEqual((1, 0), (phone.handshakes, phone.resets))
+
+    def test_idle_beta2_accessory_gets_identity_and_re_enumerates(self):
+        phone = FakePhone("idle")
+        aoa_client.connect(phone)
+        self.assertEqual((1, 0), (phone.handshakes, phone.resets))
+
+    def test_stale_session_is_attached_afresh_by_start_and_reset(self):
+        phone = FakePhone("stale")
+        self.assertEqual(("in", "out"), aoa_client.connect(phone))
+        self.assertEqual((1, 1), (phone.handshakes, phone.resets))
+
+    def test_nothing_reading_after_recovery_says_replug(self):
+        phone = FakePhone("stale", app_reads=False)
+        with self.assertRaisesRegex(aoa_client.NotReadingError, "unplug and replug"):
+            aoa_client.connect(phone)
+        self.assertEqual((1, 1), (phone.handshakes, phone.resets))
+
+    def test_no_phone(self):
+        with self.assertRaisesRegex(RuntimeError, "No Google Android USB device"):
+            aoa_client.connect(FakePhone("gone"))
+
+    def test_zero_length_probe(self):
+        class Out:
+            def __init__(self, outcomes):
+                self.outcomes, self.writes = list(outcomes), []
+
+            def write(self, payload, timeout):
+                self.writes.append(bytes(payload))
+                outcome = self.outcomes.pop(0)
+                if outcome is not None:
+                    raise outcome
+
+        reading = Out([usb.core.USBTimeoutError("t"), None])
+        self.assertTrue(aoa_client.phone_reads(reading, 5))
+        self.assertEqual([b"", b""], reading.writes)
+        with patch.object(aoa_client.time, "monotonic", side_effect=[0, 0, 0.6, 0.6, 9, 9]):
+            self.assertFalse(aoa_client.phone_reads(Out([usb.core.USBTimeoutError("t")] * 3), 1))
+        with self.assertRaises(usb.core.USBError):
+            aoa_client.phone_reads(Out([usb.core.USBError("gone", errno=errno.ENODEV)]), 5)
 
 
 class SignedTransactionValidationTest(unittest.TestCase):

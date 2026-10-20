@@ -199,8 +199,21 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
     private static final int SCREEN_OFF_TIMEOUT_MS = 60 * 1000;
     private final Runnable idleLock = this::lock;
-    /** Set when a lock closed a live USB session: the host must unplug and reconnect to resume. */
+    /** Set when a lock closed a live USB session; shown on Home only if it could not be reopened. */
     private boolean usbReplugHint;
+    /** Reopen attempts for an accessory that is still attached (see resumeAttachedAccessory). */
+    private static final int USB_RESUME_ATTEMPTS = 4;
+    private static final long USB_RESUME_RETRY_MS = 400;
+    /** Unplug: end the session at once (a reader can be left waiting on an accessory that is gone). */
+    private final BroadcastReceiver usbDetachReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!UsbManager.ACTION_USB_ACCESSORY_DETACHED.equals(intent.getAction())) return;
+            AccessoryTransport live = transport;
+            if (live == null) return;
+            live.close();
+            onDisconnected(live, "USB cable disconnected");
+        }
+    };
     private final Runnable pixelShift = this::shiftPixels;
     private VaultPin pin;
     private PinScreen pinScreen;
@@ -230,6 +243,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         getWindow().setStatusBarColor(Color.rgb(17, 19, 24));
         getWindow().setBackgroundDrawable(new ColorDrawable(VaultTheme.BG));
         buildUi();
+        IntentFilter detached = new IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED);
+        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(usbDetachReceiver, detached, Context.RECEIVER_NOT_EXPORTED);
+        else registerReceiver(usbDetachReceiver, detached);
         activateIfPolicyReady();
         ui.postDelayed(pixelShift, PIXEL_SHIFT_MS);
         // Release: USB debugging switched on while the vault is open stops it at once (adbRefused).
@@ -353,6 +369,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (managed) applyIdlePolicy(policy);
             // The key is only loaded (and USB only answered) once the PIN gate has been passed.
             showPinGate(getIntent());
+            // Started (or restarted) with the Mac already attached: its session is read behind the gate.
+            resumeAttachedAccessory(USB_RESUME_ATTEMPTS);
         }
     }
 
@@ -624,6 +642,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         ui.removeCallbacks(idleLock);
         backup.stopSeedTimer();
         showPinGate(null);
+        // The lock ended the session, not the attachment: read the host again behind the gate
+        // (posted: the closed session's reader first has to leave read() and release the device).
+        ui.postDelayed(() -> resumeAttachedAccessory(USB_RESUME_ATTEMPTS), USB_RESUME_RETRY_MS);
     }
 
     private void armIdleLock() {
@@ -881,7 +902,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             pages.action(root, "Write down recovery phrase", true, backup::confirmRevealBackup);
             pages.action(root, "I have my backup · check words", false, () -> backup.startBackupAccess(true));
         }
-        if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · unplug and reconnect the cable to resume";
+        if (usbReplugHint && transport == null) statusMessage = "USB session ended when the vault locked · ask again from your Mac; if it cannot connect, unplug and reconnect the cable";
         statusView = VaultTheme.bodyText(this, statusMessage, VaultTheme.BODY_SIZE, VaultTheme.DIM);
         statusView.setPadding(pages.dp(2), pages.dp(20), 0, pages.dp(4));
         root.addView(statusView);
@@ -1051,6 +1072,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                     credentialGate.endSilentUnlockAttempt();
                     showHome();
                     drainPendingUsb();
+                    if (transport == null) resumeAttachedAccessory(USB_RESUME_ATTEMPTS);
                     if (transport != null) setStatusActive(true); // a session opened behind the gate
                     dispatchHeldRequest();
                 });
@@ -1081,7 +1103,48 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return qr;
     }
 
-    private void handleIntent(Intent intent) {
+    private void handleIntent(Intent intent) { handleIntent(intent, false); }
+
+    /**
+     * The framework still has our accessory attached, but no session reads it: the vault locked
+     * and closed the session, or this activity (re)started after the attach. A host that comes
+     * back finds the phone already in accessory mode, and its AOA handshake does not re-enumerate
+     * it (UsbDeviceManager skips an unchanged function set), so no new USB_ACCESSORY_ATTACHED
+     * arrives: open the attached accessory again, exactly as an attach would (behind the gate
+     * while locked: read and held, never answered). The host then finds a reader on the same
+     * endpoints, without a replug. Only the accessory our filter admits, only with the permission
+     * the attach already granted (never requested here). UI thread. Retried a few times: the
+     * closed session's descriptor is released only once its reader has left read(), and the
+     * accessory device opens exclusively (EBUSY until then).
+     */
+    private void resumeAttachedAccessory(int attemptsLeft) {
+        if (!operational || transport != null || attemptsLeft <= 0) return;
+        // Unlocked but not ready for USB (setup, a sensitive flow, the backup check): an attach
+        // would only be parked; the parked one, if any, is replayed when that ends.
+        if (unlocked && (replacementActive() || sensitive.active() || !walletLoaded || !backupVerified)) return;
+        UsbManager usb = (UsbManager) getSystemService(USB_SERVICE);
+        UsbAccessory attached;
+        try {
+            // Only while the accessory function is really the configured one. getAccessoryList()
+            // can name an accessory whose function is gone (a function change other than an
+            // accessory exit leaves it set), and an open /dev/usb_accessory is exclusive: the
+            // framework could then not read a host's handshake strings (START ignored).
+            if (!AccessoryTransport.accessoryConfigured(registerReceiver(null, new IntentFilter(AccessoryTransport.ACTION_USB_STATE)))) return;
+            attached = AccessoryTransport.ourHost(usb.getAccessoryList());
+            if (attached == null || !usb.hasPermission(attached)) return;
+        } catch (RuntimeException e) {
+            return;
+        }
+        handleIntent(new Intent(UsbManager.ACTION_USB_ACCESSORY_ATTACHED).putExtra(UsbManager.EXTRA_ACCESSORY, attached), true);
+        if (transport == null && attemptsLeft > 1) {
+            ui.postDelayed(() -> resumeAttachedAccessory(attemptsLeft - 1), USB_RESUME_RETRY_MS);
+        } else if (transport != null) {
+            Log.i(TAG, "USB: reopened the attached accessory");
+        }
+    }
+
+    /** {@code resumed}: the accessory was already attached (resumeAttachedAccessory), not just plugged in. */
+    private void handleIntent(Intent intent, boolean resumed) {
         if (!operational || intent == null) return;
         if (!UsbManager.ACTION_USB_ACCESSORY_ATTACHED.equals(intent.getAction())) return;
         if (!unlocked) {
@@ -1098,7 +1161,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 transport = opened;
                 opened.start();
                 pendingUsb = null;
-                keepScreenOn(true);
+                // A fresh attach lights the gate for the waiting Mac; a resumed session (after a
+                // lock) must not hold the screen on: the gate lights when a request arrives.
+                if (!resumed) keepScreenOn(true);
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. Your Mac is connected; its request will appear here.");
             } catch (Exception exception) {
                 transport = null;
@@ -1304,6 +1369,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
         if (adbObserver != null) getContentResolver().unregisterContentObserver(adbObserver);
+        try { unregisterReceiver(usbDetachReceiver); } catch (IllegalArgumentException ignored) { }
         synchronized (stateLock) {
             session.incrementAndGet();
             unlocked = false;
@@ -1406,7 +1472,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public SigningAccount activeAccount() { return activeAccount; }
         @Override public HeldRequest heldRequest() { return heldRequest; }
         @Override public void showHeldOnGate(AccessoryTransport source, String label, String body) {
-            if (!unlocked && pinScreen != null && source == transport) pinScreen.setPending(label, body);
+            if (unlocked || source != transport) return;
+            keepScreenOn(true); // a request is waiting (also on a session resumed after a lock): keep the gate lit
+            if (pinScreen != null) pinScreen.setPending(label, body);
         }
         @Override public boolean passphraseEntry() { return passphraseEntry; }
         @Override public Map<String, String> ownAccountNames() { return accounts.ownAccountNames(); }

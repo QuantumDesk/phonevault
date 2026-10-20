@@ -2,7 +2,7 @@
 //! mode, claim the vendor interface, exchange one newline-framed JSON request/response.
 //!
 //! Port of `tools/aoa_client.py`. Same identity strings (the phone's accessory filter matches
-//! manufacturer + model), same framing, same 64 KiB response cap.
+//! manufacturer + model), same framing, same 64 KiB response cap, same connect/recovery steps.
 
 use rusb::{Context, Device, DeviceHandle, Direction, Recipient, RequestType, TransferType, UsbContext};
 use serde_json::Value;
@@ -49,6 +49,9 @@ pub enum AoaError {
         "the phone did not answer within {0} s (locked, or its USB session ended). Unlock it, or unplug and reconnect the cable"
     )]
     Timeout(u64),
+    /// Nothing on the phone reads the accessory, even after it was attached afresh (`connect`).
+    #[error("{}", NOT_READING)]
+    NotReading,
 }
 
 /// What `AoaError::Busy` says. Also matched in the text of errors that reach the send flows as
@@ -57,6 +60,8 @@ pub const USB_BUSY: &str =
     "the USB interface is held by another program (usually the adb server: run `adb kill-server`)";
 /// What `AoaError::NoDevice` says (matched the same way).
 pub const NO_DEVICE: &str = "no Android device on USB";
+/// What `AoaError::NotReading` says.
+pub const NOT_READING: &str = "the phone is not reading USB, even after reconnecting to it. Make sure Phone Vault is open on the phone, then unplug and replug the cable and try again";
 
 fn proto(msg: impl Into<String>) -> AoaError {
     AoaError::Protocol(msg.into())
@@ -84,90 +89,221 @@ pub fn presence() -> Result<Presence, AoaError> {
         }
         seen = Presence::Android;
     }
-    // No accessory on the bus: whatever comes next must be switched again.
-    *known_accessory() = None;
     Ok(seen)
 }
 
-fn google_devices(ctx: &Context) -> Result<Vec<Device<Context>>, AoaError> {
-    let mut out = Vec::new();
-    for dev in ctx.devices()?.iter() {
-        if dev.device_descriptor()?.vendor_id() == GOOGLE_VENDOR_ID {
-            out.push(dev);
+// ---------------------------------------------------------------- connect: probe, switch, recover
+//
+// Whether a phone that is already an accessory has a live session cannot be read from its
+// descriptors: an idle beta2 phone (18d1:2d00 before any handshake: vault-os frameworks-base-a17
+// 0006), a phone whose app closed its session (the vault locked on an app that does not reopen it,
+// the app restarted) and a phone whose app reads right now all look the same. The kernel accessory
+// function (f_accessory) tells them apart on the wire: its reader keeps one bulk OUT request
+// queued while the app is in read(), and drops a zero-length packet it receives (acc_read requeues
+// on a 0-byte completion). So a ZLP on the OUT endpoint completes at once when the phone reads and
+// is NAKed until timeout when nothing does: a liveness probe that the phone's app never sees and
+// that answers nothing (the vault still answers no bytes while locked).
+//
+// A phone already in accessory mode does not re-enumerate for a new handshake: UsbDeviceManager's
+// START handler sets the accessory function, which is already current, and the gadget HAL is not
+// called for an unchanged set (setEnabledFunctions), so no new USB_ACCESSORY_ATTACHED reaches the
+// app. What does: the gadget reporting CONFIGURED while START is pending (updateCurrentAccessory
+// attaches the accessory with the new strings when MSG_ACCESSORY_MODE_ENTER_TIMEOUT, 10 s, is
+// queued). A USB port reset makes the host re-configure the device: configfs sends CONFIGURED on
+// SET_CONFIGURATION (android_setup → android_work). Without a pending START the same uevent makes
+// the framework leave accessory mode instead (notifyAccessoryModeExit): the phone re-enumerates
+// in its idle composition and the next pass switches it as usual. Either way no function is added.
+
+/// (bus, address) of a device on the bus.
+type Location = (u8, u8);
+
+/// A Google device on the bus, as `connect` sees it.
+#[derive(Clone)]
+struct Seen<D> {
+    dev: D,
+    accessory: bool,
+    at: Location,
+}
+
+/// What `connect` needs from USB: libusb in the app (`LibUsb`), a scripted fake in the tests.
+trait Bus {
+    type Dev: Clone;
+    type Open;
+    /// Every Google (18d1) device on the bus now.
+    fn scan(&self) -> Result<Vec<Seen<Self::Dev>>, AoaError>;
+    /// The AOA handshake on EP0: protocol version, our identity strings, START.
+    fn handshake(&self, dev: &Self::Dev) -> Result<(), AoaError>;
+    /// A USB port reset (Linux USBDEVFS_RESET; macOS re-enumeration).
+    fn reset(&self, dev: &Self::Dev) -> Result<(), AoaError>;
+    /// Open and claim the accessory interface, then wait up to `wait` for the phone to read it
+    /// (`Session::phone_reads`). `None`: nothing on the phone reads it.
+    fn open_reading(&self, dev: &Self::Dev, wait: Duration) -> Result<Option<Self::Open>, AoaError>;
+    fn pause(&self, d: Duration);
+}
+
+/// Poll interval while waiting for the bus to change.
+const POLL: Duration = Duration::from_millis(400);
+/// How long an accessory that predates this connect gets to show that the phone reads it. A live
+/// session takes the probe at once (its reader has a request queued).
+const LIVE_PROBE: Duration = Duration::from_millis(2500);
+/// After an attach (handshake, re-enumeration or reset), how long the phone's app may take to
+/// open its session: USB_ACCESSORY_ATTACHED starts or wakes it, and it reads at once, even
+/// behind the PIN gate.
+const FRESH_ATTACH: Duration = Duration::from_secs(20);
+/// After START, how long a phone whose functions change (an idle beta2 phone: charging
+/// composition → accessory) may take to re-enumerate by itself before its port is reset.
+const SELF_REENUMERATION: Duration = Duration::from_secs(4);
+/// How long the phone may be off the bus (re-enumerating) before it counts as gone.
+const BACK_ON_BUS: Duration = Duration::from_secs(12);
+
+fn polls(d: Duration) -> u32 {
+    (d.as_millis() / POLL.as_millis()).max(1) as u32
+}
+
+/// Poll the bus until `found` returns something, for at most `within`.
+fn wait_for<B: Bus, T>(
+    bus: &B,
+    within: Duration,
+    found: impl Fn(&[Seen<B::Dev>]) -> Option<T>,
+) -> Result<Option<T>, AoaError> {
+    for _ in 0..polls(within) {
+        bus.pause(POLL);
+        if let Some(t) = found(&bus.scan()?) {
+            return Ok(Some(t));
         }
     }
-    Ok(out)
+    Ok(None)
 }
 
-fn accessory_device(ctx: &Context) -> Result<Option<Device<Context>>, AoaError> {
-    let mut found: Vec<Device<Context>> = google_devices(ctx)?
-        .into_iter()
-        .filter(|d| d.device_descriptor().is_ok_and(|x| ACCESSORY_PRODUCTS.contains(&x.product_id())))
-        .collect();
-    if found.len() > 1 {
-        return Err(proto(format!("expected one Phone Vault accessory, found {}", found.len())));
-    }
-    Ok(found.pop())
-}
-
-/// (bus, address) of the accessory this process switched or already used. A Phone Vault user
-/// build with adb off idles in the accessory composition itself (18d1:2d00 before any handshake:
-/// vault-os frameworks-base-a17 0006; its gadget has no other function to enumerate with), so an
-/// accessory that is not this one may not have our identity yet and is switched like any other
-/// Android device.
-static KNOWN_ACCESSORY: Mutex<Option<(u8, u8)>> = Mutex::new(None);
-/// After START, how long an accessory may keep its address before it counts as switched: a phone
-/// whose accessory session predates this process does not re-enumerate.
-const SETTLE_WITHOUT_REENUMERATION: Duration = Duration::from_secs(4);
-
-fn location(device: &Device<Context>) -> (u8, u8) {
-    (device.bus_number(), device.address())
-}
-
-fn known_accessory() -> MutexGuard<'static, Option<(u8, u8)>> {
-    KNOWN_ACCESSORY.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// Ask the phone to re-enumerate as our accessory. No-op if it already did for this process.
-fn switch_to_accessory(ctx: &Context) -> Result<Device<Context>, AoaError> {
-    if let Some(acc) = accessory_device(ctx)? {
-        let here = location(&acc);
-        if *known_accessory() == Some(here) {
-            return Ok(acc);
+/// The phone: its accessory if it is one, else the single Android device. Several accessories, or
+/// several plain Android devices, are refused. `patient`: during recovery the phone may be off the
+/// bus for a moment.
+fn the_phone<B: Bus>(bus: &B, patient: bool) -> Result<Seen<B::Dev>, AoaError> {
+    fn pick<D: Clone>(seen: &[Seen<D>]) -> Result<Option<Seen<D>>, AoaError> {
+        let accessories: Vec<&Seen<D>> = seen.iter().filter(|d| d.accessory).collect();
+        if accessories.len() > 1 {
+            return Err(proto(format!("expected one Phone Vault accessory, found {}", accessories.len())));
         }
-        if send_identity(&acc).is_err() {
-            // Not answering AOA requests: an accessory switched before this process started.
-            *known_accessory() = Some(here);
-            return Ok(acc);
+        if let Some(a) = accessories.first() {
+            return Ok(Some((*a).clone()));
         }
-        return wait_for_accessory(ctx, Some(here));
+        if seen.len() > 1 {
+            return Err(proto("more than one Android device is attached; keep only the vault on USB"));
+        }
+        Ok(seen.first().cloned())
     }
-    let mut devices = google_devices(ctx)?;
-    let device = devices.pop().ok_or(AoaError::NoDevice)?;
-    if devices.len() > 1 {
-        return Err(proto("more than one Android device is attached; keep only the vault on USB"));
+    if let Some(d) = pick(&bus.scan()?)? {
+        return Ok(d);
     }
-    send_identity(&device)?;
-    wait_for_accessory(ctx, None)
-}
-
-/// Wait for the accessory to (re-)enumerate after START. `previous` is the accessory START was
-/// sent to, if the phone already was one: it is accepted once it has kept its address for
-/// SETTLE_WITHOUT_REENUMERATION.
-fn wait_for_accessory(ctx: &Context, previous: Option<(u8, u8)>) -> Result<Device<Context>, AoaError> {
-    let started = Instant::now();
-    let deadline = started + Duration::from_secs(12);
-    while Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(400));
-        if let Some(acc) = accessory_device(ctx)? {
-            let here = location(&acc);
-            if previous != Some(here) || started.elapsed() >= SETTLE_WITHOUT_REENUMERATION {
-                *known_accessory() = Some(here);
-                return Ok(acc);
+    if patient {
+        for _ in 0..polls(BACK_ON_BUS) {
+            bus.pause(POLL);
+            if let Some(d) = pick(&bus.scan()?)? {
+                return Ok(d);
             }
         }
     }
-    Err(proto("the phone did not re-enumerate in accessory mode"))
+    Err(AoaError::NoDevice)
+}
+
+/// A device error that means "it is re-enumerating", not "it refused".
+fn transient(e: &AoaError) -> bool {
+    matches!(e, AoaError::Usb(rusb::Error::NoDevice | rusb::Error::NotFound | rusb::Error::Io | rusb::Error::Pipe))
+}
+
+/// Find the phone, switch it to our accessory if needed, and return the claimed interface once
+/// something on the phone reads it. An accessory whose session is live is used as it is (no
+/// handshake, no wait). A stale one is attached afresh once (`reattach`); if nothing reads even
+/// then, `NotReading` says to replug: never a silent wait.
+fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
+    let mut fresh = false;
+    let mut recovered = false;
+    loop {
+        let found = the_phone(bus, recovered)?;
+        let accessory = if found.accessory {
+            found
+        } else {
+            bus.handshake(&found.dev)?;
+            fresh = true;
+            wait_for(bus, BACK_ON_BUS, |seen| seen.iter().find(|d| d.accessory).cloned())?
+                .ok_or_else(|| proto("the phone did not re-enumerate in accessory mode"))?
+        };
+        match bus.open_reading(&accessory.dev, if fresh { FRESH_ATTACH } else { LIVE_PROBE }) {
+            Ok(Some(open)) => return Ok(open),
+            Ok(None) => {}
+            Err(e) if transient(&e) => {}
+            Err(e) => return Err(e),
+        }
+        if recovered {
+            return Err(AoaError::NotReading);
+        }
+        recovered = true;
+        fresh = true;
+        eprintln!("aoa: nothing on the phone reads its accessory; attaching it afresh (START, then a port reset)");
+        reattach(bus, &accessory)?;
+    }
+}
+
+/// Make the phone attach our accessory afresh (a new USB_ACCESSORY_ATTACHED: its app opens a new
+/// session): our identity and START, then, if the phone did not re-enumerate by itself, a port
+/// reset while START is pending (see the section comment).
+fn reattach<B: Bus>(bus: &B, stale: &Seen<B::Dev>) -> Result<(), AoaError> {
+    // A phone that does not answer the AOA requests is reset all the same.
+    let _ = bus.handshake(&stale.dev);
+    let moved = wait_for(bus, SELF_REENUMERATION, |seen| {
+        (!seen.iter().any(|d| d.accessory && d.at == stale.at)).then_some(())
+    })?;
+    if moved.is_some() {
+        return Ok(());
+    }
+    match bus.reset(&stale.dev) {
+        Err(e) if !transient(&e) => Err(e),
+        _ => Ok(()),
+    }
+}
+
+/// The libusb `Bus`.
+struct LibUsb {
+    ctx: Context,
+}
+
+impl Bus for LibUsb {
+    type Dev = Device<Context>;
+    type Open = Session;
+
+    fn scan(&self) -> Result<Vec<Seen<Self::Dev>>, AoaError> {
+        let mut out = Vec::new();
+        for dev in self.ctx.devices()?.iter() {
+            let d = dev.device_descriptor()?;
+            if d.vendor_id() == GOOGLE_VENDOR_ID {
+                let accessory = ACCESSORY_PRODUCTS.contains(&d.product_id());
+                out.push(Seen { at: (dev.bus_number(), dev.address()), dev, accessory });
+            }
+        }
+        Ok(out)
+    }
+
+    fn handshake(&self, dev: &Self::Dev) -> Result<(), AoaError> {
+        send_identity(dev)
+    }
+
+    fn reset(&self, dev: &Self::Dev) -> Result<(), AoaError> {
+        dev.open()?.reset()?;
+        Ok(())
+    }
+
+    fn open_reading(&self, dev: &Self::Dev, wait: Duration) -> Result<Option<Session>, AoaError> {
+        let session = Session::open(dev)?;
+        if !session.phone_reads(wait)? {
+            return Ok(None);
+        }
+        session.drain_stale();
+        Ok(Some(session))
+    }
+
+    fn pause(&self, d: Duration) {
+        std::thread::sleep(d);
+    }
 }
 
 /// The AOA handshake on EP0: protocol version, our identity strings, START.
@@ -199,10 +335,14 @@ pub struct Session {
 }
 
 impl Session {
-    /// Switch (if needed), open and claim the accessory interface.
+    /// Find the phone, switch it to our accessory (or recover a stale one) and claim the
+    /// interface once the phone reads it. See `connect_with`.
     pub fn connect() -> Result<Session, AoaError> {
-        let ctx = Context::new()?;
-        let device = switch_to_accessory(&ctx)?;
+        connect_with(&LibUsb { ctx: Context::new()? })
+    }
+
+    /// Open and claim an accessory's vendor interface.
+    fn open(device: &Device<Context>) -> Result<Session, AoaError> {
         let handle = device.open()?;
         // Only configure a device that has no active configuration: re-issuing SET_CONFIGURATION
         // to a configured Android gadget resets it out of accessory mode (observed on Linux).
@@ -236,6 +376,38 @@ impl Session {
             other => AoaError::Usb(other),
         })?;
         Ok(Session { handle, iface, ep_in, ep_out })
+    }
+
+    /// Does anything on the phone read the accessory? A zero-length packet on the OUT endpoint
+    /// completes as soon as the phone's reader has a request queued (it is dropped there unseen);
+    /// with no reader it is NAKed until the timeout. A host stack that refuses a zero-length write
+    /// outright gets the benefit of the doubt (the request write then waits, as before this probe).
+    fn phone_reads(&self, within: Duration) -> Result<bool, AoaError> {
+        let deadline = Instant::now() + within;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Ok(false);
+            }
+            match self.handle.write_bulk(self.ep_out, &[], left.min(Duration::from_millis(500))) {
+                Ok(_) => return Ok(true),
+                Err(rusb::Error::Timeout) => continue,
+                Err(e) if transient(&AoaError::Usb(e)) => return Err(AoaError::Usb(e)),
+                Err(_) => return Ok(true),
+            }
+        }
+    }
+
+    /// Throw away anything the phone sent to an earlier host process that never read it (a
+    /// response to a request whose client went away): this exchange must only see its own answer.
+    fn drain_stale(&self) {
+        let mut sink = vec![0u8; 16_384];
+        for _ in 0..64 {
+            match self.handle.read_bulk(self.ep_in, &mut sink, Duration::from_millis(50)) {
+                Ok(_) => continue,
+                Err(_) => break,
+            }
+        }
     }
 
     /// One request, one newline-framed JSON response. `timeout` covers the wait for on-device approval.
@@ -419,5 +591,183 @@ mod turn_tests {
         assert!(t2.join().unwrap().is_ok());
         assert_eq!(waited.load(Ordering::SeqCst), 2);
         assert!(take_turn(|| panic!("released"), || false).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod connect_tests {
+    use super::*;
+    use std::cell::RefCell;
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Mode {
+        /// adb only (18d1:4ee7): a dev phone outside accessory mode
+        Adb,
+        /// beta2 idle: the accessory composition before any handshake (no strings, no reader)
+        Idle,
+        /// our accessory; `reader`: the app has a session open
+        Accessory {
+            reader: bool,
+        },
+        Gone,
+    }
+
+    /// A phone as UsbDeviceManager + f_accessory behave (see the comment above `Location`).
+    struct Phone {
+        mode: Mode,
+        address: u8,
+        start_pending: bool,
+        /// whether the app opens a session when the accessory is attached afresh
+        app_reads: bool,
+        /// a beta2 phone falls back to Idle (not Adb) when it leaves accessory mode
+        idle_is_accessory: bool,
+        handshakes: u32,
+        resets: u32,
+    }
+
+    struct Fake(RefCell<Phone>);
+
+    fn phone(mode: Mode, app_reads: bool) -> Fake {
+        Fake(RefCell::new(Phone {
+            mode,
+            address: 10,
+            start_pending: false,
+            app_reads,
+            idle_is_accessory: mode == Mode::Idle,
+            handshakes: 0,
+            resets: 0,
+        }))
+    }
+
+    impl Bus for Fake {
+        type Dev = u8;
+        type Open = u8;
+        fn scan(&self) -> Result<Vec<Seen<u8>>, AoaError> {
+            let p = self.0.borrow();
+            Ok(match p.mode {
+                Mode::Gone => vec![],
+                Mode::Adb => vec![Seen { dev: p.address, accessory: false, at: (1, p.address) }],
+                _ => vec![Seen { dev: p.address, accessory: true, at: (1, p.address) }],
+            })
+        }
+        fn handshake(&self, dev: &u8) -> Result<(), AoaError> {
+            let mut p = self.0.borrow_mut();
+            assert_eq!(*dev, p.address);
+            p.handshakes += 1;
+            match p.mode {
+                // the function set changes: the gadget re-composes and the accessory is attached
+                Mode::Adb | Mode::Idle => {
+                    p.mode = Mode::Accessory { reader: p.app_reads };
+                    p.address += 1;
+                }
+                // unchanged function set: nothing re-enumerates, START stays pending
+                Mode::Accessory { .. } => p.start_pending = true,
+                Mode::Gone => return Err(AoaError::Usb(rusb::Error::NoDevice)),
+            }
+            Ok(())
+        }
+        fn reset(&self, dev: &u8) -> Result<(), AoaError> {
+            let mut p = self.0.borrow_mut();
+            assert_eq!(*dev, p.address);
+            p.resets += 1;
+            if let Mode::Accessory { .. } = p.mode {
+                if p.start_pending {
+                    // CONFIGURED with START pending: attached afresh, the app opens a session
+                    p.mode = Mode::Accessory { reader: p.app_reads };
+                } else {
+                    // CONFIGURED without START: the framework leaves accessory mode
+                    p.mode = if p.idle_is_accessory { Mode::Idle } else { Mode::Adb };
+                    p.address += 1;
+                }
+                p.start_pending = false;
+            }
+            Ok(())
+        }
+        fn open_reading(&self, dev: &u8, _wait: Duration) -> Result<Option<u8>, AoaError> {
+            let p = self.0.borrow();
+            if *dev != p.address {
+                return Err(AoaError::Usb(rusb::Error::NoDevice));
+            }
+            Ok(match p.mode {
+                Mode::Accessory { reader: true } => Some(*dev),
+                _ => None,
+            })
+        }
+        fn pause(&self, _d: Duration) {}
+    }
+
+    fn counts(f: &Fake) -> (u32, u32) {
+        let p = f.0.borrow();
+        (p.handshakes, p.resets)
+    }
+
+    #[test]
+    fn a_live_session_is_used_as_it_is() {
+        let f = phone(Mode::Accessory { reader: true }, true);
+        assert!(connect_with(&f).is_ok());
+        assert_eq!(counts(&f), (0, 0), "no handshake, no reset");
+    }
+
+    #[test]
+    fn a_plain_android_phone_is_switched() {
+        let f = phone(Mode::Adb, true);
+        assert_eq!(connect_with(&f).unwrap(), 11);
+        assert_eq!(counts(&f), (1, 0));
+    }
+
+    #[test]
+    fn an_idle_beta2_accessory_gets_our_identity_and_re_enumerates() {
+        let f = phone(Mode::Idle, true);
+        assert_eq!(connect_with(&f).unwrap(), 11);
+        assert_eq!(counts(&f), (1, 0), "START changes its functions: no reset needed");
+    }
+
+    #[test]
+    fn a_stale_session_is_attached_afresh_by_start_and_a_port_reset() {
+        // the vault locked (on an app that does not reopen), or the app restarted: no reader
+        let f = phone(Mode::Accessory { reader: false }, true);
+        assert_eq!(connect_with(&f).unwrap(), 10);
+        assert_eq!(counts(&f), (1, 1));
+    }
+
+    #[test]
+    fn nothing_reading_even_after_recovery_says_replug() {
+        let f = phone(Mode::Accessory { reader: false }, false);
+        let e = connect_with(&f).expect_err("must fail");
+        assert!(matches!(e, AoaError::NotReading));
+        assert!(e.to_string().contains("unplug and replug"));
+        assert_eq!(counts(&f), (1, 1), "one recovery only");
+    }
+
+    #[test]
+    fn a_fresh_switch_whose_app_never_reads_is_recovered_once_then_refused() {
+        let f = phone(Mode::Adb, false);
+        assert!(matches!(connect_with(&f), Err(AoaError::NotReading)));
+        assert_eq!(counts(&f), (2, 1));
+    }
+
+    #[test]
+    fn no_phone_and_two_phones_are_refused() {
+        let f = phone(Mode::Gone, true);
+        assert!(matches!(connect_with(&f), Err(AoaError::NoDevice)));
+        struct Two;
+        impl Bus for Two {
+            type Dev = u8;
+            type Open = u8;
+            fn scan(&self) -> Result<Vec<Seen<u8>>, AoaError> {
+                Ok(vec![Seen { dev: 1, accessory: true, at: (1, 1) }, Seen { dev: 2, accessory: true, at: (1, 2) }])
+            }
+            fn handshake(&self, _: &u8) -> Result<(), AoaError> {
+                unreachable!()
+            }
+            fn reset(&self, _: &u8) -> Result<(), AoaError> {
+                unreachable!()
+            }
+            fn open_reading(&self, _: &u8, _: Duration) -> Result<Option<u8>, AoaError> {
+                unreachable!()
+            }
+            fn pause(&self, _: Duration) {}
+        }
+        assert!(matches!(connect_with(&Two), Err(AoaError::Protocol(ref m)) if m.contains("found 2")));
     }
 }

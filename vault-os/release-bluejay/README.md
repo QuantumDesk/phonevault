@@ -321,8 +321,10 @@ true. With adb off, `getChargingFunctions()` returns ACCESSORY instead of MTP. E
   gadget down and re-composes (no same-function shortcut in its `setCurrentUsbFunctions`), so the
   phone re-enumerates as 18d1:2d00 and the accessory is attached with the host's strings
   (`USB_ACCESSORY_ATTACHED` → the app's AccessoryTransport).
-- after the session (unplug, or the accessory closed) the framework restores the charging
-  composition: the accessory again, without strings.
+- after an unplug the framework restores the charging composition: the accessory again, without
+  strings. Closing the accessory on the phone (the vault locks) changes nothing on the bus: the
+  phone stays the attached accessory, and a later handshake does **not** re-enumerate it
+  (UsbDeviceManager skips an unchanged function set), see the stale-session note below.
 
 **Why nothing else can be exposed:** the gadget can only link function instances that exist in
 configfs, and the b3 rc creates no other instance (configfs `functions/` and the gadget root stay
@@ -338,11 +340,17 @@ frameworks-base-a17 patch is applied in the tree and that the compiled product R
 gate is unchanged (no adb anywhere).
 
 **Host side:** `companion/src-tauri/src/aoa.rs` used to skip the handshake whenever it saw a
-2d00/2d01 device ("already switched"). An idle beta2 phone *is* 2d00 without strings, so the
-companion now remembers the accessory it switched (bus/address; forgotten when no accessory is on
-the bus) and handshakes an accessory it does not know; if that accessory keeps its address for
-4 s after START it is taken as already switched (a session that predates the companion).
-`tools/aoa_client.py` (one-shot) always handshakes, with the same 4 s fallback.
+2d00/2d01 device ("already switched"). An idle beta2 phone *is* 2d00 without strings. The
+companion and `tools/aoa_client.py` now **probe** an existing accessory: a zero-length bulk OUT
+packet completes only while the phone's app has a read queued (f_accessory drops a ZLP unseen), so
+a live session is used at once, without a handshake. One nobody reads (an idle beta2 phone, or a
+**stale session**: the vault locked or the app restarted while the cable stayed in) gets the
+handshake; an idle phone re-enumerates by itself (its functions change), a stale one does not, so
+the host then resets the USB port while START is pending, which makes the framework attach the
+accessory afresh (`USB_ACCESSORY_ATTACHED`, a new app session). If nothing reads even then, the
+companion says to unplug and replug. Since the same fix the app also reopens the still-attached
+accessory after every lock (and on start), so with a current app the probe simply succeeds.
+**beta2's app predates that**: on beta2 only the host recovery (START + port reset) applies.
 
 ### beta2 build (2026-10-19)
 
@@ -389,7 +397,13 @@ Not flashed yet. Flash and rollback as beta1 (`rsync … /build/out-beta2/ out-b
    bus for about a second and comes back, still **0x2d00** = accessory without adb (0x2d01 =
    accessory + adb must never appear on beta2). The app shows the connection; signing works.
 4. Unplug/replug: 0x2d00 again within seconds; the companion pairs again.
-5. Fail signs: no Google device at all (fix not active: is it really beta2?), a second interface,
+5. Stale session (no replug): after a request, let the vault lock (or press power), unlock, ask
+   again from the companion. Expected: answered within ~10 s (the companion's log line "attaching
+   it afresh" with beta2's app; none with an app that reopens the accessory). Then quit and
+   restart the companion and ask again: answered at once. Also check the zero-length probe on
+   macOS: a live session must be used without that log line. Never an endless wait: a failure
+   says "unplug and replug".
+6. Fail signs: no Google device at all (fix not active: is it really beta2?), a second interface,
    or any PID other than 0x2d00: stop and report.
 
 **Risks:** (1) untested on hardware, and without adb a misbehaviour cannot be logged; rollback =
