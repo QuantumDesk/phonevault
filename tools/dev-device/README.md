@@ -25,6 +25,7 @@ once when a button is below the fold.
 | `seedqrtest.sh` | SeedQR + reminder (resets the gadget first: an open AOA session blocks sensitive screens): Security → Show as SeedQR behind the PIN shows the 25 × 25 CompactSeedQR with the seed timer and no menu, switches to the 29 × 29 Standard SeedQR and to the words and back, Hide returns Home; `PV_USB_CHECK=1` plugs a host in while it is shown and requires the attach to stay parked; Security → Backup reminder saves each interval and restores "Every 3 months" |
 | `restoretest.sh firstrun\|replace ADDR` | picks the phrase's length on "How many words?" (12, 15, 18, 21 or 24, from `PV_WORDS_FILE`), types the words on the phone's own keyboard; requires the derived address shown **before** saving to equal `ADDR`; confirms; checks Home. `replace` goes through Security → Restore a different wallet (fresh PIN, replacement state machine) |
 | `usbsigntest.sh` | AOA pair (USB address == screen), mainnet-shaped 0.5 ETH example transfer reviewed and approved on the phone, host recomputes hash + recovers signer against the pinned pairing |
+| `reconnecttest.sh` | Reconnect without a replug and without any adb USB reset between requests (needs the pairing from `usbsigntest.sh`): fresh attach; a new client process on the live session (no handshake); lock → unlock → request (the app reopened the attached accessory); lock → request held behind the gate, answered after unlock; a client killed mid-review, its orphaned answer drained by the next client; a session the phone ended itself (malformed line) re-attached by the host (START + port reset) |
 | `msgsigntest.sh` | Message signing (needs the pairing from `usbsigntest.sh`): personal_sign text approved, sign-in for another account and unreadable bytes rejected, EIP-712 Mail and Permit2 (UNLIMITED) approved, Permit2 on the wrong host chain rejected; host checks each digest and recovers the signer |
 | `btctest.sh` | Bitcoin (testnet, fabricated coins, nothing broadcast; rerunnable): first revokes every remembered account in ☰ → Bitcoin sharing; `btc-account` share screen approved then remembered (no screen, same descriptor) and listed in ☰ → Bitcoin sharing, declined for another account; `btc-show` address on screen == answered address; `btc-sign` P2WPKH and P2TR reviewed ("Send 0.00060000 tBTC", change ✓, fee) and signed, each signature verified on the host with embit (`tools/btc_psbt_tool.py verify`); a rejection; a coin of another wallet refused with "Bitcoin transaction refused"; a revoked account is asked for again. Every step prints PASS or FAIL. Needs `PV_BTC_TOOL` and embit==0.8.0 in `PV_HOST_PY` |
 | `btc-signet-e2e.sh` | A REAL signet round trip (needs a person to fund the printed address from a signet faucet; the script never contacts a faucet): signet P2WPKH account 1, receive address 0 shown on the phone, wait for a coin (mempool.space Esplora), PSBT to own receive address 1 + change at the recommended fee, signed on the phone, verified with embit (`tools/btc_signet.py`), broadcast, waited on until confirmed. Resumable from `$PV_SIGNET_DIR` (set it to a private directory of your own); `--address-only` stops after printing the address |
@@ -75,9 +76,13 @@ Conventions learned the hard way:
   `kill $pid 2>/dev/null || true`. Wait for the top of a review, never for "Reject request"
   (below the fold: the wait itself let the idle lock close the review).
 * `adb shell` inside a `while read` loop eats the loop's stdin — the helpers use `</dev/null`.
-* USB: the app opens an accessory transport only on a **fresh** `ACCESSORY_ATTACHED`. After any
-  lock the host must reset the gadget (`usb_reset`) and switch again; the host adb server must be
-  down during the AOA switch and is restarted a few seconds later (accessory+adb coexist).
+* USB: the app opens an accessory session on `ACCESSORY_ATTACHED` and, since the stale-session
+  fix, reopens the still-attached accessory after every lock and on start; the host client probes
+  an existing accessory (zero-length packet) and re-attaches a dead one itself (AOA START + USB
+  port reset), so no script needs `usb_reset` between two requests any more (`reconnecttest.sh`
+  proves it). Scripts still `usb_reset` to start from a fresh attach, and before sensitive screens
+  (an open session refuses them). The host adb server must be down while the client talks and is
+  restarted a few seconds later (accessory+adb coexist).
 * Android refuses `pm clear` for the device-owner app. The only app-level wipe is the app's own
   ten-wrong-PINs erase, and it still needs the owner's explicit approval.
 * `adb root` is never called (Lineage gates it behind a toggle a /data wipe resets) and

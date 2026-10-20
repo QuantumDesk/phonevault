@@ -98,6 +98,36 @@ final class AccessoryTransport implements Closeable {
         }
     }
 
+    /**
+     * The host identity res/xml/accessory_filter.xml lets in (manufacturer + model): what an
+     * attach intent would have matched, so an accessory the framework still has attached may be
+     * reopened without one (MainActivity#resumeAttachedAccessory). Never a new trust decision.
+     */
+    static final String HOST_MANUFACTURER = "PhoneVault";
+    static final String HOST_MODEL = "EVM Signer";
+
+    /** The first accessory in {@code attached} (UsbManager#getAccessoryList, may be null) that is our host, else null. */
+    static UsbAccessory ourHost(UsbAccessory[] attached) {
+        if (attached == null) return null;
+        for (UsbAccessory accessory : attached) {
+            if (accessory != null && isOurHost(accessory.getManufacturer(), accessory.getModel())) return accessory;
+        }
+        return null;
+    }
+
+    static boolean isOurHost(String manufacturer, String model) {
+        return HOST_MANUFACTURER.equals(manufacturer) && HOST_MODEL.equals(model);
+    }
+
+    /** UsbManager.ACTION_USB_STATE (hidden): sticky, sent by UsbDeviceManager on every USB state change. */
+    static final String ACTION_USB_STATE = "android.hardware.usb.action.USB_STATE";
+
+    /** The sticky USB_STATE says: connected, configured, and the accessory function is in the configuration. */
+    static boolean accessoryConfigured(android.content.Intent usbState) {
+        return usbState != null && usbState.getBooleanExtra("connected", false)
+                && usbState.getBooleanExtra("configured", false) && usbState.getBooleanExtra("accessory", false);
+    }
+
     /** Test seam: an inactive session over arbitrary streams (no USB / ParcelFileDescriptor). */
     static AccessoryTransport openForTest(Closeable descriptor, InputStream input, OutputStream output,
                                           Listener listener) {

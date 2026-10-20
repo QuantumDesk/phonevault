@@ -10,6 +10,9 @@ require_pin
 WRONG="$(wrong_pin)"
 "$A" shell svc power stayon false
 "$A" shell input keyevent KEYCODE_WAKEUP; sleep 2
+# End any accessory session first: the app reopens an attached accessory after every lock, and an
+# open session refuses the phrase screens below ("Disconnect USB first", by design).
+usb_reset
 unlock_if_locked; go_home
 BEFORE="$(addr)"; [[ -n "$BEFORE" ]] || die "no address on Home"
 [[ "$("$A" shell locksettings get-disabled | tr -d '\r')" == "false" ]] || die "device has no lock credential: not in credential mode"

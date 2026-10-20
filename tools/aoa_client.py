@@ -3,6 +3,7 @@
 
 import argparse
 import base64
+import errno
 import json
 import os
 import re
@@ -51,50 +52,198 @@ def find_android_device():
     return devices[0]
 
 
-# After START, how long an accessory may keep its address before it counts as switched (a phone
-# already in an accessory session does not re-enumerate).
-SETTLE_WITHOUT_REENUMERATION = 4.0
+# ------------------------------------------------------------------ connect: probe, switch, recover
+#
+# Same steps as the companion (companion/src-tauri/src/aoa.rs, which explains them against the
+# kernel and framework sources). In short: whether a phone that already is an accessory has a live
+# session cannot be read from its descriptors (an idle beta2 phone, 18d1:2d00 before any handshake;
+# a session the phone closed without re-enumerating, e.g. the vault locked on an app that does not
+# reopen it; a live one). A zero-length packet on the OUT endpoint tells them apart: the phone's
+# reader keeps a bulk request queued and drops a ZLP unseen, so the write completes at once when
+# the phone reads and times out when nothing does. A phone already in accessory mode does not
+# re-enumerate for a new handshake (UsbDeviceManager skips an unchanged function set), so a stale
+# one is attached afresh by START followed by a USB port reset while START is pending.
+
+POLL = 0.4
+# How long an accessory that predates this connect gets to show that the phone reads it.
+LIVE_PROBE = 2.5
+# After an attach (handshake, re-enumeration or reset), how long the app may take to open its session.
+FRESH_ATTACH = 20.0
+# After START, how long a phone whose functions change (an idle beta2 phone) may take to
+# re-enumerate by itself before its port is reset.
+SELF_REENUMERATION = 4.0
+# How long the phone may be off the bus (re-enumerating) before it counts as gone.
+BACK_ON_BUS = 12.0
+NOT_READING = (
+    "the phone is not reading USB, even after reconnecting to it. Make sure Phone Vault is open "
+    "on the phone, then unplug and replug the cable and try again"
+)
+# libusb NO_DEVICE / NOT_FOUND / IO / PIPE as pyusb reports them: "it is re-enumerating"
+_TRANSIENT_ERRNOS = {errno.ENODEV, errno.ENOENT, errno.EIO, errno.EPIPE}
 
 
-def switch_to_accessory(device):
-    # A device that is already an accessory gets the handshake too: a Phone Vault user build with
-    # adb off idles in the accessory composition (18d1:2d00) before any host has sent its
-    # identity (vault-os frameworks-base-a17 0006). If it does not answer, it is a phone whose
-    # accessory session already runs: use it as it is.
-    previous = None
-    if device.idProduct in AOA_ACCESSORY_PRODUCTS:
-        previous = (device.bus, device.address)
-    try:
-        protocol = device.ctrl_transfer(0xC0, AOA_GET_PROTOCOL, 0, 0, 2)
-        version = int(protocol[0]) | (int(protocol[1]) << 8)
-        if version < 1:
-            raise RuntimeError(f"Unsupported Android Open Accessory protocol {version}")
-        for index, value in enumerate(IDENTITY):
-            device.ctrl_transfer(0x40, AOA_SEND_IDENT, 0, index, value.encode("utf-8") + b"\0")
-        device.ctrl_transfer(0x40, AOA_START, 0, 0, None)
-    except usb.core.USBError:
-        if previous is None:
-            raise
-        return device
+class NotReadingError(RuntimeError):
+    def __init__(self):
+        super().__init__(NOT_READING)
 
-    started = time.monotonic()
-    deadline = started + 12
-    while time.monotonic() < deadline:
-        time.sleep(0.4)
-        accessories = [
-            item for item in usb.core.find(find_all=True)
-            if item.idVendor == GOOGLE_VENDOR_ID
-            and item.idProduct in AOA_ACCESSORY_PRODUCTS
+
+class Seen:
+    """A Google device on the bus, as connect() sees it."""
+
+    def __init__(self, dev, accessory, at):
+        self.dev, self.accessory, self.at = dev, accessory, at
+
+
+def _transient(error):
+    return (isinstance(error, usb.core.USBError)
+            and not isinstance(error, usb.core.USBTimeoutError)
+            and error.errno in _TRANSIENT_ERRNOS)
+
+
+def send_identity(device):
+    """The AOA handshake on EP0: protocol version, our identity strings, START."""
+    protocol = device.ctrl_transfer(0xC0, AOA_GET_PROTOCOL, 0, 0, 2)
+    version = int(protocol[0]) | (int(protocol[1]) << 8)
+    if version < 1:
+        raise RuntimeError(f"Unsupported Android Open Accessory protocol {version}")
+    for index, value in enumerate(IDENTITY):
+        device.ctrl_transfer(0x40, AOA_SEND_IDENT, 0, index, value.encode("utf-8") + b"\0")
+    device.ctrl_transfer(0x40, AOA_START, 0, 0, None)
+
+
+def phone_reads(endpoint_out, within):
+    """Does anything on the phone read the accessory? (a ZLP completes only when it does)"""
+    deadline = time.monotonic() + within
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        try:
+            endpoint_out.write(b"", timeout=max(1, int(min(left, 0.5) * 1000)))
+            return True
+        except usb.core.USBTimeoutError:
+            continue
+        except usb.core.USBError as error:
+            if _transient(error):
+                raise
+            return True  # a host stack that refuses zero-length writes: proceed as before the probe
+
+
+def drain_stale(endpoint_in):
+    """Drop what the phone sent to an earlier client that never read it (an orphaned response)."""
+    for _ in range(64):
+        try:
+            endpoint_in.read(16_384, timeout=50)
+        except usb.core.USBError:
+            return
+
+
+class LibUsbBus:
+    def scan(self):
+        return [
+            Seen(device, device.idProduct in AOA_ACCESSORY_PRODUCTS, (device.bus, device.address))
+            for device in usb.core.find(find_all=True)
+            if device.idVendor == GOOGLE_VENDOR_ID
         ]
-        if len(accessories) > 1:
-            raise RuntimeError(
-                f"Expected one Phone Vault accessory, found {len(accessories)}"
-            )
-        if accessories:
-            here = (accessories[0].bus, accessories[0].address)
-            if here != previous or time.monotonic() - started >= SETTLE_WITHOUT_REENUMERATION:
-                return accessories[0]
-    raise RuntimeError("Phone did not re-enumerate in accessory mode")
+
+    def handshake(self, device):
+        send_identity(device)
+
+    def reset(self, device):
+        try:
+            device.reset()
+        finally:
+            usb.util.dispose_resources(device)
+
+    def open_reading(self, device, wait):
+        endpoint_in, endpoint_out = open_endpoints(device)
+        if not phone_reads(endpoint_out, wait):
+            usb.util.dispose_resources(device)
+            return None
+        drain_stale(endpoint_in)
+        return endpoint_in, endpoint_out
+
+    def pause(self, seconds):
+        time.sleep(seconds)
+
+
+def _wait_for(bus, within, found):
+    for _ in range(max(1, int(within / POLL))):
+        bus.pause(POLL)
+        result = found(bus.scan())
+        if result is not None:
+            return result
+    return None
+
+
+def _pick(seen):
+    accessories = [item for item in seen if item.accessory]
+    if len(accessories) > 1:
+        raise RuntimeError(f"Expected one Phone Vault accessory, found {len(accessories)}")
+    if accessories:
+        return accessories[0]
+    if len(seen) > 1:
+        raise RuntimeError(f"Expected exactly one Google Android USB device, found {len(seen)}")
+    return seen[0] if seen else None
+
+
+def _the_phone(bus, patient):
+    found = _pick(bus.scan())
+    if found is None and patient:
+        found = _wait_for(bus, BACK_ON_BUS, _pick)
+    if found is None:
+        raise RuntimeError("No Google Android USB device found")
+    return found
+
+
+def _reattach(bus, stale):
+    """Make the phone attach our accessory afresh: START, then a port reset if it did not
+    re-enumerate by itself (START is still pending then, so the reset re-attaches it)."""
+    try:
+        bus.handshake(stale.dev)
+    except usb.core.USBError:
+        pass  # a phone that does not answer the AOA requests is reset all the same
+    moved = _wait_for(bus, SELF_REENUMERATION, lambda seen: True if not any(
+        item.accessory and item.at == stale.at for item in seen) else None)
+    if moved:
+        return
+    try:
+        bus.reset(stale.dev)
+    except usb.core.USBError as error:
+        if not _transient(error):
+            raise
+
+
+def connect(bus=None):
+    """Find the phone, switch it to our accessory (or recover a stale one) and return
+    (endpoint_in, endpoint_out) once the phone reads. Raises NotReadingError (replug) otherwise."""
+    bus = bus or LibUsbBus()
+    fresh = recovered = False
+    while True:
+        found = _the_phone(bus, recovered)
+        if found.accessory:
+            accessory = found
+        else:
+            bus.handshake(found.dev)
+            fresh = True
+            accessory = _wait_for(bus, BACK_ON_BUS, lambda seen: next(
+                (item for item in seen if item.accessory), None))
+            if accessory is None:
+                raise RuntimeError("Phone did not re-enumerate in accessory mode")
+        try:
+            opened = bus.open_reading(accessory.dev, FRESH_ATTACH if fresh else LIVE_PROBE)
+        except usb.core.USBError as error:
+            if not _transient(error):
+                raise
+            opened = None
+        if opened is not None:
+            return opened
+        if recovered:
+            raise NotReadingError()
+        recovered = fresh = True
+        print("phone-vault: nothing on the phone reads its USB accessory; attaching it afresh "
+              "(AOA START, then a USB port reset if it does not re-enumerate)", file=sys.stderr)
+        _reattach(bus, accessory)
 
 
 def open_endpoints(device):
@@ -864,8 +1013,7 @@ def main():
             raise ValueError("--count must be 1..10")
         if args.command == "attest" and args.challenge and not re.fullmatch(r"(?:[0-9a-f]{2}){16,64}", args.challenge):
             raise ValueError("--challenge must be 16..64 bytes of lowercase hex")
-        device = switch_to_accessory(find_android_device())
-        endpoint_in, endpoint_out = open_endpoints(device)
+        endpoint_in, endpoint_out = connect()
         request = request_for(args)
         response = exchange(endpoint_in, endpoint_out, request,
                             max_response_bytes=MAX_PSBT_RESPONSE_BYTES if args.command == "btc-sign" else None)

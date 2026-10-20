@@ -306,7 +306,7 @@ public class CredentialGateTest {
         assertEquals("held only from the live connection while locked, under stateLock", 1,
                 SourceGuard.count("synchronized \\(stateLock\\) \\{ host\\.heldRequest\\(\\)\\.holdIfLocked\\(host\\.unlocked\\(\\), host\\.transport\\(\\), source, json, body\\); \\}"));
         assertEquals("no other hold site", 1, SourceGuard.count("\\.holdIfLocked\\("));
-        String handle = SourceGuard.definition("private void handleIntent(Intent intent) {");
+        String handle = SourceGuard.definition("private void handleIntent(Intent intent, boolean resumed) {");
         assertEquals("cleared on a new connection, locked and unlocked", 2,
                 handle.split("synchronized \\(stateLock\\) \\{ heldRequest\\.clear\\(\\); \\}", -1).length - 1);
         String disc = SourceGuard.definition("public void onDisconnected(AccessoryTransport source, String reason) {");
