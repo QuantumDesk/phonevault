@@ -12,7 +12,8 @@
 #   7. relock + unlock: still Ledger Live, Account 2 (the setting survives a relock)
 #   8. switch back to Standard: getAddress has no "scheme" and is Account 1 again
 # Rerunnable, and the phone is ALWAYS left on Standard numbering, Account 1 (EXIT trap), which the
-# host pairing of the other scripts pins. Nothing is signed or broadcast.
+# host pairing of the other scripts pins, and with Account 1 as the account Ledger Live numbering
+# remembers (step 5 expects it). Nothing is signed or broadcast.
 #
 # Needs PV_HOST_PY (venv python with pyusb) and PV_HOST_CLIENT (tools/aoa_client.py with list-addresses).
 source "$(dirname "$0")/lib.sh"
@@ -30,17 +31,17 @@ addr_n() { "$PY" -c 'import json,sys; t=open(sys.argv[1]).read(); d=json.loads(t
 ask() { # ask <name> <client args…>: one exchange in the foreground (getAddress needs no tap)
   local name="$1"; shift
   usb_reset; unlock_if_locked; go_home
-  "$A" kill-server; sleep 1
+  "$A" kill-server >/dev/null 2>&1 || true; sleep 1
   "$PY" "$CLIENT" "$@" > "$OUT.$name" 2>&1 || true
-  sleep 4; "$A" start-server >/dev/null 2>&1; wait_adb 12; nudge; unlock_if_locked
+  sleep 4; "$A" start-server >/dev/null 2>&1 || true; wait_adb 12; nudge; unlock_if_locked
 }
 start_request() { # in the background (the share screen needs a tap), sets $pid
   local name="$1"; shift
   usb_reset; unlock_if_locked; go_home
-  "$A" kill-server; sleep 1
+  "$A" kill-server >/dev/null 2>&1 || true; sleep 1
   "$PY" "$CLIENT" "$@" > "$OUT.$name" 2>&1 &
   pid=$!
-  sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
+  sleep 6; "$A" start-server >/dev/null 2>&1 || true; wait_adb 12; unlock_if_locked
 }
 wait_share() { # the share screen is up (a PIN prompt for the seed key may come first)
   local name="$1"
@@ -84,7 +85,7 @@ restore_standard() {
   local rc=$?
   trap - EXIT
   [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-  [[ $rc -eq 0 ]] || echo "  (restoring Standard numbering and Account 1 after the failure)"
+  [[ $rc -eq 0 ]] || { abort_reason; echo "  (restoring Standard numbering and Account 1 after the failure)"; }
   ensure_account1
   set_numbering standard
   ensure_account1
@@ -94,6 +95,15 @@ restore_standard() {
 trap restore_standard EXIT
 
 # An earlier failed run may have left Ledger Live on (the EXIT trap of this run fixes it too).
+# Each numbering also remembers its OWN active account: switching to Ledger Live makes active "the
+# one you last used under Ledger Live numbering" (the check screen says so). A run that passed step 7
+# used to leave Account 2 there, so the next run's step 5 came back, rightly, on Account 2 ("getAddress
+# does not report Ledger Live numbering" over a ledger-live/account 2 answer). Start from Account 1
+# under BOTH numberings; step 8 and the EXIT trap leave it that way.
+ensure_account1
+set_numbering standard
+ensure_account1
+set_numbering ledger-live
 ensure_account1
 set_numbering standard
 ensure_account1
@@ -150,7 +160,14 @@ pass "Ledger Live numbering on; getAddress reports it; Account 1 unchanged"
 
 echo "== 6. Account 2 under Ledger Live"
 go_accounts
-if has_text "+ Add Account 2"; then tap_text "+ Add Account 2"; sleep 1; uidump | grep -qF -e "m/44&apos;/60&apos;/1&apos;/0/0" -e "m/44'/60'/1'/0/0" || die "Add Account 2 does not name the Ledger Live path"; tap_text "Add and switch"
+if has_text "+ Add Account 2"; then
+  tap_text "+ Add Account 2"
+  # The path is in the middle of the description ("… (path m/44'/60'/1'/0/0) and switches …"), so a
+  # has_text/find_text prefix match can never see it: grep the whole dump, once the page is up.
+  for _ in 1 2 3 4 5; do sleep 1; ADD_SCREEN="$(uidump)"; grep -qF 'text="Add Account 2?"' <<<"$ADD_SCREEN" && break; done
+  grep -qF 'text="Add Account 2?"' <<<"$ADD_SCREEN" || die "no 'Add Account 2?' page: $(texts 10)"
+  grep -qF -e "m/44&apos;/60&apos;/1&apos;/0/0" -e "m/44'/60'/1'/0/0" <<<"$ADD_SCREEN" || die "Add Account 2 does not name the Ledger Live path: $(texts 10)"
+  tap_text "Add and switch"
 else
   b="$(bounds_of '[● ]*Account 2 · [^"]*')"
   if [[ -z "$b" ]] && has_text "Hidden accounts ("; then tap_text 'Hidden accounts ([0-9]*)'; sleep 1.2; b="$(bounds_of 'Account 2 · [^"]*')"; fi
@@ -171,6 +188,7 @@ ask ll3 address
 pass "after relock: Ledger Live, Account 2"
 
 echo "== 8. back to Standard"
+ensure_account1          # Account 1 is what Ledger Live numbering remembers for the next run's step 5
 set_numbering standard
 ensure_account1
 ask back address

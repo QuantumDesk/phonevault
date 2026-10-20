@@ -13,6 +13,16 @@
 # Every tap is found by the widget's text and live bounds (uiautomator). No coordinates are
 # guessed. uiautomator only lists VISIBLE nodes, so scroll before tapping anything below the fold.
 set -euo pipefail
+# A command that fails under set -e outside any test ends the script WITHOUT a FAIL line of its own
+# (btctest once stopped with only "step 'sign-reject' aborted (exit 1)"). Remember the last one
+# (inherited by functions: -E) so an EXIT trap can name it: see abort_reason.
+set -E
+trap 'PV_LAST_ERR="${BASH_COMMAND} (exit $?, ${BASH_SOURCE[0]##*/}:${LINENO})"' ERR
+abort_reason() { [[ -n "${PV_LAST_ERR:-}" ]] && echo "  last failed command: $PV_LAST_ERR" >&2; return 0; }
+# A runner's `timeout` sends TERM, and bash then ran the EXIT trap with $? == 0: btctest stopped in
+# the middle of 'sign-reject' with no FAIL line at all (it needs more than a 30-minute budget). Exit
+# 143 instead, so the traps report the abort (and still restore the phone).
+trap 'PV_LAST_ERR="terminated by SIGTERM (a runner timeout?)"; exit 143' TERM
 
 A="${ADB:-adb}"
 PKG=dev.phonevault.signer
@@ -92,7 +102,24 @@ require_words() {
 
 # adb drops for a few seconds when the device owner (re)applies USB restrictions or the gadget
 # is reset for an accessory switch; wait for it instead of dying on the first failed command.
-wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" get-state >/dev/null 2>&1 && return 0; sleep 5; done; die "adb did not come back"; }
+# "device" from get-state comes a moment before the shell answers: wait for both.
+wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" get-state >/dev/null 2>&1 && "$A" shell true >/dev/null 2>&1 </dev/null && return 0; sleep 5; done; die "adb did not come back"; }
+# Every tap and swipe goes through here. A bare `adb shell input ...` under set -e ended the script
+# silently when adb dropped for a moment (the gadget settling after a USB switch): no FAIL line,
+# only btctest's "step '...' aborted (exit 1)". An adb that never reached the phone (device not
+# found / offline) is retried once it is back: the input did not happen. Any other error may have
+# delivered it (a doubled tap could key a PIN digit twice), so it is a named failure, never a blind
+# retry.
+adb_input() {
+  local err i
+  for i in 1 2 3; do
+    err="$("$A" shell input "$@" 2>&1 </dev/null)" && return 0
+    grep -qiE "not found|offline|no devices|unauthorized" <<<"$err" || break
+    echo "  (adb dropped during 'input $1'; waiting for it)" >&2
+    wait_adb 12
+  done
+  die "adb input $1 failed: ${err:-no output}"
+}
 wait_boot() { local i; for i in $(seq 1 "${1:-40}"); do "$A" get-state >/dev/null 2>&1 && [[ "$("$A" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" == "1" ]] && return 0; sleep 5; done; die "device did not finish booting"; }
 
 # /data/local/tmp: /sdcard is not always readable from the shell on a fresh device.
@@ -126,7 +153,7 @@ bounds_of() {
   uidump | grep -o -i "text=\"$1\"[^>]*bounds=\"\[[0-9]*,[0-9]*\]\[[0-9]*,[0-9]*\]\"" | head -1 \
     | sed -E 's/.*bounds="\[([0-9]+),([0-9]+)\]\[([0-9]+),([0-9]+)\]".*/\1 \2 \3 \4/' || true
 }
-tap_bounds() { local x1 y1 x2 y2; read -r x1 y1 x2 y2 <<<"$1"; "$A" shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 )) </dev/null; }
+tap_bounds() { local x1 y1 x2 y2; read -r x1 y1 x2 y2 <<<"$1"; adb_input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 )); }
 # Tap a widget by exact text; scrolls down once and retries if it is below the fold.
 tap_text() {
   local b; b="$(bounds_of "$1")"
@@ -134,8 +161,8 @@ tap_text() {
   [[ -n "$b" ]] || die "button '$1' not found on screen: $(texts)"
   tap_bounds "$b"
 }
-scroll_down() { "$A" shell input swipe 720 2300 720 700 350 </dev/null; }
-scroll_top()  { "$A" shell input swipe 720 700 720 2300 350 </dev/null; sleep 0.5; "$A" shell input swipe 720 700 720 2300 350 </dev/null; }
+scroll_down() { adb_input swipe 720 2300 720 700 350; }
+scroll_top()  { adb_input swipe 720 700 720 2300 350; sleep 0.5; adb_input swipe 720 700 720 2300 350; }
 # Optional review screenshots for visual QA: with PV_QA_SHOTS set to a directory, save the
 # current screen and each page below it as <name>-<n>.png (dev builds allow screenshots).
 qa_shots() {
@@ -167,7 +194,7 @@ tick_review() {
     tap_bounds "$b"; sleep 0.8; n=$((n + 1))
   done
   if [[ $n -lt 2 ]]; then  # the danger box may sit just above the fold on a small screen: look once higher
-    "$A" shell input swipe 720 1200 720 1700 300 </dev/null; sleep 0.8
+    adb_input swipe 720 1200 720 1700 300; sleep 0.8
     b="$(unticked_box)"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 0.8; n=$((n + 1)); }
     scroll_down; sleep 0.8
   fi
@@ -223,10 +250,18 @@ unlock_if_locked() {
 # Navigation is a ☰ header menu (0.3.x): open it, then pick a section. Screens without the menu
 # (PIN gate, sensitive flows, approvals) are left alone; callers assert what they expect.
 # Right after an unlock the wallet is still loading ("Opening Phone Vault", no menu): give it a few s.
+# ☰ sits in the page header, which scrolls WITH the page: a page that find_text left several screens
+# down (Device information, scrolled to its numbering row) needs more than one scroll_top before ☰ is
+# on screen again. A single scroll_top used to leave it there: go_home's `|| true` hid that, and the
+# next go_section died "menu did not open" over a Device information dump.
 open_menu() {
   system_prompt_up && { enter_system_pin || true; }
-  local b i; for i in 1 2 3 4 5; do b="$(bounds_of "☰")"; [[ -n "$b" ]] && break; [[ $i -eq 2 ]] && scroll_top; sleep 1.5; done
-  [[ -n "$b" ]] || return 1; tap_bounds "$b"; sleep 1.2; has_text "Where to?"
+  local b i; for i in 1 2 3 4 5 6 7 8; do
+    b="$(bounds_of "☰")"; [[ -n "$b" ]] && break
+    if [[ $i -ge 2 ]]; then scroll_top; else sleep 1.5; fi
+  done
+  [[ -n "$b" ]] || return 1; tap_bounds "$b"; sleep 1.2
+  has_text "Where to?" || { sleep 1.5; has_text "Where to?"; }
 }
 go_section() { # go_section "Wallet" | "Security" | "Display &amp; auto-lock" | "Device information" | "Coming next"
   local b; b="$(bounds_of "Back to Security")"; [[ -n "$b" ]] && { tap_bounds "$b"; sleep 1.2; }
@@ -291,7 +326,7 @@ type_words() {
   [[ ${#K[@]} -ge 26 ]] || die "restore keyboard not fully visible (${#K[@]} keys)"
   for w in "${WORDS[@]}"; do
     # shellcheck disable=SC2086
-    for (( i = 0; i < ${#w}; i++ )); do "$A" shell input tap ${K[${w:$i:1}]} </dev/null; sleep 0.25; done
+    for (( i = 0; i < ${#w}; i++ )); do adb_input tap ${K[${w:$i:1}]}; sleep 0.25; done
     sleep 0.6; tap_text "$w"; sleep 0.5
   done
 }
