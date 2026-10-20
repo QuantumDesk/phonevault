@@ -11,7 +11,7 @@ cleanup() {
   [[ -n "$CLIENT_PID" ]] && { kill "$CLIENT_PID" 2>/dev/null || true; }
   "$A" start-server >/dev/null 2>&1 || true
   [[ -n "${WORK:-}" ]] && rm -rf "$WORK"
-  [[ $rc -eq 0 ]] || echo "FAIL: step '$STEP' aborted (exit $rc); host client output in $OUT" >&2
+  [[ $rc -eq 0 ]] || { echo "FAIL: step '$STEP' aborted (exit $rc); host client output in $OUT" >&2; abort_reason; }
 }
 trap cleanup EXIT
 step() { STEP="$*"; echo "== $*"; }
@@ -34,10 +34,10 @@ leave_outcome() {
 start_client() {
   local name="$1"; shift
   usb_reset; unlock_if_locked; go_home
-  "$A" kill-server; sleep 1
+  "$A" kill-server >/dev/null 2>&1 || true; sleep 1
   "$PY" "$CLIENT" "$@" > "$OUT/$name.out" 2>&1 &
   CLIENT_PID=$!
-  sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12; unlock_if_locked
+  sleep 6; "$A" start-server >/dev/null 2>&1 || true; wait_adb 12; unlock_if_locked
 }
 
 # wait_screen <title>: the request's screen appears (a PIN prompt for the seed key is answered)
