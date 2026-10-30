@@ -244,6 +244,7 @@ fn policy_for(info: &chain::ChainInfo, release: bool) -> Policy {
         package: app.packages[0].name.clone(),
         release_signers: if release { app.signature_digests.clone() } else { vec![] },
         development_signers: if release { vec![] } else { app.signature_digests.clone() },
+        beta_signers: vec![],
         avb_keys: vec![rot.verified_boot_key.clone()],
         min_os_patch_level: 201_801,
     }
@@ -693,6 +694,7 @@ mod synthetic {
             package: "dev.phonevault.signer".into(),
             release_signers: vec![vec![0xab; 32]],
             development_signers: vec![vec![0xde; 32]],
+            beta_signers: vec![],
             avb_keys: vec![vec![0xcd; 32]],
             min_os_patch_level: 202_501,
         }
@@ -879,4 +881,28 @@ fn developer_mode_turned_off_mid_check_is_not_undone() {
     .unwrap();
     assert!(allow_dev);
     assert_ne!(epoch, STATE.lock().unwrap().epoch, "the in-flight check's verdict will not be cached");
+}
+
+#[test]
+fn beta_signed_unlocked_phone_needs_dev_mode_and_is_named_beta() {
+    // Public-beta phones: beta-key app, unlocked bootloader. Never GENUINE; FAIL until the user
+    // confirms on this Mac that they flashed it; then DEVELOPMENT with the beta headline.
+    let mut info = chain::verify(&pem_chain(BLUELINE_SB), &roots(), NOW).unwrap();
+    info.leaf_p256_point = Some(vec![4u8; 65]);
+    let challenge = b"challenge".to_vec();
+    let mut p = policy_for(&info, false);
+    p.beta_signers = std::mem::take(&mut p.development_signers);
+    let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    assert_eq!(a.verdict, Verdict::Fail, "{a:?}");
+    assert!(a.problems.iter().any(|x| x.contains("public beta")), "{:?}", a.problems);
+    let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
+    assert_eq!(a.verdict, Verdict::Development, "{a:?}");
+    assert_eq!(a.headline, policy::BETA_HEADLINE);
+    assert_eq!(a.details.unwrap().app_signer_kind, "beta");
+    // the built-in policy pins the beta key and keeps it apart from release and development
+    let b = Policy::builtin();
+    assert_eq!(b.beta_signers.len(), 1);
+    assert!(b.release_signers.is_empty());
+    let same = "ab".repeat(32);
+    assert!(Policy::parse(&format!(r#"{{"_comment":[],"package":"x","releaseSignerSha256":[],"developmentSignerSha256":["{same}"],"betaSignerSha256":["{same}"],"avbKeySha256":[],"minOsPatchLevel":202501}}"#)).is_err());
 }

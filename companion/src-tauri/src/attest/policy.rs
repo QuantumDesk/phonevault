@@ -14,6 +14,9 @@ pub struct Policy {
     pub package: String,
     pub release_signers: Vec<Vec<u8>>,
     pub development_signers: Vec<Vec<u8>>,
+    /// Public-beta app key: accepted like the development key (only with the typed "I flashed
+    /// this phone" confirmation on this Mac), never better than DEVELOPMENT, but named as a beta.
+    pub beta_signers: Vec<Vec<u8>>,
     pub avb_keys: Vec<Vec<u8>>,
     pub min_os_patch_level: u64,
 }
@@ -26,6 +29,8 @@ struct PolicyFile {
     package: String,
     release_signer_sha256: Vec<String>,
     development_signer_sha256: Vec<String>,
+    #[serde(default)]
+    beta_signer_sha256: Vec<String>,
     avb_key_sha256: Vec<String>,
     min_os_patch_level: u64,
 }
@@ -54,11 +59,15 @@ impl Policy {
             package: f.package,
             release_signers: digests(&f.release_signer_sha256, "releaseSignerSha256")?,
             development_signers: digests(&f.development_signer_sha256, "developmentSignerSha256")?,
+            beta_signers: digests(&f.beta_signer_sha256, "betaSignerSha256")?,
             avb_keys: digests(&f.avb_key_sha256, "avbKeySha256")?,
             min_os_patch_level: f.min_os_patch_level,
         };
         if p.release_signers.iter().any(|r| p.development_signers.contains(r)) {
             return Err("attestation policy: a signer cannot be both release and development".into());
+        }
+        if p.beta_signers.iter().any(|b| p.release_signers.contains(b) || p.development_signers.contains(b)) {
+            return Err("attestation policy: a beta signer cannot also be a release or development signer".into());
         }
         Ok(p)
     }
@@ -96,7 +105,7 @@ pub struct Details {
     pub app_package: Option<String>,
     pub app_version: Option<u64>,
     pub app_signer: Option<String>,
-    /// "release" | "development" | "unknown"
+    /// "release" | "beta" | "development" | "unknown"
     pub app_signer_kind: String,
     pub root: String,
     pub provisioning: String,
@@ -129,6 +138,8 @@ pub struct Evidence<'a> {
 }
 
 pub const UNLOCKED_HEADLINE: &str = "Development firmware: bootloader unlocked, not safe for real funds";
+pub const BETA_HEADLINE: &str = "Beta build: bootloader unlocked, not production. Small amounts only";
+pub const BETA_CAUTION: &str = "The Phone Vault app is the public beta (beta key), confirmed on this Mac as a phone you flashed yourself.";
 pub const UNLOCKED_PROBLEM: &str = "The phone's bootloader is unlocked, so its software can be replaced without anyone noticing. Accept it only for a phone you flashed yourself: Settings → Device → Developer mode.";
 
 pub fn fail(problem: impl Into<String>) -> Assessment {
@@ -262,6 +273,13 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                 d.app_signer = Some(hex::encode(digest));
                 if policy.release_signers.contains(digest) {
                     d.app_signer_kind = "release".into();
+                } else if policy.beta_signers.contains(digest) {
+                    d.app_signer_kind = "beta".into();
+                    if allow_dev {
+                        cautions.push(BETA_CAUTION.into());
+                    } else {
+                        problems.push("This phone runs the Phone Vault public beta. Beta phones have an unlocked bootloader, so this Mac accepts one only after you confirm you flashed it yourself: Settings → Device → Developer mode.".into());
+                    }
                 } else if policy.development_signers.contains(digest) {
                     d.app_signer_kind = "development".into();
                     if allow_dev {
@@ -329,9 +347,16 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
         (Verdict::Fail, "Not genuine: this phone failed the genuine check".to_string())
     } else if !cautions.is_empty() {
         let unlocked = cautions.iter().any(|c| c == UNLOCKED_HEADLINE);
+        let beta = cautions.iter().any(|c| c == BETA_CAUTION);
         (
             Verdict::Development,
-            if unlocked { UNLOCKED_HEADLINE.into() } else { "Development device: not safe for real funds".into() },
+            if beta {
+                BETA_HEADLINE.into()
+            } else if unlocked {
+                UNLOCKED_HEADLINE.into()
+            } else {
+                "Development device: not safe for real funds".into()
+            },
         )
     } else {
         (

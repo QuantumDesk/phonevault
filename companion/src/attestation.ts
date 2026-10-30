@@ -76,13 +76,13 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
   if (devMode) {
     devControls = [
       h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "att-badge att-dev" }, "On")),
-      h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones with an unlocked bootloader or the development-signed app are accepted as Development (never Genuine). Turn it off for real funds."),
+      h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones with an unlocked bootloader, the public beta, or the development-signed app are accepted as Development or Beta (never Genuine). Turn it off for real funds."),
       h("div", { class: "row gap" }, h("button", { disabled: devForm.busy, onclick: () => change(false, null) }, "Turn off Developer mode")),
     ];
   } else if (!devForm.open) {
     devControls = [
       h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "muted" }, "Off")),
-      h("p", { class: "muted small" }, "Off: only locked Phone Vault firmware with the release-signed app passes. Developer mode is only for a phone you flashed yourself."),
+      h("p", { class: "muted small" }, "Off: only locked Phone Vault firmware with the release-signed app passes. Developer mode is only for a phone you flashed yourself, including public beta phones."),
       h("div", { class: "row gap" }, h("button", { class: "ghost", onclick: () => { devForm.open = true; devForm.error = null; rerender(); } }, "Developer mode…")),
     ];
   } else {
