@@ -25,5 +25,13 @@ pv_tmp="${TMPDIR:-/tmp}"
 PV_LOG_DIR="${PV_LOG_DIR:-${pv_tmp%/}/phonevault}"
 unset pv_tmp
 
+# macOS: adb's default libusb backend (platform-tools 35) resets the phone's USB port every time
+# the server starts (the phone logs DISCONNECTED on each `adb start-server`). The scripts restart the
+# server around every USB exchange, so the reset knocked a live accessory session off the bus
+# (reconnecttest: "[Errno 5] Input/Output Error" for a request held behind the lock) and once left
+# the server without the device. The native IOKit backend does not reset it. Linux hosts are
+# unaffected. An explicit ADB_LIBUSB from the caller wins.
+if [[ "$(uname -s)" == Darwin ]]; then export ADB_LIBUSB="${ADB_LIBUSB:-0}"; fi
+
 mkdir -p "$PV_STATE_DIR" "$PV_LOG_DIR" "$(dirname "$PAIRING")"
 chmod 700 "$PV_STATE_DIR" "$PV_LOG_DIR"

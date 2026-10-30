@@ -57,7 +57,10 @@ verdict "$WORK/one" 10 --dev-mode
 pass "verifier: DEVELOPMENT with Developer mode (chain to Google root, challenge, binding, app, unlocked bootloader)"
 verdict "$WORK/one" 20
 pass "verifier: FAIL without Developer mode (development-signed app)"
-expect_not "Review"
+# A review page's title is a short "Review transfer" / "Review message" / … ; Home's own line
+# "Review every request here. Your keys stay on this phone." is not one (a prefix match on "Review"
+# failed on it).
+if uidump | grep -qE 'text="Review [A-Za-z -]{1,40}"'; then die "a review screen appeared: $(texts 8)"; fi
 pass "no review screen: the wallet key was not used"
 
 echo "== 2. replayed challenge"
@@ -75,7 +78,15 @@ mkdir -p "$WORK/three"
 "$PY" "$CLIENT" --pairing-file "$PAIRING" attest --save "$WORK/three" > "$WORK/three.log" 2>&1 &
 pid=$!
 sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12
-seen=0; for _ in $(seq 1 10); do has_text "INCOMING REQUEST" && { seen=1; break; }; sleep 2; done
+# Credential mode: the locked page opens the system PIN prompt at once. Where that prompt is drawn
+# readable (Pixel 6a) uiautomator sees only the prompt, not the page under it: dismiss it once
+# (Back = cancel; the locked page and its Unlock button stay) to read what the page shows.
+seen=0; dismissed=0
+for _ in $(seq 1 10); do
+  has_text "INCOMING REQUEST" && { seen=1; break; }
+  if [[ $dismissed -eq 0 ]] && system_prompt_up; then "$A" shell input keyevent KEYCODE_BACK </dev/null; dismissed=1; sleep 1.5; continue; fi
+  sleep 2
+done
 [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null; die "locked phone did not show the held request: $(texts)"; }
 uidump | grep -q "prove it is genuine" || { kill $pid 2>/dev/null; die "held request is not described as a device check: $(texts 10)"; }
 kill -0 $pid 2>/dev/null || die "the host got an answer from a LOCKED phone"

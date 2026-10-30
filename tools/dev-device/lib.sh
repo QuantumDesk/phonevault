@@ -103,7 +103,23 @@ require_words() {
 # adb drops for a few seconds when the device owner (re)applies USB restrictions or the gadget
 # is reset for an accessory switch; wait for it instead of dying on the first failed command.
 # "device" from get-state comes a moment before the shell answers: wait for both.
-wait_adb() { local i; for i in $(seq 1 "${1:-24}"); do "$A" get-state >/dev/null 2>&1 && "$A" shell true >/dev/null 2>&1 </dev/null && return 0; sleep 5; done; die "adb did not come back"; }
+# A macOS adb server sometimes never sees the phone again after a quick re-enumeration (the phone
+# logged DISCONNECTED → CONNECTED within a second; `adb devices` stayed empty for minutes until the
+# server was restarted; "offline" needs the same): after 30 s without a working device, restart the
+# server once. The scripts already stop and start it around every USB exchange, so this changes
+# nothing the phone sees.
+wait_adb() {
+  local i n="${1:-24}" restarted=0
+  for i in $(seq 1 "$n"); do
+    "$A" get-state >/dev/null 2>&1 && "$A" shell true >/dev/null 2>&1 </dev/null && return 0
+    if [[ $restarted -eq 0 && $i -ge 6 && $i -lt $n ]]; then
+      echo "  (adb server lost the device or shows it offline; restarting the server)" >&2
+      "$A" kill-server >/dev/null 2>&1 || true; sleep 1; "$A" start-server >/dev/null 2>&1 || true; restarted=1
+    fi
+    sleep 5
+  done
+  die "adb did not come back"
+}
 # Every tap and swipe goes through here. A bare `adb shell input ...` under set -e ended the script
 # silently when adb dropped for a moment (the gadget settling after a USB switch): no FAIL line,
 # only btctest's "step '...' aborted (exit 1)". An adb that never reached the phone (device not
@@ -226,6 +242,13 @@ system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]] || uidump | gr
 enter_system_pin() {
   local i; for i in $(seq 1 12); do system_prompt_up && break; sleep 1; done
   system_prompt_up || return 1
+  # The prompt can sit on a sleeping screen: the vault's idle lock and the 1-minute screen timeout
+  # fire together, and the gate opens the prompt as the display goes off. Android drops every key
+  # sent to it then (InputDispatcher: "Dropping KEY event targeting BiometricPrompt … DROP_INPUT"),
+  # so the PIN was lost and the prompt stayed up (Pixel 6a, reconnecttest/ensure_account1). Wake
+  # the display first (a no-op when it is on) and let the prompt settle before keying the PIN.
+  "$A" shell input keyevent KEYCODE_WAKEUP </dev/null; sleep 1.5
+  system_prompt_up || return 1
   "$A" shell input text "$PV_TEST_PIN" </dev/null; "$A" shell input keyevent KEYCODE_ENTER </dev/null; sleep 7
 }
 locked_now() { system_prompt_up || has_text LOCKED || has_text "Phone Vault is locked"; }
@@ -245,7 +268,9 @@ unlock_if_locked() {
   # spends the vault's idle-lock budget (see go_home).
   local i; for i in 1 2 3 4; do system_prompt_up && break; uidump | grep -q -e 'text="Phone Vault is locked' -e 'text="LOCKED' && break; sleep 1; done
   if system_prompt_up || has_text "Phone Vault is locked"; then system_prompt_up || tap_text "Unlock"; enter_system_pin || die "system PIN prompt did not appear"
-  elif has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED; fi
+  elif has_text LOCKED; then clear_entry; tap_digits "$PV_TEST_PIN"; sleep 6; expect_not LOCKED
+  else nudge  # not locked: the probes above touched nothing for up to ~25 s (6a dumps take ~2 s)
+  fi
 }
 # Navigation is a ☰ header menu (0.3.x): open it, then pick a section. Screens without the menu
 # (PIN gate, sensitive flows, approvals) are left alone; callers assert what they expect.
