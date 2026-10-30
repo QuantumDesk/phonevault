@@ -40,6 +40,7 @@ follow-up once a beta has booted.
 | `beta1` | rung b4d-1 | **the first beta**: b4d-1 as a user build (below) |
 | `beta1-novoice` | beta beta1 | opt-in experiment: beta1 + `config_voice_capable`, `config_sms_capable`, `config_enable_emergency_call_while_sim_locked` = false (the release overlay verbatim). Not built yet |
 | `beta2` | rung b4d-1 | **beta1 + the USB enumeration fix** ([below](#beta2-usb-enumeration-without-adb)): beta1's files (version/channel `beta2`) + `config_usbChargingFunctionsAccessory=true` (frameworks-base-a17 0006). beta1 booted to SET PIN but never appeared on the Mac's USB |
+| `beta3` | rung b4d-1 | **beta2 + the current signer app** ([below](#beta3-beta2--the-stale-session-app)): beta2's files (version/channel `beta3`); the app now reopens a still-attached accessory after a lock and on start, so a returning host finds a live session without a replug |
 
 ## What beta1 carries
 
@@ -415,3 +416,99 @@ composed (its `usb_limit_accessory_*` paths); a Mac port supplies less anyway. (
 opens the idle accessory's bulk endpoints without the handshake talks to nothing; the endpoint
 exists only as the AOA transport itself. (5) Rebuilding the framework changes framework-res
 (new public-internal resource): if the build misbehaves, compare with beta1's target files.
+
+## beta3: beta2 + the stale-session app
+
+**What changed vs beta2:** only the signer app and the beta's name. `release-bluejay/beta3` is
+beta2's directory (same `BASE` rung b4d-1, same `config.xml` with
+`config_usbChargingFunctionsAccessory=true`, same board file, same expectations) with
+`PHONEVAULT_VERSION := 0.1.0-beta3`, `ro.phonevault.channel=beta3` and the beta name in comments
+and error texts. The image is otherwise built from the same tree state (kernel prebuilts, upstream
+diffs, frameworks-base-a17 0003..0006, recovery hardening) as beta2.
+
+The app is a fresh `gradle :app:assembleRelease` of main at the merge of the USB stale-session
+recovery (`354afa3`, merged in `f07009f`), signed with the beta app key by `sign-beta-apk.sh`
+exactly as beta1's: after a lock, on start and after unlock it reopens the still-attached
+accessory (only the filtered Phone Vault host, only with the permission the attach granted, only
+while `USB_STATE` reports the accessory function configured), and closes the session on
+`USB_ACCESSORY_DETACHED`. With beta2's app a host that came back after a lock found nothing
+reading and had to fall back to START + port reset (or a replug); with beta3's the companion's
+zero-length probe finds a live session at once. The release-only paths are unchanged
+(`versionName` is still 0.3.0, `versionCode` 3: the version was not bumped for this fix; the
+classes.dex differs from beta1/beta2's and carries the reopen path, the manifest is
+byte-identical).
+
+### beta3 build (2026-10-30)
+
+Built on the build host into `/build/out-beta3` as beta2 (`/build/pv-ladder/build-beta3.sh`:
+`sign-beta-apk.sh`, `sync-beta.sh beta3`, `build-beta.sh beta3` with installclean, as aipg under
+`/root/pv-build.lock`; 32 min, the out dir was last built as beta2). The app was built as root with
+the host's Gradle 8.10.2, `/root/android-sdk` (platform 35, build-tools 35.0.0) and the tree's
+JDK 21 from a `git archive` of the beta3 commit (unsigned APK sha256 `0ff4f7c1…dcc9`).
+
+All gates passed: production, release source (`--bluejay-beta beta3`, voice/SMS-capable warnings
+as beta1/beta2), overrides (111 absent, 58 APKs), check-build (70 modules removed, 444 `.ko`,
+load lists/modules.dep consistent, 123 expectations incl. beta2's USB allowlist and the `beta3`
+channel), patch provenance (2 pinned GrapheneOS imports, 61 project patches; run on the repo copy
+the build used), cmdline, AVB (beta key `7d4a65ae…fd4`, flags 0, rollback index 2026101300 =
+beta2's: not a production release, `release-version.mk` unchanged), app (cert `934c4f78…032f`,
+release variant, APK `43c6eced…27e7`), USB (`config_usbChargingFunctionsAccessory` true in the
+product RRO).
+`user`, `CP2A.260605.016`, `test-keys`, incremental/date `1793371783`, SPL 2026-10-01,
+Phone Vault 0.1.0-beta3; app `dev.phonevault.signer` 0.3.0 (code 3) release, APK sha256
+`43c6ecedf5938b3ac5facf7f933144ca6a08fe4b1cacf23fe54021b0458727e7`.
+
+```
+5c30df4be82329452e6d3026c23b6b2928c68f027dd1e6f6a55b2a8029f8287a  images/boot.img
+fc770312ecd50405f3fc47601c759193063750c1edbf53450104d036a5149315  images/vendor_boot.img
+8d5687a541e9b88453b89c9e42d537fd784444ffc40feb099de2c4f062849287  images/dtbo.img
+4a5a0bb47984d05cc77fdd868b14fdfc8aab158bfe4a356980503765fcc07e9b  images/pvmfw.img
+92dc227abc400954ec7f5ed8d95c95dd54280e4a30d07b89780dd8c2c1de86c1  images/vbmeta.img
+6d904e4f2ee954e21a26c5058de5f5d4de9ce2e2e52d3002a8c3d32325b5eb78  images/vbmeta_system.img
+3e01e6eec861bb1508f8e954e6c009d9d9d4fe412a19ba5c9ad130ffe2e023b4  images/vbmeta_vendor.img
+9143a6c69e652bce2f0f73446e9b4190b02705963eb3dc1c6a4a384e25f08b10  super.img
+654e604b46980ab4753e6e016dd08870871a44a1a5e63632fdccaea470c2a451  images/android-info.txt
+72cd2a860f168be500262f276614f9aa25776f10f519eca105f29567f0f76a75  flash-beta3-mac.sh
+967036e65bb5627eeb63386f2fa335d434de89bcb65c59fc1e47a3725bba9e2d  manifest.json
+793005daf9a1c16fd5a06f5ba3afac0c2af0fbcfe584ed6b8441bc8e9fccc3c2  vault_bluejay-target_files-beta3.zip
+d2c1df35cdd4f422efacbed8370aea5880c6b26692da8d8fbe29d4a46a049e85  vault_bluejay-img-beta3.zip
+```
+
+Not flashed yet. Flash and rollback as beta1 (`rsync … /build/out-beta3/ out-beta3/`,
+`./flash-beta3-mac.sh --check`, `./flash-beta3-mac.sh`). The app key is unchanged, but the flash
+script always wipes anyway.
+
+### Verify on hardware without adb
+
+1. Flash (`flash-beta3-mac.sh`), first boot to SET PIN, set the PIN.
+2. Enumeration, as beta2: `system_profiler SPUSBDataType` shows the Google device `0x18d1` /
+   **`0x2d00`**, one interface (`ioreg -p IOUSB -l -w0`: class 255/255/0), no MTP/PTP volume, no
+   network/serial/MIDI/audio device; `adb devices` lists nothing.
+3. Start the companion (from main): it detects the phone and pairs; during the first handshake
+   the phone leaves the bus for about a second and returns as **0x2d00** (0x2d01 must never
+   appear). Signing works.
+4. Unplug/replug: 0x2d00 again within seconds; the companion pairs again.
+5. Reconnect checks (beta2's step 5; **the beta3 difference**), no replug anywhere:
+   - after a request, let the vault lock (or press power), unlock, ask again from the companion:
+     answered **at once**, and the companion log has **no** "attaching it afresh" line (beta2
+     needed START + port reset here; beta3's app has already reopened the accessory, so the
+     zero-length probe finds a live session);
+   - ask while the vault is still locked: the request is held behind the PIN gate and never
+     answered while locked; unlock, then ask again if the companion gave up: answered at once;
+   - quit and restart the companion, ask again: answered at once (the probe uses the live session;
+     no handshake, no re-enumeration, `system_profiler` still shows 0x2d00);
+   - repeat the lock/unlock cycle several times (power button and timeout lock) with requests in
+     between: each answered without a replug. If one ever needs the fallback, the companion
+     logs "attaching it afresh" and answers within ~10 s (beta2's path, still present); never an
+     endless wait, a failure says "unplug and replug".
+6. Fail signs: no Google device at all, a second interface, any PID other than 0x2d00, a request
+   that hangs after a lock/unlock cycle (the reopen path not working: compare with beta2's
+   behaviour, where the companion's fallback should still recover it): stop and report.
+
+**Risks:** (1) the reopen path is new on a user build and on hardware without adb: if it
+misbehaves (e.g. it holds `/dev/usb_accessory` open at a moment the framework wants to START), the
+symptom is a host that needs the port-reset fallback or a replug, not a boot problem; beta2 is
+the comparison image. (2) The app's version was not bumped (0.3.0 / code 3, same as beta1/beta2):
+`manifest.json`'s `apk_sha256` and the image's `ro.phonevault.version` tell the builds apart, not
+the app version. (3) Same as beta2 otherwise: platform on Lineage test keys, BETA-TEST AVB/app
+keys, unlocked bootloader, voice/SMS-capable left at default (keyguard Emergency button).
