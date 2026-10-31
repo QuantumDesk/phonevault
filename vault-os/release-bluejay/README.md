@@ -41,6 +41,7 @@ follow-up once a beta has booted.
 | `beta1-novoice` | beta beta1 | opt-in experiment: beta1 + `config_voice_capable`, `config_sms_capable`, `config_enable_emergency_call_while_sim_locked` = false (the release overlay verbatim). Not built yet |
 | `beta2` | rung b4d-1 | **beta1 + the USB enumeration fix** ([below](#beta2-usb-enumeration-without-adb)): beta1's files (version/channel `beta2`) + `config_usbChargingFunctionsAccessory=true` (frameworks-base-a17 0006). beta1 booted to SET PIN but never appeared on the Mac's USB |
 | `beta3` | rung b4d-1 | **beta2 + the current signer app** ([below](#beta3-beta2--the-stale-session-app)): beta2's files (version/channel `beta3`); the app now reopens a still-attached accessory after a lock and on start, so a returning host finds a live session without a replug |
+| `beta4` | rung b4d-1 | **beta3 + the 6a-fix app** ([below](#beta4-beta3--the-6a-fix-app)): beta3's files (version/channel `beta4`), app 0.3.1 (code 4) with the held request on the credential locked page and the PIN-cancel wedge fix; AVB rollback index raised to 2026103000 |
 
 ## What beta1 carries
 
@@ -512,3 +513,101 @@ the comparison image. (2) The app's version was not bumped (0.3.0 / code 3, same
 `manifest.json`'s `apk_sha256` and the image's `ro.phonevault.version` tell the builds apart, not
 the app version. (3) Same as beta2 otherwise: platform on Lineage test keys, BETA-TEST AVB/app
 keys, unlocked bootloader, voice/SMS-capable left at default (keyguard Emergency button).
+
+## beta4: beta3 + the 6a-fix app
+
+**What changed vs beta3:** the signer app, the beta's name and the AVB rollback index.
+`release-bluejay/beta4` is beta3's directory (same `BASE` rung b4d-1, same `config.xml`, board
+file and expectations) with `PHONEVAULT_VERSION := 0.1.0-beta4`, `ro.phonevault.channel=beta4` and
+the beta name in comments and error texts. The image is otherwise built from the same tree state
+(kernel prebuilts, upstream diffs, frameworks-base-a17 0003..0006, recovery hardening) as beta3.
+
+- **App 0.3.1 (versionCode 4)**, a fresh `gradle :app:assembleRelease` of main at the merge of the
+  Pixel 6a fixes (`304cf55`, app change `e0e2ac2`) plus the version bump, signed with the beta app
+  key by `sign-beta-apk.sh` as before (same cert; builds are now also told apart by version):
+  - a request held while the credential **locked page** is up is shown there ("INCOMING REQUEST"
+    card; before, only the in-app PIN screen showed it) and is **kept across a relock** while
+    still locked (beta3 dropped it on screen-off and the host waited for its timeout); a lock
+    from unlocked with a request not yet dispatched answers it with an error ("The phone locked
+    before this request was reviewed. Nothing was signed.") as the session's last frame;
+  - a **dismissed PIN prompt** (Back/error/timeout) on a sensitive action releases the flow, so
+    the next sensitive action asks again (beta3: every later sensitive action did nothing until
+    the next lock); a PIN prompt that outlived its session unlocks the current locked page.
+- **USB re-attach race**: host-side only (`ee89e50`, companion `aoa.rs` and `tools/aoa_client.py`:
+  wait 7 s for the phone's own re-attach after START, settle 1.2 s before opening, retry a
+  vanished open once). Nothing in the image changes for it; use the companion from main.
+- **AVB rollback index 2026103000** (`release-version.mk`, was 2026101300 for beta1..beta3), on
+  vbmeta and the three chained partitions. Still only enforced once a phone is relocked to the
+  beta key; an unlocked phone can go back to beta3 by reflashing.
+
+### beta4 build (2026-10-30)
+
+Built on the build host into `/build/out-beta4` as beta3 (`/build/pv-ladder/build-beta4.sh`:
+`sign-beta-apk.sh`, `sync-beta.sh beta4`, `build-beta.sh beta4` with installclean, as aipg under
+`/root/pv-build.lock`; 32 min). The app was built as root in `/root/pv-beta4-app` with the host's
+Gradle 8.10.2, `/root/android-sdk` and the tree's JDK 21 from a `git archive` of the beta4 config
+commit (unsigned APK sha256 `0003d0d2…b1f2`); the repo copy the build used is
+`/build/pv-beta4/repo`.
+
+All gates passed: production, release source (`--bluejay-beta beta4`, voice/SMS-capable warnings
+as before), overrides (111 absent, 58 APKs), check-build (70 modules removed, 444 `.ko`, load
+lists/modules.dep consistent, 123 expectations incl. the `beta4` channel), patch provenance
+(2 pinned GrapheneOS imports, 61 project patches; on the repo copy), cmdline, AVB (beta key
+`7d4a65ae…fd4`, flags 0, rollback index **2026103000**), app (cert `934c4f78…032f`, release
+variant, 0.3.1), USB (`config_usbChargingFunctionsAccessory` true in the product RRO). The image's
+APK is `dev.phonevault.signer` versionCode 4 / versionName 0.3.1 and its dex carries the new
+locked-refusal text (absent from beta3's).
+`user`, `CP2A.260605.016`, `test-keys`, incremental/date `1793408946`, SPL 2026-10-01,
+Phone Vault 0.1.0-beta4; APK sha256
+`7f07d5c060b8346caec31d4624551af4c0043deb93e0140e29cf11a36bec03fd`.
+
+```
+08ce393f63825de6f5939f688e102773e7ac925e0786fc5dc22cf9243a13ac17  images/boot.img
+21571bc956a6f8a61ee121fad292b47328c28ffb8b85362288416632ee773e94  images/vendor_boot.img
+8d5687a541e9b88453b89c9e42d537fd784444ffc40feb099de2c4f062849287  images/dtbo.img
+4a5a0bb47984d05cc77fdd868b14fdfc8aab158bfe4a356980503765fcc07e9b  images/pvmfw.img
+bccce089283a89c4fd81da574db5b8e43981e725f4a03a73feb75f83467d2cd7  images/vbmeta.img
+58dcfe4a979b42e91ee0006fa0989cc6489b5281c83e2daaa449eae55d5bd442  images/vbmeta_system.img
+f7b3805a8b538434364cb6a56fb0b076706ec18d501c7e5c171ecb5086997ddd  images/vbmeta_vendor.img
+0cfda121bc35a4872a9f5f46f578d794bf9850151f7d79644c8e3844ac8585e3  super.img
+654e604b46980ab4753e6e016dd08870871a44a1a5e63632fdccaea470c2a451  images/android-info.txt
+72cd2a860f168be500262f276614f9aa25776f10f519eca105f29567f0f76a75  flash-beta4-mac.sh
+e26f04427d7fde99235136c285f2f0482e751894e326f3bd9880ead4afb990be  manifest.json
+b799b157b844bd9358c5812cbb11760d4577b8d11264669cf93e098de61e132b  vault_bluejay-target_files-beta4.zip
+72fbf3842c52b2921111db301b1136fda87dbb77c7cb7ad057d5f5c7c91a24e0  vault_bluejay-img-beta4.zip
+```
+
+Copied to the Mac (`~/pv-bluejay/out-beta4/`, without the two zips): `shasum -a 256 -c` on
+`SHA256SUMS` minus the zip lines, 37/37 OK. Not flashed yet. Flash and rollback as beta1
+(`./flash-beta4-mac.sh --check`, `./flash-beta4-mac.sh`; the flash script always wipes).
+
+### Verify on hardware without adb
+
+1. Flash (`flash-beta4-mac.sh`), first boot to SET PIN, set the PIN.
+2. Enumeration and pairing, as beta3 steps 2-4: `0x18d1`/**`0x2d00`**, one interface (class
+   255/255/0), no MTP/PTP/network/serial device, `adb devices` empty; the companion (from main)
+   pairs, 0x2d01 never appears; unplug/replug pairs again.
+3. Reconnect checks, as beta3 step 5 (lock/unlock, companion restart, repeated cycles; each
+   answered without a replug). With the companion from main a fallback START is followed by the
+   phone's own re-attach and **no** second drop (an older companion could reset the port just as
+   the phone came back and fail on a vanished device).
+4. **Held request on the locked page (beta4):** lock the vault, send a request from the
+   companion: the locked page shows an **INCOMING REQUEST** card at once. Press power (screen off)
+   and wake again while still locked: the card is still there and the companion is still
+   waiting. Enter the PIN: the request is reviewed and answered.
+5. **Lock before review (beta4):** unlock, send a request and lock immediately (before it is
+   reviewed): the companion gets "The phone locked before this request was reviewed. Nothing
+   was signed." promptly, not a timeout.
+6. **PIN-cancel wedge (beta4):** with USB unplugged, Security → Show recovery phrase, dismiss the
+   PIN prompt with Back; tap it again: a fresh PIN prompt appears (twice); then enter the PIN:
+   the phrase screen opens. Other sensitive actions (☰ → Wallet, "Continue · verify PIN") still
+   prompt after a dismissal.
+7. Fail signs: as beta3 step 6, plus a held request that disappears on a screen-off while locked,
+   or a sensitive action that does nothing after a dismissed prompt: stop and report.
+
+**Risks:** (1) the locked-page rebuild and the kept gate session are new on a user build; if they
+misbehave the symptom is a request not shown or not answered on the lock screen, not a boot
+problem; beta3 is the comparison image. (2) The rollback index rose: harmless while unlocked,
+but a phone ever relocked on beta4 can no longer take beta1..beta3. (3) Same as beta3 otherwise:
+platform on Lineage test keys, BETA-TEST AVB/app keys, unlocked bootloader, voice/SMS-capable left
+at default (keyguard Emergency button).
