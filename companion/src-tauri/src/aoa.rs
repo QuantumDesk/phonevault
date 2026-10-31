@@ -150,9 +150,16 @@ const LIVE_PROBE: Duration = Duration::from_millis(2500);
 /// open its session: USB_ACCESSORY_ATTACHED starts or wakes it, and it reads at once, even
 /// behind the PIN gate.
 const FRESH_ATTACH: Duration = Duration::from_secs(20);
-/// After START, how long a phone whose functions change (an idle beta2 phone: charging
-/// composition → accessory) may take to re-enumerate by itself before its port is reset.
-const SELF_REENUMERATION: Duration = Duration::from_secs(4);
+/// After START, how long a phone may take to re-enumerate by itself before its port is reset. An
+/// idle beta2 phone changes functions (charging composition → accessory); a Pixel 6a whose
+/// accessory session ended re-attaches by itself too, about 4.0 s after START: a 4 s window reset
+/// its port just as it came back, so it dropped and re-attached a second time under the session
+/// just opened (Errno 19, reconnecttest step 6, 3 of 3 runs). Still well inside the framework's
+/// 10 s START timeout (MSG_ACCESSORY_MODE_ENTER_TIMEOUT), which the reset needs to be pending.
+const SELF_REENUMERATION: Duration = Duration::from_secs(7);
+/// After a re-enumeration or a port reset the phone may come and go once more: it is opened only
+/// after it has stayed at one address for this long.
+const SETTLE: Duration = Duration::from_millis(1200);
 /// How long the phone may be off the bus (re-enumerating) before it counts as gone.
 const BACK_ON_BUS: Duration = Duration::from_secs(12);
 
@@ -218,8 +225,9 @@ fn transient(e: &AoaError) -> bool {
 fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
     let mut fresh = false;
     let mut recovered = false;
+    let mut vanished = false;
     loop {
-        let found = the_phone(bus, recovered)?;
+        let found = the_phone(bus, recovered || vanished)?;
         let accessory = if found.accessory {
             found
         } else {
@@ -231,7 +239,15 @@ fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
         match bus.open_reading(&accessory.dev, if fresh { FRESH_ATTACH } else { LIVE_PROBE }) {
             Ok(Some(open)) => return Ok(open),
             Ok(None) => {}
-            Err(e) if transient(&e) => {}
+            Err(e) if transient(&e) => {
+                if !vanished {
+                    // It left the bus under us (still re-enumerating): once, let it settle and
+                    // open it again where it now is, without another START or reset.
+                    vanished = true;
+                    settle(bus)?;
+                    continue;
+                }
+            }
             Err(e) => return Err(e),
         }
         if recovered {
@@ -244,22 +260,49 @@ fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
     }
 }
 
+/// Wait (up to `BACK_ON_BUS`) until one Google device has stayed at the same address, in the same
+/// mode, for `SETTLE`: a phone still re-enumerating is not opened (its handle would die). Not
+/// settled: `connect_with`'s patient scan reports whatever is (or is not) there.
+fn settle<B: Bus>(bus: &B) -> Result<(), AoaError> {
+    let mut last: Option<(Location, bool)> = None;
+    let mut since = Duration::ZERO;
+    for _ in 0..polls(BACK_ON_BUS) {
+        bus.pause(POLL);
+        let seen = bus.scan()?;
+        let now = if seen.len() == 1 { Some((seen[0].at, seen[0].accessory)) } else { None };
+        if now.is_none() || now != last {
+            last = now;
+            since = Duration::ZERO;
+            continue;
+        }
+        since += POLL;
+        if since >= SETTLE {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// Make the phone attach our accessory afresh (a new USB_ACCESSORY_ATTACHED: its app opens a new
 /// session): our identity and START, then, if the phone did not re-enumerate by itself, a port
-/// reset while START is pending (see the section comment).
+/// reset while START is pending (see the section comment). Returns once the phone has settled,
+/// so the next scan finds it where it stays.
 fn reattach<B: Bus>(bus: &B, stale: &Seen<B::Dev>) -> Result<(), AoaError> {
     // A phone that does not answer the AOA requests is reset all the same.
     let _ = bus.handshake(&stale.dev);
+    // Moved: our accessory left its old address (the phone dropped off the bus or came back at a
+    // new address). Only a phone that never moved is reset.
     let moved = wait_for(bus, SELF_REENUMERATION, |seen| {
         (!seen.iter().any(|d| d.accessory && d.at == stale.at)).then_some(())
     })?;
-    if moved.is_some() {
-        return Ok(());
+    if moved.is_none() {
+        if let Err(e) = bus.reset(&stale.dev) {
+            if !transient(&e) {
+                return Err(e);
+            }
+        }
     }
-    match bus.reset(&stale.dev) {
-        Err(e) if !transient(&e) => Err(e),
-        _ => Ok(()),
-    }
+    settle(bus)
 }
 
 /// The libusb `Bus`.
@@ -623,6 +666,32 @@ mod connect_tests {
         idle_is_accessory: bool,
         handshakes: u32,
         resets: u32,
+        /// Pixel 6a: a stale accessory re-attaches by itself this long after START (still listed
+        /// until then, off the bus for 0.4 s, then back at a new address with a reader)
+        self_reattach_after: Option<Duration>,
+        reattach_at: Option<Duration>,
+        /// the phone drops off the bus as the next N opens start (still re-enumerating)
+        vanish_on_open: u32,
+        vanished_opens: u32,
+        clock: Duration,
+        /// the 6a race: a port reset while it was re-attaching by itself
+        reset_while_moving: bool,
+    }
+
+    impl Phone {
+        fn tick(&mut self) {
+            if let Some(at) = self.reattach_at {
+                if self.clock >= at + POLL {
+                    self.reattach_at = None;
+                    self.start_pending = false;
+                    self.mode = Mode::Accessory { reader: self.app_reads };
+                    self.address += 1;
+                }
+            }
+        }
+        fn moving(&self) -> bool {
+            matches!(self.reattach_at, Some(at) if self.clock >= at)
+        }
     }
 
     struct Fake(RefCell<Phone>);
@@ -636,6 +705,12 @@ mod connect_tests {
             idle_is_accessory: mode == Mode::Idle,
             handshakes: 0,
             resets: 0,
+            self_reattach_after: None,
+            reattach_at: None,
+            vanish_on_open: 0,
+            vanished_opens: 0,
+            clock: Duration::ZERO,
+            reset_while_moving: false,
         }))
     }
 
@@ -643,7 +718,11 @@ mod connect_tests {
         type Dev = u8;
         type Open = u8;
         fn scan(&self) -> Result<Vec<Seen<u8>>, AoaError> {
-            let p = self.0.borrow();
+            let mut p = self.0.borrow_mut();
+            p.tick();
+            if p.moving() {
+                return Ok(vec![]);
+            }
             Ok(match p.mode {
                 Mode::Gone => vec![],
                 Mode::Adb => vec![Seen { dev: p.address, accessory: false, at: (1, p.address) }],
@@ -652,6 +731,9 @@ mod connect_tests {
         }
         fn handshake(&self, dev: &u8) -> Result<(), AoaError> {
             let mut p = self.0.borrow_mut();
+            if *dev != p.address && p.vanished_opens > 0 {
+                return Err(AoaError::Usb(rusb::Error::NoDevice)); // a handle from before it vanished
+            }
             assert_eq!(*dev, p.address);
             p.handshakes += 1;
             match p.mode {
@@ -661,7 +743,12 @@ mod connect_tests {
                     p.address += 1;
                 }
                 // unchanged function set: nothing re-enumerates, START stays pending
-                Mode::Accessory { .. } => p.start_pending = true,
+                Mode::Accessory { .. } => {
+                    p.start_pending = true;
+                    if let Some(after) = p.self_reattach_after {
+                        p.reattach_at = Some(p.clock + after);
+                    }
+                }
                 Mode::Gone => return Err(AoaError::Usb(rusb::Error::NoDevice)),
             }
             Ok(())
@@ -670,6 +757,9 @@ mod connect_tests {
             let mut p = self.0.borrow_mut();
             assert_eq!(*dev, p.address);
             p.resets += 1;
+            if p.reattach_at.is_some() {
+                p.reset_while_moving = true;
+            }
             if let Mode::Accessory { .. } = p.mode {
                 if p.start_pending {
                     // CONFIGURED with START pending: attached afresh, the app opens a session
@@ -684,8 +774,15 @@ mod connect_tests {
             Ok(())
         }
         fn open_reading(&self, dev: &u8, _wait: Duration) -> Result<Option<u8>, AoaError> {
-            let p = self.0.borrow();
-            if *dev != p.address {
+            let mut p = self.0.borrow_mut();
+            p.tick();
+            if p.vanish_on_open > 0 {
+                p.vanish_on_open -= 1;
+                p.vanished_opens += 1;
+                p.address += 1; // back a moment later, at a new address
+                return Err(AoaError::Usb(rusb::Error::NoDevice));
+            }
+            if *dev != p.address || p.moving() {
                 return Err(AoaError::Usb(rusb::Error::NoDevice));
             }
             Ok(match p.mode {
@@ -693,7 +790,9 @@ mod connect_tests {
                 _ => None,
             })
         }
-        fn pause(&self, _d: Duration) {}
+        fn pause(&self, d: Duration) {
+            self.0.borrow_mut().clock += d;
+        }
     }
 
     fn counts(f: &Fake) -> (u32, u32) {
@@ -744,6 +843,40 @@ mod connect_tests {
         let f = phone(Mode::Adb, false);
         assert!(matches!(connect_with(&f), Err(AoaError::NotReading)));
         assert_eq!(counts(&f), (2, 1));
+    }
+
+    #[test]
+    fn a_phone_that_reattaches_by_itself_after_4s_is_not_reset() {
+        // Pixel 6a: START on a stale accessory re-attaches it ~4.0 s later. The client waits for
+        // that (no port reset racing it) and opens it only once it has settled.
+        let f = phone(Mode::Accessory { reader: false }, true);
+        f.0.borrow_mut().self_reattach_after = Some(Duration::from_secs(4));
+        assert_eq!(connect_with(&f).unwrap(), 11);
+        assert_eq!(counts(&f), (1, 0));
+        assert!(!f.0.borrow().reset_while_moving);
+        assert!(SELF_REENUMERATION > Duration::from_secs(4) + POLL * 2);
+        assert!(SELF_REENUMERATION < Duration::from_secs(10), "the reset must come while START is pending");
+    }
+
+    #[test]
+    fn a_phone_that_vanishes_as_it_is_opened_is_opened_again_once() {
+        let f = phone(Mode::Accessory { reader: true }, true);
+        f.0.borrow_mut().vanish_on_open = 1;
+        assert_eq!(connect_with(&f).unwrap(), 11);
+        assert_eq!(counts(&f), (0, 0), "no START, no reset for a retry");
+        // The retry is once only: a second vanish goes through the ordinary (single) recovery.
+        let thrice = phone(Mode::Accessory { reader: true }, true);
+        thrice.0.borrow_mut().vanish_on_open = 3;
+        assert!(matches!(connect_with(&thrice), Err(AoaError::NotReading)));
+        assert_eq!(thrice.0.borrow().resets, 0, "it moved: never reset");
+    }
+
+    #[test]
+    fn settle_waits_for_a_stable_address() {
+        let f = phone(Mode::Accessory { reader: true }, true);
+        settle(&f).unwrap();
+        let took = f.0.borrow().clock;
+        assert!(took >= SETTLE && took < SETTLE + POLL * 2, "{took:?}");
     }
 
     #[test]

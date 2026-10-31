@@ -77,18 +77,38 @@ class DeviceSelectionTest(unittest.TestCase):
 class FakePhone:
     """A phone as UsbDeviceManager + f_accessory behave (same model as the companion's tests)."""
 
-    def __init__(self, mode, app_reads=True):
+    def __init__(self, mode, app_reads=True, self_reattach_after=None, vanish_on_open=0):
         self.mode, self.app_reads = mode, app_reads  # mode: adb | idle | stale | live | gone
         self.idle_is_accessory = mode == "idle"
         self.address, self.start_pending = 10, False
         self.handshakes = self.resets = 0
+        # Pixel 6a: a stale accessory re-attaches by itself this many seconds after START
+        # (still listed until then, off the bus for 0.4 s, then back at a new address with a reader).
+        self.self_reattach_after, self.reattach_at = self_reattach_after, None
+        # The phone drops off the bus as the next N opens start (still re-enumerating).
+        self.vanish_on_open, self.vanished_opens = vanish_on_open, 0
+        self.clock = 0.0
+        self.reset_while_moving = False
+
+    def _tick(self):
+        if self.reattach_at is not None and self.clock >= self.reattach_at + 0.4:
+            self.reattach_at = None
+            self.start_pending = False
+            self.mode = "live" if self.app_reads else "stale"
+            self.address += 1
+
+    def _moving(self):
+        return self.reattach_at is not None and self.clock >= self.reattach_at
 
     def scan(self):
-        if self.mode == "gone":
+        self._tick()
+        if self.mode == "gone" or self._moving():
             return []
         return [aoa_client.Seen(self.address, self.mode != "adb", (1, self.address))]
 
     def handshake(self, dev):
+        if dev != self.address and self.vanished_opens:
+            raise usb.core.USBError("gone", errno=errno.ENODEV)  # a handle from before it vanished
         assert dev == self.address
         self.handshakes += 1
         if self.mode in ("adb", "idle"):  # the function set changes: re-enumerates, attached
@@ -96,10 +116,14 @@ class FakePhone:
             self.address += 1
         else:  # unchanged function set: nothing happens, START stays pending
             self.start_pending = True
+            if self.self_reattach_after is not None:
+                self.reattach_at = self.clock + self.self_reattach_after
 
     def reset(self, dev):
         assert dev == self.address
         self.resets += 1
+        if self.reattach_at is not None:
+            self.reset_while_moving = True  # the 6a race: it drops and re-attaches a second time
         if self.mode in ("live", "stale"):
             if self.start_pending:
                 self.mode = "live" if self.app_reads else "stale"
@@ -109,12 +133,18 @@ class FakePhone:
             self.start_pending = False
 
     def open_reading(self, dev, wait):
-        if dev != self.address:
+        self._tick()
+        if self.vanish_on_open:
+            self.vanish_on_open -= 1
+            self.vanished_opens += 1
+            self.address += 1  # back a moment later, at a new address
+            raise usb.core.USBError("gone", errno=errno.ENODEV)
+        if dev != self.address or self._moving():
             raise usb.core.USBError("gone", errno=errno.ENODEV)
         return ("in", "out") if self.mode == "live" else None
 
     def pause(self, seconds):
-        pass
+        self.clock += seconds
 
 
 class ConnectTest(unittest.TestCase):
@@ -143,6 +173,33 @@ class ConnectTest(unittest.TestCase):
         with self.assertRaisesRegex(aoa_client.NotReadingError, "unplug and replug"):
             aoa_client.connect(phone)
         self.assertEqual((1, 1), (phone.handshakes, phone.resets))
+
+    def test_a_phone_that_reattaches_by_itself_after_4s_is_not_reset(self):
+        # Pixel 6a: START on a stale accessory re-attaches it ~4.0 s later. The client waits for
+        # that (no port reset racing it) and opens it only once it has settled.
+        phone = FakePhone("stale", self_reattach_after=4.0)
+        self.assertEqual(("in", "out"), aoa_client.connect(phone))
+        self.assertEqual((1, 0), (phone.handshakes, phone.resets))
+        self.assertFalse(phone.reset_while_moving)
+        self.assertGreater(aoa_client.SELF_REENUMERATION, 4.0 + 2 * aoa_client.POLL)
+        self.assertLess(aoa_client.SELF_REENUMERATION, 10.0, "the reset must come while START is pending")
+
+    def test_a_phone_that_vanishes_as_it_is_opened_is_opened_again_once(self):
+        phone = FakePhone("live", vanish_on_open=1)
+        self.assertEqual(("in", "out"), aoa_client.connect(phone))
+        self.assertEqual((0, 0), (phone.handshakes, phone.resets), "no START, no reset for a retry")
+        # The retry is once only: a second vanish goes through the ordinary (single) recovery.
+        thrice = FakePhone("live", vanish_on_open=3)
+        with self.assertRaises(aoa_client.NotReadingError):
+            aoa_client.connect(thrice)
+        self.assertEqual(0, thrice.resets, "it moved: never reset")
+
+    def test_settle_waits_for_a_stable_address(self):
+        phone = FakePhone("live")
+        start = phone.clock
+        aoa_client._settle(phone)
+        self.assertGreaterEqual(phone.clock - start, aoa_client.SETTLE)
+        self.assertLess(phone.clock - start, aoa_client.SETTLE + 2 * aoa_client.POLL)
 
     def test_no_phone(self):
         with self.assertRaisesRegex(RuntimeError, "No Google Android USB device"):
