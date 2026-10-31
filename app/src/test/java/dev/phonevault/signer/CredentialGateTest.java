@@ -197,6 +197,90 @@ public class CredentialGateTest {
         assertEquals(0, stale.count("unlock"));
     }
 
+    /**
+     * Pixel 6a: the unlock prompt stayed open across a lock (new session, new locked page, whose own
+     * prompt is not stacked on the open one). A correct PIN in it must unlock the gate on screen,
+     * not be dropped as stale with no prompt left.
+     */
+    @Test public void stalePromptSuccessUnlocksTheLockedPageOnScreen() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.gate.show(1);
+        e.drain();
+        assertEquals(1, e.prompts.size());
+        e.session = 2;                       // lock() while the prompt is up
+        e.gate.show(2);                      // the new gate
+        e.drain();
+        assertEquals("not stacked", 1, e.count("prompt"));
+        e.prompts.poll().done(true);
+        assertEquals(List.of("locked:1", "prompt:Enter your PIN to unlock", "locked:2", "unlock:2"), e.events);
+        assertTrue(e.unlocked);
+
+        // Dismissed instead: nothing unlocks, the new page's Unlock opens a prompt again.
+        FakeEnv d = env();
+        d.now = CredentialGate.FRESH_BOOT_MS + 1;
+        d.gate.show(1);
+        d.drain();
+        d.session = 2;
+        d.gate.show(2);
+        d.drain();
+        d.prompts.poll().done(false);
+        assertEquals(0, d.count("unlock"));
+        assertFalse(d.gate.promptOpen());
+        d.gate.promptUnlock(2);
+        assertEquals(2, d.count("prompt"));
+        d.prompts.poll().done(true);
+        assertEquals(1, d.count("unlock:2"));
+    }
+
+    /** A stale prompt's own action never runs for a newer session, and a stale success needs that session's locked page. */
+    @Test public void stalePromptNeverRunsItsActionForANewerSession() {
+        FakeEnv e = env();
+        int[] ran = {0}, cancelled = {0};
+        e.gate.confirmDevicePin("Enter your PIN to open the wallet", () -> ran[0]++, () -> cancelled[0]++);
+        e.session = 2;                       // locked; no locked page drawn for session 2 (e.g. sealed)
+        e.prompts.poll().done(true);
+        assertEquals(0, ran[0]);
+        assertEquals(0, e.count("unlock"));
+        assertFalse(e.unlocked);
+    }
+
+    /**
+     * Pixel 6a: Back on the system prompt of a sensitive action left its SensitiveFlow token taken,
+     * so "Continue · verify PIN" and ☰ → Wallet did nothing until the next lock. Cancel, an error
+     * and a timeout all arrive as a failed confirmation and must release it (MainActivity passes
+     * releaseSensitive as onCancel); the next sensitive action then prompts again.
+     */
+    @Test public void dismissedSensitivePromptReleasesTheFlowAndTheNextOnePromptsAgain() throws Exception {
+        FakeEnv e = env();
+        e.unlocked = true;
+        SensitiveFlow flow = new SensitiveFlow(new Object());
+        int[] opened = {0};
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            int token = flow.begin();
+            assertTrue("attempt " + attempt + " may begin", token > 0);
+            e.gate.withSeedKey("Enter your PIN to show the phrase", () -> { if (flow.owns(token)) opened[0]++; }, () -> flow.end(token));
+            if (!e.probes.isEmpty()) e.probes.poll().done(false); // the key is not usable yet: ask
+            assertEquals("attempt " + attempt + " prompts", attempt, e.count("prompt"));
+            e.prompts.poll().done(false);    // Back / error / timeout
+            assertFalse("released", flow.active());
+            assertFalse(e.gate.promptOpen());
+        }
+        assertEquals(0, opened[0]);
+        int token = flow.begin();
+        e.gate.withSeedKey("Enter your PIN to show the phrase", () -> { if (flow.owns(token)) opened[0]++; }, () -> flow.end(token));
+        if (!e.probes.isEmpty()) e.probes.poll().done(false);
+        e.prompts.poll().done(true);
+        assertEquals(1, opened[0]);
+
+        String begin = SourceGuard.definition("private void beginSensitive(String purpose, Runnable afterPin) {");
+        assertTrue("credential mode releases the token when the prompt is dismissed",
+                begin.contains("() -> releaseSensitive(token));"));
+        assertTrue("never takes a token while a prompt is already open (it would never be asked)",
+                begin.contains("if (credentialMode() && credentialGate.promptOpen()) return;"));
+        assertTrue(SourceGuard.definition("private void releaseSensitive(int token) {").contains("sensitive.end(token)"));
+    }
+
     // ---------------------------------------------------------------- seed-key window
 
     @Test public void withSeedKeyRunsAtOnceOutsideCredentialMode() {
@@ -311,6 +395,27 @@ public class CredentialGateTest {
                 handle.split("synchronized \\(stateLock\\) \\{ heldRequest\\.clear\\(\\); \\}", -1).length - 1);
         String disc = SourceGuard.definition("public void onDisconnected(AccessoryTransport source, String reason) {");
         assertTrue(disc.contains("droppedHeld = heldRequest.dropIfFrom(source);"));
-        assertTrue("lock() forgets it", SourceGuard.definition("private void lock() {").contains("heldRequest.clear();"));
+        String lock = SourceGuard.definition("private void lock() {");
+        assertTrue("only a relock while still locked keeps the gate session (and what it holds)",
+                lock.contains("boolean keepGateSession = !wasUnlocked && transport != null && !transport.isClosed();"));
+        assertTrue("a lock from unlocked forgets it", lock.contains("HeldRequest.Taken undispatched = heldRequest.take(staleTransport);"));
+        assertTrue("and answers it with a refusal as the last frame, never anything else",
+                lock.contains("if (undispatched != null) staleTransport.closeAfter(HeldRequest.lockedRefusal(undispatched.request));"));
+        String show = SourceGuard.definition("public void showHeldOnGate(AccessoryTransport source, String label, String body) {");
+        assertTrue("never while unlocked, only from the live session", show.contains("if (unlocked || source != transport) return;"));
+        assertTrue("the credential-mode locked page shows it too", show.contains("refreshGateRequest(label, body);"));
+        assertTrue(SourceGuard.definition("private void refreshGateRequest(String label, String body) {")
+                .contains("if (lockedPageSession == session.get()) showLockedPage(lockedPageSession);"));
+    }
+
+    /** The refusal a lock gives a held request: an error for its own id, never a signature. */
+    @Test public void lockedRefusalIsAnErrorForTheRequestId() throws Exception {
+        JSONObject refusal = HeldRequest.lockedRefusal(new JSONObject().put("id", "req-7").put("method", "eth_signTransaction"));
+        assertEquals("req-7", refusal.getString("id"));
+        assertEquals("error", refusal.getString("status"));
+        assertTrue(refusal.getString("error").contains("Nothing was signed"));
+        assertEquals(3, refusal.length());
+        assertEquals("an unusable id is not echoed", "unknown",
+                HeldRequest.lockedRefusal(new JSONObject().put("id", "bad id\n")).getString("id"));
     }
 }

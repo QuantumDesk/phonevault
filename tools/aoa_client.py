@@ -69,9 +69,16 @@ POLL = 0.4
 LIVE_PROBE = 2.5
 # After an attach (handshake, re-enumeration or reset), how long the app may take to open its session.
 FRESH_ATTACH = 20.0
-# After START, how long a phone whose functions change (an idle beta2 phone) may take to
-# re-enumerate by itself before its port is reset.
-SELF_REENUMERATION = 4.0
+# After START, how long a phone may take to re-enumerate by itself before its port is reset. An
+# idle beta2 phone changes functions; a Pixel 6a whose accessory session ended re-attaches by
+# itself too, about 4.0 s after START: a 4 s window reset its port just as it came back, so it
+# dropped and re-attached a second time under the session just opened (Errno 19, reconnecttest
+# step 6, 3 of 3 runs). Still well inside the framework's 10 s START timeout
+# (MSG_ACCESSORY_MODE_ENTER_TIMEOUT), which the reset needs to be pending.
+SELF_REENUMERATION = 7.0
+# After a re-enumeration or a port reset the phone may come and go once more: it is opened only
+# after it has stayed at one address for this long.
+SETTLE = 1.2
 # How long the phone may be off the bus (re-enumerating) before it counts as gone.
 BACK_ON_BUS = 12.0
 NOT_READING = (
@@ -196,31 +203,51 @@ def _the_phone(bus, patient):
     return found
 
 
+def _settle(bus):
+    """Wait (up to BACK_ON_BUS) until one Google device has stayed at the same address, in the
+    same mode, for SETTLE: a phone still re-enumerating is not opened (its handle would die)."""
+    last, since = None, None
+    for _ in range(max(1, int(BACK_ON_BUS / POLL))):
+        bus.pause(POLL)
+        seen = bus.scan()
+        now = (seen[0].at, seen[0].accessory) if len(seen) == 1 else None
+        if now is None or now != last:
+            last, since = now, 0.0
+            continue
+        since += POLL
+        if since >= SETTLE - 1e-9:
+            return
+    # Not settled: connect's patient scan reports whatever is (or is not) there.
+
+
 def _reattach(bus, stale):
     """Make the phone attach our accessory afresh: START, then a port reset if it did not
-    re-enumerate by itself (START is still pending then, so the reset re-attaches it)."""
+    re-enumerate by itself (START is still pending then, so the reset re-attaches it). Returns
+    once the phone has settled, so the next scan finds it where it stays."""
     try:
         bus.handshake(stale.dev)
     except usb.core.USBError:
         pass  # a phone that does not answer the AOA requests is reset all the same
+    # Moved: our accessory left its old address (the phone dropped off the bus or came back at a
+    # new address). Only a phone that never moved is reset.
     moved = _wait_for(bus, SELF_REENUMERATION, lambda seen: True if not any(
         item.accessory and item.at == stale.at for item in seen) else None)
-    if moved:
-        return
-    try:
-        bus.reset(stale.dev)
-    except usb.core.USBError as error:
-        if not _transient(error):
-            raise
+    if not moved:
+        try:
+            bus.reset(stale.dev)
+        except usb.core.USBError as error:
+            if not _transient(error):
+                raise
+    _settle(bus)
 
 
 def connect(bus=None):
     """Find the phone, switch it to our accessory (or recover a stale one) and return
     (endpoint_in, endpoint_out) once the phone reads. Raises NotReadingError (replug) otherwise."""
     bus = bus or LibUsbBus()
-    fresh = recovered = False
+    fresh = recovered = vanished = False
     while True:
-        found = _the_phone(bus, recovered)
+        found = _the_phone(bus, recovered or vanished)
         if found.accessory:
             accessory = found
         else:
@@ -235,6 +262,12 @@ def connect(bus=None):
         except usb.core.USBError as error:
             if not _transient(error):
                 raise
+            if not vanished:
+                # It left the bus under us (still re-enumerating): once, let it settle and open
+                # it again where it now is, without another START or reset.
+                vanished = True
+                _settle(bus)
+                continue
             opened = None
         if opened is not None:
             return opened
