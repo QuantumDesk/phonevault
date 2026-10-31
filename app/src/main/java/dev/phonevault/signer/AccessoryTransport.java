@@ -307,4 +307,36 @@ final class AccessoryTransport implements Closeable {
         if (!closed.compareAndSet(false, true)) return;
         releaseResources();
     }
+
+    /** How long {@link #closeAfter} lets its last frame reach the host before releasing anyway. */
+    static final long LAST_FRAME_WAIT_MS = 500;
+
+    /**
+     * Local close that first delivers {@code lastResponse} (a refusal) as the session's final frame.
+     * The session counts as closed at once: no other response can be sent after this call and
+     * queued ones are dropped, exactly as for {@link #close()}. Never blocks the caller; the
+     * descriptor is released once the frame is written, or after {@link #LAST_FRAME_WAIT_MS} if
+     * the host is not reading (so the accessory can be reopened). No listener callback.
+     */
+    void closeAfter(JSONObject lastResponse) {
+        if (!closed.compareAndSet(false, true)) return;
+        outbound.clear();
+        final byte[] frame = (lastResponse.toString() + "\n").getBytes(StandardCharsets.UTF_8);
+        Thread closer = new Thread(() -> {
+            Thread last = new Thread(() -> {
+                try {
+                    output.write(frame);
+                    output.flush();
+                } catch (Exception ignored) {
+                    // the host is gone: nothing to deliver
+                }
+            }, "aoa-last-frame");
+            last.setDaemon(true);
+            last.start();
+            try { last.join(LAST_FRAME_WAIT_MS); } catch (InterruptedException ignored) { }
+            releaseResources();
+        }, "aoa-close");
+        closer.setDaemon(true);
+        closer.start();
+    }
 }

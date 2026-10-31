@@ -1,12 +1,15 @@
 package dev.phonevault.signer;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
  * A request that arrived while the vault was LOCKED. The gate reads and decodes it for display
  * only (the phone answers nothing until the PIN is entered) and hands it to the normal request
  * path right after unlock: only on the connection it arrived on, and only while that connection is
- * still the live, open one. A new connection, that connection's disconnect, and lock drop it.
+ * still the live, open one. A new connection, that connection's disconnect, and a lock from
+ * unlocked drop it (the lock answers it with {@link #lockedRefusal}); a relock while still locked
+ * keeps it with its gate session.
  *
  * <p>Not synchronized itself: every call is made under MainActivity's stateLock (CredentialGateTest).
  */
@@ -57,6 +60,21 @@ final class HeldRequest {
         if (source != closed) return false;
         clear(); // its host is gone
         return true;
+    }
+
+    /**
+     * The one answer a lock gives a held request it ends before review (MainActivity#lock): an
+     * error for its id, never a signature, so the host does not wait for its timeout.
+     */
+    static JSONObject lockedRefusal(JSONObject request) {
+        String id;
+        try { id = Eip1559Request.validatedId(request.optString("id", null)); } catch (JSONException e) { id = "unknown"; }
+        try {
+            return new JSONObject().put("id", id).put("status", "error").put("error",
+                    "The phone locked before this request was reviewed. Nothing was signed. Unlock the phone and send it again.");
+        } catch (JSONException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
 
     /** Forget the request and its source. */

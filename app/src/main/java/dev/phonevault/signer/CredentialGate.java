@@ -58,6 +58,8 @@ final class CredentialGate {
     private int bootAttemptSession = -1;
     /** The unlock in progress is the boot-time silent one (its failure is not the user's). */
     private boolean silentUnlockAttempt;
+    /** Session whose locked page {@link #show} drew last (-1: none). */
+    private int lockedPageSession = -1;
 
     CredentialGate(Env env) { this.env = env; }
 
@@ -138,6 +140,7 @@ final class CredentialGate {
             env.post(attempt);
             return;
         }
+        lockedPageSession = s;
         env.showLockedPage(s);
         env.post(() -> { if (!env.unlocked() && s == env.session() && env.foreground()) promptUnlock(s); });
     }
@@ -149,7 +152,23 @@ final class CredentialGate {
         }, null);
     }
 
-    /** Ask the system to verify the device PIN; one prompt at a time. {@code onCancel} may be null. */
+    /** A system PIN prompt of ours is on screen (a second one would not be stacked). */
+    boolean promptOpen() { return credentialPromptOpen; }
+
+    /**
+     * Ask the system to verify the device PIN; one prompt at a time. {@code onCancel} may be null.
+     *
+     * <p>A prompt can outlive the session that opened it: a lock while it is up (the screen went
+     * off, the idle lock) starts a new session and draws a new locked page, whose own prompt is
+     * not stacked on the one still open. A correct PIN in that older prompt was ignored ("stale")
+     * and the vault stayed locked with no prompt left (Pixel 6a, a prompt open ~10 minutes). Its
+     * own action ({@code onOk}: unlock an old gate, open an old sensitive flow) is still never run
+     * for a newer session, but the system has just verified the PIN, so it unlocks the credential
+     * locked page that is on screen now, and only that: never a hidden activity
+     * (MainActivity#unlock checks), nor a session whose gate is not that page (the boot attempt, a
+     * sealed vault's own screen), nor anything once a newer session is unlocked. A dismissed stale
+     * prompt leaves that page and its Unlock button.
+     */
     void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) {
         if (credentialPromptOpen) return;
         credentialPromptOpen = true;
@@ -157,8 +176,14 @@ final class CredentialGate {
         env.systemConfirm(why, ok -> {
             credentialPromptOpen = false;
             if (s != env.session() && env.unlocked()) return;
+            if (ok) lastCredentialConfirm = env.elapsedRealtime();
+            if (s != env.session()) {
+                int now = env.session();
+                if (ok && lockedPageSession == now) env.unlock(now);
+                else if (!ok && onCancel != null) onCancel.run();
+                return;
+            }
             if (ok) {
-                lastCredentialConfirm = env.elapsedRealtime();
                 onOk.run();
             } else if (onCancel != null) {
                 onCancel.run();

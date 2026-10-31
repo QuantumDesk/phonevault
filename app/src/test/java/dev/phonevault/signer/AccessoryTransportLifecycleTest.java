@@ -270,4 +270,55 @@ public class AccessoryTransportLifecycleTest {
         assertTrue(reason.get(), reason.get().contains("StackOverflowError"));
         assertTrue("transport closed", t.isClosed());
     }
+
+    private static InputStream idleInput() {
+        return new InputStream() {
+            @Override public int read() throws IOException {
+                try { Thread.sleep(60_000); } catch (InterruptedException e) { throw new IOException("interrupted"); }
+                return -1;
+            }
+        };
+    }
+
+    /** lock() with a request held behind the gate: the refusal is the session's last frame, then it is released. */
+    @Test public void closeAfterDeliversOnlyTheLastFrameThenReleases() throws Exception {
+        Fd fd = new Fd();
+        Recorder listener = new Recorder();
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        AccessoryTransport t = AccessoryTransport.openForTest(fd, idleInput(), out, listener);
+        t.start();
+        Thread.sleep(50);
+        t.closeAfter(new JSONObject().put("id", "7").put("status", "error").put("error", "locked"));
+        assertTrue("closed for sending at once", t.isClosed());
+        assertFalse("nothing else can be sent after it", t.send(new JSONObject().put("id", "late")));
+        long deadline = System.currentTimeMillis() + 2000;
+        while (fd.closes.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(10);
+        assertEquals("descriptor released once", 1, fd.closes.get());
+        JSONObject written = new JSONObject(out.toString("UTF-8").trim());
+        assertEquals("7", written.getString("id"));
+        assertEquals("error", written.getString("status"));
+        assertTrue("one frame", out.toString("UTF-8").endsWith("}\n") && out.toString("UTF-8").indexOf('\n') == out.size() - 1);
+        assertFalse("local close is not a host disconnect", listener.disconnected.await(200, TimeUnit.MILLISECONDS));
+        t.closeAfter(new JSONObject().put("id", "8"));
+        t.close();
+        Thread.sleep(50);
+        assertEquals("idempotent", 1, fd.closes.get());
+    }
+
+    /** A host that does not read cannot hold the accessory: closeAfter never blocks and releases after the wait. */
+    @Test public void closeAfterWithAStuckHostReleasesAfterTheWait() throws Exception {
+        Fd fd = new Fd();
+        Recorder listener = new Recorder();
+        StuckOutput stuck = new StuckOutput();
+        AccessoryTransport t = AccessoryTransport.openForTest(fd, idleInput(), stuck, listener);
+        t.start();
+        long before = System.nanoTime();
+        t.closeAfter(new JSONObject().put("id", "1"));
+        assertTrue("closeAfter must not block", (System.nanoTime() - before) / 1_000_000 < 200);
+        assertTrue(stuck.entered.await(5, TimeUnit.SECONDS));
+        long deadline = System.currentTimeMillis() + AccessoryTransport.LAST_FRAME_WAIT_MS + 3000;
+        while (fd.closes.get() == 0 && System.currentTimeMillis() < deadline) Thread.sleep(10);
+        assertEquals("released despite the stuck write", 1, fd.closes.get());
+        stuck.released = true;
+    }
 }

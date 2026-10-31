@@ -228,8 +228,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** True between onStart and onStop. Nothing unlocks or publishes while the activity is hidden. */
     private volatile boolean foreground;
     private Intent pendingUsb;
-    /** A request that arrived while LOCKED, bound to its connection (HeldRequest). Under stateLock; cleared by lock(). */
+    /**
+     * A request that arrived while LOCKED, bound to its connection (HeldRequest). Under stateLock.
+     * A relock while still locked keeps it (with its gate session); a lock from unlocked refuses it.
+     */
     private final HeldRequest heldRequest = new HeldRequest();
+    /** Session whose credential-mode locked page is on screen (-1: none yet); see refreshGateRequest. */
+    private int lockedPageSession = -1;
     private String gateNotice;
     /** {@link AccountBook#listNotice} from this unlock, shown on the home screen until the phone locks. */
     private String accountNotice;
@@ -449,9 +454,10 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
 
     /** The locked page of session {@code s}; CredentialGate then offers the system prompt. */
     private void showLockedPage(int s) {
+        lockedPageSession = s;
         LinearLayout root = pages.page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
-        synchronized (stateLock) { if (heldRequest.summary() != null) pages.card(root, "Incoming request", heldRequest.summary()); }
+        synchronized (stateLock) { if (heldRequest.summary() != null) pages.card(root, "INCOMING REQUEST", heldRequest.summary()); }
         if (transport != null) pages.card(root, "USB", "Your Mac is connected. Its request stays unanswered until you unlock and review it.");
         TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
         Pages.hardenTouch(unlockButton);
@@ -468,6 +474,18 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         scroll.addView(root);
         setContentView(scroll);
         devDumpUi();
+    }
+
+    /**
+     * The gate shows what is held right now: the PIN screen's pending line and, in credential mode,
+     * the locked page (which draws its "INCOMING REQUEST" and USB cards only when it is built, so
+     * it is rebuilt for the current session). A request or a session that arrives while the locked
+     * page is up appears at once, not only on the next lock. UI thread.
+     */
+    private void refreshGateRequest(String label, String body) {
+        if (unlocked) return;
+        if (pinScreen != null) pinScreen.setPending(label, body);
+        if (lockedPageSession == session.get()) showLockedPage(lockedPageSession);
     }
 
     private void clearPinEntry() {
@@ -616,6 +634,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void lock() {
         AccessoryTransport staleTransport;
         synchronized (stateLock) {
+            final boolean wasUnlocked = unlocked;
             session.incrementAndGet(); // invalidates any in-flight PIN op / load / regeneration
             unlocked = false;
             credentials = null;
@@ -628,10 +647,24 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             clearReceivingIdentity();
             // USB data-lock (app layer): the session is closed INSIDE the lock so a signing task
             // can never send after this point (send + close are linearized with signing).
-            staleTransport = transport;
-            transport = null;
-            heldRequest.clear();
-            if (staleTransport != null) { staleTransport.close(); usbReplugHint = true; }
+            // A relock while already locked (screen off, Back on the gate) keeps the gate's own
+            // session: it was opened behind the gate, it only reads and holds, and it has answered
+            // nothing. Its held request stays on the gate until the PIN, as before the screen went
+            // off (dropping it silently left the host waiting for its timeout).
+            boolean keepGateSession = !wasUnlocked && transport != null && !transport.isClosed();
+            staleTransport = keepGateSession ? null : transport;
+            if (!keepGateSession) {
+                transport = null;
+                // Locking from unlocked: a request held behind the gate and not dispatched yet (the
+                // wallet was still loading) gets a refusal, the one answer a locked phone gives, as
+                // the session's last frame. Nothing else can be sent on it after this point.
+                HeldRequest.Taken undispatched = heldRequest.take(staleTransport); // always forgets it
+                if (staleTransport != null) {
+                    if (undispatched != null) staleTransport.closeAfter(HeldRequest.lockedRefusal(undispatched.request));
+                    else staleTransport.close();
+                    usbReplugHint = true;
+                }
+            }
             keepScreenOn(false);
         }
         clearSensitiveUi();
@@ -922,12 +955,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         return operational && unlocked && foreground && s == session.get() && sensitive.owns(token);
     }
 
+    /** A sensitive flow whose PIN check was dismissed: free the token (no-op if a lock already reset it). */
+    private void releaseSensitive(int token) {
+        if (sensitive.end(token) && activeSensitive == token) activeSensitive = -1;
+    }
+
     private void beginSensitive(String purpose, Runnable afterPin) {
         if (!walletLoaded || credentials == null || !unlocked) return;
         if (transport != null || requestPending.get()) {
             pages.showInfo("Disconnect USB first", "Finish or reject the current request and unplug your Mac before opening wallet security.", settings::showSecurity);
             return;
         }
+        // A system PIN prompt is already open: it would not stack a second one, and the token
+        // taken below would then wait for a prompt that never comes.
+        if (credentialMode() && credentialGate.promptOpen()) return;
         int token;
         synchronized (stateLock) {
             token = sensitive.begin();
@@ -936,7 +977,11 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         final int s = session.get();
         if (credentialMode()) {
-            withSeedKey("Enter your PIN to " + purpose, () -> { if (sensitiveValid(token, s)) afterPin.run(); });
+            // Back, an error or a timeout on the system prompt ends the flow: without this the token
+            // stayed taken and every later sensitive action (Continue · verify PIN, ☰ → Wallet)
+            // did nothing until the next lock.
+            withSeedKey("Enter your PIN to " + purpose, () -> { if (sensitiveValid(token, s)) afterPin.run(); },
+                    () -> releaseSensitive(token));
             return;
         }
         if (firstRunPinFresh) {
@@ -1154,7 +1199,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             UsbAccessory gated = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
             if (gated == null) return;
             synchronized (stateLock) { heldRequest.clear(); } // a new connection never inherits a held request
-            if (pinScreen != null) pinScreen.setPending(null, null);
             if (transport != null) { AccessoryTransport previous = transport; transport = null; previous.close(); }
             try {
                 AccessoryTransport opened = AccessoryTransport.open((UsbManager) getSystemService(USB_SERVICE), gated, this);
@@ -1170,6 +1214,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
                 pendingUsb = intent; // fall back to replaying the attach after unlock
                 if (pinScreen != null) pinScreen.setSubtitle("Enter your six-digit PIN. Your Mac is waiting.");
             }
+            refreshGateRequest(null, null); // nothing held on the new connection; its USB card shows
             return;
         }
         if (replacementActive() || sensitive.active() || !walletLoaded || !backupVerified) {
@@ -1355,12 +1400,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             droppedHeld = heldRequest.dropIfFrom(source); // its host is gone
         }
         runOnUiThread(() -> {
-            if (droppedHeld && !unlocked && pinScreen != null) pinScreen.setPending(null, null);
-            if (source != transport) return;
+            if (source != transport) {
+                if (droppedHeld) refreshGateRequest(null, null);
+                return;
+            }
             boolean hadApproval = approvalDecision != null;
             transport = null;
             cancelApproval();
             setStatusActive(false);
+            refreshGateRequest(null, null); // locked: the gate drops the held request and the USB card
             if (unlocked && hadApproval)
                 approvals.showReceipt("USB disconnected", "The request session ended. If you tapped Approve & sign, delivery may be uncertain. Check your Mac before trying another transaction.", null);
         });
@@ -1474,7 +1522,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public void showHeldOnGate(AccessoryTransport source, String label, String body) {
             if (unlocked || source != transport) return;
             keepScreenOn(true); // a request is waiting (also on a session resumed after a lock): keep the gate lit
-            if (pinScreen != null) pinScreen.setPending(label, body);
+            refreshGateRequest(label, body); // the PIN screen and the credential-mode locked page
         }
         @Override public boolean passphraseEntry() { return passphraseEntry; }
         @Override public Map<String, String> ownAccountNames() { return accounts.ownAccountNames(); }
