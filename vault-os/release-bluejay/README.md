@@ -41,6 +41,7 @@ follow-up once a beta has booted.
 | `beta1-novoice` | beta beta1 | opt-in experiment: beta1 + `config_voice_capable`, `config_sms_capable`, `config_enable_emergency_call_while_sim_locked` = false (the release overlay verbatim). Not built yet |
 | `beta2` | rung b4d-1 | **beta1 + the USB enumeration fix** ([below](#beta2-usb-enumeration-without-adb)): beta1's files (version/channel `beta2`) + `config_usbChargingFunctionsAccessory=true` (frameworks-base-a17 0006). beta1 booted to SET PIN but never appeared on the Mac's USB |
 | `beta3` | rung b4d-1 | **beta2 + the current signer app** ([below](#beta3-beta2--the-stale-session-app)): beta2's files (version/channel `beta3`); the app now reopens a still-attached accessory after a lock and on start, so a returning host finds a live session without a replug |
+| `beta4` | rung b4d-1 | **beta3 + the 6a-fix app** ([below](#beta4-beta3--the-6a-fix-app)): beta3's files (version/channel `beta4`), app 0.3.1 (code 4) with the held request on the credential locked page and the PIN-cancel wedge fix; AVB rollback index raised to 2026103000 |
 
 ## What beta1 carries
 
