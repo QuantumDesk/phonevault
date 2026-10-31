@@ -12,7 +12,9 @@ require_dev_appliance
 require_pin
 require_words
 N="${#WORDS[@]}"
-wake; unlock_if_locked
+# An open AOA session (left by any USB script) makes the app refuse the restore screens ("Disconnect
+# USB first"): start from plain adb.
+usb_reset; wake; unlock_if_locked
 case "$MODE" in
   firstrun)
     expect_screen "Set up your wallet"
@@ -28,7 +30,13 @@ case "$MODE" in
     tap_text "Restore a different wallet"; sleep 1.5
     expect_screen "Restore a different wallet?"
     tap_text "Continue · verify PIN"; sleep 1.5
-    expect_screen "VERIFY PIN"; tap_digits "$PV_TEST_PIN"; sleep 4
+    # Credential mode: the system PIN prompt verifies it, unless the chip confirmed the PIN moments
+    # ago (the seed key's window is still open: no second prompt, by design); app-PIN mode: the
+    # in-app keypad.
+    for _ in 1 2 3 4 5; do system_prompt_up && break; has_text "VERIFY PIN" && break; has_text "How many words?" && break; sleep 1; done
+    if system_prompt_up; then enter_system_pin || die "system PIN prompt did not take the PIN"
+    elif has_text "How many words?"; then echo "note: PIN not asked again (seed key window still open)"
+    else expect_screen "VERIFY PIN"; tap_digits "$PV_TEST_PIN"; sleep 4; fi
     expect_screen "How many words?"
     tap_text "${N} words"; sleep 1.5
     expect_screen "REPLACE BY RESTORE · WORD 1 OF ${N}" ;;
@@ -42,6 +50,7 @@ NEW="$(addr)"
 pass "${N} words accepted; derived address shown before saving matches"
 if [[ "$MODE" == firstrun ]]; then tap_text "Yes, restore this wallet"; else tap_text "Yes, replace with this wallet"; fi
 sleep 8
+system_prompt_up && { echo "note: chip asked for the PIN to seal the restored wallet"; enter_system_pin; }
 expect_screen "Your offline wallet"
 [[ "$(addr | tr 'A-F' 'a-f')" == "${EXPECT,,}" ]] || die "Home shows $(addr), expected $EXPECT"
 [[ "$MODE" == firstrun || "${BEFORE,,}" != "${EXPECT,,}" ]] && pass "restored wallet active on Home (backup verified by entry)"
