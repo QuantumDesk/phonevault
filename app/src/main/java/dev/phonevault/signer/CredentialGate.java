@@ -140,6 +140,12 @@ final class CredentialGate {
      * @return true when the chip now holds the PIN
      */
     static boolean storeNewPin(char[] chosen, char[] forSystem, ChipInstall chip, VaultPin pin) throws Exception {
+        if (GuessablePins.guessable(chosen)) {
+            // The SET PIN screen refuses these first; this keeps any other path from storing one.
+            Arrays.fill(chosen, '0');
+            Arrays.fill(forSystem, '0');
+            throw new IllegalArgumentException(GuessablePins.MESSAGE);
+        }
         boolean bound = chip.install(forSystem); // zeroes forSystem
         if (bound) {
             Arrays.fill(chosen, '0');

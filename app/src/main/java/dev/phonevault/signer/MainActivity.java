@@ -18,6 +18,7 @@ import android.os.Bundle;
 import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.os.SystemClock;
 import android.provider.Settings;
 import android.util.Log;
@@ -95,8 +96,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private BackupCheck backupCheck;
     private BackupReminder backupReminder;
     private boolean largeText;
-    private long idleTimeoutMs = IDLE_LOCK_MS;
-    /** Display & auto-lock preferences (text scale, screen timeout, idle lock, haptics). */
+    /** Display & auto-lock preferences (text scale, brightness, screen timeout, idle lock, lock after screen off, haptics). */
     private DisplaySettings display;
     /** Last battery reading (see onBattery). */
     private BatteryStatus battery = BatteryStatus.UNKNOWN;
@@ -157,8 +157,6 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private char[][] pinSetupEntries;
 
     // ------------------------------------------------------------------ device security & lifecycle
-    /** Idle time (no touch) before the vault locks and drops the key from memory. */
-    private static final long IDLE_LOCK_MS = 2 * 60 * 1000L;
     /** True from the moment a PIN is SET in this unlocked session until it is used once or the
      *  vault locks: the first-run wizard does not ask for the PIN again seconds after setting it. */
     private boolean firstRunPinFresh;
@@ -212,8 +210,47 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** OLED burn-in: nudge the whole UI by a pixel or two on this cadence. */
     private static final long PIXEL_SHIFT_MS = 45 * 1000L;
     /** System screen-off timeout applied as device owner (burn-in + walk-away safety). */
-    private static final int SCREEN_OFF_TIMEOUT_MS = 60 * 1000;
+    private static final int SCREEN_OFF_TIMEOUT_MS = DisplaySettings.DEFAULT_SCREEN_TIMEOUT_SECONDS * 1000;
     private final Runnable idleLock = this::lock;
+    /** uptimeMillis of the last touch (or unlock, or wake inside the grace): the idle lock counts from it. */
+    private long lastActivityUptime;
+    /** A screen holds the display on (the keep-screen-on window flag, set only through keepScreenOn). UI thread. */
+    private boolean screenHeldOn;
+    /** Lock after screen off: the grace window and its rules (ScreenOffLock). UI thread. */
+    private final ScreenOffLock screenOffLock = new ScreenOffLock();
+    private final Runnable graceLock = this::graceTimerFired;
+    /** Power-off or reboot from the power menu: lock first, so the key leaves memory before the process dies. */
+    private final BroadcastReceiver shutdownReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (Intent.ACTION_SHUTDOWN.equals(intent.getAction())) lock();
+        }
+    };
+    /**
+     * USB_STATE (sticky): when the bus comes back configured under an open session, ask its
+     * descriptor whether it can still send (AccessoryTransport.WriteProbe). A bus reset or a
+     * re-enumeration leaves f_accessory's descriptor unable to write (ENODEV) while reads may go
+     * on: without this the next request was read and its answer silently lost (the Mac waited
+     * for its timeout). Only a check: a stale session ends and is reopened (onDisconnected).
+     */
+    private final BroadcastReceiver usbStateReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!AccessoryTransport.ACTION_USB_STATE.equals(intent.getAction())) return;
+            AccessoryTransport live = transport;
+            if (live == null || live.isClosed()) return;
+            if (!intent.getBooleanExtra("connected", false) || !intent.getBooleanExtra("configured", false)) return;
+            if (!live.writable()) live.failStale("USB bus was reset under the session");
+        }
+    };
+    /** What a host that gave up left behind (gate card "REQUEST ENDED"); cleared by the next held request or unlock. */
+    private String gateUsbNote;
+    static final String MAC_STOPPED_WAITING = "Your Mac stopped waiting for its request. Nothing was signed. Ask again from your Mac.";
+    /** A request read on a session that could no longer answer it: dispatched on the session reopened next (resumed only). */
+    private JSONObject carriedRequest;
+    private long carriedUntil;
+    static final long CARRY_WINDOW_MS = 5000;
+    /** Reopens after sessions that ended by themselves without reading a request: bounded, so a failing gadget cannot loop. */
+    private volatile int usbSelfReopens;
+    static final int MAX_SELF_REOPENS = 3;
     /** Set when a lock closed a live USB session; shown on Home only if it could not be reopened. */
     private boolean usbReplugHint;
     /** Reopen attempts for an accessory that is still attached (see resumeAttachedAccessory). */
@@ -225,7 +262,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             if (!UsbManager.ACTION_USB_ACCESSORY_DETACHED.equals(intent.getAction())) return;
             AccessoryTransport live = transport;
             if (live == null) return;
-            live.close();
+            live.detached();
             onDisconnected(live, "USB cable disconnected");
         }
     };
@@ -264,8 +301,17 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         getWindow().setBackgroundDrawable(new ColorDrawable(VaultTheme.BG));
         buildUi();
         IntentFilter detached = new IntentFilter(UsbManager.ACTION_USB_ACCESSORY_DETACHED);
-        if (android.os.Build.VERSION.SDK_INT >= 33) registerReceiver(usbDetachReceiver, detached, Context.RECEIVER_NOT_EXPORTED);
-        else registerReceiver(usbDetachReceiver, detached);
+        IntentFilter usbState = new IntentFilter(AccessoryTransport.ACTION_USB_STATE);
+        IntentFilter shutdown = new IntentFilter(Intent.ACTION_SHUTDOWN);
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(usbDetachReceiver, detached, Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(usbStateReceiver, usbState, Context.RECEIVER_NOT_EXPORTED);
+            registerReceiver(shutdownReceiver, shutdown, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(usbDetachReceiver, detached);
+            registerReceiver(usbStateReceiver, usbState);
+            registerReceiver(shutdownReceiver, shutdown);
+        }
         activateIfPolicyReady();
         ui.postDelayed(pixelShift, PIXEL_SHIFT_MS);
         // Release: USB debugging switched on while the vault is open stops it at once (adbRefused).
@@ -281,6 +327,16 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     @Override protected void onStart() {
         super.onStart();
         foreground = true;
+        ui.removeCallbacks(graceLock);
+        if (screenOffLock.wakeMustLock(SystemClock.elapsedRealtime())) {
+            // The grace ran out while the display was off (the CPU may have slept through the
+            // timer): lock before anything is drawn.
+            lock();
+        } else if (unlocked) {
+            // Woken inside the grace: no PIN. The idle lock counts from the wake.
+            lastActivityUptime = SystemClock.uptimeMillis();
+            armIdleLock();
+        }
     }
 
     @Override protected void onResume() {
@@ -328,15 +384,55 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * Screen off / activity hidden ⇒ lock. Walk-away safety and the USB session ends with it. The
      * session is invalidated even while locked, so a PIN save/verify that completes while we are
      * stopped cannot unlock a hidden activity.
+     *
+     * <p>Lock after screen off (Display &amp; auto-lock, at most 1 minute): only when the DISPLAY
+     * went off, the vault is unlocked, and no screen is up that must never outlive the display
+     * ({@link #mustLockWithDisplay}), the lock waits for the grace (ScreenOffLock). The key stays
+     * in memory for that long; a held or open USB request still needs Approve on screen; the next
+     * sensitive action asks for the PIN again; the idle lock is off while the display is.
      */
     @Override protected void onStop() {
         foreground = false;
-        lock();
+        long now = SystemClock.elapsedRealtime();
+        if (display != null && screenOffLock.screenOff(display.screenOffGraceSeconds(), !displayInteractive(), unlocked,
+                mustLockWithDisplay(), now) == ScreenOffLock.Action.GRACE) {
+            ui.removeCallbacks(idleLock);
+            credentialGate.forgetConfirmation(); // the chip's window is not reused for a sensitive action
+            firstRunPinFresh = false;
+            ui.removeCallbacks(graceLock);
+            ui.postDelayed(graceLock, Math.max(1, screenOffLock.remainingMs(now)));
+            Log.i(TAG, "display off: the vault locks after the grace");
+        } else {
+            lock();
+        }
         super.onStop();
+    }
+
+    /** The grace timer (uptime-based, may run late while the CPU sleeps; never early). */
+    private void graceTimerFired() {
+        long now = SystemClock.elapsedRealtime();
+        if (screenOffLock.timerMustLock(now)) lock();
+        else if (screenOffLock.running()) ui.postDelayed(graceLock, Math.max(1, screenOffLock.remainingMs(now)));
+    }
+
+    private boolean displayInteractive() {
+        PowerManager power = getSystemService(PowerManager.class);
+        return power == null || power.isInteractive();
+    }
+
+    /**
+     * Screens that never outlive the display, grace or not: a sensitive flow (recovery phrase,
+     * backup check, replace, restore), PIN entry of any kind, passphrase typing, first-run setup
+     * or a wallet still loading, and a replacement in progress.
+     */
+    private boolean mustLockWithDisplay() {
+        return sensitive.active() || backup.showingWords() || passphraseEntry || replacementActive() || setup.replacing()
+                || !walletLoaded || !operational || pinScreen != null || credentialGate.promptOpen();
     }
 
     @Override public void onUserInteraction() {
         super.onUserInteraction();
+        lastActivityUptime = SystemClock.uptimeMillis();
         if (unlocked) armIdleLock();
         if (sensitive.active() && backup.showingWords()) backup.touched();
         devDumpUi(); // dev-only: every touch refreshes the UI dump (no-op in release)
@@ -472,7 +568,12 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         lockedPageSession = s;
         LinearLayout root = pages.page("LOCKED", "Phone Vault is locked",
                 "Your PIN is checked by the phone's security chip. Tap Unlock and enter it on the next screen.");
-        synchronized (stateLock) { if (heldRequest.summary() != null) pages.card(root, "INCOMING REQUEST", heldRequest.summary()); }
+        boolean holding;
+        synchronized (stateLock) {
+            holding = heldRequest.summary() != null;
+            if (holding) pages.card(root, "INCOMING REQUEST", heldRequest.summary());
+        }
+        if (!holding && gateUsbNote != null) pages.card(root, "REQUEST ENDED", gateUsbNote);
         if (transport != null) pages.card(root, "USB", "Your Mac is connected. Its request stays unanswered until you unlock and review it.");
         TextView unlockButton = VaultTheme.pixelButton(this, "Unlock", true);
         Pages.hardenTouch(unlockButton);
@@ -515,6 +616,13 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     private void onCreatePinEntry(char[] entered, char[][] firstEntry, int s) {
         if (s != session.get()) { Arrays.fill(entered, '0'); return; }
         if (firstEntry[0] == null) {
+            // Choosing a PIN (first run, which also precedes a restore): never one a thief tries
+            // first (GuessablePins). Unlock never applies this check.
+            if (GuessablePins.guessable(entered)) {
+                Arrays.fill(entered, '0');
+                pinScreen.showError(GuessablePins.MESSAGE);
+                return;
+            }
             firstEntry[0] = entered.clone();
             Arrays.fill(entered, '0');
             pinScreen.setTitle("CONFIRM PIN");
@@ -640,7 +748,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         clearPinEntry();
         unlocked = true;
+        if (gateUsbNote != null) { statusMessage = gateUsbNote; gateUsbNote = null; }
         loadKey();
+        lastActivityUptime = SystemClock.uptimeMillis();
         armIdleLock();
     }
 
@@ -686,6 +796,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         }
         clearSensitiveUi();
         clearPinEntry();
+        screenOffLock.locked();
+        ui.removeCallbacks(graceLock);
         if (!operational) return;
         bootUnlock.noteLock(bootId()); // no silent boot unlock after any lock this boot
         requestPending.set(false);
@@ -697,11 +809,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         ui.postDelayed(() -> resumeAttachedAccessory(USB_RESUME_ATTEMPTS), USB_RESUME_RETRY_MS);
     }
 
+    /**
+     * The idle lock: no touch for the effective idle time (DisplaySettings#idleLockMs, which also
+     * knows whether a screen holds the display on), counted from the last touch, unlock or wake.
+     * Off while the display is (the screen-off path owns that time).
+     */
     private void armIdleLock() {
         ui.removeCallbacks(idleLock);
+        if (!foreground && screenOffLock.running()) return;
+        long idle = display.idleLockMs(screenHeldOn);
         // While the recovery phrase (or its check) is on screen, the seed timer owns the timeout.
-        long delay = backup.showingWords() ? Math.max(idleTimeoutMs, BackupScreens.SEED_TIMEOUT_MS + 10_000L) : idleTimeoutMs;
-        ui.postDelayed(idleLock, delay);
+        long delay = backup.showingWords() ? Math.max(idle, BackupScreens.SEED_TIMEOUT_MS + 10_000L) : idle;
+        long now = SystemClock.uptimeMillis();
+        if (lastActivityUptime <= 0 || lastActivityUptime > now) lastActivityUptime = now;
+        ui.postDelayed(idleLock, Math.max(0, delay - (now - lastActivityUptime)));
     }
 
     /** Recovery phrase: back to home (button or timeout). */
@@ -740,6 +861,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         synchronized (stateLock) {
             held = heldRequest.take(transport);
             if (held == null) return;
+        }
+        if (!held.source.writable()) {
+            // The bus dropped after the request was read (its host timed out, was killed, or reset
+            // the port): no answer can reach the host that sent it. Nothing is reviewed; the
+            // session ends as stale and the still-attached accessory is opened again.
+            held.source.failStale("the held request's host went away");
+            statusMessage = MAC_STOPPED_WAITING;
+            if (statusView != null) statusView.setText(statusMessage);
+            return;
         }
         cryptoExecutor.execute(() -> onRequest(held.source, held.request));
     }
@@ -878,6 +1008,7 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pages.action(root, "Address book", current.startsWith("address-book"), () -> { if (menuAvailable()) safetyScreens().showList(); });
         pages.action(root, "Bitcoin sharing", "btc-sharing".equals(current), () -> { if (menuAvailable()) btc.showBtcSharing(); });
         pages.action(root, "Device information", "integrity".equals(current), () -> { if (menuAvailable()) settings.showIntegrity(); });
+        pages.action(root, "Power", current.startsWith("power"), () -> { if (menuAvailable()) settings.showPower(); });
         pages.action(root, "Coming next", "features".equals(current), () -> { if (menuAvailable()) settings.showFeatures(); });
         pages.action(root, "Lock now", false, this::lock);
         pages.present(root, "menu");
@@ -897,12 +1028,42 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         pages.showLoading("Opening Phone Vault", "Checking appliance policy…");
     }
 
-    /** Text scale, haptics and idle lock from the saved Display & auto-lock choices. */
+    /** Text scale, haptics and brightness from the saved Display & auto-lock choices (the idle lock reads them when armed). */
     private void applyDisplaySettings() {
         largeText = display.largeText();
         VaultTheme.setTextScale(DisplaySettings.textScale(largeText));
         Haptics.setEnabled(display.haptics());
-        idleTimeoutMs = display.idleLockMs();
+        applyBrightness();
+    }
+
+    /** The saved brightness, re-applied on every start; nothing until the owner chose one here. */
+    private void applyBrightness() {
+        if (display == null || !display.brightnessChosen()) return;
+        applyBrightness(display.brightnessPercent(), display.brightnessAuto());
+    }
+
+    /**
+     * Device owner: Settings.System SCREEN_BRIGHTNESS_MODE / SCREEN_BRIGHTNESS through
+     * DevicePolicyManager#setSystemSetting (as the screen timeout; no WRITE_SETTINGS). Otherwise,
+     * or if the system refuses, this window's own brightness (WindowManager.LayoutParams).
+     */
+    private void applyBrightness(int percent, boolean auto) {
+        DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+        if (policy != null && policy.isDeviceOwnerApp(getPackageName())
+                && ApplianceProvisioning.applyBrightness(this, policy, percent, auto)) {
+            setWindowBrightness(WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE);
+            return;
+        }
+        setWindowBrightness(auto ? WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE : DisplaySettings.windowBrightness(percent));
+    }
+
+    private void setWindowBrightness(float value) {
+        runOnUiThread(() -> {
+            WindowManager.LayoutParams attributes = getWindow().getAttributes();
+            if (attributes.screenBrightness == value) return;
+            attributes.screenBrightness = value;
+            getWindow().setAttributes(attributes);
+        });
     }
 
     private void showHome() {
@@ -977,6 +1138,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (sensitive.end(token) && activeSensitive == token) activeSensitive = -1;
     }
 
+    /**
+     * ☰ → Power → Restart (confirmed): lock first (key out of memory, USB closed), then
+     * DevicePolicyManager#reboot, device owner only. Never while a request is held or reviewed.
+     */
+    private void restart() {
+        if (!host.restartAvailable() || host.requestUnderReview() || !unlocked) return;
+        lock();
+        try {
+            DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+            policy.reboot(VaultDeviceAdminReceiver.component(this));
+        } catch (RuntimeException refused) {
+            Log.w(TAG, "restart refused: " + refused.getMessage());
+            gateNotice = "The phone did not restart. Hold the power button, then choose Restart.";
+            showPinGate(null);
+        }
+    }
+
     private void beginSensitive(String purpose, Runnable afterPin) {
         if (!walletLoaded || credentials == null || !unlocked) return;
         if (transport != null || requestPending.get()) {
@@ -997,6 +1175,15 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // Back, an error or a timeout on the system prompt ends the flow: without this the token
             // stayed taken and every later sensitive action (Continue · verify PIN, ☰ → Wallet)
             // did nothing until the next lock.
+            if (screenOffLock.pinRequiredForSensitive()) {
+                // Woken inside "Lock after screen off": a sensitive action always asks for the
+                // PIN, even while the chip's window from the last PIN is still open.
+                confirmDevicePin("Enter your PIN to " + purpose, () -> {
+                    screenOffLock.sensitivePinConfirmed();
+                    if (sensitiveValid(token, s)) afterPin.run();
+                }, () -> releaseSensitive(token));
+                return;
+            }
             withSeedKey("Enter your PIN to " + purpose, () -> { if (sensitiveValid(token, s)) afterPin.run(); },
                     () -> releaseSensitive(token));
             return;
@@ -1215,13 +1402,19 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             // is entered and the request has gone through the ordinary review path.
             UsbAccessory gated = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
             if (gated == null) return;
+            boolean hadHeld;
+            synchronized (stateLock) { hadHeld = heldRequest.summary() != null; }
             synchronized (stateLock) { heldRequest.clear(); } // a new connection never inherits a held request
+            // A host attached afresh (START) while a request waited: the host that sent it gave up.
+            if (hadHeld && !resumed) gateUsbNote = MAC_STOPPED_WAITING;
+            if (!resumed) usbSelfReopens = 0;
             if (transport != null) { AccessoryTransport previous = transport; transport = null; previous.close(); }
             try {
                 AccessoryTransport opened = AccessoryTransport.open((UsbManager) getSystemService(USB_SERVICE), gated, this);
                 transport = opened;
                 opened.start();
                 pendingUsb = null;
+                if (resumed) dispatchCarried(opened);
                 // A fresh attach lights the gate for the waiting Mac; a resumed session (after a
                 // lock) must not hold the screen on: the gate lights when a request arrives.
                 if (!resumed) keepScreenOn(true);
@@ -1245,19 +1438,23 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         UsbAccessory accessory = intent.getParcelableExtra(UsbManager.EXTRA_ACCESSORY);
         if (accessory == null) return;
         synchronized (stateLock) { heldRequest.clear(); }
+        if (!resumed) usbSelfReopens = 0;
         if (transport != null) {
             AccessoryTransport previous = transport;
             transport = null;
             previous.close();
         }
-        boolean replacedRequest = approvalDecision != null;
+        ApprovalDecision replaced = approvalDecision;
+        boolean undecided = replaced != null && replaced.state() == ApprovalDecision.State.REVIEW;
         cancelApproval();
-        if (replacedRequest) approvals.showReceipt("USB session changed", "The previous request ended. If you tapped Approve & sign, check your Mac for a possible signature before retrying.", null);
+        if (undecided) approvals.showReceipt("Your Mac stopped waiting", "Your Mac connected again, so the request on screen ended before you decided. Nothing was signed. Ask again from your Mac if you still want it.", null);
+        else if (replaced != null) approvals.showReceipt("USB session changed", "The previous request ended. If you tapped Approve & sign, check your Mac for a possible signature before retrying.", null);
         try {
             AccessoryTransport opened = AccessoryTransport.open(
                     (UsbManager) getSystemService(USB_SERVICE), accessory, this);
             transport = opened;  // publish first …
             opened.start();      // … then let callbacks fire; none can be mis-attributed now
+            if (resumed) dispatchCarried(opened);
             statusMessage = "USB connected · waiting for a request";
             if (statusView != null) statusView.setText(statusMessage);
         } catch (Exception exception) {
@@ -1279,6 +1476,40 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
     /** USB reader thread (or the crypto thread for a held request): RequestRouter decides. */
     @Override public void onRequest(AccessoryTransport source, JSONObject json) { router.onRequest(source, json); }
 
+    /**
+     * A request read on a session that could no longer answer it (AccessoryTransport#takeCarried),
+     * handed to the session reopened on the same, still-attached accessory within
+     * {@link #CARRY_WINDOW_MS}: its sender wrote it after the bus dropped, so it is the host on the
+     * bus now. It takes the ordinary path (held behind the lock, or reviewed); never answered by
+     * this hand-over itself. UI thread.
+     */
+    private void dispatchCarried(AccessoryTransport opened) {
+        JSONObject carried = carriedRequest;
+        carriedRequest = null;
+        if (carried == null || SystemClock.elapsedRealtime() > carriedUntil) return;
+        cryptoExecutor.execute(() -> onRequest(opened, carried));
+    }
+
+    /**
+     * A session ended by itself (a failed write, a stale descriptor, a read error) while the
+     * accessory may still be attached: open it again, as after a lock, so the next host finds a
+     * reader without a replug. Bounded by {@link #MAX_SELF_REOPENS} until a request is read again.
+     */
+    private void reopenAfterOwnEnd(JSONObject carried) {
+        if (!operational) return;
+        if (usbSelfReopens >= MAX_SELF_REOPENS) {
+            Log.w(TAG, "USB: not reopening again (" + usbSelfReopens + " sessions ended by themselves)");
+            usbReplugHint = true;
+            return;
+        }
+        usbSelfReopens++;
+        if (carried != null) {
+            carriedRequest = carried;
+            carriedUntil = SystemClock.elapsedRealtime() + CARRY_WINDOW_MS;
+        }
+        ui.postDelayed(() -> resumeAttachedAccessory(USB_RESUME_ATTEMPTS), USB_RESUME_RETRY_MS);
+    }
+
 
     /**
      * Window flags belong to the UI thread. A change from any other thread (the USB reader, the
@@ -1291,6 +1522,9 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         runOnUiThread(() -> {
             if (on) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
             else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            boolean changed = screenHeldOn != on;
+            screenHeldOn = on;
+            if (changed && unlocked && foreground) armIdleLock(); // its bound depends on it (DisplaySettings#idleLockMs)
         });
     }
 
@@ -1411,30 +1645,56 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         });
     }
 
+    /**
+     * A session ended. Unplugged: as always. Ended by itself (AccessoryTransport#endedByItself: a
+     * write the host never took, a descriptor the bus dropped under, a read error) while the
+     * accessory may still be attached: what it held for its host is dropped with a clear note
+     * ("Your Mac stopped waiting… Nothing was signed"), and the accessory is opened again
+     * (reopenAfterOwnEnd), so the next host is answered without a replug.
+     */
     @Override public void onDisconnected(AccessoryTransport source, String reason) {
         boolean droppedHeld;
         synchronized (stateLock) {
             droppedHeld = heldRequest.dropIfFrom(source); // its host is gone
         }
+        final boolean byItself = source.endedByItself();
+        final JSONObject carried = source.takeCarried();
+        if (source.requestsRead() > 0) usbSelfReopens = 0; // it worked: reopening after its own end is allowed again
+        Log.i(TAG, "USB session ended (" + source.end() + "): " + reason);
         runOnUiThread(() -> {
+            if (droppedHeld && byItself) gateUsbNote = MAC_STOPPED_WAITING;
             if (source != transport) {
-                if (droppedHeld) refreshGateRequest(null, null);
+                if (droppedHeld) refreshGateRequest(gateNoteLabel(), gateUsbNote);
+                if (byItself && transport == null) reopenAfterOwnEnd(carried);
                 return;
             }
-            boolean hadApproval = approvalDecision != null;
+            ApprovalDecision open = approvalDecision;
+            boolean undecided = open != null && open.state() == ApprovalDecision.State.REVIEW;
             transport = null;
             cancelApproval();
             setStatusActive(false);
-            refreshGateRequest(null, null); // locked: the gate drops the held request and the USB card
-            if (unlocked && hadApproval)
-                approvals.showReceipt("USB disconnected", "The request session ended. If you tapped Approve & sign, delivery may be uncertain. Check your Mac before trying another transaction.", null);
+            refreshGateRequest(gateNoteLabel(), gateUsbNote); // locked: the gate drops the held request and the USB card
+            if (unlocked && open != null) {
+                if (undecided && byItself)
+                    approvals.showReceipt("Your Mac stopped waiting", "The connection to your Mac ended before you decided. Nothing was signed. Ask again from your Mac if you still want it.", null);
+                else
+                    approvals.showReceipt("USB disconnected", "The request session ended. If you tapped Approve & sign, delivery may be uncertain. Check your Mac before trying another transaction.", null);
+            } else if (unlocked && source.end() == AccessoryTransport.End.WRITE_FAILED) {
+                statusMessage = "Your Mac stopped waiting before the answer arrived · it never left this phone. Ask again from your Mac.";
+                if (statusView != null) statusView.setText(statusMessage);
+            }
+            if (byItself) reopenAfterOwnEnd(carried);
         });
     }
+
+    private String gateNoteLabel() { return gateUsbNote != null ? "REQUEST ENDED" : null; }
 
     @Override protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
         if (adbObserver != null) getContentResolver().unregisterContentObserver(adbObserver);
         try { unregisterReceiver(usbDetachReceiver); } catch (IllegalArgumentException ignored) { }
+        try { unregisterReceiver(usbStateReceiver); } catch (IllegalArgumentException ignored) { }
+        try { unregisterReceiver(shutdownReceiver); } catch (IllegalArgumentException ignored) { }
         synchronized (stateLock) {
             session.incrementAndGet();
             unlocked = false;
@@ -1532,12 +1792,25 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
             MainActivity.this.armIdleLock();
         }
         @Override public void armIdleLock() { MainActivity.this.armIdleLock(); }
+        @Override public void applyBrightness() { MainActivity.this.applyBrightness(); }
+        @Override public void previewBrightness(int percent) { MainActivity.this.applyBrightness(percent, false); }
+        @Override public boolean restartAvailable() {
+            DevicePolicyManager policy = (DevicePolicyManager) getSystemService(Context.DEVICE_POLICY_SERVICE);
+            return policy != null && policy.isDeviceOwnerApp(getPackageName());
+        }
+        @Override public boolean requestUnderReview() {
+            synchronized (stateLock) {
+                return approvalDecision != null || requestPending.get() || heldRequest.summary() != null;
+            }
+        }
+        @Override public void restart() { MainActivity.this.restart(); }
         @Override public boolean appliancePolicyActive() { return ApplianceProvisioning.applianceImage() && operational; }
         @Override public boolean credentialMode() { return MainActivity.this.credentialMode(); }
         @Override public SigningAccount activeAccount() { return activeAccount; }
         @Override public HeldRequest heldRequest() { return heldRequest; }
         @Override public void showHeldOnGate(AccessoryTransport source, String label, String body) {
             if (unlocked || source != transport) return;
+            gateUsbNote = null; // a new request: the earlier one's note is old news
             keepScreenOn(true); // a request is waiting (also on a session resumed after a lock): keep the gate lit
             refreshGateRequest(label, body); // the PIN screen and the credential-mode locked page
         }

@@ -56,6 +56,37 @@ final class AccessoryTransport implements Closeable {
         void onDisconnected(AccessoryTransport source, String reason);
     }
 
+    /**
+     * How the session ended. Only {@link #DETACHED} means the cable (the accessory) is gone; after
+     * any end of its own ({@link #endedByItself}) the framework may still have the accessory
+     * attached, and MainActivity opens it again so the next host finds a reader without a replug.
+     */
+    enum End {
+        OPEN,
+        /** Closed by the vault itself (lock, new session, deactivation). */
+        LOCAL,
+        /** USB_ACCESSORY_DETACHED: unplugged. */
+        DETACHED,
+        /** The accessory reported end of stream. */
+        READ_ENDED,
+        /** A read, a frame, a parse or a listener failed. */
+        READ_FAILED,
+        /** A response could not be written (the host went away: ENODEV, EIO), or the host stopped reading. */
+        WRITE_FAILED,
+        /** The descriptor can no longer write (see {@link WriteProbe}): the bus dropped under it. */
+        STALE,
+    }
+
+    /**
+     * Can this session's descriptor still send? f_accessory marks an open descriptor disconnected
+     * on any bus reset or disconnect (a host that went away, a host-side port reset, a START that
+     * re-enumerates the phone) and only a new open() clears that: reads may go on working while
+     * every write fails with ENODEV, so a request read on it could never be answered. A zero-length
+     * write() asks exactly that without sending anything (acc_write checks the state first and
+     * returns 0 for no bytes). Never blocks.
+     */
+    interface WriteProbe { boolean writable(); }
+
     private final Closeable descriptor;
     private final InputStream input;
     private final OutputStream output;
@@ -65,10 +96,17 @@ final class AccessoryTransport implements Closeable {
     private final Listener listener;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean started = new AtomicBoolean(false);
+    private final WriteProbe probe;
+    private volatile End end = End.OPEN;
+    /** Requests read and handed to the listener on this session. */
+    private final java.util.concurrent.atomic.AtomicInteger requestsRead = new java.util.concurrent.atomic.AtomicInteger();
+    /** A request read on a descriptor that could no longer answer it (see {@link #takeCarried}). */
+    private volatile JSONObject carried;
 
     private AccessoryTransport(Closeable descriptor, InputStream input, OutputStream output,
-                               Listener listener) {
+                               Listener listener, WriteProbe probe) {
         this.descriptor = descriptor;
+        this.probe = probe;
         // The accessory character device (f_accessory) delivers one USB packet per read() and
         // DISCARDS whatever the caller did not ask for: a byte-at-a-time read keeps the first
         // byte of every packet and silently drops the rest, so a framed request never completes.
@@ -89,9 +127,9 @@ final class AccessoryTransport implements Closeable {
         ParcelFileDescriptor descriptor = manager.openAccessory(accessory);
         if (descriptor == null) throw new IllegalStateException("USB accessory permission was not granted");
         try {
-            return new AccessoryTransport(descriptor,
-                    new FileInputStream(descriptor.getFileDescriptor()),
-                    new FileOutputStream(descriptor.getFileDescriptor()), listener);
+            final java.io.FileDescriptor fd = descriptor.getFileDescriptor();
+            return new AccessoryTransport(descriptor, new FileInputStream(fd), new FileOutputStream(fd), listener,
+                    () -> descriptorWritable(fd));
         } catch (RuntimeException constructionFailure) {
             try { descriptor.close(); } catch (Exception ignored) {}
             throw constructionFailure;
@@ -128,10 +166,33 @@ final class AccessoryTransport implements Closeable {
                 && usbState.getBooleanExtra("configured", false) && usbState.getBooleanExtra("accessory", false);
     }
 
+    /** A zero-length write() on the accessory descriptor: false on ENODEV / EIO / EBADF / EPIPE. */
+    private static boolean descriptorWritable(java.io.FileDescriptor fd) {
+        try {
+            android.system.Os.write(fd, new byte[0], 0, 0);
+            return true;
+        } catch (android.system.ErrnoException e) {
+            return !deadErrno(e.errno);
+        } catch (Exception other) {
+            return true; // not a verdict on the session: carry on as before this check existed
+        }
+    }
+
+    static boolean deadErrno(int errno) {
+        return errno == android.system.OsConstants.ENODEV || errno == android.system.OsConstants.EIO
+                || errno == android.system.OsConstants.EBADF || errno == android.system.OsConstants.EPIPE;
+    }
+
     /** Test seam: an inactive session over arbitrary streams (no USB / ParcelFileDescriptor). */
     static AccessoryTransport openForTest(Closeable descriptor, InputStream input, OutputStream output,
                                           Listener listener) {
-        return new AccessoryTransport(descriptor, input, output, listener);
+        return new AccessoryTransport(descriptor, input, output, listener, () -> true);
+    }
+
+    /** Test seam with a write probe. */
+    static AccessoryTransport openForTest(Closeable descriptor, InputStream input, OutputStream output,
+                                          Listener listener, WriteProbe probe) {
+        return new AccessoryTransport(descriptor, input, output, listener, probe);
     }
 
     /** Begin the session loops. Idempotent; a no-op once closed. */
@@ -147,13 +208,23 @@ final class AccessoryTransport implements Closeable {
                     if (line.getBytes(StandardCharsets.UTF_8).length > MAX_REQUEST_BYTES && !BtcRequest.SIGN_PSBT.equals(request.optString("method"))) {
                         throw new IllegalArgumentException("USB request exceeds 32 KiB");
                     }
+                    if (!probe.writable()) {
+                        // Read, but no answer could ever leave this descriptor: the bus dropped
+                        // under it after it was opened. The sender is the host on the bus NOW
+                        // (it wrote after the drop), so the request is handed to the session
+                        // opened next on the same accessory (MainActivity), not lost.
+                        carried = request;
+                        fail(End.STALE, "USB session went stale (the phone could no longer answer on it)");
+                        return;
+                    }
+                    requestsRead.incrementAndGet();
                     listener.onRequest(this, request);
                 }
-                fail("USB cable disconnected");
+                fail(End.READ_ENDED, "USB cable disconnected");
             } catch (Throwable failure) {
                 // Errors too (StackOverflowError, OutOfMemoryError from a hostile frame): the
                 // session must end and be reported, never left open with a dead reader.
-                fail(failure instanceof Exception ? failure.getMessage()
+                fail(End.READ_FAILED, failure instanceof Exception ? failure.getMessage()
                         : "USB request could not be processed (" + failure.getClass().getSimpleName() + ")");
             }
         });
@@ -170,7 +241,10 @@ final class AccessoryTransport implements Closeable {
         } catch (InterruptedException interrupted) {
             // close() interrupted us: nothing to report, the session is already ending
         } catch (Exception exception) {
-            fail("USB write failed: " + exception.getMessage());
+            // ENODEV / EIO: the host that was to read this went away (or the bus was reset under
+            // the session). The session ends and is reported; MainActivity drops what it held
+            // for that host and opens the still-attached accessory again.
+            fail(End.WRITE_FAILED, "USB write failed: " + exception.getMessage());
         }
     }
 
@@ -179,10 +253,40 @@ final class AccessoryTransport implements Closeable {
      * the listener is told exactly once. A malformed or non-reading host cannot keep a half-open
      * session alive.
      */
-    private void fail(String reason) {
+    private void fail(End how, String reason) {
         if (!closed.compareAndSet(false, true)) return;
+        end = how;
         releaseResources();
         listener.onDisconnected(this, reason);
+    }
+
+    /** Requests this session read and handed on (a session that worked, as opposed to one that failed at once). */
+    int requestsRead() { return requestsRead.get(); }
+
+    /** How the session ended ({@link End#OPEN} while it is open). */
+    End end() { return end; }
+
+    /** The session ended on its own and the accessory may still be attached (not unplugged, not closed by the vault). */
+    boolean endedByItself() { return endedByItself(end); }
+
+    static boolean endedByItself(End e) {
+        return e == End.READ_ENDED || e == End.READ_FAILED || e == End.WRITE_FAILED || e == End.STALE;
+    }
+
+    /** Open, and its descriptor can still send (see {@link WriteProbe}). Sends nothing. */
+    boolean writable() { return !closed.get() && probe.writable(); }
+
+    /**
+     * The open session's descriptor can no longer send (the bus dropped under it): end it as
+     * {@link End#STALE}, reported to the listener like any other failure. No-op once closed.
+     */
+    void failStale(String reason) { fail(End.STALE, reason); }
+
+    /** The request read on a stale descriptor, once (null if none). */
+    JSONObject takeCarried() {
+        JSONObject c = carried;
+        carried = null;
+        return c;
     }
 
     private void releaseResources() {
@@ -294,7 +398,7 @@ final class AccessoryTransport implements Closeable {
         if (closed.get()) return false;
         byte[] frame = (response.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         if (!outbound.offer(frame)) {
-            fail("USB host is not reading responses (" + MAX_QUEUED_RESPONSES + " unread)");
+            fail(End.WRITE_FAILED, "USB host is not reading responses (" + MAX_QUEUED_RESPONSES + " unread)");
             return false;
         }
         return true;
@@ -305,6 +409,14 @@ final class AccessoryTransport implements Closeable {
     /** Local close (lock, replacement, new session): releases resources, no listener callback. */
     @Override public void close() {
         if (!closed.compareAndSet(false, true)) return;
+        end = End.LOCAL;
+        releaseResources();
+    }
+
+    /** USB_ACCESSORY_DETACHED: the cable is gone. Closes like {@link #close()}; no listener callback. */
+    void detached() {
+        if (!closed.compareAndSet(false, true)) return;
+        end = End.DETACHED;
         releaseResources();
     }
 
@@ -320,6 +432,7 @@ final class AccessoryTransport implements Closeable {
      */
     void closeAfter(JSONObject lastResponse) {
         if (!closed.compareAndSet(false, true)) return;
+        end = End.LOCAL;
         outbound.clear();
         final byte[] frame = (lastResponse.toString() + "\n").getBytes(StandardCharsets.UTF_8);
         Thread closer = new Thread(() -> {
