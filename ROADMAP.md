@@ -14,7 +14,9 @@ Standing rules (these never move):
 
 ## Current status
 
-**Pre-release. Development phones only. No real funds.**
+**Public beta: small amounts only; bootloader unlocked; not independently audited.** Pixel 6a
+only, images signed with beta-test keys ([0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4),
+[release notes](release/beta/RELEASE_NOTES.md)). Development phones stay development phones.
 
 ### Phone app
 
@@ -38,8 +40,12 @@ Working on hardware (development phones, development images):
   simulation shown as an untrusted claim with contradiction warnings.
 - **Messages:** `personal_sign` and EIP-712 with plain-language review (sign-in, Permit2,
   orders) ([message-signing.md](vault-os/docs/message-signing.md)).
-- **Bitcoin:** BIP-84 and BIP-86 (key path) accounts, PSBT review and signing; a signet
-  transaction has been signed on a phone and confirmed.
+- **Bitcoin:** BIP-84 (native SegWit) and BIP-86 (Taproot key path) accounts, plus BIP-49
+  (nested SegWit) and BIP-44 (legacy) accounts for coins from older Ledger/Trezor-era wallets;
+  PSBT review and signing; a signet transaction has been signed on a phone and confirmed.
+- **Entropy:** optional dice rolls mixed into a new recovery phrase during setup, and the entropy
+  report (Security → Device information → "Entropy at wallet creation") showing which sources
+  were used and whether each passed its health tests.
 - **Device attestation:** StrongBox key attestation bound to the active address
   ([device-attestation.md](vault-os/docs/device-attestation.md)); run on both phones, verdict
   DEVELOPMENT as expected for unlocked development images.
@@ -67,9 +73,9 @@ messaging, and a watch-only Bitcoin wallet. Unsigned and not notarized.
   ([dev-ladder-bluejay](vault-os/dev-ladder-bluejay/README.md)) rungs b0–b4c passed on hardware:
   hands-off factory boot into the kiosk, our development AVB key with verification on, unused
   kernel modules removed, USB lock-down, radios off, app strip. The app suites (first run, USB
-  signing, message signing, credential) pass on b4c. b4d-1 (radio daemons out) passed too; the
-  first `user` image, **beta1** ([release-bluejay](vault-os/release-bluejay/README.md): no adb,
-  hardened recovery, beta-signed AVB and release app), is built and not yet flashed.
+  signing, message signing, credential) pass on b4c. b4d-1 (radio daemons out) passed too. The
+  `user` images ([release-bluejay](vault-os/release-bluejay/README.md): no adb, hardened
+  recovery, beta-test-signed AVB and release app) are at **beta4**, the public beta image.
 
 ### Debug-only state on development images
 
@@ -141,7 +147,8 @@ Each milestone has an exit test that must pass on a real phone.
 - [ ] Independent audit of the app, the companion and the OS changes; fixes.
 - [x] Public threat model, security contact and disclosure policy ([SECURITY.md](SECURITY.md)).
 - [ ] Open repository, bug bounty, incident-response plan.
-- [ ] Closed beta with capped amounts, then public release.
+- [ ] Public beta (Pixel 6a, small amounts only, beta-test keys, bootloader unlocked), then a
+      release after the key ceremony, relocking and the audit.
 - Exit: audit report published with no open high-severity findings.
 
 ## Open items outside the milestones
@@ -152,8 +159,9 @@ Each milestone has an exit test that must pass on a real phone.
   folded below.
 - **PIN credential:** owner text on Android's own lock screen; `lifecycletest.sh` still expects the
   app-side attempt counter text.
-- **Entropy:** the R7 diagnostics screen; the jitter collector is home-grown, not a vetted
-  jitterentropy port.
+- **Entropy:** the jitter collector is home-grown, not a vetted jitterentropy port; no
+  independent raw-noise assessment of the sources. (The R7 diagnostics screen and dice entropy
+  are done.)
 - **Release UI:** move "Coming next" out of primary navigation in the shipped app.
 - **OLED burn-in:** the kiosk shows the same screen for long periods; idle screen-off and
   pixel-shift exist, burn-in behaviour over months is unmeasured.
@@ -172,7 +180,7 @@ Each milestone has an exit test that must pass on a real phone.
 - **Multisig (Safe) co-signer flow.**
 - **Stateless mode:** the seed entered each session and held only in memory (SeedSigner-style),
   as an option next to the default persistent mode. An app-level mode, not an OS mode.
-- **User-supplied entropy** (dice or typed) mixed into seed generation.
+- **Typed user entropy** (free text) next to the dice rolls that already exist.
 - **Passkeys (FIDO2/WebAuthn):** non-extractable P-256 keys in StrongBox, either over a USB HID
   function or bridged through the companion over the existing AOA channel.
 - **Shamir backups (SLIP-39).**

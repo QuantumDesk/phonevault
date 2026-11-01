@@ -112,7 +112,19 @@ Public identities of the keys generated 2026-10-18 on the build host:
 
 These are **BETA-TEST** keys: to be replaced by beta keys generated offline
 (`scripts/generate-release-keyset.sh`, offline machine) before any phone is relocked to a beta
-key or a beta goes to anyone outside the project. They are separate from the AVB dev key
+key or a beta goes to anyone outside the project.
+
+> **Conscious exception (public beta, 2026-11):** the public beta, **0.1.0-beta4**
+> ([GitHub release](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4)), ships
+> to outside testers signed with these **BETA-TEST** keys. That breaks the rule above on purpose:
+> the offline key ceremony (`scripts/generate-release-keyset.sh`) has not happened yet, and the
+> beta is offered for small amounts only, with the bootloader **unlocked** and never relocked to
+> these keys, and the genuine check accepts a beta phone only in Developer mode and never better
+> than Development. The rule still holds for relocking: no phone is relocked to a BETA-TEST key.
+> The exception ends with the key ceremony; the first image signed with offline-generated keys
+> needs a re-install (wipe) and a restore from the recovery phrase.
+
+They are separate from the AVB dev key
 (`~/.phonevault-keys/avb`, sha1 `af09b166…`), which the beta never uses. The tree reaches the AVB
 key only through the symlink `vendor/phonevault/keys/avb_bluejay_beta.pem` (sync-beta.sh removes
 the dev key's link at the same time). A new key = a new identity: re-flashing a beta signed by a
@@ -579,7 +591,14 @@ b799b157b844bd9358c5812cbb11760d4577b8d11264669cf93e098de61e132b  vault_bluejay-
 ```
 
 Copied to the Mac (`~/pv-bluejay/out-beta4/`, without the two zips): `shasum -a 256 -c` on
-`SHA256SUMS` minus the zip lines, 37/37 OK. Not flashed yet. Flash and rollback as beta1
+`SHA256SUMS` minus the zip lines, 37/37 OK. For the public beta release
+([v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), with the
+BETA-TEST keys as the exception noted under Keys): `super.img` split in two parts below GitHub's
+2 GiB limit, the seven slot images and `android-info.txt` in a zip, the build's own `SHA256SUMS`
+(sha256 `26fa3625b8350f204aeb76004f8d6e546500683da979ec4c491c502156eeeec4`) and `manifest.json`,
+`flash-beta4-mac.sh`, and `install-beta4-mac.sh` (joins, unzips, verifies against `SHA256SUMS`,
+then runs the flash script's `--check` and the flash). The source of `install-beta4-mac.sh` is
+kept at [`release/beta/install-beta4-mac.sh`](../../release/beta/install-beta4-mac.sh). Not flashed yet. Flash and rollback as beta1
 (`./flash-beta4-mac.sh --check`, `./flash-beta4-mac.sh`; the flash script always wipes).
 
 ### Verify on hardware without adb

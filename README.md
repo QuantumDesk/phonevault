@@ -10,24 +10,32 @@ own screen. Keys never leave the phone.
   EIP-1559 transfers, ERC-20 and NFT calls, Uniswap swaps decoded into a readable review,
   `personal_sign`, EIP-712 typed data (Permit / Permit2), Sign-In with Ethereum checks. Calldata
   the phone cannot explain is refused, never blind-signed.
-- **Bitcoin**: PSBT signing for native SegWit (P2WPKH) and Taproot key-path (P2TR) accounts from
-  the same 24 words, with a watch-only wallet on the computer.
+- **Bitcoin**: PSBT signing for native SegWit (P2WPKH) and Taproot key-path (P2TR) accounts, and
+  for coins from older Ledger/Trezor-era wallets nested SegWit (P2SH-P2WPKH) and legacy (P2PKH),
+  all from the same recovery phrase, with a watch-only wallet on the computer.
 - **Device attestation**: the companion asks the phone's Titan M / M2 security chip to prove the
   phone runs genuine Phone Vault firmware and app.
 - **Wallet features**: BIP-39 24-word backup with a mandatory backup check, restore, multiple
   accounts, optional passphrase wallets, SeedQR, address book with address-poisoning warnings.
 
-## Status: pre-release. Do not use it for real funds.
+## Status: public beta (Pixel 6a). Small amounts only.
 
-Phone Vault is unaudited, pre-release software. Use test assets only. It is not safe for real
-funds until all of the following exist:
+**Public beta: small amounts only; bootloader unlocked; not independently audited.** The beta
+images are signed with beta-test keys. Download, install steps and limits:
+[0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), the [tester guide](release/beta/TESTER_GUIDE.md) and the
+[release notes](release/beta/RELEASE_NOTES.md). Report bugs in
+[GitHub Issues](https://github.com/QuantumDesk/phonevault/issues/new/choose).
+
+Do not move savings to it. It is not ready for more than small amounts until all of the
+following exist:
 
 1. **Signed releases** built from source by a reproducible pipeline, with a published release key.
 2. A **relocked bootloader** with the project's own verified-boot key, demonstrated to refuse a
    tampered image.
 3. An **independent security audit** of the app, the companion and the OS changes.
 
-Development phones run an unlocked bootloader with adb enabled. See [ROADMAP.md](ROADMAP.md)
+Beta phones run an unlocked bootloader without adb; development phones run an unlocked
+bootloader with adb enabled. See [ROADMAP.md](ROADMAP.md)
 for what is done and what is open, and the [threat model](vault-os/docs/threat-model.md) for
 the trust boundary and known limitations.
 
@@ -35,7 +43,7 @@ the trust boundary and known limitations.
 
 | Phone | Role | Base |
 |---|---|---|
-| **Pixel 6a** (`bluejay`, Tensor gs101, Titan M2) | launch target | LineageOS 24.0 / Android 17 port ([port-bluejay.md](vault-os/docs/port-bluejay.md)) |
+| **Pixel 6a** (`bluejay`, Tensor gs101, Titan M2) | public beta (0.1.0-beta4) | LineageOS 24.0 / Android 17 port ([port-bluejay.md](vault-os/docs/port-bluejay.md)) |
 | Pixel 3 XL (`crosshatch`, Snapdragon 845, Titan M) | development phone only (no security updates since 2022) | LineageOS 22.2 / Android 15 |
 
 ## How it fits together
