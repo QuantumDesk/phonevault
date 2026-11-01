@@ -106,3 +106,4 @@ button.link.nft-sub { justify-content: flex-start; padding: 0; }
 .sim-changes li { overflow-wrap: anywhere; }
 .sim-changes li.pos .mono { color: var(--accent); }
 button.warn-btn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); background: color-mix(in srgb, var(--warn) 8%, var(--surface-2)); }
+.dev-offer { display: grid; gap: 8px; margin-top: 8px; text-align: left; }

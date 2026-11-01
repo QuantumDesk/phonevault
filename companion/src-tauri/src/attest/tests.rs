@@ -394,10 +394,22 @@ fn unlocked_pixel3_is_development_and_says_so() {
     assert_eq!(a.verdict, Verdict::Development, "{a:?}");
     assert_eq!(a.headline, policy::UNLOCKED_HEADLINE);
     assert_eq!(a.details.as_ref().unwrap().device_locked, Some(false));
+    assert!(!a.dev_mode_fixable, "a release app on an unlocked phone is not the self-flashed case the offer is for");
     // development-signed app: FAIL without Developer mode, DEVELOPMENT with it
     let p = policy_for(&info, false);
-    assert_eq!(evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false).verdict, Verdict::Fail);
+    let failed = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    assert_eq!(failed.verdict, Verdict::Fail);
+    assert_eq!(failed.problems.len(), 2, "{:?}", failed.problems);
+    assert!(failed.dev_mode_fixable, "unlocked + development app only: the companion offers Developer mode");
+    // any other problem besides those two: no offer
+    let mut p_old = policy_for(&info, false);
+    p_old.package = "some.other.app".into();
+    let other = evaluate(&info, &p_old, SecurityLevel::StrongBox, &challenge, &unchecked(), false);
+    assert_eq!(other.verdict, Verdict::Fail);
+    assert!(!other.dev_mode_fixable, "{:?}", other.problems);
+    assert!(!policy::fail("anything").dev_mode_fixable);
     let a = evaluate(&info, &p, SecurityLevel::StrongBox, &challenge, &unchecked(), true);
+    assert!(!a.dev_mode_fixable, "never once Developer mode is on");
     assert_eq!(a.verdict, Verdict::Development);
     assert_eq!(
         a.headline,

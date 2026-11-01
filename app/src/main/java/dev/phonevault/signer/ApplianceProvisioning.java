@@ -62,17 +62,20 @@ final class ApplianceProvisioning {
         }
         if (SystemCredential.isSet(context)) SystemCredential.applyLockPolicy(context);
 
-        // Display & auto-lock -> Screen timeout (default 60 s), re-applied on every pass so a boot
-        // or re-provisioning restores the user's choice. A device owner may set SCREEN_OFF_TIMEOUT
-        // through setSystemSetting; no WRITE_SETTINGS (or any other) permission is involved.
+        // Display & auto-lock -> Screen timeout (default 2 minutes; a saved choice is kept) and
+        // brightness (only once chosen there), re-applied on every pass so a boot or
+        // re-provisioning restores the user's choice. A device owner may set SCREEN_OFF_TIMEOUT
+        // and SCREEN_BRIGHTNESS(_MODE) through setSystemSetting; no WRITE_SETTINGS (or any other)
+        // permission is involved.
+        DisplaySettings display = new DisplaySettings(
+                context.getSharedPreferences(DisplaySettings.PREFS_FILE, Context.MODE_PRIVATE));
         try {
-            DisplaySettings display = new DisplaySettings(
-                    context.getSharedPreferences(DisplaySettings.PREFS_FILE, Context.MODE_PRIVATE));
             policy.setSystemSetting(admin, android.provider.Settings.System.SCREEN_OFF_TIMEOUT,
                     String.valueOf(display.screenTimeoutMs()));
         } catch (RuntimeException e) {
             Log.w(TAG, "screen timeout not applied: " + e.getMessage());
         }
+        if (display.brightnessChosen()) applyBrightness(context, policy, display.brightnessPercent(), display.brightnessAuto());
 
         // Hide any setup wizard the image still carries (release images strip them; this keeps a
         // factory boot deterministic either way).
@@ -93,6 +96,29 @@ final class ApplianceProvisioning {
             }
         }
         return true;
+    }
+
+    /**
+     * Device owner: Settings.System.SCREEN_BRIGHTNESS_MODE and, for a manual choice,
+     * SCREEN_BRIGHTNESS (DisplaySettings#systemBrightness). Best effort.
+     *
+     * @return whether the system took it (false: the caller falls back to the window's brightness)
+     */
+    static boolean applyBrightness(Context context, DevicePolicyManager policy, int percent, boolean auto) {
+        try {
+            if (!policy.isDeviceOwnerApp(context.getPackageName())) return false;
+            ComponentName admin = VaultDeviceAdminReceiver.component(context);
+            policy.setSystemSetting(admin, Settings.System.SCREEN_BRIGHTNESS_MODE, String.valueOf(
+                    auto ? DisplaySettings.BRIGHTNESS_MODE_AUTOMATIC : DisplaySettings.BRIGHTNESS_MODE_MANUAL));
+            if (!auto) {
+                policy.setSystemSetting(admin, Settings.System.SCREEN_BRIGHTNESS,
+                        String.valueOf(DisplaySettings.systemBrightness(percent)));
+            }
+            return true;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "brightness not applied: " + e.getMessage());
+            return false;
+        }
     }
 
     // ------------------------------------------------------------------ every activity start (MainActivity)

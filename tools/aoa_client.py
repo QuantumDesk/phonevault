@@ -94,6 +94,15 @@ class NotReadingError(RuntimeError):
         super().__init__(NOT_READING)
 
 
+class PhoneLeftError(RuntimeError):
+    """The phone dropped off the bus while a request waited for its answer."""
+
+    def __init__(self, cause):
+        super().__init__(
+            f"the phone left USB while this request waited for its answer ({cause}). Check the "
+            "phone, then ask again; if it keeps failing, unplug and replug the cable")
+
+
 class Seen:
     """A Google device on the bus, as connect() sees it."""
 
@@ -243,9 +252,12 @@ def _reattach(bus, stale):
 
 def connect(bus=None):
     """Find the phone, switch it to our accessory (or recover a stale one) and return
-    (endpoint_in, endpoint_out) once the phone reads. Raises NotReadingError (replug) otherwise."""
+    (endpoint_in, endpoint_out) once the phone reads. After the one recovery (START + port reset)
+    the bus is scanned again once and the phone probed where it now is: its app reopens the
+    accessory by itself after losing a session to the reset, which can take a moment longer than
+    the attach. Raises NotReadingError (unplug and replug) if nothing reads even then."""
     bus = bus or LibUsbBus()
-    fresh = recovered = vanished = False
+    fresh = recovered = rescanned = vanished = False
     while True:
         found = _the_phone(bus, recovered or vanished)
         if found.accessory:
@@ -272,6 +284,12 @@ def connect(bus=None):
         if opened is not None:
             return opened
         if recovered:
+            if not rescanned:
+                rescanned = True
+                print("phone-vault: still nothing reading after the re-attach; scanning for the phone again",
+                      file=sys.stderr)
+                _settle(bus)
+                continue
             raise NotReadingError()
         recovered = fresh = True
         print("phone-vault: nothing on the phone reads its USB accessory; attaching it afresh "
@@ -801,6 +819,11 @@ def exchange(endpoint_in, endpoint_out, request, timeout_ms=300_000, max_respons
             received.extend(endpoint_in.read(16_384, timeout=1_000))
         except usb.core.USBTimeoutError:
             continue
+        except usb.core.USBError as error:
+            if _transient(error):
+                # Re-enumerated or reset under us: this handle will never see the answer.
+                raise PhoneLeftError(error) from error
+            raise
         if len(received) > limit:
             raise ValueError(f"Phone response exceeds {limit // 1024} KiB")
         if b"\n" in received:
@@ -957,6 +980,11 @@ def main():
         "--pairing-file", default=DEFAULT_PAIRING_FILE,
         help="Where the paired signer address is pinned (default: %(default)s)",
     )
+    parser.add_argument(
+        "--timeout", type=int, default=300,
+        help="Seconds to wait for the phone's answer (default: %(default)s; the harness uses a short "
+             "one to play a host that gives up)",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("address", help="Read the public signer address (informational only)")
     subparsers.add_parser(
@@ -1048,7 +1076,7 @@ def main():
             raise ValueError("--challenge must be 16..64 bytes of lowercase hex")
         endpoint_in, endpoint_out = connect()
         request = request_for(args)
-        response = exchange(endpoint_in, endpoint_out, request,
+        response = exchange(endpoint_in, endpoint_out, request, timeout_ms=max(1, args.timeout) * 1000,
                             max_response_bytes=MAX_PSBT_RESPONSE_BYTES if args.command == "btc-sign" else None)
         if args.command.startswith("btc-"):
             validate_btc_response(request, response)

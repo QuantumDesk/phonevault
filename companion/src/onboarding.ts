@@ -6,8 +6,8 @@
 
 import type { Attestation, HistoryEntry, Status } from "./api";
 import { errText } from "./api";
-import type { DeviceCheck } from "./attestation";
-import { verdictLabel } from "./attestation";
+import type { DeviceCheck, DevForm } from "./attestation";
+import { verdictLabel, devModeOffer, newDevForm } from "./attestation";
 import { NETWORKS, byId, type Network } from "./networks";
 import { h, icon, padlock, grouped, short, fmtAmount, copy } from "./ui";
 import { qrSvg } from "./qr";
@@ -18,6 +18,8 @@ export interface SetupHost {
   status: () => Status | null;
   device: () => DeviceCheck;
   recheck: () => void;
+  /** Turn Developer mode on or off on this Mac (Rust checks the typed confirmation), then re-run the device check. */
+  setDeveloperMode: (on: boolean, confirmation: string | null) => Promise<void>;
   confirmPairing: (address: string) => Promise<void>;
   chainId: () => number;
   setChain: (id: number) => void;
@@ -38,11 +40,13 @@ interface S {
   /** step 4: balances when the step was entered, the time, and what arrived */
   baseline: Map<number, bigint>; since: number;
   arrived: { chainId: number; text: string; from: string | null } | null;
+  /** step 2: the "Turn on Developer mode…" confirmation form */
+  dev: DevForm;
 }
 let s: S = fresh();
 let poll = 0;
 const DEPOSIT_POLL_MS = 6000;
-function fresh(): S { return { step: 0, mismatch: false, pairing: false, pairError: null, baseline: new Map(), since: 0, arrived: null }; }
+function fresh(): S { return { step: 0, mismatch: false, pairing: false, pairError: null, baseline: new Map(), since: 0, arrived: null, dev: newDevForm() }; }
 
 export function setupStart(host: SetupHost) { s = fresh(); clearInterval(poll); advance(host); }
 
@@ -142,6 +146,7 @@ function genuineStep(host: SetupHost) {
         h("strong", null, "Stop here: don't put funds on this phone"),
         h("span", null, "It could not prove it is Phone Vault hardware running Phone Vault's firmware and app, so a modified phone could show you one thing and sign another."),
         h("span", null, "If someone sold you this phone already set up, don't use it. Flash it yourself, then plug it in again.")),
+      devModeOffer(c, s.dev, host.setDeveloperMode, host.rerender),
       h("div", { class: "actions" }, h("button", { class: "big", onclick: host.recheck, disabled: c.checking }, icon("refresh", 18), c.checking ? "Checking…" : "Check again")),
     );
   } else {

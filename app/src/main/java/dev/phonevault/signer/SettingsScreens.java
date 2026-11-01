@@ -7,6 +7,8 @@ import android.content.IntentFilter;
 import android.os.BatteryManager;
 import android.os.Build;
 import android.widget.LinearLayout;
+import android.widget.SeekBar;
+import android.widget.TextView;
 
 import java.util.List;
 
@@ -28,6 +30,16 @@ final class SettingsScreens {
         void screenTimeoutChanged();
         /** A display choice changed the idle lock: re-arm it. */
         void armIdleLock();
+        /** Apply the saved brightness choice (device owner: the system setting; else this window). */
+        void applyBrightness();
+        /** Show a slider position while it is dragged, without saving it. */
+        void previewBrightness(int percent);
+        /** Restart is possible here: this app is the device owner (DevicePolicyManager#reboot). */
+        boolean restartAvailable();
+        /** A USB request is held, under review or being answered: no restart now. */
+        boolean requestUnderReview();
+        /** Lock (the key leaves memory), then restart the phone. Refused while a request is under review. */
+        void restart();
         /** PhoneVault appliance image, policy established. */
         boolean appliancePolicyActive();
         boolean credentialMode();
@@ -72,7 +84,7 @@ final class SettingsScreens {
     void showPreferences() {
         DisplaySettings display = host.display();
         LinearLayout root = pages.page("SECURITY / PREFERENCES", "Display & auto-lock",
-                "Text size, screen timeout, locking and touch feedback. Changes apply at once.");
+                "Text size, brightness, screen timeout, locking and touch feedback. Changes apply at once.");
         pages.card(root, "Text size", host.largeText() ? "Large · easier reading" : "Standard · comfortable reading");
         pages.action(root, host.largeText() ? "Use standard text" : "Use larger text", true, () -> {
             if (display.setLargeText(!host.largeText())) {
@@ -81,9 +93,13 @@ final class SettingsScreens {
             } else pages.showInfo("Setting not saved", "Try again. Your previous text size is still active.", this::showPreferences);
         });
 
+        addBrightness(root, display);
+
         int screen = display.screenTimeoutSeconds();
+        int grace = display.screenOffGraceSeconds();
         pages.card(root, "Screen timeout", "The screen turns off after " + DisplaySettings.durationLabel(screen)
-                + " without a touch. Screen off always locks the vault.");
+                + " without a touch. " + (grace == 0 ? "Screen off locks the vault."
+                        : "The vault locks " + DisplaySettings.durationLabel(grace) + " after the screen turns off."));
         for (int seconds : DisplaySettings.SCREEN_TIMEOUT_CHOICES) {
             pages.action(root, "Screen off after " + DisplaySettings.durationLabel(seconds), seconds == screen, () -> {
                 if (display.setScreenTimeoutSeconds(seconds)) {
@@ -95,7 +111,7 @@ final class SettingsScreens {
         }
 
         int idle = display.idleSeconds();
-        int effective = DisplaySettings.effectiveIdleSeconds(idle, screen);
+        int effective = DisplaySettings.effectiveIdleSeconds(idle, screen, grace, true);
         pages.card(root, "Idle lock", "Locks after " + DisplaySettings.durationLabel(effective)
                 + " without a touch, even while a review keeps the screen on."
                 + (effective < idle ? " (Capped by the screen timeout.)" : ""));
@@ -109,6 +125,24 @@ final class SettingsScreens {
             });
         }
 
+        pages.card(root, "Lock after screen off", grace == 0 ? "Immediately · waking the phone always asks for the PIN"
+                : DisplaySettings.durationLabel(grace) + " · waking the phone within this time does not ask for the PIN. "
+                        + "Showing the recovery phrase, restoring or replacing the wallet always does; a restart always locks.");
+        if (grace > 0) {
+            TextView warning = VaultTheme.bodyText(activity, DisplaySettings.GRACE_WARNING, 14, VaultTheme.WARNING_INK);
+            warning.setPadding(0, pages.dp(8), 0, 0);
+            root.addView(warning);
+        }
+        for (int seconds : DisplaySettings.SCREEN_OFF_GRACE_CHOICES) {
+            pages.action(root, "Lock after screen off · " + DisplaySettings.graceLabel(seconds), seconds == grace, () -> {
+                if (display.setScreenOffGraceSeconds(seconds)) {
+                    host.applyDisplaySettings();
+                    host.armIdleLock();
+                    showPreferences();
+                } else pages.showInfo("Setting not saved", "Your previous lock setting is still active.", this::showPreferences);
+            });
+        }
+
         boolean haptics = display.haptics();
         pages.card(root, "Haptics", haptics ? "On · a tap for PIN keys, a pulse when you sign, a double pulse on reject"
                 : "Off · no vibration feedback");
@@ -119,9 +153,74 @@ final class SettingsScreens {
             } else pages.showInfo("Setting not saved", "Your previous haptics setting is still active.", this::showPreferences);
         });
 
-        pages.card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart.");
+        pages.card(root, "Turning off", "To turn off: hold the power button, then choose Power off or Restart. ☰ → Power can restart the phone too.");
         pages.action(root, "Back to Security", false, this::showSecurity);
         pages.present(root, "preferences");
+    }
+
+    /** Brightness: a slider (1..100 %) and Automatic. Saved on release; the slider is live while dragged. */
+    private void addBrightness(LinearLayout root, DisplaySettings display) {
+        boolean auto = display.brightnessAuto();
+        int percent = display.brightnessPercent();
+        pages.card(root, "Brightness", !display.brightnessChosen() ? "The phone's own setting · move the slider or choose Automatic"
+                : auto ? "Automatic · follows the light around you" : "Manual · " + percent + "%");
+        SeekBar slider = new SeekBar(activity);
+        slider.setContentDescription("Brightness");
+        slider.setMax(DisplaySettings.MAX_BRIGHTNESS_PERCENT - DisplaySettings.MIN_BRIGHTNESS_PERCENT);
+        slider.setProgress(percent - DisplaySettings.MIN_BRIGHTNESS_PERCENT);
+        slider.setAlpha(auto ? 0.5f : 1f);
+        Pages.hardenTouch(slider);
+        slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                if (fromUser) host.previewBrightness(progress + DisplaySettings.MIN_BRIGHTNESS_PERCENT);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) {
+                // Moving the slider is a manual choice: Automatic turns off.
+                if (display.setBrightnessPercent(bar.getProgress() + DisplaySettings.MIN_BRIGHTNESS_PERCENT)) {
+                    host.applyBrightness();
+                    showPreferences();
+                } else {
+                    host.applyBrightness();
+                    pages.showInfo("Setting not saved", "Your previous brightness is still active.", SettingsScreens.this::showPreferences);
+                }
+            }
+        });
+        root.addView(slider, Pages.matchWrap(pages.dp(10)));
+        pages.action(root, auto ? "Automatic brightness · on" : "Automatic brightness", auto, () -> {
+            if (display.setBrightnessAuto(!auto)) {
+                host.applyBrightness();
+                showPreferences();
+            } else pages.showInfo("Setting not saved", "Your previous brightness is still active.", this::showPreferences);
+        });
+    }
+
+    /** ☰ → Power: restart (device owner only, confirmed, never while a request is under review); power off stays on the button. */
+    void showPower() {
+        LinearLayout root = pages.page("DEVICE", "Power", "Restart the phone, or turn it off with the power button.");
+        pages.card(root, "Turning off", "To turn off: hold the power button, then choose Power off.");
+        if (!host.restartAvailable()) {
+            pages.card(root, "Restart", "To restart: hold the power button, then choose Restart. (This phone is not set up as a Phone Vault appliance, so the app cannot restart it.)");
+        } else if (host.requestUnderReview()) {
+            pages.card(root, "Restart", "Not while a request from your Mac is waiting or under review. Approve or reject it first.");
+        } else {
+            pages.card(root, "Restart", "Locks the vault and restarts the phone. You will enter your PIN on the start screen.");
+            pages.action(root, "Restart", false, this::confirmRestart);
+        }
+        pages.action(root, "Back to Security", false, this::showSecurity);
+        pages.present(root, "power");
+    }
+
+    private void confirmRestart() {
+        if (!host.restartAvailable() || host.requestUnderReview()) { showPower(); return; }
+        LinearLayout root = pages.page("DEVICE / POWER", "Restart the phone?",
+                "The vault locks first: your keys leave memory. After the restart, enter your PIN to unlock.");
+        pages.action(root, "Restart now", true, () -> {
+            if (host.restartAvailable() && !host.requestUnderReview()) host.restart();
+            else showPower();
+        });
+        pages.action(root, "Cancel", false, this::showPower);
+        pages.present(root, "power-confirm");
     }
 
     void showIntegrity() {
@@ -155,7 +254,7 @@ final class SettingsScreens {
             int scale = battery.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
             pages.card(root, "Battery charge", level >= 0 && scale > 0 ? (level * 100 / scale) + "% · charge is not a battery-health assessment" : "Unavailable");
         }
-        pages.card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart.");
+        pages.card(root, "Power", "To turn off: hold the power button, then choose Power off or Restart. ☰ → Power can restart the phone too.");
         pages.action(root, "Back to Security", false, this::showSecurity);
         pages.present(root, "integrity");
     }

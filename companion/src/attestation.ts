@@ -59,57 +59,107 @@ function row(k: string, v: Node | string | null | undefined, title?: string) {
 
 /** The phrase Settings → Device asks for before Developer mode turns on (Rust checks it too). */
 const DEV_CONFIRMATION = "I FLASHED THIS PHONE";
-/** Settings → Device's Developer-mode form: open, and the last error. Survives drawer re-renders. */
-const devForm = { open: false, error: null as string | null, busy: false };
+
+// The problem texts Rust's policy (src-tauri/src/attest/policy.rs, evaluate) gives for the failures
+// Developer mode accepts. The report has no reason codes, so these mirror its strings exactly; if
+// they drift, the predicate below only stops offering the button (it never offers it wrongly).
+/** policy.rs UNLOCKED_PROBLEM */
+const UNLOCKED_PROBLEM = "The phone's bootloader is unlocked, so its software can be replaced without anyone noticing. Accept it only for a phone you flashed yourself: Settings → Device → Developer mode.";
+/** policy.rs: beta-signed app, Developer mode off */
+const BETA_APP_PROBLEM = "This phone runs the Phone Vault public beta. Beta phones have an unlocked bootloader, so this Mac accepts one only after you confirm you flashed it yourself: Settings → Device → Developer mode.";
+/** policy.rs: development-signed app, Developer mode off */
+const DEV_APP_PROBLEM = "The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone.";
+
+/** True only when the check FAILED solely because the phone is a self-flashed development or beta
+ *  phone: an unlocked bootloader plus the beta- or development-signed Phone Vault app, and nothing
+ *  else. Such a phone passes as Development/Beta once Developer mode is on. Any other problem
+ *  (unknown firmware, broken chain, wrong or unknown app key, old app, …) makes this false. */
+export function wouldPassWithDeveloperMode(a: Attestation | null): boolean {
+  if (!a || a.verdict !== "fail" || a.dev_mode) return false;
+  // Rust says so itself (policy.rs dev_mode_fixable); the sentence match below must agree too.
+  if (a.dev_mode_fixable === false) return false;
+  const d = a.details;
+  if (!d || d.device_locked !== false) return false;
+  const appProblem = d.app_signer_kind === "beta" ? BETA_APP_PROBLEM : d.app_signer_kind === "development" ? DEV_APP_PROBLEM : null;
+  if (!appProblem) return false;
+  const allowed = new Set([UNLOCKED_PROBLEM, appProblem]);
+  return a.problems.includes(UNLOCKED_PROBLEM) && a.problems.includes(appProblem) && a.problems.every((p) => allowed.has(p));
+}
+
+/** A Developer-mode confirmation form's state: open, busy, and the last error. */
+export interface DevForm { open: boolean; error: string | null; busy: boolean }
+export const newDevForm = (): DevForm => ({ open: false, error: null, busy: false });
+/** Settings → Device's form. Survives drawer re-renders. */
+const devForm = newDevForm();
+
+/** Turn Developer mode on or off through `setDevMode`, keeping `f` (busy, error, open) current. */
+async function changeDevMode(f: DevForm, setDevMode: (on: boolean, confirmation: string | null) => Promise<void>, on: boolean, confirmation: string | null, rerender: () => void) {
+  f.busy = true; f.error = null; rerender();
+  try { await setDevMode(on, confirmation); f.open = false; }
+  catch (e) { f.error = typeof e === "string" ? e : String((e as { message?: unknown })?.message ?? e); }
+  finally { f.busy = false; rerender(); }
+}
+
+/** The typed-confirmation form: type I FLASHED THIS PHONE, then Turn on (or Cancel). */
+function devConfirmForm(f: DevForm, setDevMode: (on: boolean, confirmation: string | null) => Promise<void>, rerender: () => void): (Node | null)[] {
+  const input = h("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", placeholder: DEV_CONFIRMATION, "aria-label": "Confirmation phrase" }) as HTMLInputElement;
+  const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => changeDevMode(f, setDevMode, true, input.value, rerender) }, "Turn on") as HTMLButtonElement;
+  const hint = h("p", { class: "field-msg", "aria-live": "polite" });
+  // The phrase must match exactly (Rust checks the same); only say why it doesn't yet.
+  input.addEventListener("input", () => {
+    const v = input.value.trim();
+    const ok = v === DEV_CONFIRMATION;
+    turnOn.disabled = f.busy || !ok;
+    hint.textContent = !v || ok || (DEV_CONFIRMATION.startsWith(v) && v.length < DEV_CONFIRMATION.length) ? ""
+      : v.toUpperCase() === DEV_CONFIRMATION || DEV_CONFIRMATION.startsWith(v.toUpperCase()) ? "Type it in capital letters, exactly as shown."
+      : `That doesn't match yet. Type ${DEV_CONFIRMATION} exactly.`;
+    hint.className = hint.textContent ? "field-msg warn" : "field-msg";
+  });
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !turnOn.disabled) { e.preventDefault(); turnOn.click(); } });
+  return [
+    h("div", { class: "callout danger-border" },
+      h("strong", null, "Only for a phone you flashed yourself"),
+      h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
+      h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),
+    input,
+    hint,
+    f.error ? h("p", { class: "inline-error" }, icon("alert", 15), f.error) : null,
+    h("div", { class: "row gap" }, turnOn, h("button", { onclick: () => { f.open = false; f.error = null; rerender(); } }, "Cancel")),
+  ];
+}
+
+/** "Turn on Developer mode…" for a check that failed only because the phone is self-flashed
+ *  (wouldPassWithDeveloperMode), opening the typed confirmation in place; null otherwise.
+ *  `setDevMode` must re-run the device check after turning it on. */
+export function devModeOffer(c: DeviceCheck, f: DevForm, setDevMode: (on: boolean, confirmation: string | null) => Promise<void>, rerender: () => void): HTMLElement | null {
+  if (!wouldPassWithDeveloperMode(c.report)) return null;
+  if (f.open) return h("div", { class: "dev-offer" }, ...devConfirmForm(f, setDevMode, rerender));
+  return h("div", { class: "dev-offer" },
+    h("p", { class: "muted small" }, "This looks like a development or public beta phone. If you flashed it yourself, Developer mode accepts it as Development or Beta (never Genuine). Public beta: small amounts only."),
+    h("div", { class: "row gap" }, h("button", { class: "ghost", disabled: c.checking, onclick: () => { f.open = true; f.error = null; rerender(); } }, "Turn on Developer mode…")));
+}
 
 /** Settings → Device. `setDevMode` asks Rust (the only place Developer mode is stored). */
 export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: boolean, recheck: () => void, setDevMode: (on: boolean, confirmation: string | null) => Promise<void>, rerender: () => void): HTMLElement {
   const a = c.report;
   const d = a?.details ?? null;
-  const change = async (on: boolean, confirmation: string | null) => {
-    devForm.busy = true; devForm.error = null; rerender();
-    try { await setDevMode(on, confirmation); devForm.open = false; }
-    catch (e) { devForm.error = typeof e === "string" ? e : String((e as { message?: unknown })?.message ?? e); }
-    finally { devForm.busy = false; rerender(); }
-  };
+  // A check that failed only for Developer-mode reasons gets the offer (and its form) next to the reasons.
+  const offer = devMode ? null : devModeOffer(c, devForm, setDevMode, rerender);
   let devControls: (Node | null)[];
   if (devMode) {
     devControls = [
       h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "att-badge att-dev" }, "On")),
-      h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones with an unlocked bootloader, the public beta, or the development-signed app are accepted as Development or Beta (never Genuine). Turn it off for real funds."),
-      h("div", { class: "row gap" }, h("button", { disabled: devForm.busy, onclick: () => change(false, null) }, "Turn off Developer mode")),
+      h("p", { class: "inline-error" }, icon("alert", 15), "Developer mode is ON. Phones with an unlocked bootloader, the public beta, or the development-signed app are accepted as Development or Beta (never Genuine). Public beta: small amounts only."),
+      h("div", { class: "row gap" }, h("button", { disabled: devForm.busy, onclick: () => changeDevMode(devForm, setDevMode, false, null, rerender) }, "Turn off Developer mode")),
     ];
-  } else if (!devForm.open) {
+  } else if (!devForm.open || offer) {
     devControls = [
       h("div", { class: "set-row" }, h("span", null, "Developer mode"), h("span", { class: "muted" }, "Off")),
       h("p", { class: "muted small" }, "Off: only locked Phone Vault firmware with the release-signed app passes. Developer mode is only for a phone you flashed yourself, including public beta phones."),
-      h("div", { class: "row gap" }, h("button", { class: "ghost", onclick: () => { devForm.open = true; devForm.error = null; rerender(); } }, "Developer mode…")),
+      offer ? null : h("div", { class: "row gap" }, h("button", { class: "ghost", onclick: () => { devForm.open = true; devForm.error = null; rerender(); } }, "Developer mode…")),
     ];
   } else {
-    const input = h("input", { type: "text", class: "mono", autocomplete: "off", spellcheck: "false", placeholder: DEV_CONFIRMATION, "aria-label": "Confirmation phrase" }) as HTMLInputElement;
-    const turnOn = h("button", { class: "danger-ghost", disabled: true, onclick: () => change(true, input.value) }, "Turn on") as HTMLButtonElement;
-    const hint = h("p", { class: "field-msg", "aria-live": "polite" });
-    // The phrase must match exactly (Rust checks the same); only say why it doesn't yet.
-    input.addEventListener("input", () => {
-      const v = input.value.trim();
-      const ok = v === DEV_CONFIRMATION;
-      turnOn.disabled = devForm.busy || !ok;
-      hint.textContent = !v || ok || (DEV_CONFIRMATION.startsWith(v) && v.length < DEV_CONFIRMATION.length) ? ""
-        : v.toUpperCase() === DEV_CONFIRMATION || DEV_CONFIRMATION.startsWith(v.toUpperCase()) ? "Type it in capital letters, exactly as shown."
-        : `That doesn't match yet. Type ${DEV_CONFIRMATION} exactly.`;
-      hint.className = hint.textContent ? "field-msg warn" : "field-msg";
-    });
-    input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !turnOn.disabled) { e.preventDefault(); turnOn.click(); } });
-    devControls = [
-      h("div", { class: "callout danger-border" },
-        h("strong", null, "Only for a phone you flashed yourself"),
-        h("span", null, "Developer mode accepts phones with an unlocked bootloader or the development-signed app. Anyone who had such a phone before you could have changed what it shows and signs. If someone sold you this phone already set up, don't turn this on: flash it yourself from phonevault.org."),
-        h("span", null, "To turn it on, type ", h("strong", { class: "mono" }, DEV_CONFIRMATION), ":")),
-      input,
-      hint,
-      devForm.error ? h("p", { class: "inline-error" }, icon("alert", 15), devForm.error) : null,
-      h("div", { class: "row gap" }, turnOn, h("button", { onclick: () => { devForm.open = false; devForm.error = null; rerender(); } }, "Cancel")),
-    ];
+    devControls = devConfirmForm(devForm, setDevMode, rerender);
   }
   const level = (l: string | undefined) => l === "StrongBox" ? "StrongBox (security chip)" : l === "TrustedEnvironment" ? "TEE (not the security chip)" : l ?? "—";
   return h("section", { class: "set", id: "device-section" },
@@ -118,6 +168,7 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
       : h("div", { class: "set-row" }, h("span", null, "Genuine check"), h("span", { class: "muted" }, c.checking ? "Checking…" : phonePresent ? "Not checked yet" : "No phone on USB")),
     a ? h("p", { class: "small" }, a.headline) : null,
     a ? reasonList(a) : null,
+    offer,
     c.error && !c.checking ? h("p", { class: "muted small" }, c.error) : null,
     d ? h("div", { class: "att-details" },
       row("Bootloader", d.device_locked === null ? null : d.device_locked ? "Locked" : "Unlocked"),
@@ -127,7 +178,7 @@ export function deviceSection(c: DeviceCheck, devMode: boolean, phonePresent: bo
       row("OS patch level", d.os_patch_level),
       row("Vendor / boot patch", [d.vendor_patch_level, d.boot_patch_level].map((x) => x ?? "—").join(" / ")),
       row("App", d.app_package ? `${d.app_package}${d.app_version !== null ? ` (version ${d.app_version})` : ""}` : null),
-      row("App signer", d.app_signer ? h("span", null, d.app_signer_kind === "release" ? "Release key · " : d.app_signer_kind === "development" ? "Development key · " : "Unknown key · ", h("span", { class: "mono" }, short(d.app_signer))) : null, d.app_signer ?? ""),
+      row("App signer", d.app_signer ? h("span", null, d.app_signer_kind === "release" ? "Release key · " : d.app_signer_kind === "development" ? "Development key · " : d.app_signer_kind === "beta" ? "Beta key · " : "Unknown key · ", h("span", { class: "mono" }, short(d.app_signer))) : null, d.app_signer ?? ""),
       row("Key storage", level(d.attestation_security_level)),
       row("Certificates", `v${d.attestation_version} · ${d.provisioning} · ${d.chain_length} certificates`),
       row("Root", d.root),

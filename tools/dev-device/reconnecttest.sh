@@ -7,8 +7,12 @@
 #   3. lock → unlock → request: the app reopened the still-attached accessory after the lock
 #   4. lock → request → unlock: held behind the gate (nothing answered while locked), then answered
 #   5. client killed mid-request: the phone's answer to it is drained, the next client gets its own
-#   6. a session the phone ended itself (a malformed line): the host re-attaches it (START + USB
-#      port reset), no replug
+#   6. a session the phone ended itself (a malformed line): the phone opens the still-attached
+#      accessory again by itself (beta5); an older app needs the host's re-attach (START + USB port
+#      reset). Either way: answered, no replug
+#   7. the host gives up while its request is held behind the lock (the Pixel 6a beta4 wedge:
+#      later clients were not answered until a replug): the vault stays locked, the client times
+#      out; unlock, then a NEW client is answered, without a replug
 # Before this fix (vault-os docs: stale accessory session) 3, 4 and 6 timed out ("[Errno 110]")
 # unless the gadget was reset over adb. Needs the pairing from usbsigntest.sh for step 5.
 source "$(dirname "$0")/lib.sh"
@@ -114,8 +118,27 @@ endpoint_out.write(b"{not json\n", timeout=5000)
 PY
 sleep 3; "$A" start-server >/dev/null 2>&1; wait_adb 12; nudge; unlock_if_locked; go_home
 ask stale
-grep -q "$RECOVERED" "$OUT.stale" || die "stale: expected the host to re-attach the accessory (see $OUT.stale)"
-pass "a dead session on a still-attached accessory: the host re-attached it (START + port reset) in ${ELAPSED}s, no replug"
+if grep -q "$RECOVERED" "$OUT.stale"; then
+  pass "a dead session on a still-attached accessory: the host re-attached it (START + port reset) in ${ELAPSED}s, no replug"
+else
+  pass "a dead session on a still-attached accessory: the phone reopened it by itself, answered in ${ELAPSED}s, no replug"
+fi
+
+echo "== 7. host times out while its request is held behind the lock; then a new client"
+lock_vault
+"$A" kill-server; sleep 1
+# A short --timeout plays a host that gives up (the companion's own wait is 300 s).
+rc=0; t0=$(date +%s)
+"$PY" "$CLIENT" --pairing-file "$PAIRING" --timeout 20 address > "$OUT.gaveup" 2>&1 || rc=$?
+gaveup_after=$(( $(date +%s) - t0 ))
+"$A" start-server >/dev/null 2>&1; wait_adb 12
+[[ $rc -ne 0 ]] || { tail -4 "$OUT.gaveup"; die "gaveup: the host got an answer while the vault was LOCKED"; }
+grep -q "Timed out waiting" "$OUT.gaveup" || { tail -4 "$OUT.gaveup"; die "gaveup: expected the client to time out (exit $rc)"; }
+pass "locked: the request was held, the host gave up after ${gaveup_after}s"
+unlock; sleep 3; go_home
+ask aftergaveup
+pass "after the host gave up behind the lock, a new client was answered in ${ELAPSED}s, no replug"
+if grep -q "$RECOVERED" "$OUT.aftergaveup"; then echo "  (the host re-attached the accessory first)"; fi
 
 kiosk_locked; no_crashes; unwake
 pass "reconnecttest complete"

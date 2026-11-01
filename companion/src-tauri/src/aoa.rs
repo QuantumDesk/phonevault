@@ -52,6 +52,10 @@ pub enum AoaError {
     /// Nothing on the phone reads the accessory, even after it was attached afresh (`connect`).
     #[error("{}", NOT_READING)]
     NotReading,
+    /// The phone dropped off the bus while a request waited for its answer (the answer can no
+    /// longer arrive on this handle). Classified like `Usb` ("disconnected").
+    #[error("the phone left USB while this request waited for its answer ({0}). Check the phone, then ask again; if it keeps failing, unplug and replug the cable")]
+    Left(rusb::Error),
 }
 
 /// What `AoaError::Busy` says. Also matched in the text of errors that reach the send flows as
@@ -220,11 +224,14 @@ fn transient(e: &AoaError) -> bool {
 
 /// Find the phone, switch it to our accessory if needed, and return the claimed interface once
 /// something on the phone reads it. An accessory whose session is live is used as it is (no
-/// handshake, no wait). A stale one is attached afresh once (`reattach`); if nothing reads even
-/// then, `NotReading` says to replug: never a silent wait.
+/// handshake, no wait). A stale one is attached afresh once (`reattach`); if nothing reads then,
+/// the bus is scanned again once and the phone probed where it now is (the phone's app reopens
+/// its accessory by itself after a session it lost to the reset, which can take a moment longer
+/// than the attach); if nothing reads even then, `NotReading` says to replug: never a silent wait.
 fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
     let mut fresh = false;
     let mut recovered = false;
+    let mut rescanned = false;
     let mut vanished = false;
     loop {
         let found = the_phone(bus, recovered || vanished)?;
@@ -251,6 +258,12 @@ fn connect_with<B: Bus>(bus: &B) -> Result<B::Open, AoaError> {
             Err(e) => return Err(e),
         }
         if recovered {
+            if !rescanned {
+                rescanned = true;
+                eprintln!("aoa: still nothing reading after the re-attach; scanning for the phone again");
+                settle(bus)?;
+                continue;
+            }
             return Err(AoaError::NotReading);
         }
         recovered = true;
@@ -565,6 +578,10 @@ impl Session {
             match self.handle.read_bulk(self.ep_in, &mut chunk, Duration::from_secs(1)) {
                 Ok(n) => received.extend_from_slice(&chunk[..n]),
                 Err(rusb::Error::Timeout) => continue,
+                // Re-enumerated or reset under us: this handle will never see the answer.
+                Err(e @ (rusb::Error::NoDevice | rusb::Error::NotFound | rusb::Error::Io | rusb::Error::Pipe)) => {
+                    return Err(AoaError::Left(e))
+                }
                 Err(e) => return Err(AoaError::Usb(e)),
             }
             if received.len() > cap {
@@ -672,6 +689,8 @@ mod connect_tests {
         reattach_at: Option<Duration>,
         /// the phone drops off the bus as the next N opens start (still re-enumerating)
         vanish_on_open: u32,
+        /// the app opens its session late: the next N opens find nothing reading, whatever the mode
+        late_reader_opens: u32,
         vanished_opens: u32,
         clock: Duration,
         /// the 6a race: a port reset while it was re-attaching by itself
@@ -708,6 +727,7 @@ mod connect_tests {
             self_reattach_after: None,
             reattach_at: None,
             vanish_on_open: 0,
+            late_reader_opens: 0,
             vanished_opens: 0,
             clock: Duration::ZERO,
             reset_while_moving: false,
@@ -785,6 +805,10 @@ mod connect_tests {
             if *dev != p.address || p.moving() {
                 return Err(AoaError::Usb(rusb::Error::NoDevice));
             }
+            if p.late_reader_opens > 0 {
+                p.late_reader_opens -= 1;
+                return Ok(None);
+            }
             Ok(match p.mode {
                 Mode::Accessory { reader: true } => Some(*dev),
                 _ => None,
@@ -839,6 +863,30 @@ mod connect_tests {
     }
 
     #[test]
+    fn after_the_reset_the_phone_is_scanned_again_once_before_replug() {
+        // The phone's app lost its session to the reset and reopens the accessory a moment after
+        // the first post-reset probe gave up: one more scan finds it, with no second START/reset.
+        let f = phone(Mode::Accessory { reader: false }, true);
+        f.0.borrow_mut().late_reader_opens = 2; // the stale probe, then the first post-reset probe
+        assert_eq!(connect_with(&f).unwrap(), 10);
+        assert_eq!(counts(&f), (1, 1), "one recovery, then a re-scan only");
+        // Still nothing after the re-scan: replug, never a third probe or a second reset.
+        let g = phone(Mode::Accessory { reader: false }, true);
+        g.0.borrow_mut().late_reader_opens = 3;
+        let e = connect_with(&g).expect_err("must fail");
+        assert!(matches!(e, AoaError::NotReading));
+        assert!(e.to_string().contains("unplug and replug"));
+        assert_eq!(counts(&g), (1, 1));
+    }
+
+    #[test]
+    fn a_phone_that_left_mid_wait_says_so() {
+        let e = AoaError::Left(rusb::Error::NoDevice);
+        assert!(e.to_string().contains("left USB"));
+        assert!(e.to_string().contains("unplug and replug"));
+    }
+
+    #[test]
     fn a_fresh_switch_whose_app_never_reads_is_recovered_once_then_refused() {
         let f = phone(Mode::Adb, false);
         assert!(matches!(connect_with(&f), Err(AoaError::NotReading)));
@@ -864,11 +912,16 @@ mod connect_tests {
         f.0.borrow_mut().vanish_on_open = 1;
         assert_eq!(connect_with(&f).unwrap(), 11);
         assert_eq!(counts(&f), (0, 0), "no START, no reset for a retry");
-        // The retry is once only: a second vanish goes through the ordinary (single) recovery.
+        // The retry is once only: a second vanish goes through the ordinary (single) recovery,
+        // and a third through its one re-scan; a fourth is refused (replug).
         let thrice = phone(Mode::Accessory { reader: true }, true);
         thrice.0.borrow_mut().vanish_on_open = 3;
-        assert!(matches!(connect_with(&thrice), Err(AoaError::NotReading)));
+        assert!(connect_with(&thrice).is_ok(), "the re-scan after the recovery finds it");
         assert_eq!(thrice.0.borrow().resets, 0, "it moved: never reset");
+        let four = phone(Mode::Accessory { reader: true }, true);
+        four.0.borrow_mut().vanish_on_open = 4;
+        assert!(matches!(connect_with(&four), Err(AoaError::NotReading)));
+        assert_eq!(four.0.borrow().resets, 0, "it moved: never reset");
     }
 
     #[test]

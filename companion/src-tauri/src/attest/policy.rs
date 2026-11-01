@@ -124,6 +124,11 @@ pub struct Assessment {
     /// Informational.
     pub notes: Vec<String>,
     pub details: Option<Details>,
+    /// FAIL only because this is a self-flashed phone: an unlocked bootloader plus the beta- or
+    /// development-signed Phone Vault app, and nothing else. With Developer mode on it would be
+    /// DEVELOPMENT (the companion then offers "Turn on Developer mode…"). Never true for any
+    /// other problem, nor once Developer mode is on.
+    pub dev_mode_fixable: bool,
 }
 
 /// What the phone said, after the transport-level checks in `mod.rs`.
@@ -151,6 +156,7 @@ pub fn fail(problem: impl Into<String>) -> Assessment {
         cautions: vec![],
         notes: vec![],
         details: None,
+        dev_mode_fixable: false,
     }
 }
 
@@ -168,6 +174,9 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
     let hw = &kd.hardware;
     let sw = &kd.software;
     let mut problems: Vec<String> = Vec::new();
+    // The problems Developer mode would turn into cautions (see `Assessment::dev_mode_fixable`).
+    let mut unlocked_problem = false;
+    let mut dev_app_problem = false;
     let mut cautions: Vec<String> = Vec::new();
     let mut notes: Vec<String> = ev.chain.notes.clone();
     let mut d = Details {
@@ -279,6 +288,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                         cautions.push(BETA_CAUTION.into());
                     } else {
                         problems.push("This phone runs the Phone Vault public beta. Beta phones have an unlocked bootloader, so this Mac accepts one only after you confirm you flashed it yourself: Settings → Device → Developer mode.".into());
+                        dev_app_problem = true;
                     }
                 } else if policy.development_signers.contains(digest) {
                     d.app_signer_kind = "development".into();
@@ -286,6 +296,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                         cautions.push("The Phone Vault app is signed with the development key (Developer mode is on on this Mac).".into());
                     } else {
                         problems.push("The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone.".into());
+                        dev_app_problem = true;
                     }
                 } else {
                     problems.push(format!("The app on this phone is signed by an unknown key ({}): it is not the Phone Vault app from us.", short(digest)));
@@ -327,7 +338,10 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
                 // acceptable for a phone someone else set up. Only Developer mode (a typed
                 // confirmation in Settings → Device, kept on this Mac) accepts it, as DEVELOPMENT.
                 (false, _) if allow_dev => cautions.push(UNLOCKED_HEADLINE.to_string()),
-                (false, _) => problems.push(UNLOCKED_PROBLEM.to_string()),
+                (false, _) => {
+                    problems.push(UNLOCKED_PROBLEM.to_string());
+                    unlocked_problem = true;
+                }
             }
             if !rot.device_locked {
                 if let Some(p) = hw.os_patch_level {
@@ -364,5 +378,7 @@ pub fn evaluate(policy: &Policy, ev: &Evidence, allow_dev: bool) -> Assessment {
             "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the security chip".into(),
         )
     };
-    Assessment { verdict, headline, problems, cautions, notes, details: Some(d) }
+    // Exactly the two Developer-mode problems and nothing else.
+    let dev_mode_fixable = !allow_dev && unlocked_problem && dev_app_problem && problems.len() == 2;
+    Assessment { verdict, headline, problems, cautions, notes, details: Some(d), dev_mode_fixable }
 }

@@ -135,8 +135,9 @@ These scripts drive a **development phone** over adb and USB. Rules:
   wallet.
 - Never put real funds, a real seed phrase, or a PIN you use anywhere else on a development
   phone. Development images allow screenshots and adb by design.
-- `PV_TEST_PIN` is prompted silently if unset and never printed; treat any PIN that appears in
-  a log or report as burned.
+- `PV_TEST_PIN` defaults to the one test PIN in `tools/dev-device/env.sh` (export it to use
+  another, e.g. for a phone set up with an older test PIN) and is never printed; treat any PIN
+  that appears in a log or report as burned.
 - `PV_WORDS_FILE` holds the throwaway phrase (mode 0600). Delete it when the wallet is retired.
   Never commit it or paste it anywhere.
 - Keep only one phone attached, or set `ANDROID_SERIAL`.
