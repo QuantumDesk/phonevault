@@ -60,7 +60,21 @@ public class CredentialGateTest {
             silentDuringUnlock = gate.silentUnlockAttempt();
             if (unlockWorks && s == session) unlocked = true;
         }
-        @Override public void systemConfirm(String why, CredentialGate.Confirmed result) { events.add("prompt:" + why); prompts.add(result); }
+        /** The request held behind the gate, as the prompt may describe it (null: none). */
+        HeldRequest.LockPrompt held;
+        /** Every prompt shown, in order. */
+        final List<CredentialGate.PromptText> texts = new ArrayList<>();
+
+        @Override public void systemConfirm(CredentialGate.PromptText text, CredentialGate.Confirmed result) {
+            events.add("prompt:" + text.subtitle);
+            texts.add(text);
+            prompts.add(result);
+        }
+        /** The system reports a cancelled prompt through its own callback (the test delivers it). */
+        @Override public void cancelSystemConfirm() { events.add("cancel"); }
+        @Override public HeldRequest.LockPrompt heldPrompt() { return held; }
+
+        CredentialGate.PromptText lastText() { return texts.get(texts.size() - 1); }
         @Override public void probeSeedKey(CredentialGate.Probed result) { events.add("probe"); probes.add(result); }
 
         /** Run everything posted so far (and what that posts), like the UI looper. */
@@ -279,6 +293,277 @@ public class CredentialGateTest {
         assertTrue("never takes a token while a prompt is already open (it would never be asked)",
                 begin.contains("if (credentialMode() && credentialGate.promptOpen()) return;"));
         assertTrue(SourceGuard.definition("private void releaseSensitive(int token) {").contains("sensitive.end(token)"));
+    }
+
+    // ---------------------------------------------------------------- held request on the system prompt
+
+    private static final String HELLO = "0x68656c6c6f";
+    private static final String TO = "0x1111111111111111111111111111111111111111";
+
+    /**
+     * Pixel 6a: the system PIN prompt opens at once and covers the locked page, so the
+     * "INCOMING REQUEST" card under it was invisible until after unlock. The prompt itself says a
+     * request waits: who sent it (a validated site, else "your Mac") and its kind, nothing else.
+     */
+    @Test public void unlockPromptTextNamesTheHeldRequestOnlyByKindAndSite() throws Exception {
+        CredentialGate.PromptText plain = CredentialGate.unlockText(null);
+        assertEquals("Phone Vault", plain.title);
+        assertEquals("Enter your PIN to unlock", plain.subtitle);
+        assertNull(plain.description);
+        assertFalse(plain.held);
+
+        JSONObject fromSite = MessageRequestTest.personal(HELLO).put("origin", "https://app.uniswap.org");
+        CredentialGate.PromptText site = CredentialGate.unlockText(HeldRequest.LockPrompt.of(fromSite));
+        assertTrue(site.held);
+        assertEquals("Incoming request", site.title);
+        assertEquals("From app.uniswap.org, via your Mac", site.subtitle);
+        assertEquals("Message signature. Unlock to review it. Nothing is signed until you approve it.", site.description);
+
+        JSONObject local = MessageRequestTest.personal(HELLO).put("origin", "http://localhost:3000");
+        assertEquals("From http://localhost:3000, via your Mac",
+                CredentialGate.unlockText(HeldRequest.LockPrompt.of(local)).subtitle);
+
+        // An origin that fails validation is never shown: the request is refused after unlock.
+        for (String bad : new String[] {"http://app.uniswap.org", "https://App.Uniswap.org", "https://evil.example/path", "https://a b"}) {
+            CredentialGate.PromptText t = CredentialGate.unlockText(
+                    HeldRequest.LockPrompt.of(MessageRequestTest.personal(HELLO).put("origin", bad)));
+            assertEquals(bad, "From your Mac", t.subtitle);
+            assertFalse(bad, t.toString().contains("uniswap") || t.toString().contains("evil"));
+        }
+        // A request that does not parse names no site either, even with a well-formed origin.
+        JSONObject extra = MessageRequestTest.personal(HELLO).put("origin", "https://app.uniswap.org").put("extra", "1");
+        assertEquals("From your Mac", CredentialGate.unlockText(HeldRequest.LockPrompt.of(extra)).subtitle);
+        // No origin: your Mac.
+        assertEquals("From your Mac", CredentialGate.unlockText(HeldRequest.LockPrompt.of(MessageRequestTest.personal(HELLO))).subtitle);
+
+        // Never an amount, an address or the message: the kind only.
+        JSONObject tx = new JSONObject().put("id", "t").put("method", "signEip1559").put("chainId", "0x1")
+                .put("to", TO).put("value", "0x6f05b59d3b20000").put("data", "0x");
+        CredentialGate.PromptText txText = CredentialGate.unlockText(HeldRequest.LockPrompt.of(tx));
+        assertEquals("From your Mac", txText.subtitle);
+        assertEquals("Transaction. Unlock to review it. Nothing is signed until you approve it.", txText.description);
+        for (CredentialGate.PromptText t : new CredentialGate.PromptText[] {site, txText}) {
+            String all = t.toString().toLowerCase(java.util.Locale.ROOT);
+            assertFalse(all.contains("0x"));
+            assertFalse(all.contains("hello"));
+            assertFalse(all.contains("eth"));
+        }
+        String[][] kinds = {
+                {"eth_signTypedData_v4", "Typed-data signature. "}, {"btcSignPsbt", "Bitcoin transaction. "},
+                {"btcGetAccount", "Bitcoin account request. "}, {"btcShowAddress", "Address request. "},
+                {"getAddress", "Address request. "}, {"listAddresses", "Address request. "},
+                {"attest", "Hardware check. "}, {"somethingElse", ""}};
+        for (String[] k : kinds) {
+            CredentialGate.PromptText t = CredentialGate.unlockText(
+                    HeldRequest.LockPrompt.of(new JSONObject().put("id", "x").put("method", k[0])));
+            assertEquals(k[0], k[1] + "Unlock to review it. Nothing is signed until you approve it.", t.description);
+            assertEquals(k[0], "From your Mac", t.subtitle);
+        }
+
+        // HeldRequest keeps it with the request and forgets it with the request.
+        HeldRequest held = new HeldRequest();
+        AccessoryTransport a = transport();
+        assertNull(held.lockPrompt());
+        held.holdIfLocked(false, a, a, fromSite, "summary");
+        assertEquals(new HeldRequest.LockPrompt("message signature", "app.uniswap.org"), held.lockPrompt());
+        held.dropIfFrom(a);
+        assertNull(held.lockPrompt());
+        held.holdIfLocked(false, a, a, tx, "summary");
+        held.take(a);
+        assertNull(held.lockPrompt());
+    }
+
+    /** A request held before the gate prompts: the first prompt already says so. */
+    @Test public void unlockPromptSaysARequestIsWaiting() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.held = new HeldRequest.LockPrompt("message signature", "app.uniswap.org");
+        e.gate.show(1);
+        e.drain();
+        assertEquals(List.of("locked:1", "prompt:From app.uniswap.org, via your Mac"), e.events);
+        assertTrue(e.lastText().held);
+        e.prompts.poll().done(true);
+        assertEquals("the PIN unlocks; the unlock dispatches the request, the gate never does", 1, e.count("unlock:1"));
+    }
+
+    /**
+     * A request that arrives while the prompt is up: BiometricPrompt text cannot change in place, so
+     * the prompt is cancelled and shown again with the new text. The cancel unlocks nothing.
+     */
+    @Test public void requestArrivingUnderAnOpenPromptReShowsIt() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.gate.show(1);
+        e.drain();
+        assertFalse(e.lastText().held);
+
+        e.held = new HeldRequest.LockPrompt("transaction", null);
+        e.gate.heldRequestChanged();
+        assertEquals(1, e.count("cancel"));
+        e.gate.heldRequestChanged();         // the page redrawn again before the cancel reported back
+        assertEquals("cancelled once", 1, e.count("cancel"));
+        e.gate.promptUnlock(1);              // nor does the Unlock button stack one
+        assertEquals(1, e.count("prompt"));
+        e.prompts.poll().done(false);        // the cancel arrives as a failure
+        assertEquals(0, e.count("unlock"));
+        assertFalse(e.unlocked);
+        e.drain();                           // after a moment: the prompt again, with the request
+        assertEquals(2, e.count("prompt"));
+        assertEquals(CredentialGate.unlockText(e.held), e.lastText());
+        assertEquals(e.lastText(), e.gate.openPromptText());
+
+        // The same request again (the page is drawn again): nothing changes.
+        e.gate.heldRequestChanged();
+        e.gate.promptUnlock(1);
+        assertEquals(1, e.count("cancel"));
+
+        // Another request replaces it: shown again with its own text.
+        e.held = new HeldRequest.LockPrompt("message signature", "app.uniswap.org");
+        e.gate.heldRequestChanged();
+        assertEquals(2, e.count("cancel"));
+        e.prompts.poll().done(false);
+        e.drain();
+        assertEquals("prompt:From app.uniswap.org, via your Mac", e.events.get(e.events.size() - 1));
+
+        e.prompts.poll().done(true);
+        assertEquals(1, e.count("unlock:1"));
+        assertTrue(e.unlocked);
+    }
+
+    /** A held request that is dropped (its host disconnected, a new connection): the plain prompt again. */
+    @Test public void droppedRequestRestoresThePlainPrompt() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.held = new HeldRequest.LockPrompt("transaction", null);
+        e.gate.show(1);
+        e.drain();
+        assertTrue(e.lastText().held);
+        e.held = null;
+        e.gate.heldRequestChanged();
+        assertEquals(1, e.count("cancel"));
+        e.prompts.poll().done(false);
+        e.drain();
+        assertEquals(CredentialGate.unlockText(null), e.lastText());
+        assertEquals("prompt:Enter your PIN to unlock", e.events.get(e.events.size() - 1));
+
+        // A screen-off dismisses the prompt itself; the next gate's prompt reads what is held then.
+        FakeEnv off = env();
+        off.now = CredentialGate.FRESH_BOOT_MS + 1;
+        off.held = new HeldRequest.LockPrompt("transaction", null);
+        off.gate.show(1);
+        off.drain();
+        off.prompts.poll().done(false);      // the system closed it
+        off.held = null;                     // the session ended with it
+        off.gate.heldRequestChanged();       // no prompt open: nothing to cancel
+        assertEquals(0, off.count("cancel"));
+        off.session = 2;
+        off.gate.show(2);
+        off.drain();
+        assertEquals(CredentialGate.unlockText(null), off.lastText());
+    }
+
+    /** The PIN entered just before the cancel landed: it unlocks, and nothing is shown again. */
+    @Test public void successBeatingTheCancelUnlocksWithoutReShowing() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.gate.show(1);
+        e.drain();
+        e.held = new HeldRequest.LockPrompt("transaction", null);
+        e.gate.heldRequestChanged();
+        e.prompts.poll().done(true);
+        e.drain();
+        assertEquals(1, e.count("unlock:1"));
+        assertEquals(1, e.count("prompt"));
+    }
+
+    /** A cancelled prompt that never reports back cannot wedge the gate: given up on, its late result ignored. */
+    @Test public void cancelThatNeverReportsBackIsGivenUpOn() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.gate.show(1);
+        e.drain();
+        CredentialGate.Confirmed lost = e.prompts.poll();
+        e.held = new HeldRequest.LockPrompt("transaction", null);
+        e.gate.heldRequestChanged();
+        assertTrue(e.delays.contains(CredentialGate.CANCEL_GIVE_UP_MS));
+        e.drain();                           // the give-up timer
+        assertEquals(2, e.count("prompt"));
+        assertTrue(e.lastText().held);
+        lost.done(true);                     // the old prompt's late result
+        assertEquals(0, e.count("unlock"));
+        assertTrue("the new prompt is still the open one", e.gate.promptOpen());
+        e.prompts.poll().done(true);
+        assertEquals(1, e.count("unlock:1"));
+    }
+
+    /**
+     * The prompt that outlived its session (Pixel 6a, stale-prompt fix): a request held on the new
+     * locked page re-shows it as that page's unlock prompt, and the PIN unlocks that page.
+     */
+    @Test public void stalePromptIsReShownForTheNewLockedPage() {
+        FakeEnv e = env();
+        e.now = CredentialGate.FRESH_BOOT_MS + 1;
+        e.gate.show(1);
+        e.drain();
+        e.session = 2;                       // lock() while the prompt is up
+        e.gate.show(2);
+        e.drain();
+        assertEquals("not stacked", 1, e.count("prompt"));
+        e.held = new HeldRequest.LockPrompt("message signature", null);
+        e.gate.heldRequestChanged();
+        e.prompts.poll().done(false);
+        assertEquals(0, e.count("unlock"));
+        e.drain();
+        assertEquals(2, e.count("prompt"));
+        assertTrue(e.lastText().held);
+        e.prompts.poll().done(true);
+        assertEquals(List.of("unlock:2"), e.events.stream().filter(x -> x.startsWith("unlock")).collect(java.util.stream.Collectors.toList()));
+    }
+
+    /** Only the locked, visible gate's prompt is re-shown; a prompt without held text is left alone. */
+    @Test public void heldRequestChangeLeavesOtherPromptsAlone() {
+        FakeEnv unlocked = env();
+        unlocked.unlocked = true;
+        unlocked.gate.confirmDevicePin("Enter your PIN to show the phrase", () -> { }, null);
+        unlocked.held = new HeldRequest.LockPrompt("transaction", null);
+        unlocked.gate.heldRequestChanged();
+        assertEquals(0, unlocked.count("cancel"));
+
+        FakeEnv hidden = env();
+        hidden.now = CredentialGate.FRESH_BOOT_MS + 1;
+        hidden.gate.show(1);
+        hidden.drain();
+        hidden.foreground = false;
+        hidden.held = new HeldRequest.LockPrompt("transaction", null);
+        hidden.gate.heldRequestChanged();
+        assertEquals(0, hidden.count("cancel"));
+
+        // No locked page of this session (a sealed vault's screen, the boot attempt): nothing to re-show onto.
+        FakeEnv noPage = env();
+        noPage.gate.confirmDevicePin("Enter your PIN to unlock", () -> { }, null);
+        noPage.held = new HeldRequest.LockPrompt("transaction", null);
+        noPage.gate.heldRequestChanged();
+        assertEquals(0, noPage.count("cancel"));
+
+        // Held text on neither side: a stale prompt of another kind is not cancelled by a redraw.
+        FakeEnv plain = env();
+        plain.now = CredentialGate.FRESH_BOOT_MS + 1;
+        plain.gate.confirmDevicePin("Enter your PIN to open the wallet", () -> { }, null);
+        plain.session = 2;
+        plain.gate.show(2);
+        plain.drain();
+        plain.gate.heldRequestChanged();
+        assertEquals(0, plain.count("cancel"));
+    }
+
+    /** The activity side: every held/dropped refresh reaches the prompt, and the prompt carries all its text. */
+    @Test public void heldPromptCallSites() throws Exception {
+        assertTrue(SourceGuard.definition("private void refreshGateRequest(String label, String body) {")
+                .contains("credentialGate.heldRequestChanged();"));
+        String confirm = SourceGuard.definition("public void systemConfirm(CredentialGate.PromptText text, CredentialGate.Confirmed result) {");
+        assertTrue(confirm.contains("text.title, text.subtitle, text.description, cancel"));
+        assertTrue(SourceGuard.definition("public HeldRequest.LockPrompt heldPrompt() {")
+                .contains("synchronized (stateLock) { return heldRequest.lockPrompt(); }"));
     }
 
     // ---------------------------------------------------------------- seed-key window
