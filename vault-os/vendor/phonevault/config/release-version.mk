@@ -18,4 +18,4 @@
 #     so no phone that ever booted a timestamp-indexed image is locked out;
 #   - never decrease it, never reuse a value.
 PHONEVAULT_VERSION ?= 0.1.0-dev
-PHONEVAULT_AVB_ROLLBACK_INDEX := 2026103000
+PHONEVAULT_AVB_ROLLBACK_INDEX := 2026110100

@@ -1,0 +1,52 @@
+# beta5 expectations (= beta4's = beta3's = beta2's, channel beta5), appended to the base rung's
+# (rung-b4d-1/expect-build.txt) by
+# release-bluejay/sync-beta.sh when it resolves the beta config. Same syntax (check-build.sh).
+
+# User build: no debuggable image, adb authentication on, adb never a default USB function.
+# (verify-production-target-files.sh checks the same in init's load order; these pin the files.)
+grep SYSTEM/build.prop ^ro\.build\.type=user$
+nogrep SYSTEM/build.prop ^ro\.debuggable=1
+grep SYSTEM_EXT/etc/build.prop ^ro\.adb\.secure=1$
+nogrep SYSTEM_EXT/etc/build.prop ^ro\.adb\.secure=0
+grep PRODUCT/etc/build.prop ^persist\.sys\.usb\.config=none$
+nogrep VENDOR/build.prop ^persist\.sys\.usb\.config=
+nogrep VENDOR/build.prop ^persist\.adb\.notify=
+grep PRODUCT/etc/build.prop ^ro\.phonevault\.channel=beta5$
+grep VENDOR_BOOT/RAMDISK/prop.default ^ro\.debuggable=0$
+
+# No pre-authorised adb host: the key file is gone (rung images shipped it). AOSP's rootdir still
+# installs /adb_keys -> /product/etc/security/adb_keys in both ramdisks on every build; with the
+# target absent the links are inert (the production gate's adb_keys_links check).
+absent PRODUCT/etc/security/adb_keys
+grep ROOT/adb_keys \A/product/etc/security/adb_keys\Z
+grep VENDOR_BOOT/RAMDISK/adb_keys \A/product/etc/security/adb_keys\Z
+
+# No debug ramdisk payload in the image.
+absent VENDOR_BOOT/RAMDISK/force_debuggable
+absent VENDOR_BOOT/RAMDISK/adb_debug.prop
+absent BOOT/RAMDISK/force_debuggable
+absent BOOT/RAMDISK/adb_debug.prop
+
+# adbd's FunctionFS endpoint only on debuggable images (b3): unchanged gadget rc, never reached
+# on this build because ro.debuggable=0.
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^on early-boot && property:ro\.debuggable=1\n\s+mkdir /config/usb_gadget/g1/functions/ffs\.adb
+
+# Recovery (hardened recovery binary, patches/bootable-recovery/0001) lives in vendor_boot on gs101.
+present VENDOR_BOOT/RAMDISK/system/bin/recovery
+
+# The signer app is the release build signed with the beta app key: build-beta.sh checks the
+# certificate digest against the key on the host; here only its place on /product.
+present PRODUCT/app/PhoneVault/PhoneVault.apk
+
+# beta2: the USB charging composition without adb is the accessory function (frameworks-base-a17
+# 0006, config_usbChargingFunctionsAccessory=true in this beta's config.xml; build-beta.sh checks
+# the compiled overlay value). The gadget may only ever compose what the b3 rc creates: an
+# allowlist of function instances (accessory.gs2, the userspace-AOA ffs.aoa/ffs.ctrl, and ffs.adb
+# under the debuggable trigger only), nothing linked into a configuration by init, the gadget
+# never bound to the UDC by init (only the gadget HAL does that, from the framework's request).
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s*mkdir /config/usb_gadget/g1/functions/(?!(accessory\.gs2|ffs\.aoa|ffs\.ctrl|ffs\.adb)(\s|$))
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s*symlink /config/usb_gadget/g1/functions/
+nogrep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s*write /config/usb_gadget/g1/UDC
+grep VENDOR/etc/init/hw/init.gs101.usb.rc ^\s+mkdir /config/usb_gadget/g1/functions/accessory\.gs2$
+present VENDOR/etc/permissions/android.hardware.usb.accessory.xml
+present PRODUCT/overlay/framework-res__vault_bluejay__auto_generated_rro_product.apk
