@@ -108,5 +108,8 @@ font (SIL OFL 1.1, `app/src/main/assets/fonts/OFL.txt`).
 Phone Vault is free and open source, with no investors and no token. If it's useful to you:
 
 - **Ko-fi** (card or PayPal): https://ko-fi.com/halfaipg
-<!-- tip-addresses: the same addresses appear on phonevault.org; donors can check that the two match -->
+- **Ethereum and EVM networks** (ETH, USDC and other tokens on Ethereum, Base, Arbitrum, Optimism, Polygon): `0xA218db26ed545f3476e6c3E827b595cf2E182533`
+- **Bitcoin:** `bc1qdvmvswqt3z9a272ynv5adcag0uxt4hg0qzy2ap`
+
+The same addresses are on [phonevault.org](https://phonevault.org/#support). Check that the two match before you send.
 
