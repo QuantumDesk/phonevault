@@ -31,7 +31,8 @@ contract call it cannot explain.
 - Restore from Ledger or Trezor recovery phrases, including Ledger Live account numbering.
 - A 24-word recovery phrase from three randomness sources, optionally with your own dice rolls;
   a PIN held by the security chip; ten wrong PINs erase the phone.
-- A web installer (Chrome or Edge on a Mac) that checks every file before it writes anything.
+- A Mac install script that checks every file against the published hashes before it writes
+  anything.
 
 **The limits, plainly.**
 
@@ -47,12 +48,14 @@ contract call it cannot explain.
 
 **How to join.**
 
-1. Read the release notes and the tester guide: TBD links.
-2. Install from phonevault.org/install, or with the Mac script and the published SHA256SUMS.
-3. Tell us what breaks: TBD channel. Security problems privately: security@phonevault.org (see
-   SECURITY.md).
+1. Read the release notes and the tester guide: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4 and
+   https://github.com/QuantumDesk/phonevault/blob/main/release/beta/TESTER_GUIDE.md
+2. Install with `install-beta4-mac.sh` from the release; it checks every file against the
+   published SHA256SUMS first.
+3. Tell us what breaks: https://github.com/QuantumDesk/phonevault/issues. Security problems
+   privately, through GitHub's private vulnerability reporting (see SECURITY.md).
 
-The code is open source under Apache-2.0: TBD repository link.
+The code is open source under Apache-2.0: https://github.com/QuantumDesk/phonevault
 
 ---
 
@@ -60,4 +63,4 @@ The code is open source under Apache-2.0: TBD repository link.
 
 > Phone Vault public beta is open: turn a Pixel 6a into an offline wallet for Ethereum and
 > Bitcoin. Beta, small amounts only, not yet audited; the phone stays bootloader-unlocked for now.
-> Install and release notes: TBD link
+> Install and release notes: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4

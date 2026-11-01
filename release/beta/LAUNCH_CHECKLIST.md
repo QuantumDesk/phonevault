@@ -8,6 +8,16 @@ publishes). Nothing in this list has been published yet.
 Status on 2026-10-30, from the repository (`main` at f07009f): beta1 and beta2 are built; beta1
 booted but did not enumerate on USB; beta2 is built and not flashed; **beta3 does not exist yet**.
 
+Update 2026-11-01 (branch `release/public-beta4`): the launch moves to **beta4** as a GitHub
+release (no web installer, no R2 hosting for now, so D1–D3 and D5's installer part do not apply
+to this launch). Prepared, not published: A1 wording ("Public beta: small amounts only;
+bootloader unlocked; not independently audited") in README, ROADMAP, release notes and the
+website branch `public-beta`; A2 recorded as a conscious exception in release-bluejay/README.md;
+B2 is done (`9510c2c`); release assets, companion DMG (F1, from `3a3f5ba`) and extension zip
+(F3) built with hashes; E4 replaced by GitHub private vulnerability reporting (no mail for
+phonevault.org); E5 = GitHub Issues with a bug form. Still open and blocking: **C1–C10 on beta4**
+(beta4 has not been flashed), E1, E2, E3, G2, G3.
+
 ## A. Decisions before anything else
 
 - [ ] **A1 · user** Agree the wording "public beta, small amounts only". README.md ("Do not use

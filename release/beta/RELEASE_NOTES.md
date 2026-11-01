@@ -1,6 +1,7 @@
 # Phone Vault public beta: release notes
 
-**Release:** 0.1.0-beta3 (Pixel 6a only) · **Status:** public beta, not yet independently audited
+**Release:** 0.1.0-beta4 (Pixel 6a only) · **Status:** public beta, not yet independently audited ·
+**Download:** [tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4)
 
 > **Read this first.** This is a beta. Use it with small amounts only, amounts you can afford to
 > lose. It has not been independently audited. The phone's bootloader stays **unlocked**, the
@@ -22,6 +23,20 @@ reaches the network until you click **Send to network**.
 
 Why a phone: a Pixel 6a costs little second-hand, has Google's Titan M2 security chip, and a
 screen large enough to show a whole address, the amount, the network and the fee at once.
+
+## What is new in beta4
+
+- Signer app 0.3.1. A request that arrives while the phone is locked is shown on the lock
+  screen ("INCOMING REQUEST") and kept there until you enter the PIN. If the phone locks before
+  you reviewed a request, your Mac is told at once: "The phone locked before this request was
+  reviewed. Nothing was signed."
+- A PIN prompt you dismiss (Back) no longer blocks the next action that needs the PIN.
+- The companion waits for the phone to reconnect on its own after the USB link restarts,
+  instead of failing on a phone that is briefly away.
+- The genuine check recognises the beta: with **Developer mode** on it shows **Beta build:
+  bootloader unlocked, not production. Small amounts only**; with it off, a beta phone is not
+  accepted.
+- Distributed as a GitHub release with a Mac install script (`install-beta4-mac.sh`).
 
 ## What works in this beta
 
@@ -45,8 +60,8 @@ screen large enough to show a whole address, the amount, the network and the fee
   only look like a past recipient, are flagged.
 - The Mac's simulation of balance changes is shown on the phone as an unverified claim, with a
   warning when it contradicts what the transaction does.
-- Sites: through the **Phone Vault browser extension** (Chrome, Brave, Edge; Firefox as an
-  unpacked add-on), which lists Phone Vault in a site's wallet list (EIP-6963). Connecting to
+- Sites: through the **Phone Vault browser extension** (Chrome, Brave, Edge; loaded unpacked
+  from this release's zip), which lists Phone Vault in a site's wallet list (EIP-6963). Connecting to
   Uniswap through the extension has been done with a real phone. **WalletConnect** is built and
   covered by automated tests, but has not yet been used end to end by a person with a real phone
   and a real site: treat it as less tested.
@@ -122,9 +137,12 @@ screen large enough to show a whole address, the amount, the network and the fee
   erases the phone: keep your recovery phrase.
 - **Reproducible builds** and a public log of release hashes.
 - **Independent security audit.** All review so far has been internal.
-- **Companion:** macOS only (Apple silicon build; Intel Macs need a separate build). Not signed
-  or notarized yet. No Windows or Linux build.
-- **Extension:** not in the Chrome Web Store or Firefox Add-ons yet: load it unpacked.
+- **Companion:** macOS on **Apple silicon** only (no Intel build in this release). Not signed
+  or notarized yet: open it the first time with right-click → Open. No Windows or Linux build.
+- **Extension:** not in the Chrome Web Store or Firefox Add-ons yet: load it unpacked in Chrome,
+  Brave or Edge. No Firefox package in this release.
+- **Web installer:** not available for this release. Install with the Mac script from the
+  GitHub release.
 - **Not supported:** ERC-1155 display, Bitcoin multisig and Taproot script paths, coin control,
   Tor, Bitcoin passphrase wallets, air-gapped QR signing, an in-app "erase wallet" button (erase
   by re-installing; see the tester guide).
@@ -139,6 +157,9 @@ screen large enough to show a whole address, the amount, the network and the fee
   protected like release keys. Treat every beta image as development software.
 - **Not audited.** There may be bugs that let a wrong transaction through, or that lose access.
   Your recovery phrase on paper is your backup for everything.
+- **The phone's own labels.** The signer app on the phone still says "Development · test assets
+  only" on its Wallet and PIN screens. For this beta, read it as the limits above: small amounts
+  only. A later beta will change the wording.
 - **Emergency-call button.** The lock screen can show "Emergency calls only" / an Emergency
   button. The radio drivers are removed, but this button is a path out of the locked screen that
   a later beta will remove.
@@ -161,40 +182,57 @@ screen large enough to show a whole address, the amount, the network and the fee
 | Not supported | **Verizon** Pixel 6a phones (their bootloader cannot be unlocked). |
 | Carrier-locked phones | Need a **carrier unlock** first (ask the carrier), then OEM unlocking becomes available. |
 | Firmware | Google's bootloader `bluejay-17.0-15199431` and radio `g5123b-145971-260414-B-15201439` must already be on the phone. The installer checks both and writes nothing if they differ. |
-| Computer | A Mac (macOS 12 or later) with Chrome or Edge for the web installer, and a USB-C **data** cable straight into the Mac. |
+| Firmware build | Google's Android 17 builds **CP2A.260605.012** and **CP2A.260705.006** carry both. Pixel phones cannot go back to an older bootloader: a phone that already has a newer one must wait for a later beta. |
+| Computer | A Mac with **Apple silicon** (macOS 12 or later), **Chrome or Edge** (or Brave) for the extension, Google's `fastboot` (`brew install android-platform-tools`), and a USB-C **data** cable straight into the Mac. |
 
 Other Pixels, including the Pixel 3 XL used for development, are not supported in this beta.
 
 ## Reporting bugs
 
-- **Bugs and questions:** TBD channel (to be announced before launch).
-- **Security problems:** report privately, never in public. See [SECURITY.md](../../SECURITY.md).
+- **Bugs and questions:** [GitHub Issues](https://github.com/QuantumDesk/phonevault/issues/new/choose)
+  (the bug report form asks for the details below).
+- **Security problems:** report privately, never in a public issue: GitHub's private
+  vulnerability reporting ("Report a vulnerability" on the repository's Security tab). See
+  [SECURITY.md](../../SECURITY.md).
 - Never send your recovery phrase, PIN, passphrase or private keys to anyone, including us. Use a
   throwaway wallet when you show a problem.
-- Helpful details: beta version (shown in Device information), companion version, what you did,
+- Helpful details: beta version (shown in Device information), companion version, macOS version, what you did,
   what you expected, what you saw, and a photo of the phone's screen.
 
 ## Verifying downloads
 
-Every release is published with `SHA256SUMS` and `manifest.json`.
+The release at [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4) has these files:
 
-- `SHA256SUMS` lists the SHA-256 of every image, the Mac install script, the manifest, and the
-  zip archives. Check a download on your Mac:
+| File | What |
+|---|---|
+| `super.img.part-aa`, `super.img.part-ab` | Vault OS `super.img` in two parts (GitHub allows 2 GiB per file); the install script joins them |
+| `PhoneVault-beta4-images-bluejay.zip` | the boot images (`boot`, `vendor_boot`, `dtbo`, `pvmfw`, `vbmeta`, `vbmeta_system`, `vbmeta_vendor`) and `android-info.txt` |
+| `install-beta4-mac.sh` | joins, unzips, checks every file, then runs the flash script |
+| `flash-beta4-mac.sh` | the build's own flash script: reads the phone, asks you to type `FLASH`, writes slot a |
+| `manifest.json` | each partition written, with file, size and SHA-256; build ID, fingerprint, signing key identities |
+| `SHA256SUMS` | the build's own hash list (it also names build files that are not published) |
+| `PhoneVault-Companion-0.1.0-beta4-arm64.dmg` | Phone Vault Companion for Apple silicon Macs, unsigned |
+| `PhoneVault-Extension-0.1.0-beta4-chromium.zip` | the browser extension, to load unpacked (ID `fbomijndbpoddicmbngledanaafapmlk`) |
+| `SHA256SUMS-assets` | SHA-256 of every file above |
 
-  ```sh
-  shasum -a 256 -c SHA256SUMS
-  ```
+Check the downloads on your Mac, in the folder that holds them:
 
-  Every line must say `OK`.
-- `manifest.json` lists each partition the installer writes, with its file, size and SHA-256,
-  plus the build ID, fingerprint and the public identities of the AVB and app signing keys.
-- The web installer at phonevault.org/install has the SHA-256 of `manifest.json` built into the
-  page, checks the downloaded manifest against it, and then checks every image against the
-  manifest before it writes anything. One mismatch stops it.
-- The Mac script (`flash-beta3-mac.sh`) checks every file against `SHA256SUMS` before it touches
-  the phone.
+```sh
+shasum -a 256 -c SHA256SUMS-assets      # every line must say OK
+```
+
+`install-beta4-mac.sh` then checks `SHA256SUMS` against the SHA-256 built into the script, joins
+`super.img`, and checks it and every image against `SHA256SUMS` before it runs any `fastboot`
+command. `flash-beta4-mac.sh` checks them again before it writes. One mismatch stops both.
+
+The same image hashes are recorded in the repository, in
+[vault-os/release-bluejay/README.md](../../vault-os/release-bluejay/README.md#beta4-build-2026-10-30),
+so you can compare against a second source.
+
 - Beta-test key identities (for comparing with the genuine check's details):
   - AVB public key: sha256 `234b8f9bd98cac321ddda1a035cb4e8cfade4f96c63d0c081b6c9cdec4ea80f0`
   - Signer app certificate: sha256 `934c4f78f34daebc9f6733af217ff78bdb864fba20e408a1ad3ff5e00a7c032f`
-- Hashes for this release: TBD (copied from the build's `SHA256SUMS` when beta3 is built).
-- The companion DMG and the extension zips are published with their own `.sha256` files.
+- Hashes of the build's `SHA256SUMS` and `manifest.json`:
+  - `SHA256SUMS`: `26fa3625b8350f204aeb76004f8d6e546500683da979ec4c491c502156eeeec4`
+  - `manifest.json`: `e26f04427d7fde99235136c285f2f0482e751894e326f3bd9880ead4afb990be`
+  - `super.img` (joined): `0cfda121bc35a4872a9f5f46f578d794bf9850151f7d79644c8e3844ac8585e3`
