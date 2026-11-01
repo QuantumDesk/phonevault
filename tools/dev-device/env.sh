@@ -10,9 +10,20 @@
 #   PV_STATE_DIR     persistent harness state (0700)      default: ${XDG_STATE_HOME:-~/.local/state}/phonevault
 #   PV_PAIRING_FILE  the host pairing usbsigntest.sh pins default: $PV_STATE_DIR/paired-signer.json
 #   PV_LOG_DIR       per-run host logs (0700)             default: ${TMPDIR:-/tmp}/phonevault
+#   PV_TEST_PIN      the throwaway phones' 6-digit test PIN default: PV_DEFAULT_TEST_PIN below
+#
+# The test PIN is defined here, once. It is NOT a pattern: from beta5 the app refuses PINs a thief
+# tries first when a PIN is chosen (all-same digits, straight runs, repeated groups, the common
+# list: app GuessablePins), so firstrun.sh could not set the old harness PIN any more. Unlock never
+# applies that check: a phone set up before beta5 with another PIN keeps working, by exporting
+# PV_TEST_PIN=<its PIN> before running the scripts (the variable always wins over the default).
+# Like every test PIN, it is burned: never use it on a phone that holds anything.
 # shellcheck disable=SC2034  # the variables below are read by the scripts that source lib.sh
 
 PV_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+
+PV_DEFAULT_TEST_PIN=380275
+PV_TEST_PIN="${PV_TEST_PIN:-$PV_DEFAULT_TEST_PIN}"
 
 PY="${PV_HOST_PY:-python3}"
 PY="$(command -v -- "$PY" 2>/dev/null || printf '%s' "$PY")"   # a bare command name → its path

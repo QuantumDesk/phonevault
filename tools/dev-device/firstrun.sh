@@ -5,7 +5,7 @@
 source "$(dirname "$0")/lib.sh"
 require_throwaway
 require_dev_appliance
-require_pin
+require_choosable_pin
 [[ -n "${PV_WORDS_FILE:-}" ]] || die "set PV_WORDS_FILE: where to store the THROWAWAY phrase (0600)"
 wake
 expect_screen "SET PIN"

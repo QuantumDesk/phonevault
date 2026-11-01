@@ -3,7 +3,8 @@
 #
 #   PV_THROWAWAY_DEVICE=1   required: the phone's wallet holds nothing and may be wiped
 #   PV_TEST_PIN=nnnnnn      the current (or, for firstrun.sh, the to-be-set) 6-digit PIN;
-#                           prompted for silently if unset; never printed or logged
+#                           default: env.sh's PV_DEFAULT_TEST_PIN (one place); export it for a
+#                           phone set up with another PIN; never printed or logged
 #   PV_WORDS_FILE=path      a 0600 file holding a THROWAWAY 24-word phrase, one word per line or
 #                           space-separated; read by backupcheck/restore scripts, never echoed
 #   ADB=/path/to/adb        optional override
@@ -85,6 +86,30 @@ require_pin() {
     read -r -s -p "Test PIN (6 digits; never logged): " PV_TEST_PIN; echo
   fi
   [[ "$PV_TEST_PIN" =~ ^[0-9]{6}$ ]] || die "PIN must be exactly 6 digits"
+}
+
+# The app's SET PIN refuses guessable PINs (GuessablePins: one digit six times, a straight run up
+# or down incl. across 9→0, a repeated 2- or 3-digit group, three doubled digits, the common list).
+# firstrun.sh checks before keying it in, so a refusal is named here, not found on the phone.
+pin_guessable() {
+  local p="$1" i up=1 down=1 d2=1 d3=1 dbl=1 a b
+  for (( i = 1; i < 6; i++ )); do
+    a=${p:i-1:1}; b=${p:i:1}
+    (( (a + 1) % 10 == b )) || up=0
+    (( (a + 9) % 10 == b )) || down=0
+  done
+  for (( i = 2; i < 6; i++ )); do [[ ${p:i:1} == "${p:i-2:1}" ]] || d2=0; done
+  for (( i = 3; i < 6; i++ )); do [[ ${p:i:1} == "${p:i-3:1}" ]] || d3=0; done
+  for (( i = 0; i < 6; i += 2 )); do [[ ${p:i:1} == "${p:i+1:1}" ]] || dbl=0; done
+  (( up || down || d2 || d3 || dbl )) && return 0
+  case "$p" in
+    123456|654321|111111|000000|123123|112233|121212|159753|147258|696969|520520|666666|101010|789456|147852|123321|456789|999999|555555|777777) return 0 ;;
+  esac
+  return 1
+}
+require_choosable_pin() {
+  require_pin
+  if pin_guessable "$PV_TEST_PIN"; then die "PV_TEST_PIN is a PIN the app refuses at SET PIN (a pattern or a common PIN): use env.sh's default or another"; fi
 }
 
 # A PIN that differs from the test PIN in its first digit (for deliberate wrong entries).

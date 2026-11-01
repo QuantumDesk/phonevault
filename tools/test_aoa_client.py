@@ -77,7 +77,7 @@ class DeviceSelectionTest(unittest.TestCase):
 class FakePhone:
     """A phone as UsbDeviceManager + f_accessory behave (same model as the companion's tests)."""
 
-    def __init__(self, mode, app_reads=True, self_reattach_after=None, vanish_on_open=0):
+    def __init__(self, mode, app_reads=True, self_reattach_after=None, vanish_on_open=0, late_reader_opens=0):
         self.mode, self.app_reads = mode, app_reads  # mode: adb | idle | stale | live | gone
         self.idle_is_accessory = mode == "idle"
         self.address, self.start_pending = 10, False
@@ -87,6 +87,8 @@ class FakePhone:
         self.self_reattach_after, self.reattach_at = self_reattach_after, None
         # The phone drops off the bus as the next N opens start (still re-enumerating).
         self.vanish_on_open, self.vanished_opens = vanish_on_open, 0
+        # The app opens its session late: the next N opens find nothing reading, whatever the mode.
+        self.late_reader_opens = late_reader_opens
         self.clock = 0.0
         self.reset_while_moving = False
 
@@ -141,6 +143,9 @@ class FakePhone:
             raise usb.core.USBError("gone", errno=errno.ENODEV)
         if dev != self.address or self._moving():
             raise usb.core.USBError("gone", errno=errno.ENODEV)
+        if self.late_reader_opens:
+            self.late_reader_opens -= 1
+            return None
         return ("in", "out") if self.mode == "live" else None
 
     def pause(self, seconds):
@@ -188,11 +193,33 @@ class ConnectTest(unittest.TestCase):
         phone = FakePhone("live", vanish_on_open=1)
         self.assertEqual(("in", "out"), aoa_client.connect(phone))
         self.assertEqual((0, 0), (phone.handshakes, phone.resets), "no START, no reset for a retry")
-        # The retry is once only: a second vanish goes through the ordinary (single) recovery.
+        # The retry is once only: a second vanish goes through the ordinary (single) recovery,
+        # a third through its one re-scan; a fourth is refused (replug).
         thrice = FakePhone("live", vanish_on_open=3)
-        with self.assertRaises(aoa_client.NotReadingError):
-            aoa_client.connect(thrice)
+        self.assertEqual(("in", "out"), aoa_client.connect(thrice))
         self.assertEqual(0, thrice.resets, "it moved: never reset")
+        four = FakePhone("live", vanish_on_open=4)
+        with self.assertRaises(aoa_client.NotReadingError):
+            aoa_client.connect(four)
+        self.assertEqual(0, four.resets, "it moved: never reset")
+
+    def test_after_the_reset_the_phone_is_scanned_again_once_before_replug(self):
+        # The phone's app lost its session to the reset and reopens the accessory a moment after
+        # the first post-reset probe gave up: one more scan finds it, with no second START/reset.
+        phone = FakePhone("stale", late_reader_opens=2)
+        self.assertEqual(("in", "out"), aoa_client.connect(phone))
+        self.assertEqual((1, 1), (phone.handshakes, phone.resets))
+        never = FakePhone("stale", late_reader_opens=3)
+        with self.assertRaisesRegex(aoa_client.NotReadingError, "unplug and replug"):
+            aoa_client.connect(never)
+        self.assertEqual((1, 1), (never.handshakes, never.resets), "never a second START or reset")
+
+    def test_a_phone_that_leaves_mid_wait_says_so(self):
+        class Gone:
+            def read(self, size, timeout):
+                raise usb.core.USBError("No such device", errno=errno.ENODEV)
+        with self.assertRaisesRegex(aoa_client.PhoneLeftError, "unplug and replug"):
+            aoa_client.exchange(Gone(), FakeOut(), {"id": "a", "method": "getAddress"}, timeout_ms=3000)
 
     def test_settle_waits_for_a_stable_address(self):
         phone = FakePhone("live")
