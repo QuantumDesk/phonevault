@@ -342,6 +342,11 @@ const setupHost: SetupHost = {
   status: () => state.status,
   device: () => state.device,
   recheck: () => { void identifyPhone(); },
+  setDeveloperMode: async (on, confirmation) => {
+    state.devMode = await api.setDeveloperMode(on, confirmation);
+    // Rust dropped the verdict with the change: check again under the new setting
+    if ((state.status?.phone ?? "none") !== "none") void identifyPhone();
+  },
   confirmPairing: async (address) => { await pairAccount(address, null); state.phoneAddress = address; state.identity = { s: "match" }; await refreshStatus(); },
   chainId: () => prefs.chainId,
   setChain: (id) => { prefs.chainId = id; savePrefs(); },

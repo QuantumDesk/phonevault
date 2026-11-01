@@ -57,12 +57,14 @@ export interface AttestationDetails {
   attestation_version: number; keymint_version: number;
   device_locked: boolean | null; verified_boot_state: string | null; verified_boot_key: string | null; verified_boot_key_known: boolean;
   verified_boot_hash: string | null; os_version: string | null; os_patch_level: string | null; vendor_patch_level: string | null; boot_patch_level: string | null;
-  app_package: string | null; app_version: number | null; app_signer: string | null; app_signer_kind: "release" | "development" | "unknown";
+  app_package: string | null; app_version: number | null; app_signer: string | null; app_signer_kind: "release" | "beta" | "development" | "unknown";
   root: string; provisioning: string; chain_length: number; revocation: string;
 }
 export interface Attestation {
   verdict: Verdict; headline: string; problems: string[]; cautions: string[]; notes: string[];
   details: AttestationDetails | null; address: string | null; checked_at: number; dev_mode: boolean;
+  /** FAIL only because of an unlocked bootloader plus the beta- or development-signed app (policy.rs): Developer mode would accept it. */
+  dev_mode_fixable?: boolean;
 }
 /** One balance change of the paired wallet in a simulation (sim.rs). */
 export interface SimChange { asset: string; token_id: string | null; delta: string; symbol: string | null; decimals: number | null; display: string }

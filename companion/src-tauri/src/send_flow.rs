@@ -166,7 +166,7 @@ pub fn phone_exchange(
             match e {
                 aoa::AoaError::Protocol(ref m) if m == aoa::CANCELLED => fail("cancelled", m.clone(), d),
                 aoa::AoaError::Timeout(_) => fail("timeout", e.to_string(), d),
-                aoa::AoaError::Usb(_) => fail("disconnected", e.to_string(), d),
+                aoa::AoaError::Usb(_) | aoa::AoaError::Left(_) => fail("disconnected", e.to_string(), d),
                 other if !d => fail("not_delivered", other.to_string(), d),
                 other => fail("protocol", other.to_string(), d),
             }

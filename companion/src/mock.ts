@@ -39,6 +39,9 @@ const MOCK_TOKENS = [
   { chainId: 1, address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", symbol: "USDC", name: "USD Coin", decimals: 6 },
 ];
 
+/** policy.rs UNLOCKED_PROBLEM (the problem an unlocked bootloader gives with Developer mode off). */
+const UNLOCKED_PROBLEM = "The phone's bootloader is unlocked, so its software can be replaced without anyone noticing. Accept it only for a phone you flashed yourself: Settings → Device → Developer mode.";
+
 /** Device-check reports shaped like the Rust side's, for each verdict. */
 function mockAttestation(kind: string, allowDev: boolean): Attestation {
   const base: AttestationDetails = {
@@ -51,7 +54,7 @@ function mockAttestation(kind: string, allowDev: boolean): Attestation {
     root: "Google Hardware Attestation Root (RSA)", provisioning: "factory", chain_length: 4, revocation: "Not revoked (Google status list of 2026-10-10)",
   };
   const now = Math.floor(Date.now() / 1000);
-  const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: PHONE_ADDRESS, checked_at: now, dev_mode: allowDev, ...a });
+  const r = (a: Partial<Attestation>): Attestation => ({ verdict: "development", headline: "", problems: [], cautions: [], notes: [], details: base, address: PHONE_ADDRESS, checked_at: now, dev_mode: allowDev, dev_mode_fixable: false, ...a });
   switch (kind) {
     case "genuine": return r({ verdict: "genuine", headline: "Genuine Phone Vault: locked Phone Vault firmware, Phone Vault app, keys in the security chip",
       details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "4f1c2a9e0b7d3c5a8e6f1b2d4c7a9e0f3b5d8c1a2e4f6b8d0c3a5e7f9b1d2c4e", verified_boot_key_known: true,
@@ -61,10 +64,16 @@ function mockAttestation(kind: string, allowDev: boolean): Attestation {
       details: { ...base, device_locked: true, verified_boot_state: "Self-signed (yellow)", verified_boot_key: "9c2e41d07a3b55e8f1d2c3b4a5968778695a4b3c2d1e0f1a2b3c4d5e6f708192", app_signer_kind: "development" } });
     case "oldapp": return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check", address: null, details: null,
       problems: ["The phone did not answer the genuine check (Request fields do not match schema; missing=[nonce, …]). A Phone Vault app this old cannot prove it is genuine; update the app on the phone."] });
+    case "beta":
+      // a public beta phone: unlocked bootloader + beta-signed app (policy.rs)
+      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check", details: { ...base, app_signer_kind: "beta" }, dev_mode_fixable: true,
+        problems: ["This phone runs the Phone Vault public beta. Beta phones have an unlocked bootloader, so this Mac accepts one only after you confirm you flashed it yourself: Settings → Device → Developer mode.", UNLOCKED_PROBLEM] });
+      return r({ verdict: "development", headline: "Beta build: bootloader unlocked, not production. Small amounts only", details: { ...base, app_signer_kind: "beta" },
+        cautions: ["The Phone Vault app is the public beta (beta key), confirmed on this Mac as a phone you flashed yourself.", "Development firmware: bootloader unlocked, not safe for real funds"] });
     default:
-      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check",
-        problems: ["The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone."],
-        cautions: ["Development firmware: bootloader unlocked, not safe for real funds"] });
+      // Developer mode off: both reasons are problems, in policy.rs order (app, then boot)
+      if (!allowDev) return r({ verdict: "fail", headline: "Not genuine: this phone failed the genuine check", dev_mode_fixable: true,
+        problems: ["The Phone Vault app is signed with the development key, not the release key. Turn on Developer mode in Settings → Device only for a development phone.", UNLOCKED_PROBLEM] });
       return r({ verdict: "development", headline: "Development firmware: bootloader unlocked, not safe for real funds",
         cautions: ["Development firmware: bootloader unlocked, not safe for real funds", "The Phone Vault app is signed with the development key (Developer mode is on on this Mac)."] });
   }
