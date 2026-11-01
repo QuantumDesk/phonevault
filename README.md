@@ -102,3 +102,11 @@ Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 Apache-2.0 ([LICENSE](LICENSE)). See [NOTICE](NOTICE) for the licensing boundary (kernel and
 other patches to GPL code stay GPL-2.0) and third-party components, including the Press Start 2P
 font (SIL OFL 1.1, `app/src/main/assets/fonts/OFL.txt`).
+
+## Support the work
+
+Phone Vault is free and open source, with no investors and no token. If it's useful to you:
+
+- **Ko-fi** (card or PayPal): https://ko-fi.com/halfaipg
+<!-- tip-addresses: the same addresses appear on phonevault.org; donors can check that the two match -->
+
