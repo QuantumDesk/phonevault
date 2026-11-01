@@ -15,6 +15,7 @@ import android.hardware.usb.UsbAccessory;
 import android.hardware.usb.UsbManager;
 import android.os.BatteryManager;
 import android.os.Bundle;
+import android.os.CancellationSignal;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -166,6 +167,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
      * against the boot id, so re-creating the activity cannot re-arm it.
      */
     private BootUnlockGuard bootUnlock;
+    /** Cancels the system PIN prompt that is open (null: none); see CredentialGate#heldRequestChanged. */
+    private CancellationSignal promptCancel;
     /** Device-PIN prompt, boot unlock and seed-key window decisions (credential mode). */
     private final CredentialGate credentialGate = new CredentialGate(new CredentialGate.Env() {
         @Override public int session() { return session.get(); }
@@ -184,8 +187,20 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         @Override public void showLoading(String title, String caption) { pages.showLoading(title, caption); }
         @Override public void showLockedPage(int s) { MainActivity.this.showLockedPage(s); }
         @Override public void unlock(int s) { MainActivity.this.unlock(s); }
-        @Override public void systemConfirm(String why, CredentialGate.Confirmed result) {
-            SystemCredential.confirm(MainActivity.this, "Phone Vault", why, (ok, message) -> result.done(ok));
+        @Override public void systemConfirm(CredentialGate.PromptText text, CredentialGate.Confirmed result) {
+            CancellationSignal cancel = new CancellationSignal();
+            promptCancel = cancel;
+            SystemCredential.confirm(MainActivity.this, text.title, text.subtitle, text.description, cancel, (ok, message) -> {
+                if (promptCancel == cancel) promptCancel = null;
+                result.done(ok);
+            });
+        }
+        @Override public void cancelSystemConfirm() {
+            CancellationSignal cancel = promptCancel;
+            if (cancel != null) cancel.cancel();
+        }
+        @Override public HeldRequest.LockPrompt heldPrompt() {
+            synchronized (stateLock) { return heldRequest.lockPrompt(); }
         }
         @Override public void probeSeedKey(CredentialGate.Probed result) {
             cryptoExecutor.execute(() -> {
@@ -486,6 +501,8 @@ public final class MainActivity extends Activity implements AccessoryTransport.L
         if (unlocked) return;
         if (pinScreen != null) pinScreen.setPending(label, body);
         if (lockedPageSession == session.get()) showLockedPage(lockedPageSession);
+        // The system PIN prompt covers that page: it says the same (re-shown with the new text).
+        credentialGate.heldRequestChanged();
     }
 
     private void clearPinEntry() {

@@ -21,8 +21,61 @@ final class HeldRequest {
         Taken(AccessoryTransport source, JSONObject request) { this.source = source; this.request = request; }
     }
 
+    /**
+     * What the system PIN prompt may say about a held request (it covers the locked page and its
+     * "INCOMING REQUEST" card): the request's kind and, for a message signature whose request parsed
+     * and whose origin passed {@link MessageRequest#optionalOrigin}, the site. Never an amount, an
+     * address or any content: that waits for the review after unlock.
+     */
+    static final class LockPrompt {
+        /** "message signature", "transaction", … or null when the method is not one this phone takes. */
+        final String kind;
+        /** The validated origin as the review shows it ("app.uniswap.org"), or null: "your Mac". */
+        final String site;
+
+        LockPrompt(String kind, String site) { this.kind = kind; this.site = site; }
+
+        static LockPrompt of(JSONObject request) {
+            String method = request.optString("method");
+            String site = null;
+            if (MessageRequest.handles(method)) {
+                try {
+                    String origin = MessageRequest.parse(request).origin;
+                    if (origin != null) site = MessageRequest.originDisplay(origin);
+                } catch (Exception refused) {
+                    site = null; // not validated: the prompt names only "your Mac"
+                }
+            }
+            return new LockPrompt(kind(method), site);
+        }
+
+        static String kind(String method) {
+            switch (method) {
+                case MessageRequest.PERSONAL_SIGN: return "message signature";
+                case MessageRequest.SIGN_TYPED_DATA_V4: return "typed-data signature";
+                case "signEip1559": return "transaction";
+                case BtcRequest.SIGN_PSBT: return "Bitcoin transaction";
+                case BtcRequest.GET_ACCOUNT: return "Bitcoin account request";
+                case "getAddress":
+                case AddressListRequest.METHOD:
+                case BtcRequest.SHOW_ADDRESS: return "address request";
+                case AttestationProtocol.METHOD: return "hardware check";
+                default: return null;
+            }
+        }
+
+        @Override public boolean equals(Object o) {
+            if (!(o instanceof LockPrompt)) return false;
+            LockPrompt p = (LockPrompt) o;
+            return java.util.Objects.equals(kind, p.kind) && java.util.Objects.equals(site, p.site);
+        }
+
+        @Override public int hashCode() { return java.util.Objects.hash(kind, site); }
+    }
+
     private JSONObject request;
     private String summary;
+    private LockPrompt lockPrompt;
     /** The connection {@link #request} arrived on. */
     private AccessoryTransport source;
 
@@ -36,12 +89,16 @@ final class HeldRequest {
         if (unlocked || from != live) return false;
         this.request = request;
         this.summary = summary;
+        this.lockPrompt = LockPrompt.of(request);
         this.source = from;
         return true;
     }
 
     /** What the gate shows for the held request, or null when nothing is held. */
     String summary() { return summary; }
+
+    /** What the system PIN prompt says about the held request, or null when nothing is held. */
+    LockPrompt lockPrompt() { return lockPrompt; }
 
     /**
      * After unlock: the held request, if its own connection is still {@code live} and open, else
@@ -81,6 +138,7 @@ final class HeldRequest {
     void clear() {
         request = null;
         summary = null;
+        lockPrompt = null;
         source = null;
     }
 }

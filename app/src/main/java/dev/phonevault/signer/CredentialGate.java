@@ -34,7 +34,11 @@ final class CredentialGate {
         /** Unlock session {@code s}; refused (and {@link #unlocked()} stays false) if it is stale. */
         void unlock(int s);
         /** Show the system device-PIN prompt; {@code result} runs on the UI thread (possibly at once). */
-        void systemConfirm(String why, Confirmed result);
+        void systemConfirm(PromptText text, Confirmed result);
+        /** Dismiss the open system prompt; its {@code result} then reports a failure. */
+        void cancelSystemConfirm();
+        /** What the prompt may say about the request held behind the gate (null: none). Under stateLock. */
+        HeldRequest.LockPrompt heldPrompt();
         /** On the crypto thread: does the seed key work right now? {@code result} runs on the UI thread. */
         void probeSeedKey(Probed result);
     }
@@ -42,6 +46,54 @@ final class CredentialGate {
     interface Confirmed { void done(boolean ok); }
 
     interface Probed { void done(boolean ready); }
+
+    /** The system prompt's own text (BiometricPrompt title, subtitle, optional description). */
+    static final class PromptText {
+        final String title, subtitle, description;
+        /** It tells of a held request (re-shown when that request changes or is dropped). */
+        final boolean held;
+
+        PromptText(String title, String subtitle, String description, boolean held) {
+            this.title = title;
+            this.subtitle = subtitle;
+            this.description = description;
+            this.held = held;
+        }
+
+        @Override public boolean equals(Object o) {
+            if (!(o instanceof PromptText)) return false;
+            PromptText t = (PromptText) o;
+            return held == t.held && title.equals(t.title) && subtitle.equals(t.subtitle)
+                    && java.util.Objects.equals(description, t.description);
+        }
+
+        @Override public int hashCode() { return java.util.Objects.hash(title, subtitle, description, held); }
+
+        @Override public String toString() { return title + " | " + subtitle + (description == null ? "" : " | " + description); }
+    }
+
+    static final String UNLOCK_WHY = "Enter your PIN to unlock";
+
+    /** The prompt of an action (a sensitive screen, the plain unlock): "Phone Vault", why. */
+    static PromptText actionText(String why) { return new PromptText("Phone Vault", why, null, false); }
+
+    /**
+     * The unlock prompt. With a request held behind the gate it says so, since the prompt covers
+     * the locked page and its "INCOMING REQUEST" card (Pixel 6a): who sent it (the validated site,
+     * else "your Mac") and its kind only, never an amount, an address or any content.
+     */
+    static PromptText unlockText(HeldRequest.LockPrompt held) {
+        if (held == null) return actionText(UNLOCK_WHY);
+        String from = held.site != null ? "From " + held.site + ", via your Mac" : "From your Mac";
+        String kind = held.kind == null ? "" : Character.toUpperCase(held.kind.charAt(0)) + held.kind.substring(1) + ". ";
+        return new PromptText("Incoming request", from,
+                kind + "Unlock to review it. Nothing is signed until you approve it.", true);
+    }
+
+    /** Wait after a cancelled prompt before showing its replacement (the old one is still closing). */
+    static final long RESHOW_DELAY_MS = 300;
+    /** A cancelled prompt that never reported back is treated as closed after this long. */
+    static final long CANCEL_GIVE_UP_MS = 2000;
 
     /** Boot unlock is tried only this soon after boot (elapsedRealtime). */
     static final long FRESH_BOOT_MS = 10 * 60 * 1000L;
@@ -54,6 +106,12 @@ final class CredentialGate {
     private long lastCredentialConfirm;
     /** True while a system PIN prompt is on screen, so a re-created gate does not stack another. */
     private boolean credentialPromptOpen;
+    /** The open prompt's text (null when none is open). */
+    private PromptText openText;
+    /** Counts prompts shown; a result for an older one (given up on after a cancel) is ignored. */
+    private int promptGeneration;
+    /** The open prompt was cancelled to show the unlock prompt again with the current held request. */
+    private boolean reshowAfterCancel;
     /** Session whose boot-time silent unlock attempt is still pending (-1: none). */
     private int bootAttemptSession = -1;
     /** The unlock in progress is the boot-time silent one (its failure is not the user's). */
@@ -147,10 +205,52 @@ final class CredentialGate {
 
     /** The locked page's Unlock: the system prompt, then unlock if this gate is still current. */
     void promptUnlock(int s) {
-        confirmDevicePin("Enter your PIN to unlock", () -> {
+        if (credentialPromptOpen) { heldRequestChanged(); return; } // never stacked; its text kept current
+        confirm(unlockText(env.heldPrompt()), () -> {
             if (s == env.session() && !env.unlocked()) env.unlock(s);
         }, null);
     }
+
+    /**
+     * A request was held or dropped behind the gate (or the gate was drawn again): the open system
+     * prompt covers the locked page and its "INCOMING REQUEST" card, so it must say the same
+     * (Pixel 6a: only the PIN pad was visible, the request appeared only after unlock).
+     * BiometricPrompt's text cannot change while it is up: cancel it and show the unlock prompt
+     * again with {@link #unlockText} for what is held now. Only while locked, in the foreground,
+     * with the current session's locked page on screen (the page a stale prompt's success unlocks),
+     * and only when held-request text is involved: a prompt without one is left as it was. The
+     * cancel arrives as a failed confirmation (nothing unlocks, a stale prompt's onCancel runs as
+     * for Back); if it never reports back within {@link #CANCEL_GIVE_UP_MS} it is treated as closed
+     * and its late result ignored. Nothing here answers or signs anything: the held request is
+     * dispatched only by the unlock.
+     */
+    void heldRequestChanged() {
+        if (!credentialPromptOpen || reshowAfterCancel || env.unlocked() || !env.foreground()) return;
+        if (lockedPageSession != env.session()) return;
+        PromptText want = unlockText(env.heldPrompt());
+        if (want.equals(openText) || (!want.held && !openText.held)) return;
+        reshowAfterCancel = true;
+        final int cancelled = promptGeneration;
+        env.cancelSystemConfirm();
+        env.postDelayed(() -> {
+            if (cancelled != promptGeneration || !credentialPromptOpen || !reshowAfterCancel) return; // it reported back
+            promptGeneration++; // its late result, if any, is ignored
+            credentialPromptOpen = false;
+            openText = null;
+            reshowAfterCancel = false;
+            reshowUnlock();
+        }, CANCEL_GIVE_UP_MS);
+    }
+
+    /** After a cancel for new text: the unlock prompt again, if its locked page is still the gate on screen. */
+    private void reshowUnlock() {
+        int now = env.session();
+        if (env.unlocked() || lockedPageSession != now || !env.foreground()) return;
+        promptUnlock(now);
+    }
+
+    /** The open prompt's text, or null (tests). */
+    PromptText openPromptText() { return openText; }
 
     /** A system PIN prompt of ours is on screen (a second one would not be stacked). */
     boolean promptOpen() { return credentialPromptOpen; }
@@ -169,26 +269,42 @@ final class CredentialGate {
      * sealed vault's own screen), nor anything once a newer session is unlocked. A dismissed stale
      * prompt leaves that page and its Unlock button.
      */
-    void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) {
+    void confirmDevicePin(String why, Runnable onOk, Runnable onCancel) { confirm(actionText(why), onOk, onCancel); }
+
+    private void confirm(PromptText text, Runnable onOk, Runnable onCancel) {
         if (credentialPromptOpen) return;
         credentialPromptOpen = true;
+        openText = text;
+        final int generation = ++promptGeneration;
         final int s = env.session();
-        env.systemConfirm(why, ok -> {
+        env.systemConfirm(text, ok -> {
+            if (generation != promptGeneration || !credentialPromptOpen) return; // given up on after a cancel
             credentialPromptOpen = false;
-            if (s != env.session() && env.unlocked()) return;
-            if (ok) lastCredentialConfirm = env.elapsedRealtime();
-            if (s != env.session()) {
-                int now = env.session();
-                if (ok && lockedPageSession == now) env.unlock(now);
-                else if (!ok && onCancel != null) onCancel.run();
-                return;
-            }
-            if (ok) {
-                onOk.run();
-            } else if (onCancel != null) {
-                onCancel.run();
-            }
+            openText = null;
+            boolean reshow = reshowAfterCancel;
+            reshowAfterCancel = false;
+            finish(s, ok, onOk, onCancel);
+            // Cancelled for new text: show it once the old prompt has gone. A success that beat the
+            // cancel has unlocked (or been ignored as stale) above; nothing is shown again then.
+            if (reshow && !ok) env.postDelayed(this::reshowUnlock, RESHOW_DELAY_MS);
         });
+    }
+
+    /** A prompt of session {@code s} reported back: see {@link #confirmDevicePin}. */
+    private void finish(int s, boolean ok, Runnable onOk, Runnable onCancel) {
+        if (s != env.session() && env.unlocked()) return;
+        if (ok) lastCredentialConfirm = env.elapsedRealtime();
+        if (s != env.session()) {
+            int now = env.session();
+            if (ok && lockedPageSession == now) env.unlock(now);
+            else if (!ok && onCancel != null) onCancel.run();
+            return;
+        }
+        if (ok) {
+            onOk.run();
+        } else if (onCancel != null) {
+            onCancel.run();
+        }
     }
 
     /**

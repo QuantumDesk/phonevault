@@ -105,24 +105,29 @@ final class SystemCredential {
     /**
      * Ask the system to verify the device PIN (credential only, no biometrics). A success opens the
      * {@link #AUTH_WINDOW_SECONDS} window in which the seed key works. Callback on the main thread.
+     * {@code description} may be null. {@code cancel} dismisses the prompt (the callback then reports
+     * a failure): BiometricPrompt's text cannot change while it is up, so new text means cancel and
+     * show again (CredentialGate#heldRequestChanged).
      */
-    static void confirm(Activity activity, String title, String subtitle, Result result) {
+    static void confirm(Activity activity, String title, String subtitle, String description,
+                        CancellationSignal cancel, Result result) {
         if (!supported()) { result.done(false, "This Android version cannot verify the device PIN."); return; }
         try {
-            show(activity, title, subtitle, result);
+            show(activity, title, subtitle, description, cancel, result);
         } catch (RuntimeException e) {
             Log.w(TAG, "credential prompt failed: " + e);
             result.done(false, "The PIN prompt could not be shown.");
         }
     }
 
-    private static void show(Activity activity, String title, String subtitle, Result result) {
-        BiometricPrompt prompt = new BiometricPrompt.Builder(activity)
+    private static void show(Activity activity, String title, String subtitle, String description,
+                             CancellationSignal cancel, Result result) {
+        BiometricPrompt.Builder builder = new BiometricPrompt.Builder(activity)
                 .setTitle(title)
                 .setSubtitle(subtitle)
-                .setAllowedAuthenticators(BiometricManager.Authenticators.DEVICE_CREDENTIAL)
-                .build();
-        prompt.authenticate(new CancellationSignal(), activity.getMainExecutor(),
+                .setAllowedAuthenticators(BiometricManager.Authenticators.DEVICE_CREDENTIAL);
+        if (description != null) builder.setDescription(description);
+        builder.build().authenticate(cancel, activity.getMainExecutor(),
                 new BiometricPrompt.AuthenticationCallback() {
                     @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult r) {
                         result.done(true, null);

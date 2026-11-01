@@ -237,8 +237,9 @@ relock() { "$A" shell input keyevent KEYCODE_SLEEP; sleep 2; "$A" shell input ke
 # (window "BiometricPrompt", secure: uiautomator cannot read it, so we key the PIN in blind).
 focus_window() { "$A" shell dumpsys window | grep -oE "mCurrentFocus=Window\{[^}]*\}" | head -1 | sed 's/.* u0 //; s/}//' || true; }
 # The system PIN prompt: its window is named BiometricPrompt on most builds; on some it is drawn
-# readable, with the title "Enter your PIN to unlock", and the focus name differs.
-system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]] || uidump | grep -q 'text="Enter your PIN to unlock'; }
+# readable, with the subtitle "Enter your PIN to unlock" (or, with a request held behind the gate,
+# the title "Incoming request"), and the focus name differs.
+system_prompt_up() { [[ "$(focus_window)" == "BiometricPrompt" ]] || uidump | grep -q -e 'text="Enter your PIN to unlock' -e 'text="Incoming request"'; }
 enter_system_pin() {
   local i; for i in $(seq 1 12); do system_prompt_up && break; sleep 1; done
   system_prompt_up || return 1

@@ -5,8 +5,9 @@
 #      companion's verifier (same Rust code as the app) checks it: DEVELOPMENT with Developer
 #      mode (bootloader unlocked, dev-signed app), FAIL without it (development key)
 #   2. the same challenge again is refused ("already answered")
-#   3. locked: the request is held on the lock screen ("prove it is genuine"), nothing is
-#      answered until the PIN, then the answer arrives and verifies
+#   3. locked: the request is held on the lock screen ("prove it is genuine"), the system PIN
+#      prompt over it says so where it is readable ("Incoming request", "From your Mac",
+#      "Hardware check."), nothing is answered until the PIN, then the answer arrives and verifies
 #   4. the wallet key was not used: no review screen ever appeared, no crash, kiosk still LOCKED
 #
 # Needs the pairing from usbsigntest.sh (PV_PAIRING_FILE), PV_HOST_PY / PV_HOST_CLIENT like the
@@ -78,15 +79,33 @@ mkdir -p "$WORK/three"
 "$PY" "$CLIENT" --pairing-file "$PAIRING" attest --save "$WORK/three" > "$WORK/three.log" 2>&1 &
 pid=$!
 sleep 6; "$A" start-server >/dev/null 2>&1; wait_adb 12
-# Credential mode: the locked page opens the system PIN prompt at once. Where that prompt is drawn
-# readable (Pixel 6a) uiautomator sees only the prompt, not the page under it: dismiss it once
-# (Back = cancel; the locked page and its Unlock button stay) to read what the page shows.
-seen=0; dismissed=0
-for _ in $(seq 1 10); do
-  has_text "INCOMING REQUEST" && { seen=1; break; }
-  if [[ $dismissed -eq 0 ]] && system_prompt_up; then "$A" shell input keyevent KEYCODE_BACK </dev/null; dismissed=1; sleep 1.5; continue; fi
+# Credential mode: the locked page opens the system PIN prompt at once, and it covers the page.
+# The prompt itself must say a request waits (title "Incoming request", "From your Mac", the kind
+# only): a prompt already open when the request arrives is re-shown with that text. Where the
+# prompt is drawn readable (Pixel 6a) uiautomator sees only the prompt: read it, then dismiss it
+# once (Back = cancel; the locked page and its Unlock button stay) to read what the page shows.
+# Where it is a secure window (crosshatch) its text cannot be read; the page under it can.
+seen=0; dismissed=0; readable=0; said=0
+for _ in $(seq 1 12); do
+  dump="$(uidump)"
+  if grep -q 'text="Incoming request"' <<<"$dump"; then
+    readable=1
+    grep -q 'text="From your Mac"' <<<"$dump" || { kill $pid 2>/dev/null; die "the PIN prompt does not say who sent the request: $(texts 8)"; }
+    grep -q 'text="Hardware check\. Unlock to review it\. Nothing is signed until you approve it\."' <<<"$dump" \
+      || { kill $pid 2>/dev/null; die "the PIN prompt does not name the request's kind: $(texts 8)"; }
+    said=1
+  elif grep -q 'text="Enter your PIN to unlock' <<<"$dump"; then
+    readable=1   # the plain prompt: it is cancelled and re-shown with the request in a moment
+  fi
+  grep -q 'text="INCOMING REQUEST' <<<"$dump" && { seen=1; break; }
+  if [[ $dismissed -eq 0 ]] && system_prompt_up && { [[ $said -eq 1 || $readable -eq 0 ]]; }; then
+    "$A" shell input keyevent KEYCODE_BACK </dev/null; dismissed=1; sleep 1.5; continue
+  fi
   sleep 2
 done
+[[ $readable -eq 0 || $said -eq 1 ]] || { kill $pid 2>/dev/null; die "the PIN prompt never said a request is waiting: $(texts 8)"; }
+[[ $readable -eq 1 ]] && pass "locked: the PIN prompt says a request is waiting (from your Mac, a hardware check)" \
+  || echo "note: the PIN prompt is a secure window here; its text was not read"
 [[ $seen -eq 1 ]] || { kill $pid 2>/dev/null; die "locked phone did not show the held request: $(texts)"; }
 uidump | grep -q "prove it is genuine" || { kill $pid 2>/dev/null; die "held request is not described as a device check: $(texts 10)"; }
 kill -0 $pid 2>/dev/null || die "the host got an answer from a LOCKED phone"
