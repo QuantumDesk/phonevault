@@ -612,3 +612,133 @@ problem; beta3 is the comparison image. (2) The rollback index rose: harmless wh
 but a phone ever relocked on beta4 can no longer take beta1..beta3. (3) Same as beta3 otherwise:
 platform on Lineage test keys, BETA-TEST AVB/app keys, unlocked bootloader, voice/SMS-capable left
 at default (keyguard Emergency button).
+
+## beta5: beta4 + the beta5 app
+
+**What changed vs beta4:** the signer app, the beta's name and the AVB rollback index.
+`release-bluejay/beta5` is beta4's directory (same `BASE` rung b4d-1, same `config.xml`, board
+file and expectations) with `PHONEVAULT_VERSION := 0.1.0-beta5`, `ro.phonevault.channel=beta5` and
+the beta name in comments and error texts. The image is otherwise built from the same tree state
+(kernel prebuilts, upstream diffs, frameworks-base-a17 0003..0006, recovery hardening) as beta4.
+
+- **App 0.3.2 (versionCode 5)**, a fresh `gradle :app:assembleRelease` of main at `7f73b3f`
+  (app changes `80b3b88`, `cd489e5`) plus the version bump, signed with the beta app key by
+  `sign-beta-apk.sh` as before (same cert):
+  - **the system PIN prompt says a request is waiting**: on the credential locked page the
+    system PIN prompt covers the "INCOMING REQUEST" card, so its text now comes from the held
+    request: title "Incoming request", "From your Mac" (or "From <site>, via your Mac" for a
+    validated message-signature origin), "<Kind>. Unlock to review it. Nothing is signed until
+    you approve it." (kind only: never an amount, address or message content). An open prompt is
+    shown again with the new text when a request arrives, is replaced or is dropped;
+  - **brightness**: ☰ → Display & auto-lock has a 1..100 % slider and Automatic (as device owner
+    through the system setting; saved and re-applied on start);
+  - **restart**: ☰ → Power → Restart (confirmed; device owner only; never while a request is held
+    or under review) locks first, then reboots;
+  - **timeouts**: screen timeout default 2 min (a saved choice is kept); screen timeout and idle
+    lock choices 30 s, 1, 2, 5, 10 min;
+  - **lock after screen off**: Immediately (default), 30 s or 1 min. The grace applies only when
+    the display really went off while unlocked with no sensitive screen up; a wake past it locks
+    before drawing; a sensitive action after a grace wake always asks for the PIN; a shutdown or
+    reboot locks;
+  - **guessable PINs refused** at SET PIN ("That PIN is one of the first a thief would try. Choose
+    six digits that aren't a pattern."): one digit six times, straight runs (also across 9→0),
+    repeated 2- or 3-digit groups, three doubled digits, the common-PIN list. Unlock never applies
+    the check (an existing PIN keeps working);
+  - **reconnect after the host gives up** (the 6a beta4 wedge): after a bus reset or disconnect
+    f_accessory leaves the open descriptor unable to write, and beta4 never reopened it, so later
+    hosts got no answer until a replug. A zero-length write probe now detects the stale
+    descriptor (when a request is read and when `USB_STATE` reports configured again), what was
+    held for the gone host is dropped with "Your Mac stopped waiting… Nothing was signed", and
+    the still-attached accessory is reopened without a replug (bounded).
+- **AVB rollback index 2026110100** (`release-version.mk`, was 2026103000 for beta4), on vbmeta
+  and the three chained partitions. Still only enforced once a phone is relocked to the beta key.
+
+### beta5 build (2026-11-01)
+
+Built on the build host into `/build/out-beta5` as beta4 (`/build/pv-ladder/build-beta5.sh`:
+`sign-beta-apk.sh`, `sync-beta.sh beta5`, `build-beta.sh beta5` with installclean, as aipg under
+`/root/pv-build.lock`; 32 min). The app was built as root in `/root/pv-beta5-relapp` with the
+host's Gradle 8.10.2, `/root/android-sdk` and the tree's JDK 21 from an archive of the beta5
+config commit (unsigned APK sha256 `06bc3bd9…99cd6`); the repo copy the build used is
+`/build/pv-beta5/repo`. The tree state before the sync was the same as beta4's.
+
+All gates passed: production, release source (`--bluejay-beta beta5`, voice/SMS-capable warnings
+as before), overrides (111 absent, 58 APKs), check-build (70 modules removed, 444 `.ko`, load
+lists/modules.dep consistent, 123 expectations incl. the `beta5` channel), patch provenance
+(2 pinned GrapheneOS imports, 61 project patches; on the repo copy), cmdline, AVB (beta key
+`7d4a65ae…fd4`, flags 0, rollback index **2026110100**), app (cert `934c4f78…032f`, release
+variant, 0.3.2), recovery patch, USB (`config_usbChargingFunctionsAccessory` true in the product
+RRO). The image's APK (`PRODUCT/app/PhoneVault`) is `dev.phonevault.signer` versionCode 5 /
+versionName 0.3.2 and its dex carries "That PIN is one of the first a thief would try" and "Your
+Mac stopped waiting" (both absent from beta4's).
+`user`, `CP2A.260605.016`, `test-keys`, incremental/date `1793575899`, SPL 2026-10-01,
+Phone Vault 0.1.0-beta5; APK sha256
+`95fb54a02289ef06ef5095e15b41b540c0b86a8208e7237cdb30167d5d750cb7`.
+
+```
+77b15a8da219c1e507b6b5f0d6470ba170654debcde762d2a36d108cafe32ab9  images/boot.img
+7b59d66db6253fd2f5d370ae538db220315532c031217a8e175387c80562380b  images/vendor_boot.img
+8d5687a541e9b88453b89c9e42d537fd784444ffc40feb099de2c4f062849287  images/dtbo.img
+4a5a0bb47984d05cc77fdd868b14fdfc8aab158bfe4a356980503765fcc07e9b  images/pvmfw.img
+1cc1ccb27aaa1c93acb36a101625a41bd8b6c114f678b7b1293d1f85857bb9d4  images/vbmeta.img
+880adc9763905e440ee7b37a24c6badfda4b5f913fdda620c4fefd66319940ce  images/vbmeta_system.img
+462d9c33c07f6508b6782d983f4679d6515e23f50c0a413854aba2c72cb81174  images/vbmeta_vendor.img
+4240e89d53e42ecc73512d5525821aac8fbaacb530e69d2d829f72d56c635293  super.img
+654e604b46980ab4753e6e016dd08870871a44a1a5e63632fdccaea470c2a451  images/android-info.txt
+72cd2a860f168be500262f276614f9aa25776f10f519eca105f29567f0f76a75  flash-beta5-mac.sh
+6e2d1ee4abd168072c368026f0f45c059b40fd6e32698c7313673a247be1980f  manifest.json
+0475b0da5d7ab215599b6b637a97ff4c47a947c1b43500332327ff2c7a64188d  vault_bluejay-target_files-beta5.zip
+3e6ae3fe0d27803acb18eb0417101bdd62bd27a3565d686ced3700dcfa946f12  vault_bluejay-img-beta5.zip
+```
+
+Copied to the Mac (`~/pv-bluejay/out-beta5/`, without the two zips): `shasum -a 256 -c` on
+`SHA256SUMS` minus the zip lines, 37/37 OK. Not flashed yet. Flash and rollback as beta1
+(`./flash-beta5-mac.sh --check`, `./flash-beta5-mac.sh`; the flash script always wipes).
+
+For automated testing on a dev rung, the **appliance** (dev) APK from the same commit
+(`gradle :app:assembleAppliance`, versionName `0.3.2-dev-appliance`, code 5, manifest variant
+`dev-appliance`, signed with the build host's Android debug key `d8eab12d…4b53`, the same cert as
+the dev rungs' baked app) is at `~/pv-bluejay/out-beta5/app-appliance.apk`, sha256
+`43069ec76d38b5aad65aa5a8b7c341c1e551f11cfc4d8b426e4ed576942faae2`. It is not part of the image.
+
+### Verify on hardware without adb
+
+1. Flash (`flash-beta5-mac.sh`), first boot to SET PIN.
+2. **Guessable PIN (beta5):** at SET PIN try `123456`, `000000`, `121212`, `112233`: each is
+   refused with "That PIN is one of the first a thief would try…"; a non-pattern six-digit PIN is
+   accepted, and unlock with it works.
+3. Enumeration, pairing and reconnects as beta4 steps 2-3 (`0x18d1`/**`0x2d00`**, one interface,
+   no MTP/network/serial device, `adb devices` empty; lock/unlock, companion restart, repeated
+   cycles answered without a replug).
+4. **PIN prompt says a request is waiting (beta5):** lock the vault, send a request from the
+   companion: the system PIN prompt reads "Incoming request" / "From your Mac" / "<Kind>. Unlock
+   to review it…" (no amount, no address). Without a request it is the plain unlock prompt.
+   Enter the PIN: the request is reviewed and answered. Beta4 steps 4-6 (held request across a
+   screen-off, lock before review, PIN-cancel wedge) still hold.
+5. **Reconnect after the host gives up (beta5):** lock the vault, send a request, and let the
+   companion time out (or quit it) while the request is held. Unlock: the phone says "Your Mac
+   stopped waiting… Nothing was signed". Ask again from a fresh companion: answered, **no
+   replug** (beta4 needed one here). Also unplug/replug mid-session, then ask: answered.
+6. **Brightness (beta5):** ☰ → Display & auto-lock: move the slider, the screen follows;
+   Automatic follows ambient light. After a restart (step 8) the choice is kept.
+7. **Timeouts and lock after screen off (beta5):** the screen timeout defaults to 2 min; pick
+   30 s and check the screen turns off after 30 s idle. With "Lock after screen off" =
+   Immediately, every power-button wake asks for the PIN. Set 30 s: screen off, wake within ~10 s:
+   still unlocked, but Security → Show recovery phrase asks for the PIN; screen off, wake after
+   more than 30 s: the PIN is asked before anything is drawn. Screen off with the phrase or a PIN
+   screen up: locked at once.
+8. **Restart (beta5):** ☰ → Power → Restart → "Restart now": the vault locks, the phone reboots
+   and comes up asking for the PIN. With a request held or under review, Restart is refused
+   ("Not while a request from your Mac is waiting or under review…").
+9. Fail signs: as beta4 step 7, plus a guessable PIN accepted, a request that still needs a
+   replug after the host gave up, a grace wake that opens a sensitive screen without the PIN, or a
+   Restart that does not lock first: stop and report.
+
+**Risks:** (1) brightness, screen timeout and restart use device-owner system settings and
+`DevicePolicyManager#reboot` for the first time on a user build; a failure shows "Setting not
+saved" or "The phone did not restart", not a boot problem. (2) The stale-descriptor probe and
+reopen are new on hardware without adb; if they misbehave the symptom is a request not answered
+after a host gave up (beta4's behaviour, cured by a replug); beta4 is the comparison image. (3) The
+rollback index rose: harmless while unlocked, but a phone ever relocked on beta5 can no longer
+take beta1..beta4. (4) Same as beta4 otherwise: platform on Lineage test keys, BETA-TEST AVB/app
+keys, unlocked bootloader, voice/SMS-capable left at default (keyguard Emergency button).
