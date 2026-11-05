@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/QuantumDesk/phonevault/security/advisories/new
+    about: Never in a public issue. See SECURITY.md for what to include.
+  - name: Security policy (SECURITY.md)
+    url: https://github.com/QuantumDesk/phonevault/blob/main/SECURITY.md
+    about: How security reports are handled.
+  - name: Tester guide (beta5)
+    url: https://github.com/QuantumDesk/phonevault/blob/main/release/beta/TESTER_GUIDE.md
+    about: Install steps and known limits, before you report.

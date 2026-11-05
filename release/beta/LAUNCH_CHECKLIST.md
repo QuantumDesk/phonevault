@@ -8,6 +8,25 @@ publishes). Nothing in this list has been published yet.
 Status on 2026-10-30, from the repository (`main` at f07009f): beta1 and beta2 are built; beta1
 booted but did not enumerate on USB; beta2 is built and not flashed; **beta3 does not exist yet**.
 
+Update 2026-11-01 (branch `release/public-beta4`): the launch moves to **beta4** as a GitHub
+release (no web installer, no R2 hosting for now, so D1–D3 and D5's installer part do not apply
+to this launch). Prepared, not published: A1 wording ("Public beta: small amounts only;
+bootloader unlocked; not independently audited") in README, ROADMAP, release notes and the
+website branch `public-beta`; A2 recorded as a conscious exception in release-bluejay/README.md;
+B2 is done (`9510c2c`); release assets, companion DMG (F1, from `3a3f5ba`) and extension zip
+(F3) built with hashes; E4 replaced by GitHub private vulnerability reporting (no mail for
+phonevault.org); E5 = GitHub Issues with a bug form. Still open and blocking: **C1–C10 on beta4**
+(beta4 has not been flashed), E1, E2, E3, G2, G3.
+
+Update 2026-11-05 (branch `release/public-beta5`, replacing `release/public-beta4`): the launch
+moves to **beta5** (app 0.3.2, rollback index 2026110100; same image as beta4 apart from the app),
+v0.1.0-beta5. Assets, companion DMG and extension zip are rebuilt from this branch; nothing is
+published. Test status as reported: the beta5 app passed the 8 automated device suites plus
+feature checks on the 6a (debug build, no crashes); the beta5 release image was flashed, boots
+with debugging off and enumerates on USB; hands-on pairing and signing with the companion was
+done on the beta4 release image. These hardware results are not yet
+written up in vault-os/release-bluejay/README.md, and C1–C10 are still to be ticked on beta5 by hand.
+
 ## A. Decisions before anything else
 
 - [ ] **A1 · user** Agree the wording "public beta, small amounts only". README.md ("Do not use

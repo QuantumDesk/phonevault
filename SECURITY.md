@@ -5,11 +5,15 @@ report it privately and give us time to fix it before anything is published.
 
 ## Reporting a vulnerability
 
-- **Email:** security@phonevault.org (placeholder address until the project's public launch;
-  it will be confirmed here before the first release).
-- **GitHub:** once the repository is public, use
-  [private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)
-  ("Report a vulnerability" on the Security tab). Do not open a public issue for a security bug.
+- **GitHub private vulnerability reporting** (the only channel for now): on
+  [github.com/QuantumDesk/phonevault](https://github.com/QuantumDesk/phonevault), open the
+  **Security** tab and choose **Report a vulnerability**, or go straight to
+  [the report form](https://github.com/QuantumDesk/phonevault/security/advisories/new). Only the
+  maintainers can read the report. See GitHub's
+  [guide](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability).
+- There is no security e-mail address yet. `security@phonevault.org` does not receive mail;
+  do not use it. This file will name an address once one is confirmed working.
+- Do not open a public issue for a security bug.
 
 Please include:
 
@@ -58,8 +62,10 @@ Out of scope:
 
 ## Supported versions
 
-Phone Vault has not had a release yet. Only the **latest pre-release** (the current `main`
-branch) receives fixes. There are no long-term or backported versions.
+Only the **latest public beta** (now
+[0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), Pixel 6a) and
+the current `main` branch receive fixes. A fix ships as a new beta, installed by re-flashing.
+There are no long-term or backported versions.
 
 ## Please do not
 

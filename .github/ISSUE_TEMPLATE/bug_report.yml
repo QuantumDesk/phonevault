@@ -1,0 +1,83 @@
+name: Bug report
+description: Something in the Phone Vault beta did not work as described.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never paste a recovery phrase, PIN, passphrase or private key here, not even part of one, and not from a "test" wallet you might reuse.** Nobody from the project will ever ask for them. Use a throwaway wallet to show a problem. Blank out addresses you do not want to make public.
+
+        **Security problems** (anything that could let someone get a signature you did not approve, read keys, or get past the PIN) must not be reported here: use [private vulnerability reporting](https://github.com/QuantumDesk/phonevault/security/advisories/new). See [SECURITY.md](https://github.com/QuantumDesk/phonevault/blob/main/SECURITY.md).
+  - type: checkboxes
+    id: no-secrets
+    attributes:
+      label: Before you post
+      options:
+        - label: This report contains no recovery phrase, PIN, passphrase or private key.
+          required: true
+        - label: This is not a security vulnerability (those go to private vulnerability reporting).
+          required: true
+  - type: dropdown
+    id: phone
+    attributes:
+      label: Phone model
+      options:
+        - Pixel 6a
+        - Other (not supported in this beta)
+    validations:
+      required: true
+  - type: input
+    id: image-version
+    attributes:
+      label: Image version
+      description: On the phone, Security → Device information (for example 0.1.0-beta5). Write "not installed" if the install itself failed.
+      placeholder: 0.1.0-beta5
+    validations:
+      required: true
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      description: Shown in the companion's Settings next to "Phone Vault Companion", and the name of the DMG you installed. Write "n/a" if the problem is only on the phone.
+      placeholder: 0.1.0 (from PhoneVault-Companion-0.1.0-beta5-arm64.dmg)
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version and Mac
+      description: Apple menu → About This Mac.
+      placeholder: macOS 15.5, MacBook Air M2
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and extension version (if a site was involved)
+      placeholder: Chrome 141, Phone Vault extension 0.1.0
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What you did, step by step, starting from a state someone else can reach (for example "phone unlocked, companion paired, Base selected").
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: What happened instead, with any error text exactly as shown. A photo of the phone's screen helps (check it shows no recovery phrase). For an install problem, paste the script's output.
+    validations:
+      required: true

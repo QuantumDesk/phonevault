@@ -1,5 +1,7 @@
 # Phone Vault beta: tester guide (Pixel 6a)
 
+For **0.1.0-beta5**. Downloads: [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5).
+
 This guide takes you from a Pixel 6a to a first small signed transaction, and back to Google's
 own Android when you are done. Plan for about an hour.
 
@@ -12,7 +14,12 @@ own Android when you are done. Plan for about an hour.
 
 - A **Google Pixel 6a**. Not a Verizon model. A phone sold locked to a carrier needs a carrier
   unlock first (ask the carrier).
-- A **Mac** with **Chrome** or **Edge** (for the web installer), about 2.6 GB of free disk space.
+- A **Mac with Apple silicon** (M1 or later, macOS 12 or later), about 5 GB of free disk space
+  (2.4 GB download, and the same again while the install script joins `super.img`).
+- **Chrome** or **Edge** (Brave works too) for the Phone Vault browser extension.
+- Google's **fastboot** on the Mac: `brew install android-platform-tools` (with
+  [Homebrew](https://brew.sh)), or Google's
+  [SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools).
 - A **USB-C data cable**, plugged straight into the Mac (no hub). Some cheap cables only charge.
 - **Pen and paper** for the recovery phrase, or a printed backup card.
 
@@ -32,9 +39,12 @@ Phone Vault never changes the phone's firmware, so the phone must already run th
 the beta was built on: bootloader `bluejay-17.0-15199431`, radio
 `g5123b-145971-260414-B-15201439`. The installer reads both and writes nothing if they differ.
 
-- If the installer later says the bootloader or radio does not match, first install Google's
-  matching Android release with Google's [Android Flash Tool](https://flash.android.com/) (it
-  erases the phone), then come back.
+- Google's Android 17 builds **CP2A.260605.012** and **CP2A.260705.006** carry exactly this
+  bootloader and radio. Check yours in bootloader mode with `fastboot getvar version-bootloader`
+  and `fastboot getvar version-baseband`.
+- If the installer later says the bootloader or radio does not match, first install one of
+  those Google builds with Google's [Android Flash Tool](https://flash.android.com/) (it erases
+  the phone), then come back.
 - Pixel phones cannot go back to an older bootloader. If your phone already has a **newer**
   bootloader than the one above, wait for a beta built on that release.
 
@@ -44,8 +54,7 @@ Follow Google's official instructions:
 [Lock and unlock the bootloader](https://source.android.com/docs/core/architecture/bootloader/locking_unlocking).
 In short:
 
-1. Install Google's platform tools on the Mac (they include `fastboot`):
-   [SDK Platform Tools](https://developer.android.com/tools/releases/platform-tools).
+1. Install `fastboot` on the Mac if you have not yet: `brew install android-platform-tools`.
 2. Turn the phone off. Hold **Volume Down + Power** until the bootloader screen appears.
 3. Connect the cable and run `fastboot flashing unlock`.
 4. On the phone, use the volume keys to choose **Unlock the bootloader** and press Power.
@@ -55,31 +64,43 @@ unlocked at every start. That is expected in this beta.
 
 ## 4. Install Vault OS
 
-Put the phone in bootloader mode (off, then **Volume Down + Power**) and connect it to the Mac.
-
-### Option A: the web installer (recommended)
-
-1. Open **https://phonevault.org/install** in Chrome or Edge on the Mac.
-2. Optional, read-only: open **https://phonevault.org/install?check** first. It downloads the
-   images, checks every file, reads the phone and stops without writing anything.
-3. Press **Start**, choose the phone in the browser's USB list, and follow the page. It checks
-   the phone, downloads about 2.4 GB, checks every file against hashes pinned in the page, reads
-   the phone again, asks you to confirm, then installs.
-
-### Option B: the Mac script
-
-1. Download the release folder and its `SHA256SUMS` from the release page (link TBD).
-2. In Terminal, in that folder:
+1. From the release page, [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), download every file
+   into one new folder: `super.img.part-aa`, `super.img.part-ab`,
+   `PhoneVault-beta5-images-bluejay.zip`, `install-beta5-mac.sh`, `flash-beta5-mac.sh`,
+   `manifest.json`, `SHA256SUMS`, `PhoneVault-Companion-0.1.0-beta5-arm64.dmg`,
+   `PhoneVault-Extension-0.1.0-beta5-chromium.zip` and `SHA256SUMS-assets`. (If Safari unpacks
+   the zip into a folder by itself, leave that folder where it is: the script uses it.)
+2. In Terminal, in that folder, check the downloads:
 
    ```sh
-   shasum -a 256 -c SHA256SUMS        # every line must say OK
-   ./flash-beta3-mac.sh --check       # read-only check of the phone
-   ./flash-beta3-mac.sh               # type FLASH when asked
+   cd ~/Downloads/phonevault-beta5        # the folder you downloaded into
+   shasum -a 256 -c SHA256SUMS-assets     # every line must say OK
    ```
 
-Both options write the same partitions, erase the phone's data, and never touch the bootloader,
-the radio firmware or the lock state. The bootloader screen (Volume Down + Power) always stays
-reachable.
+   If Safari unpacked the images zip, its line reports the zip as missing: that is fine, the
+   install script checks every image inside it against `SHA256SUMS`. Any other `FAILED` line
+   means a damaged download: download that file again.
+
+3. Optional, and it never touches the phone: `bash install-beta5-mac.sh --verify-only` joins
+   `super.img`, unzips the images and checks every file against `SHA256SUMS`, then stops.
+4. Put the phone in bootloader mode (off, then hold **Volume Down + Power**) and connect it to
+   the Mac with the cable, straight into the Mac.
+5. Run the installer and follow it:
+
+   ```sh
+   bash install-beta5-mac.sh
+   ```
+
+   It checks that `fastboot` is installed, joins and checks every file, then runs
+   `flash-beta5-mac.sh --check`: a read-only check that the phone is a Pixel 6a with the right
+   bootloader and radio and an unlocked bootloader. Only then does it start the install, which
+   asks you to type `FLASH` before it writes anything. Anything else stops it.
+
+The install writes slot a (the boot images and `super`), **erases** the phone's data, and never
+touches the bootloader, the radio firmware or the lock state. The bootloader screen (Volume Down
++ Power) always stays reachable, so a failed install can be repeated.
+
+A web installer (phonevault.org/install) is planned but not available for this release.
 
 ## 5. First start: SET PIN
 
@@ -87,7 +108,9 @@ reachable.
    continues by itself.
 2. The first start takes about a minute. The phone must land on Phone Vault's **SET PIN**
    screen without a single tap: no setup wizard, no home screen.
-3. Choose a six-digit PIN and enter it twice. **Ten wrong PINs in a row erase the phone.**
+3. Choose a six-digit PIN and enter it twice. Easily guessed PINs (`123456`, `000000`,
+   `121212`, `112233`, common PINs) are refused: choose six digits that are not a pattern.
+   **Ten wrong PINs in a row erase the phone.**
 
 If the phone stays on the Google logo for more than five minutes or returns to the bootloader:
 hold Volume Down + Power, install again, and report what you saw.
@@ -114,8 +137,8 @@ On the phone:
 
 ## 8. Install Phone Vault Companion on your Mac
 
-1. Download the companion DMG and its `.sha256` (link TBD). Check it:
-   `shasum -a 256 -c "Phone Vault Companion_0.1.0_aarch64.dmg.sha256"`.
+1. Use `PhoneVault-Companion-0.1.0-beta5-arm64.dmg` from the release folder (its line in
+   `SHA256SUMS-assets` said OK in section 4). It runs on Apple silicon Macs only.
 2. Open the DMG and drag **Phone Vault Companion** to **Applications**.
 3. The app is **not signed or notarized yet**, so macOS blocks a double-click. The first time,
    **right-click → Open** in Applications, then **Open**. (On recent macOS: if it is still
@@ -126,26 +149,31 @@ On the phone:
 
 ## 9. Load the browser extension
 
-Until the store listings exist, load it unpacked:
+Until the store listings exist, load it unpacked in **Chrome, Brave or Edge**:
 
-- **Chrome, Brave or Edge:** download `phone-vault-extension-<version>-chromium-unpacked.zip` (link TBD), check its SHA-256, unzip it, open
-  `chrome://extensions` (or `brave://extensions`, `edge://extensions`), turn on **Developer
-  mode**, choose **Load unpacked**, and select the unzipped folder. Check that the ID is
-  `fbomijndbpoddicmbngledanaafapmlk`: the companion talks only to that ID.
-- **Firefox 128+:** `about:debugging#/runtime/this-firefox` → **Load Temporary Add-on…** → the
-  `manifest.json` from the unzipped `phone-vault-extension-<version>-firefox.zip`. A temporary add-on is removed when Firefox quits.
+1. Unzip `PhoneVault-Extension-0.1.0-beta5-chromium.zip` from the release folder (checked in
+   section 4) into a folder you will keep: the browser loads the extension from that folder every
+   time.
+2. Open `chrome://extensions` (or `brave://extensions`, `edge://extensions`) and turn on
+   **Developer mode**.
+3. Choose **Load unpacked** and select the unzipped folder (the one that contains
+   `manifest.json`).
+4. Check that the ID is `fbomijndbpoddicmbngledanaafapmlk`: the companion talks only to that
+   ID.
 
 Then, in the companion: **Settings → Browser extension → Install browser connection**, and reload
-any open site tabs.
+any open site tabs. Firefox is not packaged for this release.
 
 ## 10. Pair the phone with your Mac
 
 1. Unlock the phone and connect it to the Mac with the cable. Start the companion.
 2. **Genuine check.** The companion asks the phone's security chip to prove what booted. A beta
-   phone reports **Development**: the bootloader is unlocked and the keys are beta-test keys. To
-   accept a Development phone, turn on **Settings → Device → Developer mode** and type
-   `I FLASHED THIS PHONE` when it asks. Only do this for a phone you installed yourself. If the check says
-   **Not genuine**, stop and report it.
+   phone is not accepted until you turn on Developer mode: click **Turn on Developer mode…**
+   where the check is shown (or **Settings → Device → Developer mode**) and type
+   `I FLASHED THIS PHONE` when it asks. Only do this for a phone you installed yourself. The
+   genuine check then shows **Beta build: bootloader unlocked, not production. Small amounts
+   only** (verdict Development): the bootloader is unlocked and the keys are beta-test keys. If
+   the check says **Not genuine** with Developer mode on, stop and report it.
 3. **Pair.** Compare the address the companion shows with the address on the phone's Wallet
    screen, character by character, then confirm.
 
@@ -171,7 +199,7 @@ part of it back.
 
 There is no in-app "erase wallet" button in this beta. To erase:
 
-- **Install again** with the web installer or the Mac script: it erases all data on the phone.
+- **Install again** with `install-beta5-mac.sh`: it erases all data on the phone.
 - **Go back to Google's Android** (next section): also erases everything.
 - Ten wrong PINs in a row erase the phone.
 
@@ -190,6 +218,11 @@ funds out. Without the phrase, an erased wallet cannot be recovered.
 
 ## Reporting a problem
 
-- Bugs and questions: TBD channel.
-- Security problems: privately, see [SECURITY.md](../../SECURITY.md).
+- Bugs and questions: [GitHub Issues](https://github.com/QuantumDesk/phonevault/issues/new/choose).
+  Include the phone model, the image version (Security → Device information), the companion
+  version, your macOS version, what you did, what you expected and what you saw. A photo of the
+  phone's screen helps.
+- Security problems: privately, through GitHub's private vulnerability reporting ("Report a
+  vulnerability" on the repository's Security tab); see [SECURITY.md](../../SECURITY.md). Never
+  in a public issue.
 - Never share your recovery phrase, PIN or passphrase, not even with us.
