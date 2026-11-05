@@ -1,7 +1,7 @@
 # Phone Vault public beta: release notes
 
-**Release:** 0.1.0-beta4 (Pixel 6a only) · **Status:** public beta, not yet independently audited ·
-**Download:** [tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4)
+**Release:** 0.1.0-beta5 (Pixel 6a only) · **Status:** public beta, not yet independently audited ·
+**Download:** [tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5)
 
 > **Read this first.** This is a beta. Use it with small amounts only, amounts you can afford to
 > lose. It has not been independently audited. The phone's bootloader stays **unlocked**, the
@@ -24,19 +24,56 @@ reaches the network until you click **Send to network**.
 Why a phone: a Pixel 6a costs little second-hand, has Google's Titan M2 security chip, and a
 screen large enough to show a whole address, the amount, the network and the fee at once.
 
-## What is new in beta4
+## What is new in beta5
 
-- Signer app 0.3.1. A request that arrives while the phone is locked is shown on the lock
-  screen ("INCOMING REQUEST") and kept there until you enter the PIN. If the phone locks before
-  you reviewed a request, your Mac is told at once: "The phone locked before this request was
-  reviewed. Nothing was signed."
-- A PIN prompt you dismiss (Back) no longer blocks the next action that needs the PIN.
-- The companion waits for the phone to reconnect on its own after the USB link restarts,
-  instead of failing on a phone that is briefly away.
-- The genuine check recognises the beta: with **Developer mode** on it shows **Beta build:
-  bootloader unlocked, not production. Small amounts only**; with it off, a beta phone is not
-  accepted.
-- Distributed as a GitHub release with a Mac install script (`install-beta4-mac.sh`).
+Signer app 0.3.2 on the phone, and a new companion build:
+
+- **The PIN prompt shows a waiting request.** When a request arrives while the phone is locked,
+  the system PIN prompt now says so: "Incoming request", "From your Mac" (or the site, via your
+  Mac), and the kind of request. It never shows an amount, address or message. Nothing is
+  signed until you unlock and approve.
+- **Guessable PINs are refused** when you set a PIN: the same digit six times, straight runs,
+  repeated groups, three doubled digits and the most common PINs ("That PIN is one of the first
+  a thief would try"). An existing PIN keeps working.
+- **Brightness** (a slider and Automatic) under ☰ → Display & auto-lock.
+- **Restart** under ☰ → Power: the vault locks first, then the phone restarts. Not allowed while
+  a request is waiting or under review.
+- **Timeouts:** screen timeout and auto-lock choices from 30 seconds up to **10 minutes**; the
+  screen timeout now defaults to **2 minutes**.
+- **Lock after screen off** (opt-in): Immediately (the default), 30 seconds or 1 minute at most.
+  A wake within the grace does not ask for the PIN, but showing the recovery phrase or any other
+  sensitive action still does; a wake after it asks before anything is shown; a restart or
+  shutdown always locks.
+- **Recovery without a replug when the Mac stops waiting.** If the companion times out or quits
+  while the phone holds a request, the phone now drops it ("Your Mac stopped waiting… Nothing
+  was signed") and answers the next request without unplugging the cable. In beta4 this needed
+  a replug.
+- **A Developer mode button in the companion.** When the genuine check fails only because this
+  is a self-installed beta phone (unlocked bootloader plus the beta-signed app, nothing else),
+  the companion offers **Turn on Developer mode…** right there, with the same typed
+  confirmation. Any other problem gets no button.
+- The AVB rollback index is raised (2026110100). It only matters on a relocked phone, which this
+  beta never is.
+
+Carried over from beta4: a request that arrives while the phone is locked waits on the lock
+screen until you enter the PIN; if the phone locks before you review a request, your Mac is told
+at once that nothing was signed; a dismissed PIN prompt no longer blocks the next action; the
+genuine check accepts a beta phone, as **Beta build: bootloader unlocked, not production. Small
+amounts only**, only with Developer mode on. Distributed as a GitHub release with a Mac install
+script (`install-beta5-mac.sh`).
+
+## How beta5 was tested
+
+Stated plainly, so you know what has and has not been done on this exact build:
+
+- **The beta5 app** passed the project's automated device suites on a Pixel 6a running a
+  development (debug) build of the app: 8 suites, plus checks of each new feature above, with no
+  crashes.
+- **The beta5 release image** (the files in this release) was flashed on a Pixel 6a: it boots,
+  debugging is off, and the phone shows up on USB as expected.
+- **Hands-on pairing and signing with the companion** was done on the **beta4** release image,
+  which is the same image apart from the signer app. It has not yet been repeated by hand on
+  beta5.
 
 ## What works in this beta
 
@@ -114,9 +151,9 @@ screen large enough to show a whole address, the amount, the network and the fee
 
 - PIN: six digits, held by the security chip as the phone's lock credential. The chip slows
   down guessing, the wallet key works only after the chip has checked the PIN, and **ten wrong
-  PINs erase the phone**.
-- The vault locks when the screen turns off or after an idle time; the recovery phrase is shown
-  only after you enter the PIN again.
+  PINs erase the phone**. Easily guessed PINs (patterns, common PINs) are refused.
+- The vault locks when the screen turns off (or, if you choose, up to 1 minute after) or after
+  an idle time; the recovery phrase is always shown only after you enter the PIN again.
 - Multiple accounts, optional passphrase wallets (typed on the phone, never stored).
 - USB: the phone appears to your Mac as a single accessory interface; no storage, network,
   MIDI or debugging interface. No adb in this build.
@@ -157,8 +194,8 @@ screen large enough to show a whole address, the amount, the network and the fee
   protected like release keys. Treat every beta image as development software.
 - **Not audited.** There may be bugs that let a wrong transaction through, or that lose access.
   Your recovery phrase on paper is your backup for everything.
-- **The phone's own labels.** The signer app on the phone still says "Development · test assets
-  only" on its Wallet and PIN screens. For this beta, read it as the limits above: small amounts
+- **The phone's own labels.** The signer app on the phone still says "DEVELOPMENT · TEST ASSETS
+  ONLY" on its own screens (Wallet and PIN). For this beta, read it as the limits above: small amounts
   only. A later beta will change the wording.
 - **Emergency-call button.** The lock screen can show "Emergency calls only" / an Emergency
   button. The radio drivers are removed, but this button is a path out of the locked screen that
@@ -201,18 +238,18 @@ Other Pixels, including the Pixel 3 XL used for development, are not supported i
 
 ## Verifying downloads
 
-The release at [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4) has these files:
+The release at [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5) has these files:
 
 | File | What |
 |---|---|
 | `super.img.part-aa`, `super.img.part-ab` | Vault OS `super.img` in two parts (GitHub allows 2 GiB per file); the install script joins them |
-| `PhoneVault-beta4-images-bluejay.zip` | the boot images (`boot`, `vendor_boot`, `dtbo`, `pvmfw`, `vbmeta`, `vbmeta_system`, `vbmeta_vendor`) and `android-info.txt` |
-| `install-beta4-mac.sh` | joins, unzips, checks every file, then runs the flash script |
-| `flash-beta4-mac.sh` | the build's own flash script: reads the phone, asks you to type `FLASH`, writes slot a |
+| `PhoneVault-beta5-images-bluejay.zip` | the boot images (`boot`, `vendor_boot`, `dtbo`, `pvmfw`, `vbmeta`, `vbmeta_system`, `vbmeta_vendor`) and `android-info.txt` |
+| `install-beta5-mac.sh` | joins, unzips, checks every file, then runs the flash script |
+| `flash-beta5-mac.sh` | the build's own flash script: reads the phone, asks you to type `FLASH`, writes slot a |
 | `manifest.json` | each partition written, with file, size and SHA-256; build ID, fingerprint, signing key identities |
 | `SHA256SUMS` | the build's own hash list (it also names build files that are not published) |
-| `PhoneVault-Companion-0.1.0-beta4-arm64.dmg` | Phone Vault Companion for Apple silicon Macs, unsigned |
-| `PhoneVault-Extension-0.1.0-beta4-chromium.zip` | the browser extension, to load unpacked (ID `fbomijndbpoddicmbngledanaafapmlk`) |
+| `PhoneVault-Companion-0.1.0-beta5-arm64.dmg` | Phone Vault Companion for Apple silicon Macs, unsigned |
+| `PhoneVault-Extension-0.1.0-beta5-chromium.zip` | the browser extension, to load unpacked (ID `fbomijndbpoddicmbngledanaafapmlk`) |
 | `SHA256SUMS-assets` | SHA-256 of every file above |
 
 Check the downloads on your Mac, in the folder that holds them:
@@ -221,18 +258,18 @@ Check the downloads on your Mac, in the folder that holds them:
 shasum -a 256 -c SHA256SUMS-assets      # every line must say OK
 ```
 
-`install-beta4-mac.sh` then checks `SHA256SUMS` against the SHA-256 built into the script, joins
+`install-beta5-mac.sh` then checks `SHA256SUMS` against the SHA-256 built into the script, joins
 `super.img`, and checks it and every image against `SHA256SUMS` before it runs any `fastboot`
-command. `flash-beta4-mac.sh` checks them again before it writes. One mismatch stops both.
+command. `flash-beta5-mac.sh` checks them again before it writes. One mismatch stops both.
 
 The same image hashes are recorded in the repository, in
-[vault-os/release-bluejay/README.md](../../vault-os/release-bluejay/README.md#beta4-build-2026-10-30),
+[vault-os/release-bluejay/README.md](../../vault-os/release-bluejay/README.md#beta5-build-2026-11-01),
 so you can compare against a second source.
 
 - Beta-test key identities (for comparing with the genuine check's details):
   - AVB public key: sha256 `234b8f9bd98cac321ddda1a035cb4e8cfade4f96c63d0c081b6c9cdec4ea80f0`
   - Signer app certificate: sha256 `934c4f78f34daebc9f6733af217ff78bdb864fba20e408a1ad3ff5e00a7c032f`
 - Hashes of the build's `SHA256SUMS` and `manifest.json`:
-  - `SHA256SUMS`: `26fa3625b8350f204aeb76004f8d6e546500683da979ec4c491c502156eeeec4`
-  - `manifest.json`: `e26f04427d7fde99235136c285f2f0482e751894e326f3bd9880ead4afb990be`
-  - `super.img` (joined): `0cfda121bc35a4872a9f5f46f578d794bf9850151f7d79644c8e3844ac8585e3`
+  - `SHA256SUMS`: `2d9840dc1dc8ebe187f5380d8171960208c3d90620ad333db8a2ce89fa828c95`
+  - `manifest.json`: `6e2d1ee4abd168072c368026f0f45c059b40fd6e32698c7313673a247be1980f`
+  - `super.img` (joined): `4240e89d53e42ecc73512d5525821aac8fbaacb530e69d2d829f72d56c635293`

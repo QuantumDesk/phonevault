@@ -48,9 +48,9 @@ contract call it cannot explain.
 
 **How to join.**
 
-1. Read the release notes and the tester guide: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4 and
+1. Read the release notes and the tester guide: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5 and
    https://github.com/QuantumDesk/phonevault/blob/main/release/beta/TESTER_GUIDE.md
-2. Install with `install-beta4-mac.sh` from the release; it checks every file against the
+2. Install with `install-beta5-mac.sh` from the release; it checks every file against the
    published SHA256SUMS first.
 3. Tell us what breaks: https://github.com/QuantumDesk/phonevault/issues. Security problems
    privately, through GitHub's private vulnerability reporting (see SECURITY.md).
@@ -63,4 +63,4 @@ The code is open source under Apache-2.0: https://github.com/QuantumDesk/phoneva
 
 > Phone Vault public beta is open: turn a Pixel 6a into an offline wallet for Ethereum and
 > Bitcoin. Beta, small amounts only, not yet audited; the phone stays bootloader-unlocked for now.
-> Install and release notes: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4
+> Install and release notes: https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5

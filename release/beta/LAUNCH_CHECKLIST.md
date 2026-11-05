@@ -18,6 +18,15 @@ B2 is done (`9510c2c`); release assets, companion DMG (F1, from `3a3f5ba`) and e
 phonevault.org); E5 = GitHub Issues with a bug form. Still open and blocking: **C1–C10 on beta4**
 (beta4 has not been flashed), E1, E2, E3, G2, G3.
 
+Update 2026-11-05 (branch `release/public-beta5`, replacing `release/public-beta4`): the launch
+moves to **beta5** (app 0.3.2, rollback index 2026110100; same image as beta4 apart from the app),
+v0.1.0-beta5. Assets, companion DMG and extension zip are rebuilt from this branch; nothing is
+published. Test status as reported: the beta5 app passed the 8 automated device suites plus
+feature checks on the 6a (debug build, no crashes); the beta5 release image was flashed, boots
+with debugging off and enumerates on USB; hands-on pairing and signing with the companion was
+done on the beta4 release image. These hardware results are not yet
+written up in vault-os/release-bluejay/README.md, and C1–C10 are still to be ticked on beta5 by hand.
+
 ## A. Decisions before anything else
 
 - [ ] **A1 · user** Agree the wording "public beta, small amounts only". README.md ("Do not use

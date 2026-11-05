@@ -22,7 +22,7 @@ own screen. Keys never leave the phone.
 
 **Public beta: small amounts only; bootloader unlocked; not independently audited.** The beta
 images are signed with beta-test keys. Download, install steps and limits:
-[0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), the [tester guide](release/beta/TESTER_GUIDE.md) and the
+[0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), the [tester guide](release/beta/TESTER_GUIDE.md) and the
 [release notes](release/beta/RELEASE_NOTES.md). Report bugs in
 [GitHub Issues](https://github.com/QuantumDesk/phonevault/issues/new/choose).
 
@@ -43,7 +43,7 @@ the trust boundary and known limitations.
 
 | Phone | Role | Base |
 |---|---|---|
-| **Pixel 6a** (`bluejay`, Tensor gs101, Titan M2) | public beta (0.1.0-beta4) | LineageOS 24.0 / Android 17 port ([port-bluejay.md](vault-os/docs/port-bluejay.md)) |
+| **Pixel 6a** (`bluejay`, Tensor gs101, Titan M2) | public beta (0.1.0-beta5) | LineageOS 24.0 / Android 17 port ([port-bluejay.md](vault-os/docs/port-bluejay.md)) |
 | Pixel 3 XL (`crosshatch`, Snapdragon 845, Titan M) | development phone only (no security updates since 2022) | LineageOS 22.2 / Android 15 |
 
 ## How it fits together

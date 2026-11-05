@@ -6,6 +6,6 @@ contact_links:
   - name: Security policy (SECURITY.md)
     url: https://github.com/QuantumDesk/phonevault/blob/main/SECURITY.md
     about: How security reports are handled.
-  - name: Tester guide (beta4)
+  - name: Tester guide (beta5)
     url: https://github.com/QuantumDesk/phonevault/blob/main/release/beta/TESTER_GUIDE.md
     about: Install steps and known limits, before you report.

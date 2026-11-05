@@ -1,6 +1,6 @@
 # Phone Vault beta: tester guide (Pixel 6a)
 
-For **0.1.0-beta4**. Downloads: [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4).
+For **0.1.0-beta5**. Downloads: [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5).
 
 This guide takes you from a Pixel 6a to a first small signed transaction, and back to Google's
 own Android when you are done. Plan for about an hour.
@@ -64,16 +64,16 @@ unlocked at every start. That is expected in this beta.
 
 ## 4. Install Vault OS
 
-1. From the release page, [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), download every file
+1. From the release page, [https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), download every file
    into one new folder: `super.img.part-aa`, `super.img.part-ab`,
-   `PhoneVault-beta4-images-bluejay.zip`, `install-beta4-mac.sh`, `flash-beta4-mac.sh`,
-   `manifest.json`, `SHA256SUMS`, `PhoneVault-Companion-0.1.0-beta4-arm64.dmg`,
-   `PhoneVault-Extension-0.1.0-beta4-chromium.zip` and `SHA256SUMS-assets`. (If Safari unpacks
+   `PhoneVault-beta5-images-bluejay.zip`, `install-beta5-mac.sh`, `flash-beta5-mac.sh`,
+   `manifest.json`, `SHA256SUMS`, `PhoneVault-Companion-0.1.0-beta5-arm64.dmg`,
+   `PhoneVault-Extension-0.1.0-beta5-chromium.zip` and `SHA256SUMS-assets`. (If Safari unpacks
    the zip into a folder by itself, leave that folder where it is: the script uses it.)
 2. In Terminal, in that folder, check the downloads:
 
    ```sh
-   cd ~/Downloads/phonevault-beta4        # the folder you downloaded into
+   cd ~/Downloads/phonevault-beta5        # the folder you downloaded into
    shasum -a 256 -c SHA256SUMS-assets     # every line must say OK
    ```
 
@@ -81,18 +81,18 @@ unlocked at every start. That is expected in this beta.
    install script checks every image inside it against `SHA256SUMS`. Any other `FAILED` line
    means a damaged download: download that file again.
 
-3. Optional, and it never touches the phone: `bash install-beta4-mac.sh --verify-only` joins
+3. Optional, and it never touches the phone: `bash install-beta5-mac.sh --verify-only` joins
    `super.img`, unzips the images and checks every file against `SHA256SUMS`, then stops.
 4. Put the phone in bootloader mode (off, then hold **Volume Down + Power**) and connect it to
    the Mac with the cable, straight into the Mac.
 5. Run the installer and follow it:
 
    ```sh
-   bash install-beta4-mac.sh
+   bash install-beta5-mac.sh
    ```
 
    It checks that `fastboot` is installed, joins and checks every file, then runs
-   `flash-beta4-mac.sh --check`: a read-only check that the phone is a Pixel 6a with the right
+   `flash-beta5-mac.sh --check`: a read-only check that the phone is a Pixel 6a with the right
    bootloader and radio and an unlocked bootloader. Only then does it start the install, which
    asks you to type `FLASH` before it writes anything. Anything else stops it.
 
@@ -108,7 +108,9 @@ A web installer (phonevault.org/install) is planned but not available for this r
    continues by itself.
 2. The first start takes about a minute. The phone must land on Phone Vault's **SET PIN**
    screen without a single tap: no setup wizard, no home screen.
-3. Choose a six-digit PIN and enter it twice. **Ten wrong PINs in a row erase the phone.**
+3. Choose a six-digit PIN and enter it twice. Easily guessed PINs (`123456`, `000000`,
+   `121212`, `112233`, common PINs) are refused: choose six digits that are not a pattern.
+   **Ten wrong PINs in a row erase the phone.**
 
 If the phone stays on the Google logo for more than five minutes or returns to the bootloader:
 hold Volume Down + Power, install again, and report what you saw.
@@ -135,7 +137,7 @@ On the phone:
 
 ## 8. Install Phone Vault Companion on your Mac
 
-1. Use `PhoneVault-Companion-0.1.0-beta4-arm64.dmg` from the release folder (its line in
+1. Use `PhoneVault-Companion-0.1.0-beta5-arm64.dmg` from the release folder (its line in
    `SHA256SUMS-assets` said OK in section 4). It runs on Apple silicon Macs only.
 2. Open the DMG and drag **Phone Vault Companion** to **Applications**.
 3. The app is **not signed or notarized yet**, so macOS blocks a double-click. The first time,
@@ -149,7 +151,7 @@ On the phone:
 
 Until the store listings exist, load it unpacked in **Chrome, Brave or Edge**:
 
-1. Unzip `PhoneVault-Extension-0.1.0-beta4-chromium.zip` from the release folder (checked in
+1. Unzip `PhoneVault-Extension-0.1.0-beta5-chromium.zip` from the release folder (checked in
    section 4) into a folder you will keep: the browser loads the extension from that folder every
    time.
 2. Open `chrome://extensions` (or `brave://extensions`, `edge://extensions`) and turn on
@@ -166,7 +168,8 @@ any open site tabs. Firefox is not packaged for this release.
 
 1. Unlock the phone and connect it to the Mac with the cable. Start the companion.
 2. **Genuine check.** The companion asks the phone's security chip to prove what booted. A beta
-   phone is not accepted until you turn on **Settings → Device → Developer mode** and type
+   phone is not accepted until you turn on Developer mode: click **Turn on Developer mode…**
+   where the check is shown (or **Settings → Device → Developer mode**) and type
    `I FLASHED THIS PHONE` when it asks. Only do this for a phone you installed yourself. The
    genuine check then shows **Beta build: bootloader unlocked, not production. Small amounts
    only** (verdict Development): the bootloader is unlocked and the keys are beta-test keys. If
@@ -196,7 +199,7 @@ part of it back.
 
 There is no in-app "erase wallet" button in this beta. To erase:
 
-- **Install again** with `install-beta4-mac.sh`: it erases all data on the phone.
+- **Install again** with `install-beta5-mac.sh`: it erases all data on the phone.
 - **Go back to Google's Android** (next section): also erases everything.
 - Ten wrong PINs in a row erase the phone.
 

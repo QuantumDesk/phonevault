@@ -15,7 +15,7 @@ Standing rules (these never move):
 ## Current status
 
 **Public beta: small amounts only; bootloader unlocked; not independently audited.** Pixel 6a
-only, images signed with beta-test keys ([0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4),
+only, images signed with beta-test keys ([0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5),
 [release notes](release/beta/RELEASE_NOTES.md)). Development phones stay development phones.
 
 ### Phone app
@@ -75,7 +75,7 @@ messaging, and a watch-only Bitcoin wallet. Unsigned and not notarized.
   kernel modules removed, USB lock-down, radios off, app strip. The app suites (first run, USB
   signing, message signing, credential) pass on b4c. b4d-1 (radio daemons out) passed too. The
   `user` images ([release-bluejay](vault-os/release-bluejay/README.md): no adb, hardened
-  recovery, beta-test-signed AVB and release app) are at **beta4**, the public beta image.
+  recovery, beta-test-signed AVB and release app) are at **beta5**, the public beta image.
 
 ### Debug-only state on development images
 

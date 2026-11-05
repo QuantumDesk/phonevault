@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Phone Vault 0.1.0-beta4 (Pixel 6a): install from the GitHub release assets on a Mac.
+# Phone Vault 0.1.0-beta5 (Pixel 6a): install from the GitHub release assets on a Mac.
 #
 # Put these release assets in one folder, then run this script from anywhere:
-#   super.img.part-aa  super.img.part-ab  PhoneVault-beta4-images-bluejay.zip
-#   flash-beta4-mac.sh  manifest.json  SHA256SUMS  install-beta4-mac.sh
+#   super.img.part-aa  super.img.part-ab  PhoneVault-beta5-images-bluejay.zip
+#   flash-beta5-mac.sh  manifest.json  SHA256SUMS  install-beta5-mac.sh
 #
-#   bash install-beta4-mac.sh                 join, unzip, verify, read-only phone check, then flash
-#   bash install-beta4-mac.sh --verify-only   join, unzip, verify; never runs fastboot
+#   bash install-beta5-mac.sh                 join, unzip, verify, read-only phone check, then flash
+#   bash install-beta5-mac.sh --verify-only   join, unzip, verify; never runs fastboot
 #
 # It never writes the bootloader, the radio firmware or the lock state. The flash itself is done by
-# flash-beta4-mac.sh, which reads the phone first and asks you to type FLASH before it writes.
+# flash-beta5-mac.sh, which reads the phone first and asks you to type FLASH before it writes.
 # Flashing ERASES everything on the phone.
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -17,16 +17,16 @@ cd "$(dirname "$0")"
 FASTBOOT="${FASTBOOT:-fastboot}"
 # SHA-256 of the build's own SHA256SUMS (also listed in SHA256SUMS-assets and in
 # vault-os/release-bluejay/README.md). Everything else is checked against that file.
-SUMS_SHA256=26fa3625b8350f204aeb76004f8d6e546500683da979ec4c491c502156eeeec4
+SUMS_SHA256=2d9840dc1dc8ebe187f5380d8171960208c3d90620ad333db8a2ce89fa828c95
 SLOT_IMAGES=(boot vendor_boot dtbo pvmfw vbmeta vbmeta_system vbmeta_vendor)
 PARTS=(super.img.part-aa super.img.part-ab)
-ZIP=PhoneVault-beta4-images-bluejay.zip
+ZIP=PhoneVault-beta5-images-bluejay.zip
 
 die() { echo "ABORT: $*" >&2; exit 1; }
 mode="${1:-}"
 case "${mode}" in ""|--verify-only) ;; *) die "unknown option ${mode} (use --verify-only or nothing)";; esac
 
-echo "== Phone Vault 0.1.0-beta4 installer (Pixel 6a)"
+echo "== Phone Vault 0.1.0-beta5 installer (Pixel 6a)"
 
 if [[ "${mode}" != --verify-only ]]; then
   command -v "${FASTBOOT}" >/dev/null || die "fastboot not found. Install it with:  brew install android-platform-tools
@@ -39,7 +39,7 @@ command -v unzip >/dev/null || die "unzip not found (it ships with macOS)"
 echo "== SHA256SUMS"
 [[ -s SHA256SUMS ]] || die "missing SHA256SUMS (download it from the release page)"
 got="$(shasum -a 256 SHA256SUMS | awk '{print $1}')"
-[[ "${got}" == "${SUMS_SHA256}" ]] || die "SHA256SUMS is not the beta4 file (sha256 ${got})"
+[[ "${got}" == "${SUMS_SHA256}" ]] || die "SHA256SUMS is not the beta5 file (sha256 ${got})"
 echo "SHA256SUMS: OK"
 
 want_super="$(awk '$2=="super.img" {print $1}' SHA256SUMS)"
@@ -73,7 +73,7 @@ for i in "${SLOT_IMAGES[@]}"; do [[ -s "images/${i}.img" ]] || die "missing imag
 [[ -s images/android-info.txt ]] || die "missing images/android-info.txt after unzip"
 
 echo "== verify against SHA256SUMS"
-files=(super.img images/android-info.txt flash-beta4-mac.sh manifest.json)
+files=(super.img images/android-info.txt flash-beta5-mac.sh manifest.json)
 for i in "${SLOT_IMAGES[@]}"; do files+=("images/${i}.img"); done
 for f in "${files[@]}"; do
   [[ -s "${f}" ]] || die "missing ${f}"
@@ -94,13 +94,13 @@ The phone must be in its bootloader: power it off, then hold Volume Down + Power
 bootloader screen appears, and connect it straight to this Mac with a USB-C data cable.
 EOF
 read -r -p "Press Return when the phone shows the bootloader screen (Ctrl-C to stop): " _
-bash ./flash-beta4-mac.sh --check
+bash ./flash-beta5-mac.sh --check
 
 cat <<'EOF'
 
 == the phone passed the check
-The next step ERASES everything on the phone and installs Vault OS 0.1.0-beta4.
+The next step ERASES everything on the phone and installs Vault OS 0.1.0-beta5.
 Make sure any funds are moved out or that you have the recovery phrase of any wallet on it.
-flash-beta4-mac.sh checks everything again and asks you to type FLASH before it writes.
+flash-beta5-mac.sh checks everything again and asks you to type FLASH before it writes.
 EOF
-bash ./flash-beta4-mac.sh
+bash ./flash-beta5-mac.sh

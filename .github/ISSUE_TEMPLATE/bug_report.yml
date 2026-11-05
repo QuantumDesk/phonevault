@@ -31,8 +31,8 @@ body:
     id: image-version
     attributes:
       label: Image version
-      description: On the phone, Security → Device information (for example 0.1.0-beta4). Write "not installed" if the install itself failed.
-      placeholder: 0.1.0-beta4
+      description: On the phone, Security → Device information (for example 0.1.0-beta5). Write "not installed" if the install itself failed.
+      placeholder: 0.1.0-beta5
     validations:
       required: true
   - type: input
@@ -40,7 +40,7 @@ body:
     attributes:
       label: Companion version
       description: Shown in the companion's Settings next to "Phone Vault Companion", and the name of the DMG you installed. Write "n/a" if the problem is only on the phone.
-      placeholder: 0.1.0 (from PhoneVault-Companion-0.1.0-beta4-arm64.dmg)
+      placeholder: 0.1.0 (from PhoneVault-Companion-0.1.0-beta5-arm64.dmg)
     validations:
       required: true
   - type: input

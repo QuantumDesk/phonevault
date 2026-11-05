@@ -63,7 +63,7 @@ Out of scope:
 ## Supported versions
 
 Only the **latest public beta** (now
-[0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), Pixel 6a) and
+[0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), Pixel 6a) and
 the current `main` branch receive fixes. A fix ships as a new beta, installed by re-flashing.
 There are no long-term or backported versions.
 

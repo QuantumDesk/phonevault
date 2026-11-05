@@ -114,8 +114,8 @@ These are **BETA-TEST** keys: to be replaced by beta keys generated offline
 (`scripts/generate-release-keyset.sh`, offline machine) before any phone is relocked to a beta
 key or a beta goes to anyone outside the project.
 
-> **Conscious exception (public beta, 2026-11):** the public beta, **0.1.0-beta4**
-> ([GitHub release](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4)), ships
+> **Conscious exception (public beta, 2026-11):** the public beta, **0.1.0-beta5**
+> ([GitHub release](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5)), ships
 > to outside testers signed with these **BETA-TEST** keys. That breaks the rule above on purpose:
 > the offline key ceremony (`scripts/generate-release-keyset.sh`) has not happened yet, and the
 > beta is offered for small amounts only, with the bootloader **unlocked** and never relocked to
@@ -591,14 +591,8 @@ b799b157b844bd9358c5812cbb11760d4577b8d11264669cf93e098de61e132b  vault_bluejay-
 ```
 
 Copied to the Mac (`~/pv-bluejay/out-beta4/`, without the two zips): `shasum -a 256 -c` on
-`SHA256SUMS` minus the zip lines, 37/37 OK. For the public beta release
-([v0.1.0-beta4](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta4), with the
-BETA-TEST keys as the exception noted under Keys): `super.img` split in two parts below GitHub's
-2 GiB limit, the seven slot images and `android-info.txt` in a zip, the build's own `SHA256SUMS`
-(sha256 `26fa3625b8350f204aeb76004f8d6e546500683da979ec4c491c502156eeeec4`) and `manifest.json`,
-`flash-beta4-mac.sh`, and `install-beta4-mac.sh` (joins, unzips, verifies against `SHA256SUMS`,
-then runs the flash script's `--check` and the flash). The source of `install-beta4-mac.sh` is
-kept at [`release/beta/install-beta4-mac.sh`](../../release/beta/install-beta4-mac.sh). Not flashed yet. Flash and rollback as beta1
+`SHA256SUMS` minus the zip lines, 37/37 OK. beta4 was staged as a public GitHub release and
+replaced by beta5 ([below](#beta5-build-2026-11-01)) before anything was published. Flash and rollback as beta1
 (`./flash-beta4-mac.sh --check`, `./flash-beta4-mac.sh`; the flash script always wipes).
 
 ### Verify on hardware without adb
@@ -711,7 +705,14 @@ Phone Vault 0.1.0-beta5; APK sha256
 ```
 
 Copied to the Mac (`~/pv-bluejay/out-beta5/`, without the two zips): `shasum -a 256 -c` on
-`SHA256SUMS` minus the zip lines, 37/37 OK. Not flashed yet. Flash and rollback as beta1
+`SHA256SUMS` minus the zip lines, 37/37 OK. For the public beta release
+([v0.1.0-beta5](https://github.com/QuantumDesk/phonevault/releases/tag/v0.1.0-beta5), with the
+BETA-TEST keys as the exception noted under Keys): `super.img` split in two parts below GitHub's
+2 GiB limit, the seven slot images and `android-info.txt` in a zip, the build's own `SHA256SUMS`
+(sha256 `2d9840dc1dc8ebe187f5380d8171960208c3d90620ad333db8a2ce89fa828c95`) and `manifest.json`,
+`flash-beta5-mac.sh`, and `install-beta5-mac.sh` (joins, unzips, verifies against `SHA256SUMS`,
+then runs the flash script's `--check` and the flash). The source of `install-beta5-mac.sh` is
+kept at [`release/beta/install-beta5-mac.sh`](../../release/beta/install-beta5-mac.sh). Flash and rollback as beta1
 (`./flash-beta5-mac.sh --check`, `./flash-beta5-mac.sh`; the flash script always wipes).
 
 For automated testing on a dev rung, the **appliance** (dev) APK from the same commit
